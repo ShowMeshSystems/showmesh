@@ -151,6 +151,17 @@ describe('Shows · Assets tab', () => {
     expect(screen.getByText('Superseded')).toBeInTheDocument()
   })
 
+  it('opens the asset detail as a dialog portaled into document.body and clears the selection on Escape', async () => {
+    setup(['asset:write'], [asset()])
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body)
+    expect(within(dialog).getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('the upload control is disabled without asset:write and is actually inert', async () => {
     setup([], [])
     fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))

@@ -849,3 +849,31 @@ nothing still uses it.
 **Unblocks.** `Drawer` (new kit element). Follow-up: migrate
 `AssetsSurface`, `Monitor`, `MonitorManifest`, `ShowsAutomation`, `ShowsCues`,
 and `ShowsPresentation` off `Panes` onto `Drawer`, one screen at a time.
+
+### D-022 `Panes` changes once, every screen adopts `Drawer` in one pass, and the cue editor moves into it
+
+**What.** D-021 says `Panes` itself does not change and screens adopt `Drawer`
+one at a time. Eric ruled the follow-up in full instead: `Panes` changes once
+so every screen picks it up, and the cue editor on Shows &rsaquo; Cues moves
+into the drawer too.
+
+**Ruling:** `Panes` (`ui/src/kit/Shell.tsx`) keeps its list as the page body
+and now renders its `aside` child inside `Drawer` instead of a column, only
+while the screen has a selection. New props: `inspectorOpen`,
+`onInspectorClose`, `inspectorLabelledBy`, `inspectorWidth` (`'content'`
+default, `'wide'` where the editor is form-heavy). Selection stays each
+screen's own state (selected row, "Editing" marker, `aria-current`); closing
+the drawer clears it; picking another row swaps the drawer's content without
+closing it. The old two-column grid and sticky-aside CSS are gone from
+`.sm-panes`; the list keeps full width with nothing selected.
+
+Every screen that used `Panes` adopted the drawer in this pass: `Monitor`,
+`MonitorManifest`, `AssetsSurface`, `ShowsAutomation` (`'wide'` for the step
+and action editors), `ShowsCues` (`'wide'`; "New cue" opens the drawer with
+the draft the same way a row does), `ShowsPresentation`, and the night-session
+definitions editor in `ShowsNightSession`/`ShowNight.tsx`'s
+`NightSessionDefinitions` (`'wide'`). `ShowsPlaylists` and `NodeDetail` were
+checked and do not use `Panes`; nothing there changed. `Panes` itself is
+retired as a two-column layout as of this pass.
+
+**Unblocks.** Nothing further; the D-021 follow-up is closed.

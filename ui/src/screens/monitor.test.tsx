@@ -133,11 +133,22 @@ describe('Monitor · Fleet', () => {
     })
 
     fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
-    const inspector = screen.getByRole('complementary')
+    const inspector = screen.getByRole('dialog')
     expect(within(inspector).getByRole('heading', { name: 'barn-player', level: 2 })).toBeInTheDocument()
     expect(within(inspector).getByText('FPP player · healthy as FPP reports')).toBeInTheDocument()
     expect(within(inspector).getByText('Bindings held')).toBeInTheDocument()
     expect(within(inspector).getByRole('link', { name: 'Open Live Control' })).toHaveAttribute('href', '/control')
+  })
+
+  it('opens the inspector as a dialog portaled into document.body and clears the selection on Escape', () => {
+    renderScreen({ nodes: [node('media-garage', 'online')] })
+    fireEvent.click(screen.getByRole('row', { name: 'View media-garage' }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body)
+    expect(within(dialog).getByRole('heading', { name: 'media-garage', level: 2 })).toBeInTheDocument()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('says what the fleet contains without arithmetic that does not close', () => {
@@ -199,7 +210,7 @@ describe('Monitor · Fleet · FPP inspector · Fallback program', () => {
   function openInspector() {
     renderScreen({ fpp: [withFallbackUuid] })
     fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
-    return within(screen.getByRole('complementary'))
+    return within(screen.getByRole('dialog'))
   }
 
   it('reads as loading before either fetch resolves', () => {

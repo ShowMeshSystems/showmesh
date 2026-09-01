@@ -93,8 +93,10 @@ export function ShowsPresentation() {
   const { spans, overlapping } = channelSpans(surfaces.map((s) => ({ id: s.id, label: s.payload.name, startChannel: s.payload.channelRange.startChannel, channelCount: s.payload.channelRange.channelCount })))
   const totalClaimed = spans.reduce((sum, span) => sum + (span.end - span.start + 1), 0)
 
+  const closeInspector = () => { setCreating(false); setSelectedId(null) }
+
   return (
-    <Panes>
+    <Panes inspectorOpen={creating || selected !== null} onInspectorClose={closeInspector} inspectorLabelledBy="ps-surface-editor-heading">
       <div>
         <Section
           id="ps-list"
@@ -353,7 +355,7 @@ function SurfaceEditor({
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">{isNew ? 'New surface' : `Editing ${surface.payload.name}`}</p>
+      <p className="sm-eyebrow sm-eyebrow--accent" id="ps-surface-editor-heading">{isNew ? 'New surface' : `Editing ${surface.payload.name}`}</p>
 
       <div className="sm-inspector__group">
         <Field label="Name">

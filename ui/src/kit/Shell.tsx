@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react'
+import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
+import { Drawer } from './Drawer'
 
 export type Connection = 'live' | 'degraded' | 'lost' | 'unknown'
 
@@ -85,6 +86,33 @@ export function RailBadge({ tone, count }: { tone: 'bad' | 'warn' | 'live'; coun
   return <span className={`sm-rail__badge sm-rail__badge--${tone}`}>{count}</span>
 }
 
-export function Panes({ children }: { children: ReactNode }) {
-  return <div className="sm-panes" data-panes>{children}</div>
+type PanesProps = {
+  children: ReactNode
+  /** Whether the current selection opens the inspector drawer. */
+  inspectorOpen: boolean
+  /** Clears the selection; the row that opened the drawer gets focus back. */
+  onInspectorClose: () => void
+  /** Id of the heading rendered inside the `aside` content. */
+  inspectorLabelledBy: string
+  /** 'content' (default) or 'wide' for a form-heavy editor. */
+  inspectorWidth?: 'content' | 'wide' | number
+}
+
+/**
+ * D-021/D-022: the list is the whole page body. Its `aside` child never
+ * renders in place; it floats in a `Drawer` when `inspectorOpen` is true.
+ */
+export function Panes({ children, inspectorOpen, onInspectorClose, inspectorLabelledBy, inspectorWidth = 'content' }: PanesProps) {
+  const items = Children.toArray(children)
+  const asideIndex = items.findIndex((child) => isValidElement(child) && child.type === 'aside')
+  const aside = asideIndex === -1 ? null : (items[asideIndex] as ReactElement<{ children?: ReactNode }>)
+  const body = asideIndex === -1 ? items : items.filter((_, index) => index !== asideIndex)
+  return (
+    <div className="sm-panes" data-panes>
+      {body}
+      <Drawer open={inspectorOpen} onClose={onInspectorClose} labelledBy={inspectorLabelledBy} width={inspectorWidth}>
+        {aside?.props.children}
+      </Drawer>
+    </div>
+  )
 }

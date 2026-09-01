@@ -162,6 +162,18 @@ describe('Shows · Presentation tab', () => {
     renderWorkspace({ session: signedIn(['config:write']), nodes: [node()] }, '/shows/winter-ridge-2026/presentation?surface=garage')
 
     expect(await screen.findByText('Editing Garage door')).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body)
+  })
+
+  it('opens the surface editor as a dialog and clears the selection on Escape', async () => {
+    setup()
+    fireEvent.click(await screen.findByRole('row', { name: 'Edit Garage door' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Editing Garage door')).toBeInTheDocument()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('a show with no surface is a settled empty, distinct from loading and from a read failure', async () => {

@@ -247,9 +247,27 @@ export function ShowsAutomation() {
     .filter(({ binding }) => binding !== undefined && binding.state !== 'ok')
 
   const stepAside = aside.kind === 'step' ? macros.find((m) => m.id === aside.macroId) ?? null : null
+  const closeInspector = () => {
+    if (aside.kind === 'step') clearMacroDraft(aside.macroId)
+    setAside({ kind: 'none' })
+  }
+  const inspectorLabelledBy: Record<Aside['kind'], string> = {
+    none: '',
+    step: 'au-step-editor-heading',
+    run: 'au-run-viewer-heading',
+    'action-draft': 'au-action-draft-heading',
+    'action-edit': 'au-action-edit-heading',
+    'macro-draft': 'au-macro-draft-heading',
+  }
+  const inspectorWidth = aside.kind === 'step' || aside.kind === 'action-draft' || aside.kind === 'action-edit' ? 'wide' : 'content'
 
   return (
-    <Panes>
+    <Panes
+      inspectorOpen={aside.kind !== 'none'}
+      onInspectorClose={closeInspector}
+      inspectorLabelledBy={inspectorLabelledBy[aside.kind]}
+      inspectorWidth={inspectorWidth}
+    >
       <div>
         <Section
           id="au-list"
@@ -855,7 +873,7 @@ function StepEditor({
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">
+      <p className="sm-eyebrow sm-eyebrow--accent" id="au-step-editor-heading">
         Editing · {macro.payload.label} step {stepIndex + 1} of {steps.length}
       </p>
 
@@ -1735,7 +1753,7 @@ function ActionDraft({
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">Draft · new action</p>
+      <p className="sm-eyebrow sm-eyebrow--accent" id="au-action-draft-heading">Draft · new action</p>
 
       <div className="sm-inspector__group">
         <Field
@@ -1940,7 +1958,7 @@ function ActionEditor({
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">Editing · {action.payload.label}</p>
+      <p className="sm-eyebrow sm-eyebrow--accent" id="au-action-edit-heading">Editing · {action.payload.label}</p>
 
       {binding !== undefined && binding.state !== 'ok' && (
         <div className="sm-attn">
@@ -2124,7 +2142,7 @@ function MacroDraft({
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">Draft · new macro</p>
+      <p className="sm-eyebrow sm-eyebrow--accent" id="au-macro-draft-heading">Draft · new macro</p>
 
       <div className="sm-inspector__group">
         <Field label="Label">{(props) => <Input {...props} value={label} onChange={(e) => onLabelChange(e.target.value)} />}</Field>
@@ -2249,7 +2267,7 @@ function RunViewer({ runId, onClose }: { runId: string; onClose: () => void }) {
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">Run detail</p>
+      <p className="sm-eyebrow sm-eyebrow--accent" id="au-run-viewer-heading">Run detail</p>
       <p className="sm-small sm-muted">
         Started <span className="sm-data">{formatClock(run.createdAt) ?? 'an unrecorded time'}</span>
         {run.finishedAt !== null && (

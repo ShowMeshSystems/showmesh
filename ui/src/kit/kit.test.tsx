@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, NotWired, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 
 afterEach(cleanup)
 
@@ -334,5 +334,45 @@ describe('Drawer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
     const dialog = screen.getByRole('dialog', { name: 'Node detail' })
     expect(dialog).toHaveStyle({ width: '500px' })
+  })
+})
+
+describe('Panes', () => {
+  function Harness() {
+    const [selected, setSelected] = useState<string | null>(null)
+    return (
+      <Panes inspectorOpen={selected !== null} onInspectorClose={() => setSelected(null)} inspectorLabelledBy="row-heading">
+        <ul>
+          <li>
+            <button type="button" onClick={() => setSelected('a')}>Row A</button>
+          </li>
+        </ul>
+        <aside>
+          <h2 id="row-heading">Row {selected}</h2>
+        </aside>
+      </Panes>
+    )
+  }
+
+  it('renders the list as the page body and keeps it full width with nothing selected', () => {
+    const { container } = render(<Harness />)
+    expect(screen.getByRole('button', { name: 'Row A' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(container.querySelector('aside')).toBeNull()
+  })
+
+  it('opens the aside content in a dialog portaled into document.body on selection', async () => {
+    render(<Harness />)
+    await userEvent.click(screen.getByRole('button', { name: 'Row A' }))
+    const dialog = screen.getByRole('dialog', { name: 'Row a' })
+    expect(dialog.parentElement).toBe(document.body)
+  })
+
+  it('clears the selection on Escape', async () => {
+    render(<Harness />)
+    await userEvent.click(screen.getByRole('button', { name: 'Row A' }))
+    screen.getByRole('dialog', { name: 'Row a' })
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })

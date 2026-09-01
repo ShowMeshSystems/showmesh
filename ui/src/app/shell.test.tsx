@@ -143,7 +143,7 @@ describe('app shell', () => {
 
   it('shows the mode badge with no pin note when the cue activation pin is not pinned', async () => {
     getShowModeConfigMock.mockResolvedValue(showModeConfig({ pinned: false }))
-    renderShell({})
+    renderShell({ session: authenticatedSession() })
     const badge = await screen.findByRole('button', { name: /^show$/i })
     expect(badge.textContent).not.toContain('edit staged')
     expect(badge.title).toBe('closed in show mode. A show.cue edit saved now applies immediately.')
@@ -153,7 +153,7 @@ describe('app shell', () => {
     const withoutPin: Record<string, unknown> = { ...showModeConfig({ pinned: false }) }
     delete withoutPin['cueActivationPin']
     getShowModeConfigMock.mockResolvedValue(withoutPin as unknown as ReturnType<typeof showModeConfig>)
-    renderShell({})
+    renderShell({ session: authenticatedSession() })
     const badge = await screen.findByRole('button', { name: /^show$/i })
     expect(badge.textContent).not.toContain('edit staged')
     expect(badge.title).toBe('closed in show mode')
@@ -168,7 +168,7 @@ describe('app shell', () => {
         pinnedAt: '2026-08-30T19:00:00Z',
       }),
     )
-    renderShell({})
+    renderShell({ session: authenticatedSession() })
     const badge = await screen.findByRole('button', { name: /edit staged/i })
     expect(badge.title).toBe('closed in show mode. A show.cue edit saved now applies immediately.')
     expect(screen.getByText(/A show\.cue edit is staged and will not reach any node/)).toBeInTheDocument()
@@ -436,6 +436,45 @@ describe('app shell', () => {
     expect(screen.getByText('/config/show/…/cues')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Shows › Automation' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Shows › Cues' })).toBeInTheDocument()
+  })
+
+  describe('the show pill and mode badge stay quiet while signed out', () => {
+    it('reads nothing and shows no failure text while signed out, bootstrap-required, or still loading', () => {
+      for (const blindSession of [session({ authenticated: false }), session({ authenticated: false, bootstrapRequired: true }), null]) {
+        cleanup()
+        renderShell({ session: blindSession })
+        expect(getShowActiveMock).not.toHaveBeenCalled()
+        expect(getShowModeConfigMock).not.toHaveBeenCalled()
+        expect(screen.queryByText('Show not reported')).not.toBeInTheDocument()
+        expect(screen.getAllByText('Show').length).toBeGreaterThan(0)
+        expect(screen.getAllByText('Mode').length).toBeGreaterThan(0)
+      }
+    })
+
+    it('issues the reads and renders the pill and badge only once the session authenticates', async () => {
+      getShowActiveMock.mockResolvedValue(showActiveConfig('winter-2026'))
+      getShowModeConfigMock.mockResolvedValue(showModeConfig({ pinned: false }))
+      const { rerender } = renderShell({ session: session({ authenticated: false }) })
+      expect(getShowActiveMock).not.toHaveBeenCalled()
+      expect(getShowModeConfigMock).not.toHaveBeenCalled()
+
+      rerender(
+        <ModelContext.Provider value={{ ...initialModel(), session: authenticatedSession() }}>
+          <MemoryRouter initialEntries={['/']}>
+            <Routes>
+              <Route path="/" element={<Layout />}>
+                <Route path="*" element={<NotFound />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </ModelContext.Provider>,
+      )
+
+      expect(await screen.findByRole('button', { name: /winter-2026/i })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: /^show$/i })).toBeInTheDocument()
+      expect(getShowActiveMock).toHaveBeenCalledTimes(1)
+      expect(getShowModeConfigMock).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('D-020 the show pill popover', () => {

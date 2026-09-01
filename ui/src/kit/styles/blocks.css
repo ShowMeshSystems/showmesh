@@ -535,10 +535,6 @@ a.sm-tile:hover {
   max-width: none;
 }
 
-.sm-assets-surface .sm-panes:not(:has(> aside > *)) {
-  grid-template-columns: minmax(0, 1fr);
-}
-
 .sm-main:has(.sm-rc-breadcrumb) {
   max-width: 1220px;
 }
@@ -677,18 +673,7 @@ a.sm-tile:hover {
 
 .sm-monitor > .sm-panes > :first-child {
   min-width: 0;
-  padding: 20px 24px 0 28px;
-}
-
-.sm-monitor > .sm-panes > aside {
-  padding: 20px 28px 0 0;
-}
-
-@media (max-width: 1100px) {
-  .sm-monitor > .sm-panes > :first-child,
-  .sm-monitor > .sm-panes > aside {
-    padding: 20px 28px 0;
-  }
+  padding: 20px 28px 0;
 }
 
 /* The lifecycle rails: where the night is, and where this cycle is. */

@@ -156,10 +156,15 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
   const selectedIdentityAsset = selectedIdentity === null ? null : state.assets.find((a) => assetIdentityKey(a) === selectedIdentity) ?? null
   const knownSequences = Array.from(new Set(state.assets.map((a) => a.sequence))).sort()
   const knownShows = Array.from(new Set(state.assets.map((a) => a.show))).sort()
+  const closeInspector = () => { setUploading(false); setSelectedIdentity(null) }
 
   return (
     <div className="sm-assets-surface">
-      <Panes>
+      <Panes
+        inspectorOpen={uploading || selectedIdentityAsset !== null}
+        onInspectorClose={closeInspector}
+        inspectorLabelledBy={uploading ? 'assets-upload-heading' : 'assets-detail-heading'}
+      >
         <div>
           <Section
             id="asset-list"
@@ -390,7 +395,7 @@ function AssetDetail({
   return (
     <div className="sm-inspector">
       <p className="sm-eyebrow">Asset variant</p>
-      <h2 className="sm-inspector__title">{asset.sequence}</h2>
+      <h2 className="sm-inspector__title" id="assets-detail-heading">{asset.sequence}</h2>
       <p className="sm-small sm-muted">
         for <span className="sm-data">{targetLabel(asset)}</span>
       </p>
@@ -598,7 +603,7 @@ function AssetUploadForm({
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">Upload asset</p>
+      <h2 className="sm-eyebrow sm-eyebrow--accent" id="assets-upload-heading">Upload asset</h2>
       <p className="sm-small sm-muted">{scope.kind === 'show' ? 'Into this show. Manual upload is a permanent path, not a stopgap.' : 'Manual upload is a permanent path, not a stopgap.'}</p>
 
       <div className="sm-inspector__group">

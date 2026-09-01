@@ -290,6 +290,18 @@ describe('Shows · Cues tab', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
+  it('opens the cue editor as a wide dialog portaled into document.body, with "New cue" starting the draft, and clears the selection on Escape', async () => {
+    setup()
+    fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body)
+    expect(dialog.className).toContain('sm-drawer--wide')
+    expect(within(dialog).getByText('New cue')).toBeInTheDocument()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('a new cue with no output selected cannot be created', async () => {
     setup()
     fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))

@@ -23,6 +23,7 @@ import {
   Button,
   ButtonRow,
   DefinitionStrip,
+  Drawer,
   Field,
   Input,
   RuledStrip,
@@ -152,6 +153,9 @@ export function Access() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  // Open by default for the signed-in principal's own row, same as the
+  // pane this replaces used to show without a click.
+  const [inspectorOpen, setInspectorOpen] = useState(true)
 
   const principals = data.kind === 'loaded' ? data.principals : []
   const effectiveSelectedId = selectedId ?? model.session?.principal?.id ?? null
@@ -162,6 +166,21 @@ export function Access() {
   useEffect(() => {
     setIssuedValue(null)
   }, [effectiveSelectedId])
+
+  const closeInspector = () => {
+    setInspectorOpen(false)
+    setCreating(false)
+  }
+  const selectPrincipal = (principalId: string) => {
+    setCreating(false)
+    setSelectedId(principalId)
+    setInspectorOpen(true)
+  }
+  const openCreate = () => {
+    setCreating(true)
+    setSelectedId(null)
+    setInspectorOpen(true)
+  }
 
   return (
     <>
@@ -197,14 +216,11 @@ export function Access() {
       <Section
         id="ac-princ"
         title="Principals"
-        detail="Scopes are granted as bundles defined on the coordinator; there is no per-principal scope bundle to read, so only your own row below shows the scopes you actually hold. Every other row shows its role instead."
+        detail="Scopes are granted as bundles defined on the coordinator; there is no per-principal scope bundle to read, so the inspector shows your own scopes when you select your row. Every other principal shows its role instead."
         aside={
           <Button
             variant="primary"
-            onClick={() => {
-              setCreating(true)
-              setSelectedId(null)
-            }}
+            onClick={openCreate}
             disabled={!writeGate.allowed}
             title={writeGate.allowed ? undefined : writeGate.reason}
           >
@@ -218,13 +234,15 @@ export function Access() {
         {data.kind === 'loaded' && (
           <>
             <TableWrap label="Principals, scrollable">
-              <Table minWidth={660}>
+              <Table minWidth={720}>
                 <thead>
                   <tr>
                     <th scope="col">Principal</th>
-                    <th scope="col">Scopes held</th>
-                    <th scope="col">Last token use</th>
+                    <th scope="col">Kind</th>
+                    <th scope="col">Role</th>
                     <th scope="col">State</th>
+                    <th scope="col">Last token use</th>
+                    <th scope="col">Password</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -235,11 +253,8 @@ export function Access() {
                       tokens={data.tokens[principal.id]}
                       session={model.session}
                       nowIso={nowIso}
-                      selected={principal.id === effectiveSelectedId && !creating}
-                      onSelect={() => {
-                        setCreating(false)
-                        setSelectedId(principal.id)
-                      }}
+                      selected={principal.id === effectiveSelectedId && !creating && inspectorOpen}
+                      onSelect={() => selectPrincipal(principal.id)}
                     />
                   ))}
                 </tbody>
@@ -254,43 +269,50 @@ export function Access() {
         )}
       </Section>
 
-      {creating ? (
-        <CreatePrincipalPanel
-          writeGate={writeGate}
-          onCreated={(principal) => {
-            setCreating(false)
-            setSelectedId(principal.id)
-            reload()
-          }}
-          onDiscard={() => setCreating(false)}
-        />
-      ) : (
-        <Section id="ac-cred" title={selectedPrincipal === undefined ? 'Credentials' : `Credentials for ${selectedPrincipal.name}`}>
-          {selectedPrincipal === undefined ? (
-            <RuledStrip absence="empty" label="Nothing selected" fact="Select a principal above for its credentials." />
-          ) : (
-            <>
-              <AdministrationPanel
-                principal={selectedPrincipal}
-                session={model.session}
-                writeGate={writeGate}
-                onChanged={reload}
-              />
-              <CredentialsPanel
-                principal={selectedPrincipal}
-                tokens={selectedTokens}
-                session={model.session}
-                writeGate={writeGate}
-                readDenied={data.kind === 'denied'}
-                readFailed={data.kind === 'failed' ? data.reason : null}
-                issuedValue={issuedValue}
-                onIssued={setIssuedValue}
-                onChanged={reload}
-              />
-            </>
-          )}
-        </Section>
-      )}
+      <Drawer open={inspectorOpen} onClose={closeInspector} labelledBy="ac-cred" width="wide">
+        {creating ? (
+          <CreatePrincipalPanel
+            writeGate={writeGate}
+            onCreated={(principal) => {
+              setCreating(false)
+              setSelectedId(principal.id)
+              reload()
+            }}
+            onDiscard={closeInspector}
+          />
+        ) : (
+          <Section id="ac-cred" title={selectedPrincipal === undefined ? 'Credentials' : `Credentials for ${selectedPrincipal.name}`}>
+            {selectedPrincipal === undefined ? (
+              <RuledStrip absence="empty" label="Nothing selected" fact="Select a principal for its credentials." />
+            ) : (
+              <>
+                <div className="sm-inspector__row">
+                  <span className="sm-inspector__label sm-data">Created</span>
+                  <p className="sm-inspector__value sm-data">{formatDateClock(selectedPrincipal.createdAt) ?? 'unrecorded'}</p>
+                </div>
+                <ScopesRow principal={selectedPrincipal} session={model.session} />
+                <AdministrationPanel
+                  principal={selectedPrincipal}
+                  session={model.session}
+                  writeGate={writeGate}
+                  onChanged={reload}
+                />
+                <CredentialsPanel
+                  principal={selectedPrincipal}
+                  tokens={selectedTokens}
+                  session={model.session}
+                  writeGate={writeGate}
+                  readDenied={data.kind === 'denied'}
+                  readFailed={data.kind === 'failed' ? data.reason : null}
+                  issuedValue={issuedValue}
+                  onIssued={setIssuedValue}
+                  onChanged={reload}
+                />
+              </>
+            )}
+          </Section>
+        )}
+      </Drawer>
 
       <Section id="ac-audit" title="Attribution">
         <RuledStrip
@@ -359,31 +381,24 @@ function PrincipalRow({
       <td>
         <strong>{principal.name}</strong>{' '}
         {isYou && <span className="sm-chip">You</span>}
+        {selected && <span className="sm-viewing">Editing</span>}
         <br />
         <span className="sm-small sm-faint">
           {count === null ? 'Credentials unread' : `${count} ${count === 1 ? 'credential' : 'credentials'}`}
-          {principal.kind === 'machine' && ' · machine principal'}
-          {principal.reserved && ' · reserved'}
         </span>
       </td>
       <td>
-        {isYou && session !== null ? (
-          session.scopes.length === 0 ? (
-            <span className="sm-small sm-faint">No scopes held.</span>
-          ) : (
-            <span className="sm-chip-row">
-              {session.scopes.map((scope) => (
-                <span key={scope} className="sm-chip">
-                  {scope}
-                </span>
-              ))}
-            </span>
-          )
-        ) : (
-          <span className="sm-small sm-muted">
-            Role <span className="sm-data">{principal.role}</span>
-          </span>
+        {principal.kind === 'machine' ? 'Machine' : 'Human'}
+        {principal.reserved && (
+          <>
+            <br />
+            <span className="sm-small sm-faint">reserved</span>
+          </>
         )}
+      </td>
+      <td className="sm-data">{principal.role}</td>
+      <td>
+        <StatusPair tone={state.tone} label={state.label} />
       </td>
       <td className="sm-data">
         {lastUsed === null ? 'Never used' : formatDateClock(lastUsed)}
@@ -394,10 +409,39 @@ function PrincipalRow({
           </>
         )}
       </td>
-      <td>
-        <StatusPair tone={state.tone} label={state.label} />
-      </td>
+      <td className="sm-data">{principal.hasPassword ? 'Set' : 'Token only'}</td>
     </SelectableRow>
+  )
+}
+
+/**
+ * The scopes rows carried over from the old per-principal panel: only the
+ * signed-in principal's own scope bundle is ever known, because no endpoint
+ * reports another principal's resolved scopes.
+ */
+function ScopesRow({ principal, session }: { principal: PrincipalObject; session: Model['session'] }) {
+  const isYou = isSignedInPrincipal(session, principal)
+  return (
+    <div className="sm-inspector__row">
+      <span className="sm-inspector__label sm-data">Scopes</span>
+      {isYou && session !== null ? (
+        session.scopes.length === 0 ? (
+          <p className="sm-inspector__value sm-small sm-faint">No scopes held.</p>
+        ) : (
+          <p className="sm-inspector__value sm-chip-row">
+            {session.scopes.map((scope) => (
+              <span key={scope} className="sm-chip">
+                {scope}
+              </span>
+            ))}
+          </p>
+        )
+      ) : (
+        <p className="sm-inspector__value sm-small sm-muted">
+          Not reported for another principal. Role <span className="sm-data">{principal.role}</span> is shown instead.
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -528,15 +572,6 @@ function AdministrationPanel({
   return (
     <div className="sm-inspector__group">
       <h3 className="sm-subsection__title">Administration</h3>
-      <div className="sm-inspector__row">
-        <span className="sm-inspector__label sm-data">Created</span>
-        <p className="sm-inspector__value sm-data">{formatDateClock(principal.createdAt) ?? 'unrecorded'}</p>
-      </div>
-      <div className="sm-inspector__row">
-        <span className="sm-inspector__label sm-data">Password</span>
-        <p className="sm-inspector__value sm-data">{principal.hasPassword ? 'Set' : 'Token only'}</p>
-      </div>
-
       <Segmented<PrincipalObject['role']>
         label="Role"
         value={role}

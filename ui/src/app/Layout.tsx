@@ -294,15 +294,23 @@ function ShowActivePicker({
  * must still open the picker. `Show not reported` is reserved for the one
  * case that actually is unreported: the `show.active` read itself failed.
  */
-function ShowPicker({ model }: { model: Model }) {
+function ShowPicker({ model, signInKind }: { model: Model; signInKind: SignInState['kind'] }) {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const anchorRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState<ShowActiveConfigResponse | null>(null)
   const [readError, setReadError] = useState<string | null>(null)
+  const authenticated = signInKind === 'signed_in'
+  const principalId = model.session?.principal?.id ?? null
 
+  // Without a credential this device cannot read show.active either; the
+  // read is never issued until signed in, and is re-issued whenever the
+  // signed-in principal changes.
   useEffect(() => {
+    if (!authenticated) return
     let cancelled = false
+    setActive(null)
+    setReadError(null)
     readShowActiveOrEmpty()
       .then((response) => {
         if (!cancelled) setActive(response)
@@ -313,7 +321,15 @@ function ShowPicker({ model }: { model: Model }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [authenticated, principalId])
+
+  if (!authenticated) {
+    return (
+      <span className="sm-showpicker sm-showpicker--unavailable">
+        <span className="sm-showpicker__eyebrow">Show</span>
+      </span>
+    )
+  }
 
   if (readError !== null) {
     return (
@@ -449,15 +465,21 @@ function ModePicker({
   )
 }
 
-function ShellMode({ model }: { model: Model }) {
+function ShellMode({ model, signInKind }: { model: Model; signInKind: SignInState['kind'] }) {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const nightSession = useNightSessionSeed(model)
   const anchorRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const [response, setResponse] = useState<ShowModeConfigResponse | null>(null)
+  const authenticated = signInKind === 'signed_in'
+  const principalId = model.session?.principal?.id ?? null
 
+  // Same rule as ShowPicker: no show.mode read without a credential, and a
+  // fresh read whenever the signed-in principal changes.
   useEffect(() => {
+    if (!authenticated) return
     let cancelled = false
+    setResponse(null)
     getShowModeConfig()
       .then((r) => {
         if (!cancelled) setResponse(r)
@@ -468,7 +490,15 @@ function ShellMode({ model }: { model: Model }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [authenticated, principalId])
+
+  if (!authenticated) {
+    return (
+      <span className="sm-showpicker sm-showpicker--unavailable">
+        <span className="sm-showpicker__eyebrow">Mode</span>
+      </span>
+    )
+  }
 
   if (response === null) return null
   const mode = response.payload.mode
@@ -514,8 +544,8 @@ export function Layout() {
   return (
     <div className="sm-shell">
       <ChromeBar
-        showPicker={<ShowPicker model={model} />}
-        mode={<ShellMode model={model} />}
+        showPicker={<ShowPicker model={model} signInKind={signIn.kind} />}
+        mode={<ShellMode model={model} signInKind={signIn.kind} />}
         nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
         connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
         principal={

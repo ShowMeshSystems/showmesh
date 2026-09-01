@@ -149,7 +149,8 @@ describe('Access', () => {
     renderScreen()
     await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Principals', 'Credentials for erbartos', 'Attribution', 'Bootstrap'])
+    expect(headings).toEqual(expect.arrayContaining(['Principals', 'Credentials for erbartos', 'Attribution', 'Bootstrap']))
+    expect(headings).toHaveLength(4)
   })
 
   it('shows resolved scopes on the signed-in row and a role on every other row, and states the bundle is not reported', async () => {
@@ -410,14 +411,15 @@ describe('Access', () => {
     expect(within(screen.getByText('Audit store').closest('.sm-strip') as HTMLElement).getByText('audit:read')).toBeInTheDocument()
   })
 
-  it('renders hasPassword and createdAt as detail rows, not table columns', async () => {
+  it('shows hasPassword as a Password table column and createdAt as an inspector detail row', async () => {
     stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
     stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
     stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
     renderScreen()
     await waitFor(() => expect(screen.getByText('Administration')).toBeInTheDocument())
-    expect(screen.queryByRole('columnheader', { name: /Password|Created/ })).not.toBeInTheDocument()
-    expect(screen.getByText('Set')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Password' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Created' })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: 'View credentials for erbartos' })).getByText('Set')).toBeInTheDocument()
     expect(screen.getByText('Created')).toBeInTheDocument()
     expect(screen.queryByText('unrecorded')).not.toBeInTheDocument()
   })
@@ -541,6 +543,30 @@ describe('Access', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reset password' }))
     await waitFor(() => expect(received).toEqual({ password: 'a-new-password' }))
     await waitFor(() => expect(screen.getByText(/Every session and token this principal held is now invalid/)).toBeInTheDocument())
+  })
+
+  it('opens the inspector as a dialog on row selection, marks the row Editing, and closes on the close button', async () => {
+    stubs.listPrincipals = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        principals: [principal(), principal({ id: 'p2', name: 'old-laptop', role: 'operator' })],
+      })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('old-laptop')).toBeInTheDocument())
+
+    // The signed-in principal's own row opens by default, same as the panel it replaces.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: 'View credentials for erbartos' })).getByText('Editing')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('row', { name: 'View credentials for old-laptop' }))
+    await waitFor(() => expect(screen.getByText('Credentials for old-laptop')).toBeInTheDocument())
+    expect(within(screen.getByRole('row', { name: 'View credentials for old-laptop' })).getByText('Editing')).toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: 'View credentials for erbartos' })).queryByText('Editing')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
 

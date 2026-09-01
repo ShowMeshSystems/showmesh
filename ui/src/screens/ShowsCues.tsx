@@ -117,8 +117,15 @@ export function ShowsCues() {
   const audioAssets = state.assets.filter((a) => a.mediaType === 'audio' && a.current)
   const existingIds = state.cues.map((c) => c.id)
 
+  const closeInspector = () => { setCreating(false); setSelectedId(null) }
+
   return (
-    <Panes>
+    <Panes
+      inspectorOpen={creating || selected !== null}
+      onInspectorClose={closeInspector}
+      inspectorLabelledBy="cue-editor-heading"
+      inspectorWidth="wide"
+    >
       <div>
         <Section
           id="cue-list"
@@ -589,7 +596,7 @@ function CueEditor({
 
   return (
     <div className="sm-inspector">
-      <p className="sm-eyebrow sm-eyebrow--accent">{isNew ? 'New cue' : `Editing ${cue.payload.name}`}</p>
+      <p className="sm-eyebrow sm-eyebrow--accent" id="cue-editor-heading">{isNew ? 'New cue' : `Editing ${cue.payload.name}`}</p>
       <p className="sm-small sm-muted">In this show. Cues can only reference this show's own assets.</p>
 
       <div className="sm-inspector__group">

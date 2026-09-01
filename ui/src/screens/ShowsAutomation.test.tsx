@@ -256,6 +256,18 @@ describe('Shows · Automation tab', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
+  it('opens the step editor as a wide dialog portaled into document.body and clears the selection on Escape', async () => {
+    setup()
+    const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+    fireEvent.click(stepButton)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body)
+    expect(dialog.className).toContain('sm-drawer--wide')
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('a step cannot be saved without a local-fallback reason', async () => {
     setup()
     const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
@@ -537,7 +549,7 @@ describe('Shows · Automation tab', () => {
       const newAction = await screen.findByRole('button', { name: 'New action' })
       fireEvent.click(newAction)
       expect(await screen.findByText('Draft · new action')).toBeInTheDocument()
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       expect(within(aside).queryByText('mqtt target')).not.toBeInTheDocument()
       expect(within(aside).queryByText('fpp target')).not.toBeInTheDocument()
       expect(within(aside).queryByRole('heading', { name: 'Safety class' })).not.toBeInTheDocument()
@@ -552,7 +564,7 @@ describe('Shows · Automation tab', () => {
       setup()
       const newAction = await screen.findByRole('button', { name: 'New action' })
       fireEvent.click(newAction)
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
 
       fireEvent.click(within(aside).getByRole('button', { name: 'FPP' }))
       expect(await within(aside).findByText('fpp target')).toBeInTheDocument()
@@ -576,7 +588,7 @@ describe('Shows · Automation tab', () => {
     it('derives stop for stopPlaylistGracefully and none for startPlaylist, disabling the control both times', async () => {
       setup()
       fireEvent.click(await screen.findByRole('button', { name: 'New action' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       fireEvent.click(within(aside).getByRole('button', { name: 'FPP' }))
       const primitive = await within(aside).findByLabelText('Primitive')
       fireEvent.change(primitive, { target: { value: 'stopPlaylistGracefully' } })
@@ -593,7 +605,7 @@ describe('Shows · Automation tab', () => {
     it('derives blackout for audio.output.mute, disabling the control', async () => {
       setup()
       fireEvent.click(await screen.findByRole('button', { name: 'New action' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       fireEvent.click(within(aside).getByRole('button', { name: 'Audio' }))
       const operation = await within(aside).findByLabelText('Operation')
       fireEvent.change(operation, { target: { value: 'audio.output.mute' } })
@@ -605,7 +617,7 @@ describe('Shows · Automation tab', () => {
     it('leaves mqtt safety class unanswered and withholds the save until it is answered', async () => {
       setup()
       fireEvent.click(await screen.findByRole('button', { name: 'New action' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       fireEvent.change(await within(aside).findByLabelText('Label'), { target: { value: 'Weather Sign' } })
       fireEvent.click(within(aside).getByRole('button', { name: 'MQTT' }))
       fireEvent.change(await within(aside).findByLabelText('Broker'), { target: { value: 'lot-a' } })
@@ -625,7 +637,7 @@ describe('Shows · Automation tab', () => {
       setup()
       const newMacro = await screen.findByRole('button', { name: 'New macro' })
       fireEvent.click(newMacro)
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       fireEvent.change(await within(aside).findByLabelText('Label'), { target: { value: 'Wind Hold' } })
       const actionSelect = within(aside).getByLabelText('Action')
       fireEvent.change(actionSelect, { target: { value: 'start-preshow' } })
@@ -648,7 +660,7 @@ describe('Shows · Automation tab', () => {
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       expect(await within(aside).findByText('Editing · Start Preshow Playlist')).toBeInTheDocument()
       expect(within(aside).getAllByText('start-preshow').length).toBeGreaterThan(0)
       expect(within(aside).getAllByText('fpp').length).toBeGreaterThan(0)
@@ -672,7 +684,7 @@ describe('Shows · Automation tab', () => {
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       expect(await within(aside).findByText(/Active revision/)).toBeInTheDocument()
       expect(within(aside).queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
       expect(within(aside).queryByText('Active · 1')).not.toBeInTheDocument()
@@ -683,7 +695,7 @@ describe('Shows · Automation tab', () => {
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       await within(aside).findByText('Editing · Start Preshow Playlist')
       expect(within(aside).queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
     })
@@ -693,7 +705,7 @@ describe('Shows · Automation tab', () => {
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
       const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       expect(await within(aside).findByText('Revision history could not be read just now.')).toBeInTheDocument()
     })
 
@@ -754,7 +766,7 @@ describe('Shows · Automation tab', () => {
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
       const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
       expect(boxA).toBeChecked()
@@ -775,7 +787,7 @@ describe('Shows · Automation tab', () => {
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
       const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
       expect(boxA).toBeChecked()
@@ -796,7 +808,7 @@ describe('Shows · Automation tab', () => {
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       const boxB = await within(aside).findByRole('checkbox', { name: 'Node B' })
       fireEvent.click(boxB)
 
@@ -815,7 +827,7 @@ describe('Shows · Automation tab', () => {
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
       expect(boxA).toBeChecked()
 
@@ -834,7 +846,7 @@ describe('Shows · Automation tab', () => {
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
       fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
-      const aside = screen.getByRole('complementary')
+      const aside = screen.getByRole('dialog')
       const ghostBox = await within(aside).findByRole('checkbox', { name: 'ghost-node (not declared)' })
       expect(ghostBox).toBeChecked()
       fireEvent.click(ghostBox)

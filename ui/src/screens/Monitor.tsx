@@ -121,12 +121,18 @@ export function Monitor() {
     setSelected(next)
     setSearchParams(next === null ? {} : { resource: next })
   }
+  const closeInspector = () => { setSelected(null); setSearchParams({}) }
+  const inspectorLabelledBy = selectedNode !== undefined
+    ? `inspect-${selected}`
+    : selectedFpp !== undefined
+      ? `inspect-fpp-${selectedFpp.instanceId}`
+      : 'mo-inspector-empty'
 
   return (
     <div className="sm-monitor">
       <MonitorHead model={model} />
 
-      <Panes>
+      <Panes inspectorOpen={selected !== null} onInspectorClose={closeInspector} inspectorLabelledBy={inspectorLabelledBy}>
         <div>
           <Tiles>
             <StatTile label="Nodes" value={`${counts.nodesOnline} / ${counts.nodesTotal}`} detail={nodesDetail(counts)} />
@@ -280,12 +286,15 @@ export function Monitor() {
           ) : selectedFpp !== undefined ? (
             <FppInspector instance={selectedFpp} nowIso={nowIso} />
           ) : (
-            <RuledStrip
-              absence="empty"
-              label="Nothing selected"
-              fact="Select a resource for its full evidence."
-              detail="FPP transport stays in Live Control. Resolume configuration has its own screen."
-            />
+            <div id="mo-inspector-empty">
+              <h2 className="sm-inspector__title">Resource not found</h2>
+              <RuledStrip
+                absence="empty"
+                label="Nothing selected"
+                fact="Select a resource for its full evidence."
+                detail="FPP transport stays in Live Control. Resolume configuration has its own screen."
+              />
+            </div>
           )}
         </aside>
       </Panes>
@@ -360,7 +369,7 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   return (
     <div className="sm-inspector">
       <p className="sm-eyebrow">FPP</p>
-      <h2 className="sm-inspector__title">{inspector.title}</h2>
+      <h2 className="sm-inspector__title" id={`inspect-fpp-${instance.instanceId}`}>{inspector.title}</h2>
       <p className="sm-small sm-muted">{inspector.subtitle}</p>
       {inspector.groups.map((group) => (
         <section key={group.name} aria-labelledby={`inspect-fpp-${group.name}`} className="sm-inspector__group">

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Model, NodeAssetManifest } from '../api'
@@ -59,6 +59,18 @@ describe('Monitor · Manifest', () => {
     renderScreen()
     await waitFor(() => expect(screen.getByText('media-front')).toBeInTheDocument())
     expect(screen.getByText('Ready')).toBeInTheDocument()
+  })
+
+  it('opens the manifest detail as a dialog portaled into document.body and clears it on Escape', async () => {
+    getAssetManifest.mockResolvedValue({ serverTime: '2026-08-28T21:07:00Z', nodes: [manifest()] })
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('media-front')).toBeInTheDocument())
+    screen.getByRole('row', { name: 'View manifest for media-front' }).click()
+    const dialog = await waitFor(() => screen.getByRole('dialog'))
+    expect(dialog.parentElement).toBe(document.body)
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('never offers a delete control for an extra asset', async () => {

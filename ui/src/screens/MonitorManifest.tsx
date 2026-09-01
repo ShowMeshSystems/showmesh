@@ -84,7 +84,11 @@ export function MonitorManifest() {
         ) : nodes.length === 0 && state.kind === 'loaded' ? (
           <RuledStrip absence="empty" label="None" fact="No node is declared, so there is nothing to check." />
         ) : (
-          <Panes>
+          <Panes
+            inspectorOpen={selectedManifest !== null}
+            onInspectorClose={() => setSelected(null)}
+            inspectorLabelledBy={selected === null ? '' : `mo-manifest-inspect-${selected}`}
+          >
             <div>
               <TableWrap label="Node asset manifest, scrollable">
                 <Table minWidth={640}>
@@ -179,7 +183,7 @@ function ManifestDetail({ manifest }: { manifest: NodeAssetManifest }) {
   return (
     <div className="sm-inspector">
       <p className="sm-eyebrow">Node</p>
-      <h2 className="sm-inspector__title">
+      <h2 className="sm-inspector__title" id={`mo-manifest-inspect-${manifest.node}`}>
         <Link to={`/monitor/fleet/node/${manifest.node}`}>{manifest.node}</Link>
       </h2>
       <p className="sm-small sm-muted">

@@ -154,6 +154,14 @@ describe('Shows workspace shell', () => {
     expect(screen.getByRole('heading', { name: 'New night session' })).toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: 'Night session definition sections' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Night session' })).toHaveAttribute('aria-current', 'page')
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body)
+    expect(dialog.className).toContain('sm-drawer--wide')
+    expect(within(dialog).getByRole('heading', { name: 'New night session' })).toBeInTheDocument()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('populates FPP and timeline dropdowns from reported inventory without inventing options', async () => {
