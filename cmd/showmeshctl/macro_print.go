@@ -31,6 +31,7 @@ func printShowActionDetail(w io.Writer, resp showActionConfigResponse) {
 		_, _ = fmt.Fprintf(w, "Description:  %s\n", resp.Payload.Description)
 	}
 	_, _ = fmt.Fprintf(w, "Safety class: %s\n", resp.Payload.SafetyClass)
+	_, _ = fmt.Fprintf(w, "Idempotent:   %s\n", showActionIdempotentLabel(resp.Payload.Idempotent))
 	_, _ = fmt.Fprintf(w, "Revision:     %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:      %s\n", resp.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"))
 	if resp.CreatedByPrincipalName != nil {
@@ -80,6 +81,22 @@ func printShowActionDetail(w io.Writer, resp showActionConfigResponse) {
 		}
 	default:
 		_, _ = fmt.Fprintf(w, "  (unrecognized integration %q)\n", t.Integration)
+	}
+}
+
+// showActionIdempotentLabel renders show.action's tri-state idempotent
+// declaration -- true, false, or never declared -- distinguishing "not
+// declared" from a declared false rather than collapsing an absent server
+// claim into its zero value (api/openapi.yaml's ConfigShowAction.idempotent
+// doc comment: "a real, distinct state from a declared false").
+func showActionIdempotentLabel(v *bool) string {
+	switch {
+	case v == nil:
+		return "not declared"
+	case *v:
+		return "true"
+	default:
+		return "false"
 	}
 }
 

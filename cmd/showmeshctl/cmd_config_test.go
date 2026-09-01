@@ -204,6 +204,74 @@ func TestCmdConfigSetAcceptsAFullConfigGetResponse(t *testing.T) {
 	}
 }
 
+// TestUnwrapConfigGetResponseUnwrapsTheWrapperShape proves
+// unwrapConfigGetResponse — the generalization of parseConfigSetPayload's
+// own wrapper detection to every config kind — recognizes the full object
+// every "<kind> get --output json" prints (kind, revision, payload,
+// updatedAt, source all present together) and returns the bytes of its
+// "payload" field alone.
+func TestUnwrapConfigGetResponseUnwrapsTheWrapperShape(t *testing.T) {
+	got, err := unwrapConfigGetResponse([]byte(testFPPEndpointsConfigResponse))
+	if err != nil {
+		t.Fatalf("unwrapConfigGetResponse: %v", err)
+	}
+	var payload configFPPEndpointsPayload
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("unwrapped bytes did not decode as the bare payload: %v; got=%s", err, got)
+	}
+	if len(payload.Endpoints) != 1 || payload.Endpoints[0].ID != "player-01" {
+		t.Fatalf("unwrapped payload = %+v, want the one endpoint from the wrapper", payload)
+	}
+}
+
+// TestUnwrapConfigGetResponsePassesThroughBarePayload proves a payload
+// with no top-level "payload" key at all — the shape an operator would
+// hand-type — passes through byte-for-byte unchanged: today's behavior.
+func TestUnwrapConfigGetResponsePassesThroughBarePayload(t *testing.T) {
+	const bare = `{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]}`
+	got, err := unwrapConfigGetResponse([]byte(bare))
+	if err != nil {
+		t.Fatalf("unwrapConfigGetResponse: %v", err)
+	}
+	if string(got) != bare {
+		t.Errorf("got = %s, want the bare payload returned unchanged: %s", got, bare)
+	}
+}
+
+// TestUnwrapConfigGetResponseRejectsNullPayload proves a JSON `null`
+// "payload" value, alongside the wrapper's own marker keys, is refused
+// rather than silently unwrapped to a zero value: a JSON null is not an
+// absent key.
+func TestUnwrapConfigGetResponseRejectsNullPayload(t *testing.T) {
+	const wrapper = `{"kind":"fpp.endpoints","revision":1,"payload":null,"updatedAt":"2026-08-12T00:00:00Z","source":"api"}`
+	_, err := unwrapConfigGetResponse([]byte(wrapper))
+	if err == nil {
+		t.Fatal("unwrapConfigGetResponse returned no error, want a refusal naming the null payload")
+	}
+	if !strings.Contains(err.Error(), "null") {
+		t.Errorf("error = %q, want it to name the null payload", err.Error())
+	}
+}
+
+// TestUnwrapConfigGetResponseRejectsAmbiguousShape proves a "payload" key
+// present WITHOUT both wrapper marker keys ("kind" and "revision") is
+// refused as ambiguous — naming both shapes this helper accepts — rather
+// than guessed either way. A bare payload could legitimately have its own
+// field named "payload"; only the full marker set makes the wrapper shape
+// unambiguous.
+func TestUnwrapConfigGetResponseRejectsAmbiguousShape(t *testing.T) {
+	const ambiguous = `{"kind":"fpp.endpoints","payload":{"endpoints":[]}}`
+	_, err := unwrapConfigGetResponse([]byte(ambiguous))
+	if err == nil {
+		t.Fatal("unwrapConfigGetResponse returned no error, want a refusal naming both accepted shapes")
+	}
+	for _, want := range []string{"kind", "revision", "payload"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err.Error(), want)
+		}
+	}
+}
+
 // TestCmdConfigSetRejectsBodyWithNoEndpointsKeyAnywhere is Step 7 seam A
 // review defect 2's other half: this CLI must refuse, client-side, any
 // input where it cannot find an "endpoints" key at all (neither bare nor

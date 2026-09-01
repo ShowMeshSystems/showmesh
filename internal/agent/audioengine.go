@@ -109,8 +109,12 @@ var newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
 // onNode callback). onNode runs with its own lock released, so two
 // deliveries can call [audioEngineRebuilder.rebuild] from different
 // goroutines; mu serializes them so at most one rebuild runs at a time,
-// and each fully releases what it displaces before the next one starts
-// (see [audioEngineRebuilder.bind]). Serialization alone does not order
+// and each releases what it displaces before the next one starts (see
+// [audioEngineRebuilder.bind]), except the displaced engine's own pipeline
+// resources when its teardown times out rather than confirming NULL:
+// [gstengine.Engine.Close] leaves those unreleased on purpose rather than
+// risk a use-after-free against a state change its own abandoned goroutine
+// may still be driving. Serialization alone does not order
 // revisions: an older delivery's rebuild can still acquire mu AFTER a
 // newer delivery's rebuild already bound its engine. builtRevision and
 // haveBuilt (also guarded by mu) are what make a slower rebuild unable to

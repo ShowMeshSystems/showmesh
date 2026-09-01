@@ -13,6 +13,7 @@ import (
 	"time"
 
 	glib "github.com/go-gst/go-glib/pkg/glib/v2"
+	gobject "github.com/go-gst/go-glib/pkg/gobject/v2"
 	"github.com/go-gst/go-gst/pkg/gst"
 
 	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -105,6 +106,16 @@ type Engine struct {
 	// would otherwise never see that branch and would report a false
 	// clean Close.
 	anyTeardownIncomplete atomic.Bool
+
+	// pipelineStateAtClose is the pipeline's own GStreamer state, read
+	// once by Close immediately before releasing its reference to
+	// e.pipeline (see releaseBus: go-gst's finalizer does not reliably
+	// reclaim a GStreamer object's own internal resources, so Close
+	// drops this reference explicitly rather than leaving it for GC,
+	// which makes the live object unsafe to query afterward). Zero value
+	// when Close's own SetState(NULL) attempt was abandoned or deferred
+	// rather than confirmed.
+	pipelineStateAtClose gst.State
 
 	closeOnce sync.Once
 	closeErr  error
@@ -323,6 +334,18 @@ func (e *Engine) Close() error {
 			if err != nil {
 				slog.Warn("gstengine: output pipeline did not reach NULL within the shutdown timeout", "error", err)
 				e.anyTeardownIncomplete.Store(true)
+			} else {
+				// See pipelineStateAtClose's doc comment: read before
+				// the reference is dropped, not after. Set to nil once
+				// released, not left dangling, so any caller that still
+				// checks "if e.pipeline != nil" (as this same block
+				// does) sees a released pipeline as absent rather than
+				// touching a freed object.
+				e.pipelineStateAtClose, _, _ = e.pipeline.GetState(0)
+				if obj, ok := e.pipeline.(gobject.Object); ok {
+					gobject.UnsafeObjectUnref(obj)
+				}
+				e.pipeline = nil
 			}
 		}
 		if e.ltc != nil {
@@ -534,6 +557,7 @@ const buildSettleWindow = 300 * time.Millisecond
 // [Engine.watchBus], which only starts once this returns nil.
 func (e *Engine) awaitSustainedPlaying() error {
 	bus := e.pipeline.GetBus()
+	defer releaseBus(bus)
 	deadline := time.Now().Add(buildSettleWindow)
 	for {
 		remaining := time.Until(deadline)
@@ -544,10 +568,25 @@ func (e *Engine) awaitSustainedPlaying() error {
 		if msg == nil {
 			return nil
 		}
-		if msg.Type() == gst.MessageError {
-			text, _ := msg.ParseError()
+		msgType := msg.Type()
+		var text string
+		if msgType == gst.MessageError {
+			text, _ = msg.ParseError()
+		}
+		gst.UnsafeMessageUnref(msg)
+		if msgType == gst.MessageError {
 			return fmt.Errorf("output pipeline failed to sustain PLAYING: %s", text)
 		}
+	}
+}
+
+// releaseBus drops this package's own reference to a bus returned by
+// GetBus. Each GetBus call takes a fresh reference go-gst's own
+// finalizer never reclaims in practice, so every caller must release it
+// explicitly rather than letting it go out of scope.
+func releaseBus(bus gst.Bus) {
+	if obj, ok := bus.(gobject.Object); ok {
+		gobject.UnsafeObjectUnref(obj)
 	}
 }
 
@@ -686,6 +725,7 @@ func addMixerKeepAlive(bin gst.Bin, mixer gst.Element, ch int, sampleRate int) e
 
 func (e *Engine) watchBus() {
 	bus := e.pipeline.GetBus()
+	defer releaseBus(bus)
 	for {
 		select {
 		case <-e.done:
@@ -701,6 +741,7 @@ func (e *Engine) watchBus() {
 			text, gerr := msg.ParseError()
 			if b := e.branchForSource(msg.Source()); b != nil {
 				b.reportLoadError(classifyBranchError(text, gerr))
+				gst.UnsafeMessageUnref(msg)
 				continue
 			}
 			e.markBroken(fmt.Sprintf("output pipeline error: %s", text))
@@ -721,6 +762,7 @@ func (e *Engine) watchBus() {
 			// A downstream element dropped/skipped a buffer for the clock.
 			e.qosCount.Add(1)
 		}
+		gst.UnsafeMessageUnref(msg)
 	}
 }
 

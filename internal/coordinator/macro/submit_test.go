@@ -341,3 +341,147 @@ func TestGetRunUnknownIDWrapsSentinel(t *testing.T) {
 		t.Fatalf("GetRun on an unknown id: err = %v, want wrapped api.ErrMacroRunNotFound", err)
 	}
 }
+
+// setupTwoShowRuns submits one run for each of two macros belonging to
+// different shows ("halloween-2026" and "christmas-2026"), and returns the
+// executor those runs live in.
+func setupTwoShowRuns(t *testing.T) *Executor {
+	t.Helper()
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	e, _ := newTestExecutor(t, st, svc, &fakeDispatcher{}, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m-halloween", config.ShowMacroPayload{
+		Show: "halloween-2026", Label: "spooky macro", Steps: []config.ShowMacroStep{testStep("s1", "a1")},
+	})
+	putMacro(t, st, "m-christmas", config.ShowMacroPayload{
+		Show: "christmas-2026", Label: "jolly macro", Steps: []config.ShowMacroStep{testStep("s1", "a1")},
+	})
+
+	if _, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m-halloween", IdempotencyKey: "key-halloween", Trigger: "api", Issuer: testIssuer(),
+	}); err != nil || problem != nil {
+		t.Fatalf("submit halloween run: problem=%+v err=%v", problem, err)
+	}
+	if _, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m-christmas", IdempotencyKey: "key-christmas", Trigger: "api", Issuer: testIssuer(),
+	}); err != nil || problem != nil {
+		t.Fatalf("submit christmas run: problem=%+v err=%v", problem, err)
+	}
+	e.wg.Wait()
+	return e
+}
+
+// TestListRunsFiltersByShow proves GET /macro-runs?show= actually narrows
+// the result instead of silently returning every show's runs.
+//
+// Broken and confirmed to fail: changed the `if f.Show != "" && r.Show !=
+// f.Show { continue }` line in ListRuns to a no-op and reran — this test's
+// "runs = 2, want 1" assertion failed as expected (both the halloween and
+// christmas run came back for a filter naming only halloween-2026).
+// Restored afterward.
+func TestListRunsFiltersByShow(t *testing.T) {
+	e := setupTwoShowRuns(t)
+
+	runs, err := e.ListRuns(context.Background(), api.MacroRunFilter{Show: "halloween-2026"})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	if runs[0].Show != "halloween-2026" {
+		t.Fatalf("runs[0].Show = %q, want halloween-2026", runs[0].Show)
+	}
+}
+
+// TestListRunsEmptyShowReturnsEverything proves an empty/absent show
+// narrows nothing, unchanged from before this filter existed.
+func TestListRunsEmptyShowReturnsEverything(t *testing.T) {
+	e := setupTwoShowRuns(t)
+
+	runs, err := e.ListRuns(context.Background(), api.MacroRunFilter{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(runs))
+	}
+}
+
+// TestListRunsShowMatchingNothingReturnsEmptyList proves a show naming no
+// run is a legitimate empty answer, not an error.
+func TestListRunsShowMatchingNothingReturnsEmptyList(t *testing.T) {
+	e := setupTwoShowRuns(t)
+
+	runs, err := e.ListRuns(context.Background(), api.MacroRunFilter{Show: "no-such-show"})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(runs))
+	}
+}
+
+// TestListRunsCombinesShowAndState proves show and state narrow together,
+// including the "running" branch which is served by a different store call
+// ([Store.ListRunningMacroRuns], via [Executor.listRunningRuns]) than
+// "finished"/no-state is. The dispatch fake blocks on release so the run
+// stays state=="running" until this test lets it finish.
+func TestListRunsCombinesShowAndState(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+
+	release := make(chan struct{})
+	dispatch := &fakeDispatcher{dispatchFn: func(_ context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error) {
+		<-release
+		now := time.Now()
+		return api.FPPCommandOutcome{
+			CommandID: "cmd-" + in.IdempotencyKey, Action: in.Action, InstanceID: in.InstanceID, Params: in.Params,
+			Outcome: "confirmed", OutcomeState: "current", OutcomeReason: "test evidence confirmed",
+			DispatchedAt: ptrTime(now), ResolvedAt: ptrTime(now),
+		}, nil, nil
+	}}
+	e, _ := newTestExecutor(t, st, svc, dispatch, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putMacro(t, st, "m-halloween", config.ShowMacroPayload{
+		Show: "halloween-2026", Label: "spooky macro", Steps: []config.ShowMacroStep{testStep("s1", "a1")},
+	})
+
+	if _, problem, err := e.SubmitRun(context.Background(), api.MacroSubmitRequest{
+		MacroObjectID: "m-halloween", IdempotencyKey: "key-halloween", Trigger: "api", Issuer: testIssuer(),
+	}); err != nil || problem != nil {
+		t.Fatalf("submit halloween run: problem=%+v err=%v", problem, err)
+	}
+
+	// The step's dispatch is blocked on release, so this run is still
+	// state=="running" — the filter combination must find it there.
+	runs, err := e.ListRuns(context.Background(), api.MacroRunFilter{Show: "halloween-2026", State: "running"})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Show != "halloween-2026" || runs[0].State != "running" {
+		t.Fatalf("runs = %+v, want exactly one running halloween-2026 run", runs)
+	}
+
+	// A show id that does not own the running run must not match it, even
+	// combined with the right state.
+	runs, err = e.ListRuns(context.Background(), api.MacroRunFilter{Show: "christmas-2026", State: "running"})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %d, want 0 for a show with no running runs", len(runs))
+	}
+
+	close(release)
+	e.wg.Wait()
+
+	runs, err = e.ListRuns(context.Background(), api.MacroRunFilter{Show: "halloween-2026", State: "finished"})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].State != "finished" {
+		t.Fatalf("runs = %+v, want exactly one finished halloween-2026 run once the block is released", runs)
+	}
+}

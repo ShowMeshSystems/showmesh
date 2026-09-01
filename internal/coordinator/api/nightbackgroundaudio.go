@@ -395,7 +395,7 @@ func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSe
 }
 
 // nightAdvanceBackgroundAudio is nightTick's own per-tick entry point
-// while rec is in a resting state. It never blocks: every call either
+// while rec is in preshow or a resting state. It never blocks: every call either
 // resumes an in-flight step or decides and commits the next one,
 // returning immediately either way.
 func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
