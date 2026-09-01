@@ -401,6 +401,67 @@ func TestDecodeNightSessionPayloadCrossfadeMsRejectedWithoutCrossfadeTransition(
 	}
 }
 
+func TestDecodeNightSessionPayloadFadeOutMsRequiresFadeInMs(t *testing.T) {
+	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": -10, "fadeOutMs": 200`, 1)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "resting.backgroundAudio.fadeOutMs" {
+		t.Fatalf("expected field-required when fadeOutMs is configured without fadeInMs, got %+v", verr)
+	}
+}
+
+func TestDecodeNightSessionPayloadFadeInMsRequiresFadeOutMs(t *testing.T) {
+	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": -10, "fadeInMs": 800`, 1)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "resting.backgroundAudio.fadeOutMs" {
+		t.Fatalf("expected field-required when fadeInMs is configured without fadeOutMs, got %+v", verr)
+	}
+}
+
+func TestDecodeNightSessionPayloadFadeOutMsMustBePositive(t *testing.T) {
+	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": -10, "fadeOutMs": 0, "fadeInMs": 800`, 1)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.fadeOutMs" {
+		t.Fatalf("expected field-invalid on fadeOutMs 0, got %+v", verr)
+	}
+}
+
+func TestDecodeNightSessionPayloadFadeInMsMustBePositive(t *testing.T) {
+	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": -10, "fadeOutMs": 200, "fadeInMs": 0`, 1)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.fadeInMs" {
+		t.Fatalf("expected field-invalid on fadeInMs 0, got %+v", verr)
+	}
+}
+
+// TestDecodeNightSessionPayloadFadePairAccepted proves the duck-style
+// down/up pair decodes as two independent, differently-valued durations
+// (never a single shared number) when both are configured together.
+func TestDecodeNightSessionPayloadFadePairAccepted(t *testing.T) {
+	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": -10, "fadeOutMs": 200, "fadeInMs": 800`, 1)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	ba := p.Resting.BackgroundAudio
+	if ba.FadeOutMs == nil || *ba.FadeOutMs != 200 {
+		t.Fatalf("expected fadeOutMs 200, got %v", ba.FadeOutMs)
+	}
+	if ba.FadeInMs == nil || *ba.FadeInMs != 800 {
+		t.Fatalf("expected fadeInMs 800, got %v", ba.FadeInMs)
+	}
+}
+
+// TestDecodeNightSessionPayloadNoFadeConfiguredLeavesBothNil proves the
+// compatibility requirement directly: omitting fadeOutMs/fadeInMs
+// entirely decodes to both nil, never a silently-defaulted duration.
+func TestDecodeNightSessionPayloadNoFadeConfiguredLeavesBothNil(t *testing.T) {
+	p := decodeValidNightSession(t)
+	ba := p.Resting.BackgroundAudio
+	if ba.FadeOutMs != nil || ba.FadeInMs != nil {
+		t.Fatalf("expected both fade durations nil when not configured, got fadeOutMs=%v fadeInMs=%v", ba.FadeOutMs, ba.FadeInMs)
+	}
+}
+
 func TestDecodeNightSessionPayloadMaxGainDbMustNotBePositive(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": 1`, 1)
 	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)

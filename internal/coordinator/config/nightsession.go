@@ -167,7 +167,7 @@ var (
 	nightSessionShowPlaylistKeys   = map[string]bool{"fppInstanceId": true, "playlist": true}
 	nightSessionRestingKeys        = map[string]bool{"fppInstanceId": true, "playlist": true, "endOfNightPlaylist": true, "timelineAsset": true, "endOfNightRepeat": true, "backgroundAudio": true}
 	nightSessionAssetRefKeys       = map[string]bool{"show": true, "sequence": true, "target": true}
-	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true}
+	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true, "fadeOutMs": true, "fadeInMs": true}
 	nightSessionBackgroundItemKeys = map[string]bool{"itemId": true, "show": true, "sequence": true, "target": true}
 	nightSessionTransitionKeys     = map[string]bool{"cues": true, "blackoutHoldMs": true}
 	nightSessionRestingTransKeys   = map[string]bool{"cues": true, "blackoutAfterShowMs": true}
@@ -283,6 +283,18 @@ func (i *NightSessionBackgroundAudioItem) UnmarshalJSON(b []byte) error {
 // nil means "not applicable"; non-nil (including *CrossfadeMs == 0) means
 // "present on the wire", matching FadeDurationMs's existing pointer
 // pattern one field over.
+// FadeOutMs and FadeInMs are the show-boundary fade pair: FadeOutMs fades
+// the bed to silence before it is paused or stopped for a real show,
+// FadeInMs fades it back up to MaxGainDb after it resumes or restarts -
+// a duck-style DOWN/UP pair with two independent durations, following
+// audio.settings' own duckFadeDurationMs/duckRestoreFadeDurationMs
+// precedent (a fast duck and a slow restore are deliberately different
+// numbers). Both nil is a fully supported, unchanged-behavior
+// configuration: the boundary cuts instantly, exactly as before this
+// pair existed. They are validated to be configured together or not at
+// all - a bed faded down with no way to fade back up would stay silent
+// forever, matching CrossfadeMs's own present-together validation
+// pattern one field over.
 type NightSessionBackgroundAudio struct {
 	Items          []NightSessionBackgroundAudioItem `json:"items"`
 	Repeat         string                            `json:"repeat"`
@@ -290,6 +302,8 @@ type NightSessionBackgroundAudio struct {
 	ItemTransition string                            `json:"itemTransition"`
 	CrossfadeMs    *int                              `json:"crossfadeMs,omitempty"`
 	MaxGainDb      float64                           `json:"maxGainDb"`
+	FadeOutMs      *int                              `json:"fadeOutMs,omitempty"`
+	FadeInMs       *int                              `json:"fadeInMs,omitempty"`
 }
 
 // OutputNodeID returns the audio.node id every item plays on (item 0's
@@ -773,9 +787,45 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		}
 	}
 
+	_, fadeOutPresent := fields["fadeOutMs"]
+	_, fadeInPresent := fields["fadeInMs"]
+	var fadeOutMs, fadeInMs *int
+	if fadeOutPresent != fadeInPresent {
+		return NightSessionBackgroundAudio{}, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: "resting.backgroundAudio.fadeOutMs",
+			Detail: "resting.backgroundAudio.fadeOutMs and fadeInMs must be configured together, or both omitted for no fade",
+		}
+	}
+	if fadeOutPresent {
+		v, verr := decodeRequiredNonNegativeInt(fields, "fadeOutMs", "resting.backgroundAudio.fadeOutMs")
+		if verr != nil {
+			return NightSessionBackgroundAudio{}, verr
+		}
+		if v == 0 {
+			return NightSessionBackgroundAudio{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.fadeOutMs",
+				Detail: "resting.backgroundAudio.fadeOutMs must be positive when configured; omit fadeOutMs and fadeInMs together for no fade",
+			}
+		}
+		fadeOutMs = &v
+
+		v2, verr := decodeRequiredNonNegativeInt(fields, "fadeInMs", "resting.backgroundAudio.fadeInMs")
+		if verr != nil {
+			return NightSessionBackgroundAudio{}, verr
+		}
+		if v2 == 0 {
+			return NightSessionBackgroundAudio{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.fadeInMs",
+				Detail: "resting.backgroundAudio.fadeInMs must be positive when configured; omit fadeOutMs and fadeInMs together for no fade",
+			}
+		}
+		fadeInMs = &v2
+	}
+
 	return NightSessionBackgroundAudio{
 		Items: items, Repeat: repeat, Resume: resume, ItemTransition: itemTransition,
 		CrossfadeMs: crossfadeMs, MaxGainDb: maxGainDb,
+		FadeOutMs: fadeOutMs, FadeInMs: fadeInMs,
 	}, nil
 }
 
