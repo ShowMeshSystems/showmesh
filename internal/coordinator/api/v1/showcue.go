@@ -9,23 +9,30 @@ type ConfigShowCueRenderOutput struct {
 	Sequence string `json:"sequence"`
 }
 
-// ConfigShowCueAudioOutput is show.cue.outputs.audio.
+// ConfigShowCueAudioOutput is show.cue.outputs.audio. Target is ADR-045's
+// optional target node, mirroring show.surface's "node" field: absent
+// resolves later to the installation's single program+ltc audio.node.
 type ConfigShowCueAudioOutput struct {
 	Asset             string `json:"asset"`
 	StartOffsetMillis int    `json:"startOffsetMillis"`
+	Target            string `json:"target,omitempty"`
 }
 
-// ConfigShowCueLTCOutput is show.cue.outputs.ltc.
+// ConfigShowCueLTCOutput is show.cue.outputs.ltc. Target is ADR-045's
+// optional target node — see [ConfigShowCueAudioOutput.Target].
 type ConfigShowCueLTCOutput struct {
-	StartOffsetMillis int `json:"startOffsetMillis"`
+	StartOffsetMillis int    `json:"startOffsetMillis"`
+	Target            string `json:"target,omitempty"`
 }
 
 // ConfigShowCueAnnouncementOutput is show.cue.outputs.announcement.
-// DuckGainDb is present only when Policy is "duck".
+// DuckGainDb is present only when Policy is "duck". Target is ADR-045's
+// optional target node — see [ConfigShowCueAudioOutput.Target].
 type ConfigShowCueAnnouncementOutput struct {
 	Policy     string   `json:"policy"`
 	DuckGainDb *float64 `json:"duckGainDb,omitempty"`
 	FadeMillis int      `json:"fadeMillis"`
+	Target     string   `json:"target,omitempty"`
 }
 
 // ConfigShowCueOutputs is show.cue.outputs. At least one member is

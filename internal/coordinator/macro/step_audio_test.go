@@ -49,8 +49,8 @@ func audioAction(nodeID, sessionID, action, safetyClass string) config.ShowActio
 	return config.ShowActionPayload{
 		Show: "test-show", Label: "test audio action", SafetyClass: safetyClass,
 		Target: config.ShowActionTarget{
-			Integration: config.ShowActionIntegrationAudio,
-			AudioNodeID: nodeID, AudioSessionID: sessionID, AudioAction: action,
+			Integration:  config.ShowActionIntegrationAudio,
+			AudioNodeIDs: config.AudioNodeIDList{nodeID}, AudioSessionID: sessionID, AudioAction: action,
 		},
 	}
 }
@@ -136,4 +136,50 @@ func TestMacroRunDispatchesAudioStepThroughSameDispatcher(t *testing.T) {
 			t.Fatalf("step outcomeState = %q, want %q", got.Steps[0].OutcomeState, audioStateNotConfigured)
 		}
 	})
+}
+
+// TestMacroRunAudioStepDispatchesOnlyTheFirstOfMultipleTargetNodes pins
+// dispatchAudioStep's own documented contract: every consumer of an
+// audio-integration show.action OTHER than a night-session announcement
+// or the night-mode resting bed reads only the FIRST configured
+// audioNodeId (api/openapi.yaml's ConfigShowActionTarget.audioNodeId doc
+// comment). Names three distinct node ids, none of them alphabetically
+// or positionally special beyond "first", so a test that happened to
+// read the last or a sorted element would not accidentally pass.
+// Asserting the exact dispatched node id, not merely that a dispatch
+// happened, is what a silent last-element or all-elements substitution
+// would fail.
+func TestMacroRunAudioStepDispatchesOnlyTheFirstOfMultipleTargetNodes(t *testing.T) {
+	var gotNodeIDs []string
+	fake := &fakeAudioActions{dispatchFn: func(ctx context.Context, in api.AudioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error) {
+		gotNodeIDs = append(gotNodeIDs, in.NodeID)
+		return v1.AudioSessionCommandResult{
+			CommandID: "cmd-1", Action: in.Action, NodeID: in.NodeID, SessionID: in.SessionID,
+			Outcome: "started", Reason: "test evidence confirmed playback began",
+		}, nil, nil
+	}}
+	e, st, _, _ := newTestExecutorWithAudio(t, &fakeDispatcher{}, &fakeBrokers{}, fake)
+	multiTarget := config.ShowActionPayload{
+		Show: "test-show", Label: "test multi-node audio action", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration:    config.ShowActionIntegrationAudio,
+			AudioNodeIDs:   config.AudioNodeIDList{"porch-node", "yard-node", "attic-node"},
+			AudioSessionID: "announcement", AudioAction: "audio.session.start",
+		},
+	}
+	putAction(t, st, "a1", multiTarget)
+	putMacro(t, st, "m1", testMacroPayload(testStep("s1", "a1")))
+
+	got := submitAndWait(t, e, api.MacroSubmitRequest{
+		MacroObjectID: "m1", IdempotencyKey: "key-multi-target", Trigger: "api", Issuer: testIssuer(),
+	})
+	if got.Steps[0].Outcome != outcomeConfirmed {
+		t.Fatalf("step outcome = %q, want %q: %+v", got.Steps[0].Outcome, outcomeConfirmed, got.Steps[0])
+	}
+	if fake.callCount() != 1 {
+		t.Fatalf("audio dispatcher called %d times, want exactly 1 (only the first node dispatched)", fake.callCount())
+	}
+	if len(gotNodeIDs) != 1 || gotNodeIDs[0] != "porch-node" {
+		t.Fatalf("dispatched nodeId(s) = %v, want exactly [%q] (the first configured target node)", gotNodeIDs, "porch-node")
+	}
 }

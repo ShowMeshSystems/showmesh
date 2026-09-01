@@ -54,6 +54,13 @@ const (
 	// per pkg/observation's StateAt.
 	DefaultValidFor = 30 * time.Second
 
+	// silentSinceConnectThreshold: SHOWMESH HYPOTHESIS, NOT MEASURED, own
+	// constant (not DefaultValidFor reused, which answers a different
+	// question). Set from contract section 1.2's recorded cadences (~1s
+	// port_status, ~4s fppd_status), which a working FPP publishes
+	// continuously regardless of show state.
+	silentSinceConnectThreshold = 30 * time.Second
+
 	// clientID is fixed rather than configurable: the hard interface
 	// contract this package was built against (Step 5 spec section 4)
 	// does not expose a ClientID field on Options, and this package
@@ -149,11 +156,17 @@ type Collector struct {
 
 	store *messageStore
 
-	// connMu guards connected/connReason, set by the autopaho connection
-	// callbacks (Run) and read by every Poll call (render.go).
+	// connMu guards connected/connReason/connectedAt/messageSinceConnect,
+	// set by the connection callbacks (Run) and the publish handler.
 	connMu     sync.Mutex
 	connected  bool
 	connReason string
+
+	// connectedAt: when the current connection came up (zero while
+	// disconnected). messageSinceConnect: any message received since. Both
+	// reset together on every OnConnectionUp, see setConnected.
+	connectedAt         time.Time
+	messageSinceConnect bool
 
 	// unmatchedMu guards unmatchedLogged, contract section 4.4's "logged
 	// at info once per host" bookkeeping for a message whose HostName does
@@ -324,13 +337,45 @@ func (c *Collector) connectionState() (connected bool, reason string) {
 }
 
 // setConnected records a fresh connection-state observation from an
-// autopaho callback. reason is only meaningful (and only read) when
-// connected is false — see connectionState.
+// autopaho callback. reason is only meaningful when connected is false. A
+// transition to connected restarts connectedAt/messageSinceConnect fresh,
+// on both the first connect and every reconnect.
 func (c *Collector) setConnected(connected bool, reason string) {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 	c.connected = connected
 	c.connReason = reason
+	if connected {
+		c.connectedAt = c.now()
+		c.messageSinceConnect = false
+	}
+}
+
+// markMessageReceived records that a message has arrived since the
+// current connection came up. Called only for a message this package
+// actually stored, never for one it ignored (unmatched host or suffix).
+func (c *Collector) markMessageReceived() {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	c.messageSinceConnect = true
+}
+
+// SilentSinceConnect reports whether no message has arrived on any
+// subscribed topic for at least silentSinceConnectThreshold since the
+// current connection came up. States only that fact, never why. Always
+// false while disconnected: Poll (render.go) already reports that case.
+func (c *Collector) SilentSinceConnect() (silent bool, reason string) {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	if !c.connected || c.messageSinceConnect || c.connectedAt.IsZero() {
+		return false, ""
+	}
+	if c.now().Sub(c.connectedAt) < silentSinceConnectThreshold {
+		return false, ""
+	}
+	return true, fmt.Sprintf(
+		"connected to the broker since %s but has received no message on any subscribed topic since",
+		c.connectedAt.Format(time.RFC3339))
 }
 
 // subscriber is the ENTIRE method set this package ever calls on its live
@@ -377,6 +422,7 @@ func (c *Collector) newPublishHandler() func(paho.PublishReceived) (bool, error)
 			retained:   pr.Packet.Retain,
 			receivedAt: c.now(),
 		})
+		c.markMessageReceived()
 
 		// Always report the message as handled: this is the only consumer
 		// on this connection.

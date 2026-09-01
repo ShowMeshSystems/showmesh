@@ -266,10 +266,10 @@ const (
 // and [v1.CollectorStatus.State] use, deliberately distinct from
 // pkg/observation.State — see [v1.CollectorStatus]'s doc comment for why
 // the two must not be conflated. Not every value a collector could
-// plausibly report exists here yet: only the two this codebase's one
-// collector (the FPP REST collector) actually produces. Add a value only
-// when a real producer needs it, matching this codebase's standing rule
-// against emitting a state nothing can currently justify.
+// plausibly report exists here: only the ones a real producer in this
+// codebase actually emits. Add a value only when a real producer needs it,
+// matching this codebase's standing rule against emitting a state nothing
+// can currently justify.
 type CollectorRunState string
 
 const (
@@ -284,6 +284,14 @@ const (
 	// [v1.CollectorStatus]'s doc comment for why "running" and "every
 	// signal collection_failed" are not a contradiction.
 	CollectorRunning CollectorRunState = "running"
+
+	// CollectorConnectedNoData: the collector is connected to its upstream
+	// and has received no message on any subscribed topic for at least its
+	// own silence threshold since that connection came up. States only
+	// what was observed, never why: a silently denied broker read grant
+	// reads identically to a genuinely idle topic from here. Reason is
+	// always set alongside this value.
+	CollectorConnectedNoData CollectorRunState = "connected_no_data"
 )
 
 // CollectorState is one collector's own run state, reported in the

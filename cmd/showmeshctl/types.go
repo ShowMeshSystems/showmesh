@@ -130,6 +130,12 @@ type node struct {
 	// channel-range string per node). "fppconnect status" (cmd_fppconnect.go)
 	// prints these.
 	FPPConnect []observationEntry `json:"fppConnect"`
+
+	// Audio is required (api/openapi.yaml's Node schema): whatever
+	// node.audio.* observations this coordinator currently holds for this
+	// node, one [observationEntry] per signal. Never null: an empty slice
+	// means this node has never published an audio discovery report.
+	Audio []observationEntry `json:"audio"`
 }
 
 // observationEntry mirrors internal/coordinator/api/v1.ObservationEntry:
@@ -387,8 +393,27 @@ type snapshot struct {
 	Nodes           []node                `json:"nodes"`
 	FPP             snapshotFPP           `json:"fpp"`
 	Collectors      []collectorState      `json:"collectors"`
+	MacroRuns       []macroRunSummary     `json:"macroRuns"`
 	Resolume        []resolumeInstance    `json:"resolume"`
+	AuditStore      *auditStoreStatus     `json:"auditStore"`
 	AudioConfigPush *audioConfigPushState `json:"audioConfigPush"`
+}
+
+// auditStoreStatus is snapshot.auditStore: whether this coordinator can
+// currently write to its audit store, computed fresh on every request via a
+// real probe write (always rolled back, never committed), not cached from
+// past traffic.
+//
+// *auditStoreStatus, not a bare value: this field is required by the
+// current contract, but a coordinator that predates it omits "auditStore"
+// from the response entirely rather than sending a zero-value object,
+// following AudioConfigPushState's own doc comment above -- a bare struct
+// here would decode that absence as state="", which is not a member of the
+// state enum and prints/re-marshals as if the coordinator had actually
+// reported something.
+type auditStoreStatus struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
 }
 
 // audioConfigPushState is snapshot.audioConfigPush: whether the

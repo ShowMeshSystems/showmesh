@@ -11897,7 +11897,17 @@ components:
 
         `clockDomain` and `clockDomainProvenance` are the operator's own
         declaration of which hardware clock the routes run on, never
-        inferred, and are required on a program-only node too.
+        inferred, and are required on a program-only node too. `role`
+        (ADR-045) is one of `program`, `program+ltc`, or `zone`; optional
+        on the wire, and absent decodes to `program+ltc` - the role every
+        pre-ADR-045 audio.node object already implicitly held, since an
+        installation had exactly one and it always carried both program
+        and LTC. At most one audio.node across the installation may carry
+        `program+ltc` at a time (ADR-018's one clock domain, one LTC
+        emitter); a second is refused, naming both node ids. `zone` is
+        the operator's own name for the independent speaker zone this
+        node drives, present only when `role` is `zone` - refused on any
+        other role, since an ignored field would read as an applied one.
       required:
         [programRoute, programChannels, clockDomain, clockDomainProvenance]
       dependentRequired:
@@ -11921,6 +11931,16 @@ components:
           type: string
         clockDomainProvenance:
           type: string
+        role:
+          type: string
+          enum: [program, "program+ltc", zone]
+          description: >-
+            Optional; absent decodes to "program+ltc" (ADR-045).
+        zone:
+          type: string
+          description: >-
+            The operator's own name for this node's independent speaker
+            zone. Present only when role is "zone".
     AudioNodeConfigResponse:
       type: object
       description: The body of GET and PUT /config/audio.node/{id}.
@@ -12449,9 +12469,25 @@ components:
             validation rather than by this schema.
           additionalProperties: true
         audioNodeId:
-          type: string
-          description: "audio-only: the target audio node id."
-          minLength: 1
+          description: >-
+            audio-only: the target audio node id(s), widened from one
+            node to a list: a bare string (one node - the shape
+            every payload stored before that change already used) or an
+            array of distinct, non-empty node ids. A show.action bound to
+            a night-session announcement or the night-mode resting bed
+            may name more than one node, and those consumers use every
+            listed node. Every other consumer dispatches to only the
+            first listed node. Configuration validation is not a dispatch
+            consumer: a binding check verifies that every named node is
+            declared, regardless of which node a dispatch would reach.
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: array
+              minItems: 1
+              items:
+                type: string
+                minLength: 1
         audioSessionId:
           type: string
           description: "audio-only: the target pkg/audio session id."
@@ -12507,8 +12543,18 @@ components:
           type: object
           additionalProperties: true
         audioNodeId:
-          type: string
-          minLength: 1
+          description: >-
+            audio-only: the target audio node id(s) - a bare string or an
+            array of distinct, non-empty node ids. See ConfigShowActionTarget's
+            own audioNodeId description.
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: array
+              minItems: 1
+              items:
+                type: string
+                minLength: 1
         audioSessionId:
           type: string
           minLength: 1
@@ -13481,6 +13527,22 @@ components:
         participating in this Playlist's own Show's resolved Cue catalog,
         reusing the same resolution `GET /nodes/{nodeId}/cue-catalog` and
         the cue-catalog deploy path already use -- never a second one.
+        `audio-ltc-emitter-ambiguous`, `audio-target-unbound` and
+        `audio-target-unresolved` check ADR-045's audio routing against the
+        store rather than against authoring, which cannot see an audio.node
+        deleted after a Cue named it: more than one audio.node holding role
+        "program+ltc"; a Cue output naming a target node that holds no
+        audio.node object; and a Cue output naming no target where more
+        than one audio.node exists and none holds role "program+ltc", so
+        there is no node for it to resolve to. An installation with no
+        audio.node at all is unchanged by these three: a Show declaring
+        audio on a fleet with no audio node is reported exactly as it was
+        before. `assets-missing` is a different question from those three:
+        it asks whether the node a Cue's render, audio or LTC output
+        already resolves to actually holds the asset that output needs,
+        per the same per-node asset manifest `GET /nodes/{nodeId}/assets`
+        reports; a target that resolves to nobody is `audio-target-unbound`/
+        `-unresolved` instead.
       required: [playlistId, ready, serverTime]
       properties:
         playlistId:
@@ -13500,6 +13562,10 @@ components:
             - node-render-unassigned
             - exclusive-claim-conflict
             - node-catalog-stale
+            - audio-ltc-emitter-ambiguous
+            - audio-target-unbound
+            - audio-target-unresolved
+            - assets-missing
         reason:
           type: string
         warning:
@@ -13886,7 +13952,12 @@ components:
           minLength: 1
     ConfigShowCueAudioOutput:
       type: object
-      description: show.cue.outputs.audio (Track H seam H1).
+      description: >-
+        show.cue.outputs.audio (Track H seam H1). target (ADR-045) is an
+        optional target node id, mirroring show.surface.node; absent
+        resolves later to the installation's single program+ltc
+        audio.node. Present, it must name an existing audio.node object —
+        enforced server-side.
       required: [asset, startOffsetMillis]
       properties:
         asset:
@@ -13895,24 +13966,33 @@ components:
         startOffsetMillis:
           type: integer
           minimum: 0
+        target:
+          type: string
+          minLength: 1
     ConfigShowCueLTCOutput:
       type: object
       description: >-
         show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours;
         requires outputs.audio to also be present (ADR-018's one clock
-        domain) — enforced server-side.
+        domain) — enforced server-side. target (ADR-045) is the same
+        optional target node as outputs.audio.target.
       required: [startOffsetMillis]
       properties:
         startOffsetMillis:
           type: integer
           minimum: 0
           maximum: 86400000
+        target:
+          type: string
+          minLength: 1
     ConfigShowCueAnnouncementOutput:
       type: object
       description: >-
         show.cue.outputs.announcement (Track H seam H1, H0.4). Requires
         outputs.audio to also be present. duckGainDb is required when
         policy is "duck" and refused otherwise — enforced server-side.
+        target (ADR-045) is the same optional target node as
+        outputs.audio.target.
       required: [policy, fadeMillis]
       properties:
         policy:
@@ -13926,6 +14006,9 @@ components:
           type: integer
           minimum: 0
           maximum: 60000
+        target:
+          type: string
+          minLength: 1
     ConfigShowCueOutputs:
       type: object
       description: >-
@@ -14211,23 +14294,30 @@ components:
         target:
           type: string
           minLength: 1
+          description: >-
+            The audio.node id this item plays on. Items are not required
+            to share one target - every distinct target among them is
+            its own node the bed plays on, each with its own independent
+            playback progress.
     ConfigNightSessionBackgroundAudio:
       type: object
       description: >-
         night.session.resting.backgroundAudio: a ShowMesh `background`
-        playback session (RESTING-MODE.md §8). Present only when the
-        deployment configures background audio at all; its absence is
-        valid and is not degraded. `resume` and `itemTransition` are
-        pinned against pkg/audio's vocabulary on Track C's branch
-        (track-c/audio-node). crossfadeMs is required when itemTransition
-        is "crossfade" and must be absent otherwise (server-side; not
-        expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs
-        are the show-boundary fade pair: fadeOutMs fades the bed to
-        silence before it is paused or stopped for a show, fadeInMs
-        fades it back up to maxGainDb after resting returns. They must
-        be configured together, or both omitted for an instant cut
-        exactly as before this pair existed (server-side; not
-        expressible here).
+        playback session (RESTING-MODE.md §8), playing on every distinct
+        node its own items[].target names (a list of target nodes,
+        derived from the items themselves - there is no separate
+        "which output(s)" field). Present only when the deployment
+        configures background audio at all; its absence is valid and is
+        not degraded. `resume` and `itemTransition` are pinned against
+        pkg/audio's vocabulary on Track C's branch (track-c/audio-node).
+        crossfadeMs is required when itemTransition is "crossfade" and
+        must be absent otherwise (server-side; not expressible here).
+        maxGainDb must be <= 0. fadeOutMs and fadeInMs are the
+        show-boundary fade pair: fadeOutMs fades the bed to silence
+        before it is paused or stopped for a show, fadeInMs fades it
+        back up to maxGainDb after resting returns. They must be
+        configured together, or both omitted for an instant cut exactly
+        as before this pair existed (server-side; not expressible here).
       required: [items, repeat, resume, itemTransition, maxGainDb]
       properties:
         items:
@@ -14978,8 +15068,11 @@ components:
         One durable audio step Track F seam F5's own controller has
         recorded, across every cycle the session has lived through:
         either the resting bed's own playback sequence or an
-        announcement session's clear and start.
-      required: [sequence, phase, cueName, kind, actionRevision, state,
+        announcement session's clear, apply, and start. The bed and an
+        announcement each accept a list of target nodes, and
+        every one of them, including the first, reports through this
+        array with its own nodeId - never a first-node exception.
+      required: [sequence, phase, cueName, nodeId, kind, actionRevision, state,
                  dispatchedAt, resolvedAt]
       properties:
         sequence:
@@ -14997,10 +15090,16 @@ components:
             request.
         cueName:
           type: string
+        nodeId:
+          type: string
+          description: >-
+            The audio.node this step addressed. A refused or stalled step
+            on one node is answerable from this field alone, without
+            reading phase or relying on any array ordering.
         kind:
           type: string
           enum: [apply, gain, start, pause, resume, stop,
-                 announcementClear, announcementStart]
+                 announcementClear, announcementApply, announcementStart]
         actionRevision:
           type: integer
         state:

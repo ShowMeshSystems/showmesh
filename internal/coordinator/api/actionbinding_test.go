@@ -112,6 +112,71 @@ func TestActionBindingAudioOKAndBroken(t *testing.T) {
 	}
 }
 
+// TestActionBindingAudioChecksEveryTargetNodeNotOnlyTheFirst pins
+// checkAudioActionBinding's own documented contract (api/openapi.yaml's
+// ConfigShowActionTarget.audioNodeId doc comment): configuration
+// validation is not a dispatch consumer, so it verifies every named node
+// is declared, regardless of which node an ordinary dispatch would reach
+// (the first). Names three distinct node ids where the FIRST TWO are
+// declared and only the THIRD, "attic-node", is not - a validator that
+// checked only the first element would report this binding ok, which is
+// exactly the false confidence a night-session announcement bound to this
+// same target (which uses every listed node) cannot afford.
+func TestActionBindingAudioChecksEveryTargetNodeNotOnlyTheFirst(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	// yard-node is program-only (role "program"): only one audio.node
+	// across the installation may hold the default role "program+ltc"
+	// (ADR-018's one clock domain), so porch-node and yard-node cannot
+	// both take the default.
+	const yardNodeBody = `{"programRoute":"hw:0,1","programChannels":[1,2],` +
+		`"clockDomain":"second-interface","clockDomainProvenance":"second physical interface, program only",` +
+		`"role":"program"}`
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("porch-node", []string{"hw:0,0"}, []string{"hw:0,0"}),
+		nodeViewWithAudioCapabilities("yard-node", []string{"hw:0,1"}, nil),
+	})
+	if status, putBody := mustPutAudioNode(t, api, token, "porch-node", validAudioNodeBody); status != http.StatusOK {
+		t.Fatalf("PUT audio.node porch-node: status = %d; body: %s", status, putBody)
+	}
+	if status, putBody := mustPutAudioNode(t, api, token, "yard-node", yardNodeBody); status != http.StatusOK {
+		t.Fatalf("PUT audio.node yard-node: status = %d; body: %s", status, putBody)
+	}
+	// "attic-node" is deliberately never declared.
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-multi-target", `{
+		"show": "halloween-2026",
+		"label": "Start on a multi-node target",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": ["porch-node", "yard-node", "attic-node"],
+			"audioSessionId": "announcement",
+			"audioAction": "audio.session.start"
+		}
+	}`, map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	_, bindBody := doRequest(t, api.Handler, "GET", "/api/v1/actions/start-multi-target/binding", nil)
+	m := decodeMap(t, bindBody)
+	binding, _ := m["binding"].(map[string]any)
+	if binding["state"] != "broken" {
+		t.Fatalf("binding state = %v, want broken (attic-node, the third listed node, was never declared); body: %s", binding["state"], bindBody)
+	}
+	reason, _ := binding["reason"].(string)
+	if !strings.Contains(reason, "attic-node") {
+		t.Fatalf("broken reason = %q, want it to name the undeclared node id attic-node", reason)
+	}
+}
+
 // TestActionBindingResolumeStates proves all three resolume states: ok
 // (resolves), broken (does not resolve, naming the clip label), and
 // unknown (no composition uploaded — never reported as ok or broken).

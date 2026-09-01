@@ -273,6 +273,19 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ADR-045: at most one audio.node across the installation may carry
+	// role "program+ltc" (ADR-018's one clock domain, one LTC emitter).
+	// Read live on every write, matching the placement check above.
+	existingRoles, err := h.audioNodeRoles(r.Context())
+	if err != nil {
+		h.writeInternalError(w, now, "get audio.node roles", err)
+		return
+	}
+	if err := config.ValidateAudioNodeRoleUniqueness(id, payload, existingRoles); err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
+		return
+	}
+
 	payloadJSON, err := config.EncodeAudioNodePayload(payload)
 	if err != nil {
 		h.writeInternalError(w, now, "encode audio.node config payload", err)
@@ -315,10 +328,45 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 			ProgramRoute: p.ProgramRoute, LTCRoute: p.LTCRoute,
 			ProgramChannels: p.ProgramChannels, LTCChannel: p.LTCChannel,
 			ClockDomain: p.ClockDomain, ClockDomainProvenance: p.ClockDomainProvenance,
+			Role: p.Role, Zone: p.Zone,
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                 rev.Source,
 	}
+}
+
+// audioNodeRoles reads every configured "audio.node" object's currently
+// active Role, keyed by node id — [config.ValidateAudioNodeRoleUniqueness]'s
+// own existingRoles parameter. An object with no active revision (created
+// but never written) is skipped, matching listAudioNodeSummaries' own
+// CurrentRevision > 0 filter.
+func (h *handlers) audioNodeRoles(ctx context.Context) (map[string]string, error) {
+	objs, err := h.deps.Config.ListConfigObjects(ctx, config.AudioNodeConfigKind)
+	if err != nil {
+		return nil, fmt.Errorf("list audio.node config objects: %w", err)
+	}
+	roles := make(map[string]string, len(objs))
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.AudioNodeConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return nil, fmt.Errorf("get active audio.node config revision for %q: %w", obj.ID, err)
+		}
+		var head struct {
+			Role string `json:"role"`
+		}
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+			return nil, fmt.Errorf("decode audio.node config payload head for %q: %w", obj.ID, err)
+		}
+		role := head.Role
+		if role == "" {
+			role = config.AudioNodeRoleDefault
+		}
+		roles[obj.ID] = role
+	}
+	return roles, nil
 }

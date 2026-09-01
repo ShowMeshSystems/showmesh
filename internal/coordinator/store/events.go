@@ -156,7 +156,7 @@ func (e EventRecord) validate() error {
 // bounds, never for a second connection — inserting through s.db here
 // (instead of q) would silently defeat the whole point of a caller
 // passing a [Tx] in.
-func appendEvent(ctx context.Context, q querier, s *Store, ev EventRecord) (int64, error) {
+func appendEvent(ctx context.Context, q querier, s *Store, ev EventRecord, hooks commitHook) (int64, error) {
 	if err := ev.validate(); err != nil {
 		return 0, fmt.Errorf("store: append event: %w", err)
 	}
@@ -200,7 +200,20 @@ func appendEvent(ctx context.Context, q querier, s *Store, ev EventRecord) (int6
 	// AppendEvent call after every process start also check, regardless of
 	// how far eventAppendCount is from its next multiple of
 	// pruneEveryNEvents).
-	byCount := s.eventAppendCount.Add(1)%pruneEveryNEvents == 0
+	//
+	// byCount is predicted from eventAppendCount's current, already-
+	// committed value rather than mutated here: the actual Add(1) is
+	// queued via hooks and only runs once q's transaction commits (see
+	// [commitHook]): this call itself does not know yet whether that will
+	// happen. A caller that appends more than once to this table inside
+	// one still-open transaction (none does today) would see this
+	// prediction skip the effect of its own earlier, not-yet-committed
+	// call in this same transaction; the eventual real count is still
+	// exact either way, since every queued Add(1) still lands, only the
+	// PRUNE-TIMING decision for such a caller would be approximate rather
+	// than exact, an acceptable cost for an already-amortized trigger
+	// that no current caller exercises this way.
+	byCount := (s.eventAppendCount.Load()+1)%pruneEveryNEvents == 0
 	byAge := false
 	if !byCount {
 		last := s.lastPruneAtNanos.Load()
@@ -210,8 +223,10 @@ func appendEvent(ctx context.Context, q querier, s *Store, ev EventRecord) (int6
 		if err := s.pruneEvents(ctx, q); err != nil {
 			return 0, fmt.Errorf("store: append event: %w", err)
 		}
-		s.lastPruneAtNanos.Store(s.now().UnixNano())
+		prunedAt := s.now()
+		hooks.after(func() { s.lastPruneAtNanos.Store(prunedAt.UnixNano()) })
 	}
+	hooks.after(func() { s.eventAppendCount.Add(1) })
 
 	return seq, nil
 }
@@ -259,7 +274,8 @@ func (s *Store) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	seq, err := appendEvent(ctx, tx, s, ev)
+	var hooks pruneHooks
+	seq, err := appendEvent(ctx, tx, s, ev, &hooks)
 	if err != nil {
 		return 0, err
 	}
@@ -267,6 +283,7 @@ func (s *Store) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("store: commit append event: %w", err)
 	}
+	hooks.run()
 	return seq, nil
 }
 
@@ -285,7 +302,7 @@ func (s *Store) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) 
 // needs this to keep the two atomic, the same way [Tx.AppendAuditEntry]
 // already lets a state change and its audit entry land together.
 func (t *Tx) AppendEvent(ctx context.Context, ev EventRecord) (int64, error) {
-	return appendEvent(ctx, t.tx, t.s, ev)
+	return appendEvent(ctx, t.tx, t.s, ev, t)
 }
 
 const eventColumns = `

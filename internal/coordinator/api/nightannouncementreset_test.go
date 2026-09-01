@@ -114,7 +114,7 @@ func TestNightPrepareSite_ResetsAnnouncementSessionOnNewEpoch(t *testing.T) {
 		t.Fatalf("clear params = %v, want sessionId \"announcement-1\"", clears[0].Params)
 	}
 
-	persisted, err := st.GetAudioSession(context.Background(), "announcement-1")
+	persisted, err := st.GetAudioSession(context.Background(), "node-a", "announcement-1")
 	if err != nil {
 		t.Fatalf("get persisted audio session: %v", err)
 	}
@@ -262,10 +262,10 @@ func TestNightPrepareSite_AnnouncementResetBudget_BoundedRegardlessOfSessionCoun
 		t.Fatalf("session state = %q, want %q; the night must still start when the reset budget runs out", prep.Session.State, nightStatePreparing)
 	}
 
-	// Unbounded, this would cost 3*50ms = 150ms. Bounded to one dispatch
-	// plus a wide scheduling margin, it must stay well under that.
-	if elapsed >= 3*50*time.Millisecond {
-		t.Fatalf("prepare-site took %s, want well under 150ms (3 unbounded dispatches): the reset pass must not grow with the number of announcement sessions", elapsed)
+	// Not a boundedness check (the dispatch count and skipped-budget log
+	// below already prove that); this only catches a genuine hang.
+	if elapsed >= 10*time.Second {
+		t.Fatalf("prepare-site took %s, want under 10s: the announcement reset pass appears to be hanging", elapsed)
 	}
 
 	var clears []dispatchedAudioCommand

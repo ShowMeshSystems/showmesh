@@ -49,8 +49,28 @@ type resolumeRecoveryRestoreReport struct {
 	OmittedLayerCount int                            `json:"omittedLayerCount"`
 }
 
+// resolumeRecoveryResponse.ResolumeConfigured is *false* when this
+// coordinator has no Resolume instance configured at all
+// (SHOWMESH_RESOLUME_URL unset), distinct from AutoRestoreConfigured,
+// which is about whether the toggle has a stored value. printResolumeRecoveryStatus
+// renders "not configured" rather than AutoRestoreEnabled's default-ON
+// value when this is explicitly false: an operator who believes recovery
+// is armed and is wrong is worse off than one who knows it is unavailable.
+//
+// Declared *bool, not bool: this package sets no
+// json.Decoder.DisallowUnknownFields anywhere (types.go's own doc comment)
+// and has no absent-field detection of its own, so a coordinator that
+// predates this field OMITS "resolumeConfigured" from the response body
+// entirely rather than sending it false. A bare bool cannot tell that case
+// apart from an explicit false: encoding/json leaves a missing bool field
+// at its zero value, which IS false, so a newer CLI reading an older
+// coordinator's response would render "not configured" about a fully
+// configured, armed coordinator: exactly the harm this field exists to
+// prevent, inverted. nil (absent) falls through to the ordinary toggle
+// rendering instead of asserting "not configured" on no evidence.
 type resolumeRecoveryResponse struct {
 	ServerTime            time.Time                      `json:"serverTime"`
+	ResolumeConfigured    *bool                          `json:"resolumeConfigured"`
 	AutoRestoreEnabled    bool                           `json:"autoRestoreEnabled"`
 	AutoRestoreConfigured bool                           `json:"autoRestoreConfigured"`
 	SettleDelaySeconds    float64                        `json:"settleDelaySeconds"`
@@ -382,13 +402,34 @@ func cmdResolumeRecoveryRevisions(args []string, stdout, stderr io.Writer, clock
 	return exitOK
 }
 
-// printResolumeRecoveryStatus renders resp as human-readable text.
-func printResolumeRecoveryStatus(stdout io.Writer, resp resolumeRecoveryResponse) {
+// printResolumeRecoveryToggleLine renders the auto-restore toggle, or
+// "not configured" in its place when resp.ResolumeConfigured is a
+// non-nil, explicit false. nil (the field was absent -- an older
+// coordinator that predates it) and true both fall through to the
+// ordinary toggle line: there is no evidence to assert "not configured"
+// against a coordinator that never said so.
+func printResolumeRecoveryToggleLine(stdout io.Writer, resp resolumeRecoveryResponse) {
+	if resp.ResolumeConfigured != nil && !*resp.ResolumeConfigured {
+		_, _ = fmt.Fprintln(stdout, "resolume: not configured (no Resolume instance configured on this coordinator)")
+		return
+	}
 	configuredNote := "stored choice"
 	if !resp.AutoRestoreConfigured {
 		configuredNote = "default"
 	}
 	_, _ = fmt.Fprintf(stdout, "auto-restore: %v (%s), settle delay: %.0fs\n", resp.AutoRestoreEnabled, configuredNote, resp.SettleDelaySeconds)
+}
+
+// printResolumeRecoveryStatus renders resp as human-readable text.
+//
+// Only the auto-restore toggle line is replaced when ResolumeConfigured is
+// explicitly false (never merely nil/absent -- see that field's own doc
+// comment): record and lastRestore are both separately required fields in
+// the same schema, and an unconfigured coordinator can still hold a stored
+// recovery record and a previous restore outcome, so this renders the
+// configured-state distinction without discarding either.
+func printResolumeRecoveryStatus(stdout io.Writer, resp resolumeRecoveryResponse) {
+	printResolumeRecoveryToggleLine(stdout, resp)
 	if len(resp.Record) == 0 {
 		_, _ = fmt.Fprintln(stdout, "no recovery record (no composition uploaded, or no layers)")
 	}

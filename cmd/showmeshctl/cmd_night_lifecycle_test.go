@@ -249,11 +249,11 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 			"transition":{"state":"unknown","reason":""},
 			"cues":{"state":"recorded","reason":"","cues":[]},
 			"backgroundAudio":{"state":"recorded","reason":"","steps":[
-				{"sequence":"background","phase":"restingBackground","cueName":"bg-0002-gain","kind":"gain","actionRevision":2,
+				{"sequence":"background","phase":"restingBackground:node-a","cueName":"bg-0002-gain","nodeId":"node-a","kind":"gain","actionRevision":2,
 				 "state":"resolved","outcome":"unconfirmable","reason":"no confirmation evidence was reported",
 				 "dispatchedAt":"2026-08-18T22:00:00Z","resolvedAt":"2026-08-18T22:00:01Z"},
-				{"sequence":"announcement","phase":"announcementSession:clear:enterResting","cueName":"thank-you",
-				 "kind":"announcementClear","actionRevision":4,
+				{"sequence":"announcement","phase":"announcementSession:clear:enterResting:node-b","cueName":"thank-you",
+				 "nodeId":"node-b","kind":"announcementClear","actionRevision":4,
 				 "state":"resolved","outcome":"refused","reason":"stale_revision",
 				 "dispatchedAt":"2026-08-18T22:00:02Z","resolvedAt":"2026-08-18T22:00:03Z"}
 			]},
@@ -274,6 +274,9 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 		// playing and still holding the bed ducked, which must be
 		// readable here and not only in a coordinator log line.
 		"Announcement sessions", "thank-you", "announcementClear", "refused", "stale_revision",
+		// CLI parity with the API/UI - each step's own node is rendered,
+		// so a refused step is answerable by node from this output alone.
+		"node=node-a", "node=node-b",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout does not contain %q; stdout=%s", want, out)

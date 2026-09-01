@@ -114,7 +114,39 @@ if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
   usermod -aG audio "$SERVICE_USER" 2>/dev/null || \
     echo "install.sh: WARNING: could not add $SERVICE_USER to the 'audio' group (group may not exist on this host); ALSA device access may need manual attention."
 else
-  echo "install.sh: user $SERVICE_USER already exists"
+  # A pre-existing "showmesh" account is only safe to adopt as the agent's
+  # service account if it has the exact shape this installer creates: a
+  # system uid, a nologin-equivalent shell, and its home field pointing at
+  # STATE_DIR. Anything else (a human login account that happens to share
+  # this name) must be refused, not silently run as: it would hand the
+  # agent that human's uid, supplementary groups, and home directory.
+  existing_uid="$(id -u "$SERVICE_USER")"
+  existing_shell="$(getent passwd "$SERVICE_USER" | cut -d: -f7)"
+  existing_home="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+  sys_uid_max=999
+  if [ -r /etc/login.defs ]; then
+    configured_max="$(awk '$1 == "SYS_UID_MAX" { print $2 }' /etc/login.defs)"
+    if [ -n "$configured_max" ]; then
+      sys_uid_max="$configured_max"
+    fi
+  fi
+  shell_ok=0
+  case "$existing_shell" in
+    */nologin|*/false) shell_ok=1 ;;
+  esac
+  uid_ok=1
+  [ "$existing_uid" -le "$sys_uid_max" ] || uid_ok=0
+  home_ok=1
+  [ "$existing_home" = "$STATE_DIR" ] || home_ok=0
+  if [ "$uid_ok" -ne 1 ] || [ "$shell_ok" -ne 1 ] || [ "$home_ok" -ne 1 ]; then
+    mismatches=""
+    [ "$uid_ok" -eq 1 ] || mismatches="${mismatches}uid=$existing_uid (expected <= $sys_uid_max); "
+    [ "$shell_ok" -eq 1 ] || mismatches="${mismatches}shell=$existing_shell (expected a nologin-equivalent shell); "
+    [ "$home_ok" -eq 1 ] || mismatches="${mismatches}home=$existing_home (expected $STATE_DIR); "
+    echo "install.sh: refusing to adopt existing account '$SERVICE_USER' (uid=$existing_uid, shell=$existing_shell, home=$existing_home) as the agent's service account: it does not look like the locked-down system account this installer creates (expected uid<=$sys_uid_max, a nologin shell, and home=$STATE_DIR). Mismatched: $mismatches This is either a different account that happens to share this name, or this installer's own account modified since it was created (for example by a manual usermod). If it is a different account: rename or remove it, or edit SERVICE_USER/SERVICE_GROUP in $SCRIPT_DIR/install.sh to use a different service account name, then re-run. If it is this installer's own account that was modified: restore the expected shell and home instead of removing the account (recreating it would leave any state file directly under $STATE_DIR, outside assets/, owned by an orphaned uid, since only $STATE_DIR/assets is chowned recursively) -- for example: usermod --shell /usr/sbin/nologin --home $STATE_DIR $SERVICE_USER" >&2
+    exit 1
+  fi
+  echo "install.sh: user $SERVICE_USER already exists (system account, matches the shape this installer creates)"
 fi
 
 # --- /etc/showmesh and the env file (never overwrite an existing one) ---
