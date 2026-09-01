@@ -85,9 +85,6 @@ assert_refused "home clause"
 userdel showmesh
 
 echo "OK: each of the three guard clauses independently refuses a colliding account"
-echo "NOTE: the shell clause accepts both a */nologin and a */false shell; only"
-echo "the /bin/bash mutation above is exercised, so the */false acceptance path"
-echo "itself has no bench assertion catching a regression of it."
 echo
 
 echo "=== 2. First install (fresh host) ==="
@@ -201,6 +198,23 @@ if ! grep -q 'no SHOWMESH_NODE_ID set yet' /tmp/showmesh-upgrade-install.log; th
 fi
 echo "OK: upgrade path refused to (re)start the agent and printed the operator message"
 rm -rf "$STUBDIR" /tmp/showmesh-systemctl-calls.log /tmp/showmesh-upgrade-install.log
+echo
+
+echo "=== 10: shell clause accepts a */false shell too, not only */nologin ==="
+echo "The installed 'showmesh' account already has /usr/sbin/nologin. Change"
+echo "only its shell to /usr/bin/false (still a nologin-equivalent match) and"
+echo "confirm a re-run accepts it rather than refusing it, exercising the other"
+echo "half of the shell clause's acceptance branch. Placed here, at the end, so"
+echo "it needs no cleanup and does not disturb the fresh-host state check 2 and"
+echo "check 5 depend on."
+usermod --shell /usr/bin/false showmesh
+OUT="$(./install.sh "$REPO/bin/showmesh-agent-native" 2>&1)"
+if ! echo "$OUT" | grep -q 'already exists (system account, matches the shape this installer creates)'; then
+  echo "FAIL: install.sh refused or did not recognize a showmesh account with a */false shell as matching its own shape" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+echo "OK: a */false shell is accepted the same as */nologin"
 echo
 
 echo "=== ALL CHECKS PASSED ==="
