@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -21,8 +22,8 @@ import (
 
 func announcementAudioAction() config.ShowActionTarget {
 	return config.ShowActionTarget{
-		Integration: config.ShowActionIntegrationAudio,
-		AudioNodeID: "node-a", AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
+		Integration:  config.ShowActionIntegrationAudio,
+		AudioNodeIDs: config.AudioNodeIDList{"node-a"}, AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
 	}
 }
 
@@ -93,6 +94,47 @@ func announcementFixture(t *testing.T, resume string) (*handlers, *store.Store, 
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
 	playThroughApplyGainStart(t, h, pub, rec)
 	return h, st, pub, rec, ba
+}
+
+// pinAnnouncementCueInConfig commits a new night.session config revision
+// carrying cue in resting.enterResting.cues and activates it, returning
+// rec updated to point at it. announcementFixture's own base revision
+// carries no cues at all (the dispatch tests below drive
+// nightAdvanceCueList directly, off their own in-memory cue/payload
+// values); the wire-mapping layer (mapNightBackgroundAudio,
+// mapNightCues) reads the PINNED revision instead, so a test asserting
+// on that layer needs the cue actually stored there too.
+func pinAnnouncementCueInConfig(t *testing.T, st *store.Store, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio, cue config.NightSessionCue) store.NightSessionRecord {
+	t.Helper()
+	ctx := context.Background()
+	payload := config.NightSessionPayload{
+		Show: "halloween", Label: "Halloween main loop",
+		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "fpp-main", Playlist: "halloween-show"},
+		Resting: config.NightSessionResting{
+			FPPInstanceID: "fpp-main", Playlist: "halloween-resting",
+			TimelineAsset:   config.NightSessionAssetRef{Show: "halloween", Sequence: "resting-loop", Target: "fpp-main"},
+			BackgroundAudio: ba,
+		},
+		EnterShow:                 config.NightSessionEnterShow{Cues: nil, BlackoutHoldMs: 0},
+		EnterResting:              config.NightSessionEnterResting{Cues: []config.NightSessionCue{cue}, BlackoutAfterShowMs: 0},
+		AnnouncementDefaultPolicy: config.NightSessionAnnouncementPolicyDefault,
+	}
+	raw, err := config.EncodeNightSessionPayload(payload)
+	if err != nil {
+		t.Fatalf("encode night.session payload: %v", err)
+	}
+	nextRev := rec.ConfigRevision + 1
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.NightSessionConfigKind, ObjectID: rec.ConfigObjectID, Revision: nextRev, PayloadJSON: raw,
+		CreatedByPrincipalID: "test", CreatedByPrincipalName: "test", Source: "api",
+	}); err != nil {
+		t.Fatalf("create night.session revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, nextRev); err != nil {
+		t.Fatalf("activate night.session revision: %v", err)
+	}
+	rec.ConfigRevision = nextRev
+	return rec
 }
 
 // announcementApplyParams returns the params of the single dispatched
@@ -190,8 +232,8 @@ func TestNightAnnouncement_OperatorDeclaredParamsAreNeverOverwritten(t *testing.
 	putNightAction(t, st, "thank-you", config.ShowActionPayload{
 		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
 		Target: config.ShowActionTarget{
-			Integration: config.ShowActionIntegrationAudio,
-			AudioNodeID: "node-a", AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
+			Integration:  config.ShowActionIntegrationAudio,
+			AudioNodeIDs: config.AudioNodeIDList{"node-a"}, AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
 			Params: map[string]any{"sourceRole": "manual", "mixPolicy": "mix"},
 		},
 	})
@@ -346,7 +388,7 @@ func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
 	putNightAction(t, st, "contradicted", config.ShowActionPayload{
 		Show: "halloween", Label: "Contradicted", SafetyClass: config.ShowSafetyClassNone,
 		Target: config.ShowActionTarget{
-			Integration: config.ShowActionIntegrationAudio, AudioNodeID: "node-a",
+			Integration: config.ShowActionIntegrationAudio, AudioNodeIDs: config.AudioNodeIDList{"node-a"},
 			AudioSessionID: "announcement-2", AudioAction: "audio.session.apply",
 			Params: map[string]any{"mixPolicy": "mix"},
 		},
@@ -365,7 +407,7 @@ func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
 	putNightAction(t, st, "too-quiet", config.ShowActionPayload{
 		Show: "halloween", Label: "Too quiet", SafetyClass: config.ShowSafetyClassNone,
 		Target: config.ShowActionTarget{
-			Integration: config.ShowActionIntegrationAudio, AudioNodeID: "node-a",
+			Integration: config.ShowActionIntegrationAudio, AudioNodeIDs: config.AudioNodeIDList{"node-a"},
 			AudioSessionID: "announcement-3", AudioAction: "audio.session.apply",
 			Params: map[string]any{"sourceRole": string(pkgaudio.SourceRoleBackground)},
 		},
@@ -435,29 +477,170 @@ func TestNightAnnouncement_DispatchesClearThenApplyThenStart(t *testing.T) {
 	assertNoBackgroundCommandsAfter(t, pub, before)
 
 	ctx := context.Background()
-	startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-a", "thank-you")
 	if err != nil {
 		t.Fatalf("the start was not committed as a durable outbox row: %v", err)
 	}
 	if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
 		t.Fatalf("start row = %+v, want resolved/confirmed", startRow)
 	}
-	clearRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you")
-	if err != nil {
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting+":node-a", "thank-you"); err != nil {
 		t.Fatalf("the clear was not committed as a durable outbox row: %v", err)
 	}
 	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterResting, "thank-you")
 	if err != nil {
 		t.Fatalf("apply row: %v", err)
 	}
-	// The revision order the node's own RevisionState requires: clear,
-	// then the pinned apply on the session the clear deleted, then start
-	// strictly above both.
-	if clearRow.ActionRevision <= applyRow.ActionRevision {
-		t.Fatalf("clear revision %d must exceed the apply's pinned %d", clearRow.ActionRevision, applyRow.ActionRevision)
+	if applyRow.State != nightCueStateResolved || applyRow.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("apply row = %+v, want resolved/confirmed", applyRow)
 	}
-	if startRow.ActionRevision <= clearRow.ActionRevision {
-		t.Fatalf("start revision %d must exceed the clear's %d", startRow.ActionRevision, clearRow.ActionRevision)
+	// The apply's own outbox row still pins the CONFIGURATION revision the
+	// cue ran against (mustPutAnnouncementCueAction's first and only PUT,
+	// so 1) - unaffected by the session-revision floor the three wire
+	// dispatches below advance through instead.
+	if applyRow.ActionRevision != 1 {
+		t.Fatalf("apply row ActionRevision = %d, want 1 (the pinned show.action config revision)", applyRow.ActionRevision)
+	}
+
+	// The wire revision order the node's own RevisionState requires: clear,
+	// then apply (both floor-derived, never the apply's pinned config
+	// revision), then start strictly above both.
+	clearWireRev := dispatchedRevision(t, pub, "audio.session.clear", before)
+	applyWireRev := dispatchedRevision(t, pub, "audio.session.apply", before)
+	startWireRev := dispatchedRevision(t, pub, "audio.session.start", before)
+	if clearWireRev >= applyWireRev {
+		t.Fatalf("clear wire revision %d must be strictly below the apply's %d", clearWireRev, applyWireRev)
+	}
+	if applyWireRev >= startWireRev {
+		t.Fatalf("apply wire revision %d must be strictly below the start's %d", applyWireRev, startWireRev)
+	}
+	if applyWireRev == int64(applyRow.ActionRevision) {
+		t.Fatalf("apply wire revision %d must NOT be the pinned config revision %d - that constant-fed-into-a-counter is exactly the stale_revision defect this floor replaces", applyWireRev, applyRow.ActionRevision)
+	}
+}
+
+// dispatchedRevision returns the params["revision"] of the first dispatch
+// of action found at or after index from, failing the test if none exists.
+func dispatchedRevision(t *testing.T, pub *fakeAudioPublisher, action string, from int) int64 {
+	t.Helper()
+	for _, d := range pub.dispatched[from:] {
+		if d.Action != action {
+			continue
+		}
+		rev, ok := d.Params["revision"].(float64)
+		if !ok {
+			t.Fatalf("dispatched %q carried no numeric revision param: %v", action, d.Params)
+		}
+		return int64(rev)
+	}
+	t.Fatalf("no %q was dispatched", action)
+	return 0
+}
+
+// TestNightAnnouncement_TwoNodesBothPlayAndARefusedStartIsIsolatedToItsNode
+// is the acceptance proof at unit level for the announcement half: an
+// announcement cue bound to a two-node target plays (clear then
+// apply then start) on BOTH nodes, and a refused step on one node
+// (node-b's own start) is reported against node-b alone while node-a's
+// own start still confirms.
+func TestNightAnnouncement_TwoNodesBothPlayAndARefusedStartIsIsolatedToItsNode(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putNightAction(t, st, "thank-you", config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration:  config.ShowActionIntegrationAudio,
+			AudioNodeIDs: config.AudioNodeIDList{"node-a", "node-b"}, AudioSessionID: "announcement-1",
+			AudioAction: "audio.session.apply",
+		},
+	})
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	// Pin the cue into the STORED config revision too - the dispatch path
+	// below takes cue/payload directly, but mapNightBackgroundAudio's own
+	// wire mapping (asserted further down) reads the pinned revision,
+	// exactly as mapNightCues already does.
+	rec = pinAnnouncementCueInConfig(t, st, rec, ba, cue)
+
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-b:audio.session.start": {
+			Outcome: mqttproto.OutcomeRefused, Reason: "node-b refuses this start",
+			Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "refused", "reason": "node-b refuses this start"}},
+		},
+	}
+
+	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	ctx := context.Background()
+	// node-a: the bound action's own first node, dispatched via the
+	// generic per-cue engine - unsuffixed phase, unchanged from the
+	// single-node case.
+	nodeAStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-a", "thank-you")
+	if err != nil {
+		t.Fatalf("node-a start row: %v", err)
+	}
+	if nodeAStart.State != nightCueStateResolved || nodeAStart.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-a start = %+v, want resolved/confirmed", nodeAStart)
+	}
+	nodeAApply, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("node-a apply row (the generic engine's own): %v", err)
+	}
+	if nodeAApply.State != nightCueStateResolved || nodeAApply.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-a apply = %+v, want resolved/confirmed", nodeAApply)
+	}
+
+	// node-b: this controller's own extra-node apply, and its own
+	// refused start - isolated from node-a's, which stayed confirmed.
+	nodeBApply, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementApplyExtra+":"+nightPhaseEnterResting+":node-b", "thank-you")
+	if err != nil {
+		t.Fatalf("node-b apply row: %v", err)
+	}
+	if nodeBApply.State != nightCueStateResolved || nodeBApply.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b apply = %+v, want resolved/confirmed", nodeBApply)
+	}
+	nodeBStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-b", "thank-you")
+	if err != nil {
+		t.Fatalf("node-b start row: %v", err)
+	}
+	if nodeBStart.State != nightCueStateResolved || nodeBStart.Outcome != nightCueOutcomeRefused {
+		t.Fatalf("node-b start = %+v, want resolved/refused - node-a's own confirmed start must not leak into node-b's row", nodeBStart)
+	}
+
+	// Both nodes' clears ran too.
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting+":node-a", "thank-you"); err != nil {
+		t.Fatalf("node-a clear row: %v", err)
+	}
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting+":node-b", "thank-you"); err != nil {
+		t.Fatalf("node-b clear row: %v", err)
+	}
+
+	// GET /night/session's own wire mapping: node-a's apply is mirrored
+	// from the generic engine's own row (mapNightAnnouncementPrimaryApplySteps)
+	// and every step - including that mirrored one - carries its own
+	// nodeId, uniformly (owner ruling: no first-node exception).
+	wire := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	byNodeAndKind := map[string]v1.NightBackgroundAudioStep{}
+	for _, step := range wire.Steps {
+		if step.Sequence != v1.NightAudioSequenceAnnouncement {
+			continue
+		}
+		byNodeAndKind[step.NodeID+":"+step.Kind] = step
+	}
+	for _, key := range []string{
+		"node-a:" + nightAnnouncementStepClear, "node-a:" + nightAnnouncementStepApply, "node-a:" + nightAnnouncementStepStart,
+		"node-b:" + nightAnnouncementStepClear, "node-b:" + nightAnnouncementStepApply, "node-b:" + nightAnnouncementStepStart,
+	} {
+		if _, ok := byNodeAndKind[key]; !ok {
+			t.Fatalf("wire steps missing %q; got %+v", key, byNodeAndKind)
+		}
+	}
+	if got := byNodeAndKind["node-a:"+nightAnnouncementStepStart].Outcome; got != nightCueOutcomeConfirmed {
+		t.Fatalf("wire node-a start outcome = %q, want confirmed", got)
+	}
+	if got := byNodeAndKind["node-b:"+nightAnnouncementStepStart].Outcome; got != nightCueOutcomeRefused {
+		t.Fatalf("wire node-b start outcome = %q, want refused - answerable from this ONE array without reading phase or sort order", got)
 	}
 }
 
@@ -475,18 +658,18 @@ func TestNightAnnouncement_RevisionsAdvanceAcrossCycles(t *testing.T) {
 	pub.resultsByAction = announcementNodeResults("announcement-1")
 
 	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
-	firstStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	firstStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-a", "thank-you")
 	if err != nil {
 		t.Fatalf("cycle 1 start row: %v", err)
 	}
 
 	rec.Cycle++
 	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
-	secondClear, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you")
+	secondClear, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting+":node-a", "thank-you")
 	if err != nil {
 		t.Fatalf("cycle 2 clear row: %v", err)
 	}
-	secondStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	secondStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-a", "thank-you")
 	if err != nil {
 		t.Fatalf("cycle 2 start row: %v", err)
 	}
@@ -523,7 +706,7 @@ func TestNightAnnouncement_StartsEvenWhenTheApplyDidNotConfirm(t *testing.T) {
 	if err != nil || applyRow.Outcome == nightCueOutcomeConfirmed {
 		t.Fatalf("apply row = %+v, err = %v; this test needs an unconfirmed apply", applyRow, err)
 	}
-	startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-a", "thank-you")
 	if err != nil {
 		t.Fatalf("no start row after an unconfirmed apply: %v (a silent announcement must never be the quiet outcome of a skipped step)", err)
 	}
@@ -584,12 +767,12 @@ func TestNightAnnouncement_NoClearAheadOfTheShowCommitBoundary(t *testing.T) {
 	if len(got) > 0 && got[0] == "audio.session.clear" {
 		t.Fatalf("dispatched %v: a clear was sent ahead of the atomic show-commit boundary", got)
 	}
-	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow, "thank-you"); err == nil {
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow+":node-a", "thank-you"); err == nil {
 		t.Fatal("a clear step was committed for the first outward-facing cue")
 	}
 	// The start still happens: it runs after the cue, by which point the
 	// boundary has been crossed.
-	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow, "thank-you"); err != nil {
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow+":node-a", "thank-you"); err != nil {
 		t.Fatalf("no start step after the first outward-facing announcement cue: %v", err)
 	}
 }
@@ -634,5 +817,439 @@ func TestNightAnnouncement_StepsAreOnTheOperatorSurface(t *testing.T) {
 	// background: adding one sequence must not swallow the other.
 	if step, ok := byKind[nightBGStepStart]; !ok || step.Sequence != v1.NightAudioSequenceBackground {
 		t.Fatalf("background start step = %+v (present=%v), want it present and tagged background", step, ok)
+	}
+}
+
+// mustRefreshNightSession re-reads rec's own row, the way the real night
+// loop begins every tick: nightAdvanceCueList never mutates its rec
+// parameter, so a test that re-walks the cue list across ticks (as the
+// loop does) must fetch ShowCommitted and Cycle back out of the store
+// itself rather than assuming the previous call's local value.
+func mustRefreshNightSession(t *testing.T, st *store.Store, id string) store.NightSessionRecord {
+	t.Helper()
+	rec, err := st.GetNightSession(context.Background(), id)
+	if err != nil {
+		t.Fatalf("refresh night session: %v", err)
+	}
+	return rec
+}
+
+// mustPutPlainFirstCueAction binds a confirmable, non-announcement action
+// suitable for a cue that is meant to BE the first outward-facing cue,
+// standing in for something like a lighting or FPP cue that normally
+// precedes an announcement in a real show.
+func mustPutPlainFirstCueAction(t *testing.T, st *store.Store, id string) {
+	t.Helper()
+	putNightAction(t, st, id, config.ShowActionPayload{
+		Show: "halloween", Label: "Enter show lighting", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationFPP, InstanceID: "fpp-main",
+			Primitive: "startPlaylist", Params: map[string]any{"playlist": id},
+		},
+	})
+}
+
+// mutation target: nightAdvanceCueList's clear gate. Gating the clear on
+// !isFirst alone let the skip on the commit tick evaporate the very next
+// tick, since the cue list is re-walked and isFirst is then false —
+// landing the clear one tick after the announcement's own start and
+// cutting it off. An announcement that is the first outward-facing cue
+// must get exactly one apply, one start, and no clear at all this cycle,
+// no matter how many more ticks re-walk the same cue list.
+func TestNightAnnouncement_FirstOutwardCue_NoClearAfterStartAcrossTicks(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	before := len(pub.dispatched)
+	// Tick 1: the show is not yet committed, so this announcement is the
+	// first outward-facing cue.
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+	rec = mustRefreshNightSession(t, st, rec.ID)
+	if !rec.ShowCommitted {
+		t.Fatal("show not committed after the first outward-facing cue ran")
+	}
+
+	// Ticks 2 and 3: re-walk the exact same cue list, as the real night
+	// loop does every tick. isFirst is now false on both.
+	for i := 0; i < 2; i++ {
+		h.nightAdvanceCueList(ctx, testNow.Add(time.Duration(i+1)*time.Second), rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+		rec = mustRefreshNightSession(t, st, rec.ID)
+	}
+
+	counts := map[string]int{}
+	for _, d := range pub.dispatched[before:] {
+		counts[d.Action]++
+	}
+	if counts["audio.session.clear"] != 0 {
+		t.Fatalf("dispatched %d clears for the first outward-facing announcement this cycle, want 0", counts["audio.session.clear"])
+	}
+	if counts["audio.session.apply"] != 1 {
+		t.Fatalf("dispatched %d applies, want exactly 1", counts["audio.session.apply"])
+	}
+	if counts["audio.session.start"] != 1 {
+		t.Fatalf("dispatched %d starts, want exactly 1", counts["audio.session.start"])
+	}
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow, "thank-you"); err == nil {
+		t.Fatal("a clear step was committed for the first outward-facing cue, even after later ticks re-walked the cue list")
+	}
+}
+
+// mutation target: the same clear gate, from the other direction. A
+// non-first announcement must not lose its clear-before-apply ordering
+// to the new per-cycle-applied check: the clear has to run on the very
+// first tick, before any apply row exists for this cue this cycle.
+func TestNightAnnouncement_NotFirstOutwardCue_ClearStillRunsBeforeApply(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	before := len(pub.dispatched)
+	// enterResting carries no first-outward-cue boundary at all, so this
+	// announcement is never "first" here.
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	got := announcementActions(pub, before)
+	if len(got) < 2 || got[0] != "audio.session.clear" {
+		t.Fatalf("dispatched %v, want the clear to run first, before the apply", got)
+	}
+}
+
+// mutation target: nightAnnouncementAppliedThisCycle's per-cycle row
+// lookup. A stale announcement session left over from an earlier cycle
+// must still be cleared: otherwise it can hold the background bed ducked
+// indefinitely (this file's own clear-ordering doc comment).
+func TestNightAnnouncement_StaleAnnouncementFromEarlierCycleIsStillCleared(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	// Cycle 1: run the announcement to completion via enterResting, so it
+	// is left applied and started, exactly as a session left playing by
+	// an earlier cycle would be.
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	// Cycle 2: a fresh cycle has no outbox row yet for this cue's own
+	// phase, so the clear must run again before the apply, even though a
+	// clear already ran once for this same cue in the prior cycle.
+	rec.Cycle++
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	got := announcementActions(pub, before)
+	if len(got) < 2 || got[0] != "audio.session.clear" {
+		t.Fatalf("cycle 2 dispatched %v, want a clear first, stopping any announcement left over from cycle 1", got)
+	}
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting+":node-a", "thank-you"); err != nil {
+		t.Fatalf("no clear row committed for cycle 2: %v", err)
+	}
+}
+
+// mutation target: nightAnnouncementAppliedThisCycle scoped to the
+// current cycle. Following the cut-off scenario through to its next
+// cycle: once a cycle where the announcement was the first outward cue
+// ends, the very next cycle must still clear before its own apply, even
+// though no clear ever ran the cycle before.
+func TestNightAnnouncement_NextCycleAfterFirstOutwardCueStillClearsBeforeApply(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	mustPutPlainFirstCueAction(t, st, "lights")
+	duck := config.NightSessionAnnouncementPolicyDuck
+	announcement := announcementCue(&duck)
+	lights := config.NightSessionCue{
+		Name: "lights", Role: "", Action: "lights", OffsetMs: 0, OnFailure: config.NightSessionCueOnFailureContinue,
+	}
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	// Cycle 1: the announcement is the only enterShow cue, so it is
+	// itself the first outward-facing cue and gets no clear this cycle.
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{announcement}, payload)
+	if got := announcementActions(pub, before); len(got) > 0 && got[0] == "audio.session.clear" {
+		t.Fatalf("cycle 1 dispatched %v: a clear was sent ahead of the show-commit boundary", got)
+	}
+	rec = mustRefreshNightSession(t, st, rec.ID)
+
+	// Cycle 2: both cues are due from the first tick, "lights" sorts
+	// first by offset and becomes the first outward-facing cue instead,
+	// so the announcement is no longer first and its clear must run
+	// before its apply.
+	rec.Cycle++
+	rec.ShowCommitted = false
+	if err := st.UpdateNightSession(ctx, rec, testNow); err != nil {
+		t.Fatalf("advance to cycle 2: %v", err)
+	}
+	before = len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{lights, announcement}, payload)
+
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow+":node-a", "thank-you"); err != nil {
+		t.Fatalf("cycle 2: no clear row for the announcement: %v", err)
+	}
+	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterShow, "thank-you")
+	if err != nil {
+		t.Fatalf("cycle 2: no apply row for the announcement: %v", err)
+	}
+	if applyRow.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("cycle 2 apply row = %+v, want confirmed (not refused as stale)", applyRow)
+	}
+	clearWireRev := dispatchedRevision(t, pub, "audio.session.clear", before)
+	applyWireRev := dispatchedRevision(t, pub, "audio.session.apply", before)
+	if clearWireRev >= applyWireRev {
+		t.Fatalf("clear wire revision %d must be strictly below the apply's %d", clearWireRev, applyWireRev)
+	}
+	var clearIdx, applyIdx = -1, -1
+	for i, d := range pub.dispatched[before:] {
+		if d.Action == "audio.session.clear" && clearIdx == -1 {
+			clearIdx = i
+		}
+		if d.Action == "audio.session.apply" && applyIdx == -1 {
+			if _, isLights := d.Params["playlist"]; !isLights {
+				applyIdx = i
+			}
+		}
+	}
+	if clearIdx == -1 {
+		t.Fatal("cycle 2: the announcement's clear was never dispatched")
+	}
+	if applyIdx == -1 || clearIdx > applyIdx {
+		t.Fatalf("cycle 2: clear dispatched at index %d, apply at %d; the clear must run before the apply", clearIdx, applyIdx)
+	}
+}
+
+// mutation target: nightAnnouncementRevisions' floor computation itself.
+// Make the floor ignore persistedRevision (e.g. return applyRevision+1,
+// applyRevision+2 unconditionally) and this fails: a persisted revision
+// above applyRevision must still push the floor up.
+//
+// This is the acceptance bullet that matters most: two CONSECUTIVE night
+// sessions reusing one audio session id ("announcement-1") must produce a
+// clear/start pair that strictly exceeds what the first session left
+// persisted, never revisions that collapse back to the bound action's own
+// pinned config revision the way a fresh, empty
+// nightAnnouncementHistory (keyed by the new session's own id) used to
+// produce.
+func TestNightAnnouncement_FloorSurvivesConsecutiveNightSessionsSharingOneAudioSession(t *testing.T) {
+	h, st, pub, rec1, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	// Night session 1: run the announcement cue to completion, exactly as
+	// a real first night would.
+	h.nightAdvanceCueList(ctx, testNow, rec1, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	firstStart, err := st.GetNightCueOutboxRow(ctx, rec1.ID, rec1.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-a", "thank-you")
+	if err != nil {
+		t.Fatalf("session 1 start row: %v", err)
+	}
+
+	// A brand-new night session record - a fresh uuid, per
+	// nightPrepareSiteTx, exactly as prepare-site mints for a new epoch -
+	// reusing the SAME node and background-audio config, and therefore the
+	// SAME announcement audio session id ("announcement-1"). Its own
+	// announcement-session history is empty: nothing has ever run under
+	// this session's own id.
+	rec2 := store.NightSessionRecord{
+		ID: "sess-2", ConfigObjectID: rec1.ConfigObjectID, ConfigRevision: rec1.ConfigRevision,
+		State: nightStateRestingIntershow, StateEnteredAt: testNow, Cycle: 1,
+	}
+	if err := st.CreateNightSession(ctx, rec2, testNow); err != nil {
+		t.Fatalf("create night session 2: %v", err)
+	}
+	if history, err := h.nightAnnouncementHistory(ctx, rec2); err != nil {
+		t.Fatalf("session 2 history: %v", err)
+	} else if len(history) != 0 {
+		t.Fatalf("session 2 announcement history = %v, want empty (this is exactly the case the fix must not depend on)", history)
+	}
+
+	h.nightAdvanceCueList(ctx, testNow, rec2, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	secondClear, err := st.GetNightCueOutboxRow(ctx, rec2.ID, rec2.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting+":node-a", "thank-you")
+	if err != nil {
+		t.Fatalf("session 2 clear row: %v", err)
+	}
+	secondStart, err := st.GetNightCueOutboxRow(ctx, rec2.ID, rec2.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-a", "thank-you")
+	if err != nil {
+		t.Fatalf("session 2 start row: %v", err)
+	}
+
+	if secondClear.ActionRevision <= firstStart.ActionRevision {
+		t.Fatalf("session 2 clear revision %d did not advance past session 1's start revision %d; the floor collapsed back to the config revision instead of surviving across night sessions", secondClear.ActionRevision, firstStart.ActionRevision)
+	}
+	if secondStart.ActionRevision <= secondClear.ActionRevision {
+		t.Fatalf("session 2 start revision %d did not advance past its own clear's %d", secondStart.ActionRevision, secondClear.ActionRevision)
+	}
+
+	persisted, err := st.GetAudioSession(ctx, "node-a", "announcement-1")
+	if err != nil {
+		t.Fatalf("get persisted audio session: %v", err)
+	}
+	if int64(persisted.Revision) != secondStart.ActionRevision {
+		t.Fatalf("persisted audio_sessions revision = %d, want it to track session 2's own start revision %d", persisted.Revision, secondStart.ActionRevision)
+	}
+}
+
+// TestNightAnnouncement_ApplyConfirmsAcrossThreeCyclesAsSoleFirstOutwardCue
+// is the acceptance test for the apply-revision-floor defect: an
+// announcement that is the ONLY (and therefore first outward-facing) cue
+// in nightPhaseEnterShow skips its own clear every cycle
+// (nightAnnouncementCueWithResolvedPolicy's isFirst gate, unchanged by this
+// fix), so before this fix its apply carried the bound action's frozen
+// pinned config revision (1, forever) into a node counter that only the
+// start ever advanced - refused as stale_revision from the second cycle
+// on, exactly as the owner's rehearsal-stack trace showed. Two cycles is
+// not enough to prove this: the first cycle's apply is accepted no matter
+// what revision it carries, because the node has nothing to compare
+// against yet. The defect - and the fix - only show from the SECOND
+// confirmed apply on, which is why this drives three.
+//
+// mutation target: nightRunCue/nightResumeCueRow's dispatchRevision
+// selection. Put the apply back on its own pinned config revision
+// (row.ActionRevision / revision, unconditionally) and cycles 2 and 3 fail
+// here at the wire-revision monotonicity check - the apply wire revision
+// no longer advances past the previous cycle's - while cycle 1 still
+// passes, proving the defect is real and that this test catches it. The
+// apply row itself stays resolved/confirmed under the mutation:
+// announcementNodeResults answers by action name unconditionally, with no
+// revision awareness, so this stub can never produce a node-side
+// stale_revision refusal. What this test guards is the coordinator's own
+// job - emitting a strictly advancing dispatch revision for the apply,
+// which is exactly what this change fixes; node-side refusal of a stale
+// revision is the agent's behaviour, covered by the agent-side tests
+// where the merged clear exemption applies.
+func TestNightAnnouncement_ApplyConfirmsAcrossThreeCyclesAsSoleFirstOutwardCue(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	var lastApplyWireRev int64 = -1
+	for cycle := 1; cycle <= 3; cycle++ {
+		if cycle > 1 {
+			rec.Cycle++
+			rec.ShowCommitted = false
+			if err := st.UpdateNightSession(ctx, rec, testNow); err != nil {
+				t.Fatalf("cycle %d: advance cycle: %v", cycle, err)
+			}
+		}
+
+		before := len(pub.dispatched)
+		h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+		rec = mustRefreshNightSession(t, st, rec.ID)
+
+		if got := announcementActions(pub, before); len(got) > 0 && got[0] == "audio.session.clear" {
+			t.Fatalf("cycle %d: dispatched %v, want no clear - this announcement is the sole cue and stays the first outward-facing cue every cycle", cycle, got)
+		}
+
+		applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterShow, "thank-you")
+		if err != nil {
+			t.Fatalf("cycle %d: apply row: %v", cycle, err)
+		}
+		if applyRow.State != nightCueStateResolved || applyRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("cycle %d: apply row = %+v, want resolved/confirmed - not refused as stale_revision", cycle, applyRow)
+		}
+		if applyRow.ActionRevision != 1 {
+			t.Fatalf("cycle %d: apply row ActionRevision = %d, want 1 (the pinned config revision, unaffected by any cycle)", cycle, applyRow.ActionRevision)
+		}
+		startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow+":node-a", "thank-you")
+		if err != nil {
+			t.Fatalf("cycle %d: start row: %v", cycle, err)
+		}
+		if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("cycle %d: start row = %+v, want resolved/confirmed", cycle, startRow)
+		}
+
+		applyWireRev := dispatchedRevision(t, pub, "audio.session.apply", before)
+		if applyWireRev <= lastApplyWireRev {
+			t.Fatalf("cycle %d: apply wire revision %d did not advance past the previous cycle's %d", cycle, applyWireRev, lastApplyWireRev)
+		}
+		lastApplyWireRev = applyWireRev
+	}
+}
+
+// TestNightAnnouncement_ApplyConfirmsAcrossTwoNightSessionsAsSoleFirstOutwardCue
+// is acceptance bullet 2: the same guarantee holds across two CONSECUTIVE
+// night sessions sharing one audio session id, not just across cycles of
+// one session - mirroring
+// TestNightAnnouncement_FloorSurvivesConsecutiveNightSessionsSharingOneAudioSession
+// but for the apply specifically, and with the announcement as the sole
+// enterShow cue so its clear is skipped in both sessions, the same shape
+// that hid the defect on the owner's rig.
+func TestNightAnnouncement_ApplyConfirmsAcrossTwoNightSessionsAsSoleFirstOutwardCue(t *testing.T) {
+	h, st, pub, rec1, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	h.nightAdvanceCueList(ctx, testNow, rec1, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+	applyRow1, err := st.GetNightCueOutboxRow(ctx, rec1.ID, rec1.Cycle, nightPhaseEnterShow, "thank-you")
+	if err != nil {
+		t.Fatalf("session 1: apply row: %v", err)
+	}
+	if applyRow1.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("session 1: apply row = %+v, want confirmed", applyRow1)
+	}
+
+	// A brand-new night session record - a fresh uuid, per nightPrepareSiteTx
+	// - reusing the same node and background-audio config, and therefore the
+	// same announcement audio session id ("announcement-1").
+	rec2 := store.NightSessionRecord{
+		ID: "sess-2", ConfigObjectID: rec1.ConfigObjectID, ConfigRevision: rec1.ConfigRevision,
+		State: rec1.State, StateEnteredAt: testNow,
+	}
+	if err := st.CreateNightSession(ctx, rec2, testNow); err != nil {
+		t.Fatalf("create night session 2: %v", err)
+	}
+
+	h.nightAdvanceCueList(ctx, testNow, rec2, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+	applyRow2, err := st.GetNightCueOutboxRow(ctx, rec2.ID, rec2.Cycle, nightPhaseEnterShow, "thank-you")
+	if err != nil {
+		t.Fatalf("session 2: apply row: %v", err)
+	}
+	if applyRow2.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("session 2: apply row = %+v, want confirmed - not refused as stale against session 1's own surviving floor", applyRow2)
+	}
+	if applyRow2.ActionRevision != 1 {
+		t.Fatalf("session 2: apply row ActionRevision = %d, want 1 (the pinned config revision)", applyRow2.ActionRevision)
+	}
+}
+
+// mutation target: nightAnnouncementRevisions' floor computation. The
+// returned triple always strictly exceeds the persisted revision, and is
+// three CONSECUTIVE values - clear, then apply, then start - with no gap
+// an apply carrying its own pinned config revision could ever fall into.
+func TestNightAnnouncementRevisions_TripleStrictlyExceedsPersistedRevision(t *testing.T) {
+	for _, persisted := range []int64{0, 1, 5, 100} {
+		clear, apply, start := nightAnnouncementRevisions(persisted)
+		if clear <= persisted {
+			t.Fatalf("persisted=%d: clear=%d, want it to strictly exceed persisted", persisted, clear)
+		}
+		if apply != clear+1 {
+			t.Fatalf("persisted=%d: apply=%d, want exactly clear+1=%d (three consecutive values)", persisted, apply, clear+1)
+		}
+		if start != apply+1 {
+			t.Fatalf("persisted=%d: start=%d, want exactly apply+1=%d (three consecutive values)", persisted, start, apply+1)
+		}
 	}
 }

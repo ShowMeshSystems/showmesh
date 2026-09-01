@@ -223,6 +223,7 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision (ADR-009). A cue's own offsetMs is NOT")
 		_, _ = fmt.Fprintln(stderr, "bounded here: checking it against the resting FSEQ's actual length needs")
 		_, _ = fmt.Fprintln(stderr, "a live FPP read and is readiness work, not this write-time check.")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"night get --output json\" prints.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -239,6 +240,10 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 	id := rest[0]
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "night set", newCLIError(exitUsage, "%v", err))
+	}
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "night set", newCLIError(exitUsage, "%v", err))
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,6 +87,48 @@ func TestCmdAudioSettingsSetPutsTheFileContents(t *testing.T) {
 	}
 	if strings.TrimSpace(string(gotBody)) != payload {
 		t.Fatalf("PUT body = %s, want the incomplete file's own bytes %s, unreshaped", gotBody, payload)
+	}
+}
+
+// TestCmdAudioSettingsSetAcceptsAFullAudioSettingsGetResponse is the
+// audio.settings half of generalizing parseConfigSetPayload's
+// fpp.endpoints-only round-trip fix (cmd_config.go, unwrapConfigGetResponse)
+// to every config kind: feed "audio settings set" the EXACT bytes "audio
+// settings get --output json" prints, and prove the PUT body carries the
+// bare payload object directly at the top level, not still wrapped under
+// "payload".
+func TestCmdAudioSettingsSetAcceptsAFullAudioSettingsGetResponse(t *testing.T) {
+	const getResponse = `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.settings","revision":1,
+		"payload":{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-12.04},
+		"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, getResponse)
+	}))
+	defer ts.Close()
+
+	// The EXACT shape `audio settings get --output json` emits.
+	file := writeAudioSettingsPayloadFile(t, getResponse)
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{"settings", "set", "--file", file, "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+
+	var sentTop map[string]any
+	if err := json.Unmarshal(gotBody, &sentTop); err != nil {
+		t.Fatalf("PUT body was not a JSON object: %v; body=%s", err, gotBody)
+	}
+	if _, stillWrapped := sentTop["payload"]; stillWrapped {
+		t.Fatalf("PUT body = %s, still has a top-level \"payload\" key — the wrapper was sent unmodified, not unwrapped", gotBody)
+	}
+	if sentTop["driftIgnoreThresholdMs"] != float64(30) {
+		t.Fatalf("PUT body = %s, want driftIgnoreThresholdMs=30 from the \"audio settings get\" response — the round trip must survive", gotBody)
 	}
 }
 

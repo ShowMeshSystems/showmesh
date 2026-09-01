@@ -138,6 +138,26 @@ type FrameWriter struct {
 	source   FrameSource
 	timeline TimelineSource
 
+	// sequenceFilename is the bare runtime filename this writer opened
+	// source from — buildFSEQAssignment's already-validated fseqFilename
+	// (internal/agent/renderops.go), carried through unchanged. Compared
+	// exact-string against the timeline's own reported filename
+	// (multisync.Snapshot.Filename) on every content tick to catch FPP
+	// having moved on to a sequence this writer was never told about; see
+	// writeOneFrame. "" for a writer with no real sequence ([unknownTimeline]
+	// always reports "" too, and is permanently an idle content state, so
+	// the comparison never runs for those writers).
+	//
+	// The comparison itself is plain exact-string equality, not a path or
+	// case normalization: internal/agent/cueactivationrender.go's
+	// activateSurfaceRender already compares multisync.Snapshot.Filename
+	// against a Cue's resolved runtime filename the same way (ADR-043
+	// decision 6, "Filename is corroboration and mismatch evidence only"),
+	// treating a match/mismatch as exact strings with no normalization.
+	// This reuses that established comparison rather than inventing a new
+	// one for this second call site.
+	sequenceFilename string
+
 	// channelStart is 0-BASED, already converted from the operator-facing
 	// 1-based show.surface.channelRange.startChannel — see
 	// internal/agent/renderops.go's buildFSEQAssignment, the one place that
@@ -218,12 +238,15 @@ type FrameWriter struct {
 	currentRate       *float64
 	framesObservedAt  time.Time
 
-	// loggedRangeErrOnce and loggedWriteErrOnce keep this loop from log-
-	// spamming at up to 40Hz when a condition (e.g. the process is down, or
-	// the assigned range is not covered by this frame) is persistent —
-	// counted every tick regardless, logged once until it clears.
+	// loggedRangeErrOnce, loggedWriteErrOnce, and loggedStale keep this loop
+	// from log-spamming at up to 40Hz when a condition (e.g. the process is
+	// down, the assigned range is not covered by this frame, or the
+	// timeline is reporting a filename this writer never opened) is
+	// persistent — counted every tick regardless, logged once until it
+	// clears.
 	loggedRangeErr bool
 	loggedWriteErr bool
+	loggedStale    bool
 
 	// lastTickTime anchors finding 13's ticker-drop detection: Go's
 	// time.Ticker silently drops ticks when the receiver falls behind
@@ -272,7 +295,11 @@ type FrameWriter struct {
 // resolveGeometry); every other idle mode and the content path ignore them
 // entirely and keep working from channelStart/channelCount alone exactly as
 // before.
-func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, idleOutput string, showMode ShowModeSource, logger Logger) (*FrameWriter, error) {
+//
+// sequenceFilename is the bare runtime filename source was opened from —
+// see [FrameWriter.sequenceFilename] for what it is compared against and
+// why.
+func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, sequenceFilename string, channelStart, channelCount, width, height int, idleOutput string, showMode ShowModeSource, logger Logger) (*FrameWriter, error) {
 	// A source with no frames cannot cover any channel range, so the
 	// construction-time probe below has nothing to prove and every tick
 	// this writer would ever run is already known to fail. Refused here,
@@ -302,7 +329,7 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		idleOutput = IdleOutputBlack
 	}
 
-	return newFrameWriter(sup, surfaceID, source, timeline, channelStart, channelCount, width, height, stepTime, idleOutput, showMode, logger), nil
+	return newFrameWriter(sup, surfaceID, source, timeline, sequenceFilename, channelStart, channelCount, width, height, stepTime, idleOutput, showMode, logger), nil
 }
 
 // unknownTimeline is the [TimelineSource] a writer with no timeline of its
@@ -353,7 +380,7 @@ func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, 
 	}
 	channelCount := width * height * bytesPerPixel
 	stepTime := time.Second / time.Duration(frameRate)
-	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, 0, channelCount, width, height, stepTime, IdleOutputDiagnostic, nil, logger), nil
+	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, "", 0, channelCount, width, height, stepTime, IdleOutputDiagnostic, nil, logger), nil
 }
 
 // NewIdleFrameWriter builds a frame writer for a real show surface whose
@@ -384,7 +411,7 @@ func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pi
 	}
 	channelCount := width * height * bytesPerPixel
 	stepTime := time.Second / time.Duration(frameRate)
-	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, 0, channelCount, width, height, stepTime, idleOutput, nil, logger), nil
+	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, "", 0, channelCount, width, height, stepTime, idleOutput, nil, logger), nil
 }
 
 // newFrameWriter allocates the writer both constructors above share: every
@@ -394,7 +421,7 @@ func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pi
 // loop dereferences them every tick and has no absence branch (see
 // [emptyFrameSource] and [unknownTimeline] for what a writer with neither
 // of its own passes instead).
-func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, stepTime time.Duration, idleOutput string, showMode ShowModeSource, logger Logger) *FrameWriter {
+func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, sequenceFilename string, channelStart, channelCount, width, height int, stepTime time.Duration, idleOutput string, showMode ShowModeSource, logger Logger) *FrameWriter {
 	diagW, diagH, diagBPP := resolveGeometry(width, height, channelCount)
 	alertBuf := make([]byte, channelCount)
 	fillAlert(alertBuf, diagBPP)
@@ -413,6 +440,7 @@ func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		logger:            logger,
 		source:            source,
 		timeline:          timeline,
+		sequenceFilename:  sequenceFilename,
 		channelStart:      channelStart,
 		channelCount:      channelCount,
 		stepTime:          stepTime,
@@ -535,7 +563,46 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 		drawing = DrawingIdle
 		idleMode = fw.idleOutput
 		outBuf = fw.idleOutputFor(tickTime)
+	} else if snap.Filename != "" && snap.Filename != fw.sequenceFilename {
+		// The timeline says something is playing, but not the sequence
+		// this writer holds: FPP has moved on to a sequence this surface
+		// was never assigned, and sync is still arriving. Before this
+		// check, Playing plus "whatever FSEQ this surface holds" was
+		// drawn unconditionally, with nothing ever re-checking that the
+		// held file was still the right one.
+		//
+		// An empty snap.Filename is deliberately NOT a mismatch: it means
+		// MultiSync has not reported a filename yet, the same "nothing to
+		// compare against" reading internal/agent/cueactivationrender.go's
+		// activateSurfaceRender already gives it (ADR-043 decision 6) — a
+		// writer must never blank a surface for lack of evidence, only for
+		// evidence that actually disagrees.
+		//
+		// This deliberately does NOT fall through to idleOutputFor: a
+		// [IdleOutputHold] writer's fw.buf is the last frame extracted
+		// from the WRONG sequence, and drawing it here would reproduce the
+		// exact bug being fixed under a different name. Black is the one
+		// output this writer can put on the wall that is not a
+		// content claim about anything, forced the same way a coverage-gap
+		// extraction failure already forces its own output regardless of
+		// the operator's configured idle mode.
+		//
+		// Not counted as a dropped frame: extraction never even ran, and a
+		// real frame (idleBuf) reaches the pipeline's stdin just as
+		// successfully as an ordinary idle tick's does. dropped means a
+		// frame failed to reach the pipeline at all (build contract
+		// ruling 3); this frame reaches it, it is just deliberately not
+		// content.
+		if !fw.loggedStale {
+			fw.loggedStale = true
+			fw.logger.Warn("frame writer: timeline is reporting a different sequence than this surface holds; this surface has stopped drawing content until it recovers",
+				"surface_id", fw.surfaceID, "held_sequence", fw.sequenceFilename, "timeline_sequence", snap.Filename)
+		}
+		drawing = DrawingStale
+		idleMode = ""
+		outBuf = fw.idleBuf
 	} else {
+		fw.loggedStale = false
 		pos := snap.PositionMS
 		frameIdx := fw.frameIndexFor(pos)
 		if err := fw.source.ChannelRange(frameIdx, fw.channelStart, fw.channelCount, fw.buf); err != nil {

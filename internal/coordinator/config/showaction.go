@@ -329,14 +329,6 @@ const (
 	// checked for existence.
 	ValidationCodeCrossShowReference = "cross-show-reference"
 
-	// ValidationCodeBackgroundAudioMixedTargets means
-	// resting.backgroundAudio.items named more than one distinct asset
-	// target: a background-audio playlist plays on exactly one audio
-	// output, and each item's own "target" (ADR-028 asset identity) is
-	// this seam's only source of which audio.node id that is, so every
-	// item must agree.
-	ValidationCodeBackgroundAudioMixedTargets = "background-audio-mixed-targets"
-
 	// ValidationCodeAnnouncementPolicyNotApplicable means a cue named
 	// announcementPolicy while its own role was not "announcement": the
 	// duck/mix/interrupt policy only ever applies to an announcement.
@@ -429,6 +421,26 @@ var showActionAudioActionSet = func() map[string]bool {
 	}
 	return m
 }()
+
+// IsSupportedAudioAction reports whether action is one of
+// showActionAudioActions — exported so a caller outside this package (the
+// action-binding re-check, internal/coordinator/api/actionbinding.go) can
+// re-validate a STORED audioAction against the current supported set
+// without a second, hand-copied list of the same vocabulary, mirroring
+// api.FPPPrimitiveRegistry.WireActions()'s identical role for FPP's own
+// binding check.
+func IsSupportedAudioAction(action string) bool {
+	return showActionAudioActionSet[action]
+}
+
+// ShowActionAudioActions returns showActionAudioActions' own values, for a
+// caller that needs to name the full supported set (e.g. in a refusal
+// message) rather than test one action against it.
+func ShowActionAudioActions() []string {
+	out := make([]string, len(showActionAudioActions))
+	copy(out, showActionAudioActions)
+	return out
+}
 
 // The seven Resolume action names (internal/coordinator/collector/resolume.ActionName),
 // duplicated here by value rather than by import: this package must not
@@ -698,9 +710,66 @@ type ShowActionTarget struct {
 	// one of [showActionAudioActions]; Params (above) carries that
 	// operation's own command params, exactly as a direct
 	// audio.session.*/audio.gain.*/audio.output.* API call would.
-	AudioNodeID    string `json:"audioNodeId,omitempty"`
-	AudioSessionID string `json:"audioSessionId,omitempty"`
-	AudioAction    string `json:"audioAction,omitempty"`
+	//
+	// AudioNodeIDs widens target.audioNodeId from one node to a list
+	// (api/openapi.yaml's ConfigShowActionTarget.audioNodeId doc comment
+	// is the authority; this comment must not drift from it again): the
+	// night-mode bed and announcements use every listed node, every
+	// other dispatch consumer reads only the first, and configuration
+	// validation (the audio binding check) checks every named node
+	// regardless of which one a dispatch would reach. The wire KEY stays
+	// "audioNodeId": AudioNodeIDList's own UnmarshalJSON keeps decoding a
+	// bare JSON string (every installation's payload stored before this
+	// change) into a one-element list unchanged, and now also accepts a
+	// JSON array for a multi-node target. A cue whose bound action reaches
+	// the generic single-target dispatch path (nightRunCue) with more than
+	// one node uses AudioNodeIDs[0] only; the night controller's own
+	// multi-node fan-out (background audio, announcement clear/apply/
+	// start) is the sole place every configured node is actually
+	// addressed - see nightannouncement.go and nightbackgroundaudio.go.
+	AudioNodeIDs   AudioNodeIDList `json:"audioNodeId,omitempty"`
+	AudioSessionID string          `json:"audioSessionId,omitempty"`
+	AudioAction    string          `json:"audioAction,omitempty"`
+}
+
+// AudioNodeIDList is target.audioNodeId's wire type: a JSON string (one
+// node, the shape every payload stored before this field was widened
+// already used) or a JSON array of strings (more than one node).
+// Internally always a plain []string; MarshalJSON always writes the
+// array form, so a payload this coordinator re-encodes (after a PUT)
+// canonicalizes on the new shape while an untouched stored payload's raw
+// bytes - and therefore what a plain GET returns - are unaffected.
+type AudioNodeIDList []string
+
+// UnmarshalJSON accepts a bare JSON string or a JSON array of strings.
+// Used by every plain encoding/json call this package's own callers make
+// against a stored show.action payload (e.g. nightResolveShowAction's
+// jsonUnmarshalStrict) - the read-back path a hand-rolled validating
+// decoder never touches - which is why this compatibility lives here and
+// not only in decodeAudioTarget's own validating decode.
+func (l *AudioNodeIDList) UnmarshalJSON(b []byte) error {
+	if isJSONNull(b) {
+		*l = nil
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(b, &single); err == nil {
+		*l = AudioNodeIDList{single}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(b, &list); err != nil {
+		return fmt.Errorf("target.audioNodeId must be a JSON string or an array of strings: %w", err)
+	}
+	*l = AudioNodeIDList(list)
+	return nil
+}
+
+// MarshalJSON always writes the array form - see this type's own doc
+// comment for why re-encoding never needs to preserve the legacy scalar
+// shape.
+func (l AudioNodeIDList) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string(l))
 }
 
 // ShowActionMQTTPublish is show.action.target.publish.
@@ -1128,7 +1197,7 @@ var audioActionDeclaredSafetyClass = map[string]string{
 // session surfaces, exactly as an unresolvable mqtt broker would if it
 // were removed after an action was bound to it.
 func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyClass string) (ShowActionTarget, *ValidationError) {
-	nodeID, verr := decodeRequiredString(targetFields, "audioNodeId", "target.audioNodeId")
+	nodeIDs, verr := decodeAudioNodeIDList(targetFields, "audioNodeId", "target.audioNodeId")
 	if verr != nil {
 		return ShowActionTarget{}, verr
 	}
@@ -1179,9 +1248,49 @@ func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyCl
 	}
 
 	return ShowActionTarget{
-		Integration: ShowActionIntegrationAudio, AudioNodeID: nodeID, AudioSessionID: sessionID,
+		Integration: ShowActionIntegrationAudio, AudioNodeIDs: nodeIDs, AudioSessionID: sessionID,
 		AudioAction: action, Params: params,
 	}, nil
+}
+
+// decodeAudioNodeIDList reads key from top as target.audioNodeId, this
+// package's own widened field: a required, non-null JSON string (decoded
+// as a one-element list, the shape every payload stored before this
+// change already used) or a required, non-null, non-empty JSON array of
+// non-empty strings.
+func decodeAudioNodeIDList(top map[string]json.RawMessage, key, field string) (AudioNodeIDList, *ValidationError) {
+	raw, present := top[key]
+	if !present {
+		return nil, &ValidationError{Code: ValidationCodeFieldRequired, Field: field, Detail: fmt.Sprintf("%s is required", field)}
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null", field)}
+	}
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		if single == "" {
+			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: field, Detail: fmt.Sprintf("%s must not be empty", field)}
+		}
+		return AudioNodeIDList{single}, nil
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a JSON string or an array of strings", field)}
+	}
+	if len(list) == 0 {
+		return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: field, Detail: fmt.Sprintf("%s must name at least one node", field)}
+	}
+	seen := make(map[string]bool, len(list))
+	for i, id := range list {
+		if id == "" {
+			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: fmt.Sprintf("%s[%d]", field, i), Detail: fmt.Sprintf("%s[%d] must not be empty", field, i)}
+		}
+		if seen[id] {
+			return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: fmt.Sprintf("%s[%d]", field, i), Detail: fmt.Sprintf("%s names node %q more than once", field, id)}
+		}
+		seen[id] = true
+	}
+	return AudioNodeIDList(list), nil
 }
 
 // showActionGainDbParams names, per audio action, the decibel parameter

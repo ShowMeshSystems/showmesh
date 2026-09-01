@@ -747,14 +747,16 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 
 // Clear releases the session entirely: engine resources, desired state,
 // and its persisted record. Like Stop, never refused for want of
-// evidence.
+// evidence, and never refused as stale either: see
+// [Session.dispatchExemptFromStaleRevision]'s doc comment for why a
+// teardown must always land regardless of the requested revision.
 func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped}
 	}
 	s.mu.Lock()
-	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+	res := s.dispatchExemptFromStaleRevision(invocation, revision, func() pkgaudio.OutcomeResult {
 		m.stopLTCLocked(ctx, s)
 		s.releaseEngineLocked(ctx)
 		// Same hazard Stop resolves: a fade this Clear interrupted has no

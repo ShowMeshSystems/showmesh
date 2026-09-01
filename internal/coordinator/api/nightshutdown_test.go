@@ -272,3 +272,68 @@ func TestNightTransitionToResting_WithoutShutdownStillStartsEndOfNightRepeat(t *
 		t.Fatalf("commands sent = %v, want one %q", cmds, "Start Playlist")
 	}
 }
+
+// Fading out replays the enterShow cue list to bring the presentation
+// to black. RESTING-MODE.md §7.1 stages an announcement AFTER the blackout
+// barrier as a show-start element, so a fade must replay every other role
+// and never re-greet an emptying site.
+func TestNightFadingOut_ReplaysEveryRoleExceptAnnouncement(t *testing.T) {
+	now := time.Date(2026, 10, 31, 23, 0, 0, 0, time.UTC)
+	payload := nightShutdownPayload()
+	payload.EnterShow.Cues = []config.NightSessionCue{
+		{Name: "house-to-black", Role: config.NightSessionCueRoleLighting, Action: "act-blackout", OnFailure: config.NightSessionCueOnFailureContinue},
+		{Name: "welcome", Role: config.NightSessionCueRoleAnnouncement, Action: "act-blackout", OnFailure: config.NightSessionCueOnFailureContinue},
+	}
+	f := newNightShutdownFixture(t, &now, payload, fadingOutSession(now, "fade-out"))
+	putNightAction(t, f.store, "act-blackout", config.ShowActionPayload{
+		Show: "halloween-2026", Label: "Blackout", SafetyClass: config.ShowSafetyClassBlackout,
+		Target: config.ShowActionTarget{Integration: config.ShowActionIntegrationResolume, Action: config.ShowActionResolumeBlackout, Ref: map[string]any{}},
+	})
+
+	f.h.nightAdvanceFadingOut(context.Background(), now, mustGetCurrentSession(t, f.store))
+
+	rows, err := f.store.ListNightCueOutboxRowsForPhasePrefix(context.Background(), "sess-1", nightPhaseFadeOut)
+	if err != nil {
+		t.Fatalf("list fade-out cue rows: %v", err)
+	}
+	var names []string
+	for _, r := range rows {
+		names = append(names, r.CueName)
+	}
+	if len(names) != 1 || names[0] != "house-to-black" {
+		t.Fatalf("fade-out dispatched cues = %v, want only the lighting cue: an announcement is a show-start element and must never replay at shutdown", names)
+	}
+
+	announcement, err := f.store.ListNightCueOutboxRowsForPhasePrefix(context.Background(), "sess-1", nightPhaseAnnouncementSession)
+	if err != nil {
+		t.Fatalf("list announcement-session rows: %v", err)
+	}
+	if len(announcement) != 0 {
+		t.Fatalf("announcement-session rows written during fade-out = %d, want 0", len(announcement))
+	}
+}
+
+// nightFadeOutCues is the rule itself: every role but announcement, order
+// preserved.
+func TestNightFadeOutCues_DropsOnlyAnnouncements(t *testing.T) {
+	in := []config.NightSessionCue{
+		{Name: "a", Role: config.NightSessionCueRoleLighting},
+		{Name: "b", Role: config.NightSessionCueRoleAnnouncement},
+		{Name: "c", Role: config.NightSessionCueRoleProjection},
+		{Name: "d", Role: config.NightSessionCueRoleAudio},
+		{Name: "e", Role: config.NightSessionCueRoleOther},
+	}
+	var got []string
+	for _, cue := range nightFadeOutCues(in) {
+		got = append(got, cue.Name)
+	}
+	want := []string{"a", "c", "d", "e"}
+	if len(got) != len(want) {
+		t.Fatalf("nightFadeOutCues = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("nightFadeOutCues = %v, want %v", got, want)
+		}
+	}
+}

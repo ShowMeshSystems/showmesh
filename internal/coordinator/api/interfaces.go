@@ -631,6 +631,24 @@ type CueActivationNudger interface {
 	Nudge()
 }
 
+// CueActivationPinStatus is the operator-visibility surface for
+// ADR-033 show mode: whatever GET /api/v1/config/show.mode already shows
+// the operator (ADR-033 decision 3's persistent, always-visible mode
+// panel) is also where a mid-show show.cue edit's own staged, not-yet-
+// applied state has to surface: a staged edit nobody can see is not a
+// fix, it is the exact silence the incident this type exists for was
+// built from. The real implementation is *CueActivationLoop itself
+// (CueActivationLoop.PinStatus), wired by coordinator.go on the identical
+// "construct the loop first, then share it through Dependencies" ordering
+// [CueActivationNudger]'s own doc comment describes.
+type CueActivationPinStatus interface {
+	// PinStatus reports whether a show-mode pin is currently held and,
+	// when it is, the frozen Show/Generation identity and when it was
+	// minted. pinned is false whenever program mode applies, or show mode
+	// applies but no active show has ever been resolved.
+	PinStatus() (pinned bool, show string, generation int64, pinnedAt time.Time)
+}
+
 // AssetSettingsSource is Track G seam G-4's live, no-restart view of the
 // assets.settings configuration kind (ADR-039 decision 6): the three
 // settings this package itself needs to read on every request rather than

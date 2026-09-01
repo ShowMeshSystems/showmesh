@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -76,6 +78,32 @@ type CueActivationLoop struct {
 	minNudgeInterval time.Duration
 	nudgeMu          sync.Mutex
 	lastNudgeTick    time.Time
+
+	// pinMu/pin hold ADR-033 show mode's own frozen authorization identity
+	// pin is nil whenever program mode applies (Decide/Authorize
+	// then resolve live, exactly as before this field existed), and holds
+	// a live *cueactivate.ShowPin whenever show mode applies, for as long
+	// as the active Show/Generation stays the one the pin was minted for,
+	// see [CueActivationLoop.resolvePin]'s own doc comment for exactly
+	// when it is (re)started or dropped. This is loop-lifetime state, not
+	// per-tick state, which is the entire point: a mid-show show.cue edit
+	// must never reach a fresh resolution before the show itself restarts.
+	pinMu    sync.Mutex
+	pin      *cueactivate.ShowPin
+	pinnedAt time.Time
+}
+
+// PinStatus implements [CueActivationPinStatus] for GET
+// /api/v1/config/show.mode: the operator-visible surface for
+// ADR-033 show mode's own frozen authorization identity, whenever one is
+// held.
+func (l *CueActivationLoop) PinStatus() (pinned bool, show string, generation int64, pinnedAt time.Time) {
+	l.pinMu.Lock()
+	defer l.pinMu.Unlock()
+	if l.pin == nil {
+		return false, "", 0, time.Time{}
+	}
+	return true, l.pin.Active.ShowID, l.pin.Active.Generation, l.pinnedAt
 }
 
 // NewCueActivationLoop builds a [CueActivationLoop] against deps/opts,
@@ -187,7 +215,12 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 	case l.inFlight <- struct{}{}:
 		go func() {
 			defer func() { <-l.inFlight }()
-			l.h.cueActivationTick(ctx, l.h.now())
+			pin, err := l.resolvePin(ctx)
+			if err != nil {
+				l.logger.Warn("cue activation loop: resolve show-mode pin failed; falling back to live resolution this tick", "error", err)
+				pin = nil
+			}
+			l.h.cueActivationTick(ctx, l.h.now(), pin)
 		}()
 	default:
 		// Previous tick still running; skip this one — the next tick
@@ -195,9 +228,59 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 	}
 }
 
+// resolvePin is ADR-033 show mode's own pin lifecycle. It reads
+// the CURRENT mode and active show fresh, every tick, and answers what
+// this tick's Decide/Authorize calls must use.
+//
+//   - Program mode: any existing pin is dropped and nil is returned, so
+//     the tick resolves live, unchanged from before pinning existed, and
+//     "close to today's behaviour" per Eric's ruling.
+//   - Show mode, no pin yet, or the active Show/Generation has changed
+//     since the pin held was minted: a fresh [cueactivate.NewShowPin] is
+//     started against the CURRENTLY active show, right now. This is "the
+//     show starts" and "the show stops and restarts" both, in this
+//     repository's own terms: ADR-027 already treats the active show as
+//     configuration, and Generation is show.active's own config revision
+//     number (assetsync.ActiveShow's own doc comment), the exact
+//     mechanism this codebase uses to express "a new run of a show began".
+//     A show.cue edit never touches show.active, so it can never look like
+//     a restart here; only actually changing which show (or which
+//     generation of it) is active does.
+//   - Show mode, existing pin still matches the live Show/Generation: that
+//     SAME pin is returned again, so a show.cue edit saved mid-show never
+//     reaches this tick's Decide/Authorize calls at all.
+func (l *CueActivationLoop) resolvePin(ctx context.Context) (*cueactivate.ShowPin, error) {
+	if l.h.deps.Config == nil || l.h.deps.AssetManifests == nil {
+		return nil, nil
+	}
+	mode, _, _, _, err := resolveShowMode(ctx, l.h.deps.Config)
+	if err != nil {
+		return nil, fmt.Errorf("resolve show mode: %w", err)
+	}
+	if mode.Mode != config.ShowModeShow {
+		l.pinMu.Lock()
+		l.pin = nil
+		l.pinMu.Unlock()
+		return nil, nil
+	}
+
+	active, err := assetsync.ResolveActiveShow(ctx, l.h.deps.AssetManifests)
+	if err != nil {
+		return nil, fmt.Errorf("resolve active show: %w", err)
+	}
+
+	l.pinMu.Lock()
+	defer l.pinMu.Unlock()
+	if l.pin == nil || l.pin.Active.ShowID != active.ShowID || l.pin.Active.Generation != active.Generation {
+		l.pin = cueactivate.NewShowPin(active)
+		l.pinnedAt = l.h.now()
+	}
+	return l.pin, nil
+}
+
 // cueActivationTick resolves and dispatches an activation for every FPP
 // instance this coordinator has an accepted observation from.
-func (h *handlers) cueActivationTick(ctx context.Context, now time.Time) {
+func (h *handlers) cueActivationTick(ctx context.Context, now time.Time, pin *cueactivate.ShowPin) {
 	if h.deps.FPPReconciliation == nil || h.deps.FPPObservations == nil {
 		return
 	}
@@ -207,11 +290,11 @@ func (h *handlers) cueActivationTick(ctx context.Context, now time.Time) {
 		return
 	}
 	for _, obs := range obsList {
-		h.cueActivationTickOne(ctx, now, obs)
+		h.cueActivationTickOne(ctx, now, obs, pin)
 	}
 }
 
-func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs store.FPPPlaylistEntryObservationRecord) {
+func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs store.FPPPlaylistEntryObservationRecord, pin *cueactivate.ShowPin) {
 	result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, obs)
 	if err != nil {
 		h.logWarn("cue activation loop: reconcile failed", "instanceUuid", obs.InstanceUUID, "error", err)
@@ -220,7 +303,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	if h.deps.AssetManifests == nil {
 		return
 	}
-	dec, err := cueactivate.Decide(ctx, h.deps.AssetManifests, result, obs, obs.InstanceUUID)
+	dec, err := cueactivate.Decide(ctx, h.deps.AssetManifests, result, obs, obs.InstanceUUID, pin)
 	if err != nil {
 		h.logWarn("cue activation loop: decide failed", "instanceUuid", obs.InstanceUUID, "error", err)
 		return
@@ -232,7 +315,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	case cueactivate.StateActivated, cueactivate.StateMismatched:
 		var outcomes []cueActivationDispatchOutcome
 		if len(dec.Activations) > 0 {
-			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer)
+			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer, pin)
 			for _, outcome := range outcomes {
 				switch {
 				case outcome.Err != nil:
@@ -329,17 +412,12 @@ type cueScopedFailToBlackTarget struct {
 //     asset-missing refusal only produced a log line
 //     (outcome.Dispatched && !outcome.Confirmed, cueActivationTickOne's
 //     own switch above), identical to a bare unconfirmed dispatch. This
-//     matters because a never-uploaded sequence can be resolved
-//     "present" by this coordinator's own manifest computation (an
-//     unauthored sequence is not "missing" — see [cueactivate.
-//     cueAssetsPresent]'s own doc comment) while the node itself, asked
-//     to open a file that was never uploaded at all, refuses — the
-//     single worst case Eric's ruling named, and the one case a
-//     fail-to-black gated only on THIS coordinator's own opinion could
-//     never reach. Whether that coordinator/node disagreement about a
-//     never-uploaded sequence is itself a separate defect is a question
-//     for its own fix; this path does not depend on the coordinator
-//     having noticed first, which is the requirement here.
+//     matters even now that [cueactivate.cueAssetsPresent] itself refuses
+//     a never-uploaded sequence (so the ordinary case reaches path 1,
+//     pre-dispatch): this coordinator's own view of a node's inventory can
+//     still be stale or wrong relative to what the node just observed on
+//     disk, and path 2 is what catches THAT residual disagreement rather
+//     than depending on the coordinator having noticed first.
 //
 // Every other outcome (successfully confirmed, refused for an unrelated
 // reason, or no result at all) is excluded — fail-to-black has no bearing
@@ -626,7 +704,7 @@ func (h *handlers) dispatchBlackAndSilenceAudioStopSession(ctx context.Context, 
 	// second, independently written revision rule left this stop refused
 	// as stale for the life of the session.
 	revision := cueactivation.AudioSessionRevision(stopAt, cueactivation.AudioSessionStepStop)
-	in := audioDispatchInput{
+	in := AudioDispatchInput{
 		Action: "audio.session.stop", NodeID: nodeID, SessionID: sessionID,
 		Params: map[string]any{
 			"sessionId": sessionID, "invocationId": idempotencyKey, "revision": revision,

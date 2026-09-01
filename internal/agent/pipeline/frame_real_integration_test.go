@@ -169,7 +169,7 @@ func TestFrameWriterAgainstRealFSEQRealMultiSyncRealGStreamer(t *testing.T) {
 	// real fdsrc genuinely PREROLLs and needs a first buffer to ever reach
 	// PLAYING, so awaiting Running before anything feeds its stdin would
 	// deadlock this test on exactly the platforms this field exists for.
-	fw, err := NewFrameWriter(sup, "surface-real-1", f, timeline, channelStart0, channelCount, width, height, IdleOutputBlack, nil, testLogger{})
+	fw, err := NewFrameWriter(sup, "surface-real-1", f, timeline, "kpop-2026-mh-test.fseq", channelStart0, channelCount, width, height, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter against real FSEQ: %v", err)
 	}

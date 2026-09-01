@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -227,7 +228,7 @@ func TestPrintShowActionDetailRendersAudioTarget(t *testing.T) {
 		Payload: showAction{
 			Show: "halloween-2026", Label: "Hush resting background audio", SafetyClass: "stop",
 			Target: showActionTarget{
-				Integration: "audio", AudioNodeID: "node-a", AudioSessionID: "resting-bg",
+				Integration: "audio", AudioNodeIDs: audioNodeIDList{"node-a"}, AudioSessionID: "resting-bg",
 				AudioAction: "audio.session.stop",
 			},
 		},
@@ -242,5 +243,178 @@ func TestPrintShowActionDetailRendersAudioTarget(t *testing.T) {
 	}
 	if strings.Contains(out, "unrecognized integration") {
 		t.Errorf("printShowActionDetail fell into the unrecognized-integration default for \"audio\":\n%s", out)
+	}
+}
+
+// TestShowActionIdempotentLabelDistinguishesTriState proves
+// showActionIdempotentLabel's three renderings (true, false, never
+// declared) are pairwise distinct -- in particular that "not declared"
+// never reads as "false" -- since collapsing those two is exactly the claim
+// about an operator's wiring the system cannot see (api/openapi.yaml's
+// ConfigShowAction.idempotent doc comment).
+func TestShowActionIdempotentLabelDistinguishesTriState(t *testing.T) {
+	tru, fls := true, false
+
+	declaredTrue := showActionIdempotentLabel(&tru)
+	declaredFalse := showActionIdempotentLabel(&fls)
+	notDeclared := showActionIdempotentLabel(nil)
+
+	renderings := map[string]string{"declared true": declaredTrue, "declared false": declaredFalse, "not declared": notDeclared}
+	seen := make(map[string]string, len(renderings))
+	for name, rendering := range renderings {
+		if other, dup := seen[rendering]; dup {
+			t.Errorf("showActionIdempotentLabel(%s) and showActionIdempotentLabel(%s) render identically as %q; "+
+				"all three states must be legible as different facts", name, other, rendering)
+		}
+		seen[rendering] = name
+	}
+}
+
+// TestPrintShowActionDetailRendersIdempotentTriState proves the tri-state
+// reaches the operator-facing "action get" detail text, not just the
+// labeling helper in isolation.
+func TestPrintShowActionDetailRendersIdempotentTriState(t *testing.T) {
+	base := showActionConfigResponse{
+		ID: "hush-background", Revision: 1,
+		Payload: showAction{Show: "s1", Label: "l1", SafetyClass: "stop"},
+	}
+
+	tru, fls := true, false
+	cases := []struct {
+		name string
+		v    *bool
+		want string
+	}{
+		{"declared true", &tru, "true"},
+		{"declared false", &fls, "false"},
+		{"not declared", nil, "not declared"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resp := base
+			resp.Payload.Idempotent = c.v
+			var buf bytes.Buffer
+			printShowActionDetail(&buf, resp)
+			out := buf.String()
+			if !strings.Contains(out, "Idempotent:   "+c.want) {
+				t.Errorf("printShowActionDetail(idempotent=%v) missing %q in output:\n%s", c.v, c.want, out)
+			}
+		})
+	}
+}
+
+// TestShowActionIdempotentSurvivesDecodeAsTriState is this fix's own
+// mutation-proof: showAction.Idempotent must be *bool, not bool, because a
+// declared-false action and an action that never declared idempotent both
+// decode from JSON with no error and no other signal to tell them apart.
+// json.Unmarshal leaves a plain bool at its zero value both when the key is
+// absent and when the value is `null` (encoding/json's own documented
+// "null has no effect on the value" rule) -- exactly the collapse
+// api/openapi.yaml's ConfigShowAction.idempotent doc comment forbids. With
+// *bool, absent/null decode to a nil pointer and `false` decodes to a
+// non-nil pointer to false, so this test distinguishes all three wire
+// shapes. Changing the field back to a plain bool makes the first
+// assertion below fail: Idempotent stops being comparable to nil at all
+// (a compile failure), and forcing it to compare against the zero value
+// instead collapses "absent" and "false" together, which the
+// wantNilForAbsent/wantNilForNull assertions catch.
+func TestShowActionIdempotentSurvivesDecodeAsTriState(t *testing.T) {
+	cases := []struct {
+		name    string
+		json    string
+		wantNil bool
+		wantVal bool
+	}{
+		{"declared true", `{"idempotent":true}`, false, true},
+		{"declared false", `{"idempotent":false}`, false, false},
+		{"explicit null", `{"idempotent":null}`, true, false},
+		{"absent", `{}`, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var a showAction
+			if err := json.Unmarshal([]byte(c.json), &a); err != nil {
+				t.Fatalf("json.Unmarshal(%s): %v", c.json, err)
+			}
+			if c.wantNil {
+				if a.Idempotent != nil {
+					t.Errorf("json.Unmarshal(%s): Idempotent = %v, want nil (never declared)", c.json, *a.Idempotent)
+				}
+				return
+			}
+			if a.Idempotent == nil {
+				t.Fatalf("json.Unmarshal(%s): Idempotent = nil, want a declared value", c.json)
+			}
+			if *a.Idempotent != c.wantVal {
+				t.Errorf("json.Unmarshal(%s): Idempotent = %v, want %v", c.json, *a.Idempotent, c.wantVal)
+			}
+		})
+	}
+
+	// The property that actually matters: "absent" and "declared false"
+	// must decode to DIFFERENT Go values, not both to the zero value.
+	var absent, declaredFalse showAction
+	if err := json.Unmarshal([]byte(`{}`), &absent); err != nil {
+		t.Fatalf("json.Unmarshal({}): %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"idempotent":false}`), &declaredFalse); err != nil {
+		t.Fatalf("json.Unmarshal({idempotent:false}): %v", err)
+	}
+	if absent.Idempotent == declaredFalse.Idempotent {
+		t.Fatalf("absent and declared-false both decoded to Idempotent=%v; a plain bool field would collapse "+
+			"these two distinct wire states into the same Go value", absent.Idempotent)
+	}
+	if absent.Idempotent != nil {
+		t.Errorf("absent payload decoded Idempotent = %v, want nil", *absent.Idempotent)
+	}
+	if declaredFalse.Idempotent == nil || *declaredFalse.Idempotent != false {
+		t.Errorf("declared-false payload decoded Idempotent = %v, want a non-nil pointer to false", declaredFalse.Idempotent)
+	}
+}
+
+// TestAudioNodeIDListUnmarshalJSON_AcceptsScalarOrArray is the CLI-side
+// decode compatibility proof: the server's audioNodeId is a
+// bare string (every payload stored before that change) or an array of
+// strings, and this program's own independent transcription must accept
+// both under the same wire key.
+func TestAudioNodeIDListUnmarshalJSON_AcceptsScalarOrArray(t *testing.T) {
+	var scalar audioNodeIDList
+	if err := scalar.UnmarshalJSON([]byte(`"node-a"`)); err != nil {
+		t.Fatalf("unmarshal scalar: %v", err)
+	}
+	if len(scalar) != 1 || scalar[0] != "node-a" {
+		t.Fatalf("scalar decode = %+v, want [node-a]", scalar)
+	}
+
+	var array audioNodeIDList
+	if err := array.UnmarshalJSON([]byte(`["node-a","node-b"]`)); err != nil {
+		t.Fatalf("unmarshal array: %v", err)
+	}
+	if len(array) != 2 || array[0] != "node-a" || array[1] != "node-b" {
+		t.Fatalf("array decode = %+v, want [node-a node-b]", array)
+	}
+}
+
+// TestPrintShowActionDetailRendersEveryAudioNode proves the printer's
+// Node line lists every configured node, not only the first, for a
+// night-mode bed or announcement target naming more than one.
+func TestPrintShowActionDetailRendersEveryAudioNode(t *testing.T) {
+	resp := showActionConfigResponse{
+		ID: "thank-you", Revision: 1,
+		Payload: showAction{
+			Show: "halloween-2026", Label: "Thank you announcement", SafetyClass: "none",
+			Target: showActionTarget{
+				Integration: "audio", AudioNodeIDs: audioNodeIDList{"node-a", "node-b"}, AudioSessionID: "announcement-1",
+				AudioAction: "audio.session.apply",
+			},
+		},
+	}
+	var buf bytes.Buffer
+	printShowActionDetail(&buf, resp)
+	out := buf.String()
+	for _, want := range []string{"node-a", "node-b"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printShowActionDetail output missing node %q:\n%s", want, out)
+		}
 	}
 }

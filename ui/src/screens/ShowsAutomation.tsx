@@ -870,7 +870,7 @@ type MqttTargetValue = {
   expectValue: string
 }
 type ResolumeTargetValue = { action: string; ref: Record<string, string> }
-type AudioTargetValue = { audioNodeId: string; audioSessionId: string; audioAction: string; gainDb: string }
+type AudioTargetValue = { audioNodeIds: string[]; audioSessionId: string; audioAction: string; gainDb: string }
 
 function emptyFppValue(): FppTargetValue {
   return { instanceId: '', primitive: '', params: {} }
@@ -882,7 +882,7 @@ function emptyResolumeValue(): ResolumeTargetValue {
   return { action: '', ref: {} }
 }
 function emptyAudioValue(): AudioTargetValue {
-  return { audioNodeId: '', audioSessionId: '', audioAction: '', gainDb: '' }
+  return { audioNodeIds: [], audioSessionId: '', audioAction: '', gainDb: '' }
 }
 
 function fppValueFromTarget(target: ConfigShowActionTarget): FppTargetValue {
@@ -920,7 +920,8 @@ function audioValueFromTarget(target: ConfigShowActionTarget): AudioTargetValue 
   const audioAction = target.audioAction ?? ''
   const gainKey = audioAction === 'audio.gain.set' ? 'gainDb' : audioAction === 'audio.gain.fade' ? 'targetGainDb' : null
   const gain = gainKey === null ? undefined : target.params?.[gainKey]
-  return { audioNodeId: target.audioNodeId ?? '', audioSessionId: target.audioSessionId ?? '', audioAction, gainDb: gain === undefined ? '' : String(gain) }
+  const ids = target.audioNodeId
+  return { audioNodeIds: Array.isArray(ids) ? ids : ids === undefined || ids === '' ? [] : [ids], audioSessionId: target.audioSessionId ?? '', audioAction, gainDb: gain === undefined ? '' : String(gain) }
 }
 
 type TargetBuild = { target: ConfigShowActionTarget; blockReason: string | null }
@@ -1023,7 +1024,7 @@ function buildResolumeTarget(value: ResolumeTargetValue, actionsState: ResolumeA
 
 function buildAudioTarget(value: AudioTargetValue): TargetBuild {
   let blockReason: string | null = null
-  if (value.audioNodeId === '') blockReason ??= 'An audio node is required.'
+  if (value.audioNodeIds.length === 0) blockReason ??= 'An audio node is required.'
   if (value.audioSessionId.trim() === '') blockReason ??= 'A session id is required.'
   if (value.audioAction === '') blockReason ??= 'An audio operation is required.'
   let params: Record<string, unknown> | undefined
@@ -1041,7 +1042,7 @@ function buildAudioTarget(value: AudioTargetValue): TargetBuild {
   }
   const target: ConfigShowActionTarget = {
     integration: 'audio',
-    audioNodeId: value.audioNodeId,
+    audioNodeId: value.audioNodeIds.length === 1 ? (value.audioNodeIds[0] ?? '') : value.audioNodeIds,
     audioSessionId: value.audioSessionId.trim(),
     audioAction: value.audioAction,
     ...(params !== undefined ? { params } : {}),
@@ -1267,16 +1268,23 @@ function AudioTarget({ value, onChange, nodesState }: { value: AudioTargetValue;
         (nodesState.nodes.length === 0 ? (
           <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
         ) : (
-          <Field label="Audio node" help="Declared nodes only. Undeclared ones are listed in Settings › Node routing.">
+          <Field label="Audio nodes" help="Declared nodes only. A night announcement or the resting bed plays on every checked node; any other consumer dispatches to the first.">
             {(props) => (
-              <Select {...props} value={value.audioNodeId} onChange={(e) => onChange({ ...value, audioNodeId: e.target.value })}>
-                <option value="">Select an audio node</option>
-                {nodesState.nodes.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
-                  </option>
-                ))}
-              </Select>
+              <div className="sm-choice-row" id={props.id} aria-describedby={props['aria-describedby']} role="group">
+                {nodesState.nodes.map((node) => {
+                  const checked = value.audioNodeIds.includes(node.id)
+                  return (
+                    <label key={node.id} className="sm-choice">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => onChange({ ...value, audioNodeIds: checked ? value.audioNodeIds.filter((id) => id !== node.id) : [...value.audioNodeIds, node.id] })}
+                      />
+                      <span>{node.label}</span>
+                    </label>
+                  )
+                })}
+              </div>
             )}
           </Field>
         ))}

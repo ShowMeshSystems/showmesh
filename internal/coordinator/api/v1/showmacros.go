@@ -1,5 +1,7 @@
 package v1
 
+import "encoding/json"
+
 // This file is Step 9 wave 2 Builder C's own wire-type addition: the two
 // new configuration kinds (show.action, show.macro — STEP-9-SPEC.md
 // section 5) and the macro run surface (STEP-9-SPEC.md section 6.6). It
@@ -65,8 +67,9 @@ type ConfigShowActionMQTTExpect struct {
 
 // ConfigShowActionTarget is show.action.target (STEP-9-SPEC.md section
 // 5.3), flattened exactly as the specification's own wire examples show
-// it: Integration plus either the fpp, mqtt, or resolume fields directly,
-// never nested a second level under an "fpp"/"mqtt"/"resolume" key.
+// it: Integration plus either the fpp, mqtt, resolume, or audio fields
+// directly, never nested a second level under an
+// "fpp"/"mqtt"/"resolume"/"audio" key.
 type ConfigShowActionTarget struct {
 	Integration string `json:"integration"`
 
@@ -85,6 +88,46 @@ type ConfigShowActionTarget struct {
 	// column, persistent, bypassed, master) — never a Resolume object id.
 	Action string         `json:"action,omitempty"`
 	Ref    map[string]any `json:"ref,omitempty"`
+
+	// audio-only: the target audio node id(s), pkg/audio session id, and
+	// one of the reserved audio.session.*/audio.gain.*/audio.output.*
+	// operation names. Params (above) carries that operation's own command
+	// params, exactly as api/openapi.yaml's ConfigShowActionTarget already
+	// documents.
+	AudioNodeIDs   AudioNodeIDList `json:"audioNodeId,omitempty"`
+	AudioSessionID string          `json:"audioSessionId,omitempty"`
+	AudioAction    string          `json:"audioAction,omitempty"`
+}
+
+// AudioNodeIDList is ConfigShowActionTarget.AudioNodeIDs' own wire type:
+// decodes a JSON string (one node - the shape every payload stored
+// before audioNodeId widened to a list already used) or an array of node
+// ids, and always MARSHALS the array form, independently transcribed
+// from the server's own decode-side type
+// (internal/coordinator/config.AudioNodeIDList) per this file's own
+// standing "never reuse the server's types directly" rule.
+type AudioNodeIDList []string
+
+func (l AudioNodeIDList) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string(l))
+}
+
+func (l *AudioNodeIDList) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*l = nil
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(b, &single); err == nil {
+		*l = AudioNodeIDList{single}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(b, &list); err != nil {
+		return err
+	}
+	*l = AudioNodeIDList(list)
+	return nil
 }
 
 // ConfigShowAction is the "show.action" configuration kind's decoded

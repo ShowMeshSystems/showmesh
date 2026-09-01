@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -130,13 +131,45 @@ func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payl
 		binding.State, binding.Reason = checkMQTTActionBinding(payload.Target, h.deps.IntegrationBrokers)
 	case config.ShowActionIntegrationResolume:
 		binding.State, binding.Reason = h.checkResolumeActionBinding(payload.Target)
+	case config.ShowActionIntegrationAudio:
+		binding.State, binding.Reason = h.checkAudioActionBinding(ctx, payload.Target)
 	default:
-		// Unreachable given write-time validation of target.integration's
-		// closed enum; answered rather than silently reported "ok".
+		// Reached whenever payload.Target.Integration is a value this
+		// switch does not name: NOT unreachable — see dispatchActionTarget's
+		// (actioninvoke.go) identical default branch, corrected the same
+		// way, for the full explanation of why write-time validation does
+		// not make this switch itself exhaustive.
 		binding.State = v1.ActionBindingStateUnknown
 		binding.Reason = fmt.Sprintf("this action names an unrecognized integration %q", payload.Target.Integration)
 	}
 	return binding
+}
+
+// checkAudioActionBinding checks that audioNodeId still names a declared
+// audio.node config object and that audioAction is still a supported
+// operation, mirroring checkFPPActionBinding's identical two-part shape
+// one section up (a configured target and a still-registered operation).
+// It deliberately does NOT check audioSessionId against a live
+// audio.session object: decodeAudioTarget's own doc comment
+// (internal/coordinator/config/showaction.go) states why — a session id is
+// minted by the caller (the night-session driver or an operator), never
+// looked up, so a session that does not exist yet is not a broken binding,
+// exactly as an unresolvable one is not checked at write time either.
+func (h *handlers) checkAudioActionBinding(ctx context.Context, target config.ShowActionTarget) (state, reason string) {
+	for _, nodeID := range target.AudioNodeIDs {
+		hasNode, err := nodeHasAudioNodeObject(ctx, h.deps.Config, nodeID)
+		if err != nil {
+			return v1.ActionBindingStateUnknown, fmt.Sprintf("this coordinator could not check whether audio node %q is still declared: %v", nodeID, err)
+		}
+		if !hasNode {
+			return v1.ActionBindingStateBroken, fmt.Sprintf("audio node %q is not a declared audio.node", nodeID)
+		}
+	}
+	if !config.IsSupportedAudioAction(target.AudioAction) {
+		return v1.ActionBindingStateBroken, fmt.Sprintf("audioAction %q is no longer a supported audio operation (supported: %s)",
+			target.AudioAction, strings.Join(config.ShowActionAudioActions(), ", "))
+	}
+	return v1.ActionBindingStateOK, fmt.Sprintf("audio node(s) %v are declared and operation %q is still supported", []string(target.AudioNodeIDs), target.AudioAction)
 }
 
 // checkFPPActionBinding is a configuration check only — no network call.

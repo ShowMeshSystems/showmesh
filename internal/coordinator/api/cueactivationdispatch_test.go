@@ -140,6 +140,7 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 
 	// CatalogRevision must be the coordinator's OWN resolution to pass
 	// Authorize's stale-catalog check — resolve it the same way
@@ -154,7 +155,7 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}
@@ -183,6 +184,7 @@ func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testi
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
 
 	// The fake publisher replies with the PUBLISH succeeding (Publish
@@ -196,7 +198,7 @@ func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testi
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}
@@ -219,6 +221,38 @@ func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testi
 	}
 	if cmd.OutcomeState == mqttproto.OutcomeConfirmed {
 		t.Fatalf("persisted command OutcomeState = %q, must not read as confirmed", cmd.OutcomeState)
+	}
+}
+
+// putAuthorizedAudioAssetForTest creates a real asset record for the
+// sequence putAudioOnlyCueForTest's cueID names ("asset-"+cueID), targets
+// it at nodeID, and marks nodeID's own reported inventory as holding it —
+// turning cueActivationDispatchTestFixture's Cue, which otherwise names a
+// sequence nothing has ever uploaded (see putAudioOnlyCueForTest's own doc
+// comment), into one [cueactivate.Authorize] actually finds present. Before
+// this coordinator started refusing a never-uploaded sequence, that vacuous
+// "nothing uploaded" state passed Authorize on its own; a test
+// that needs a genuinely authorized activation must now build one for
+// real. Callers must call this BEFORE resolving CatalogRevision — the
+// asset's own hash is part of what the catalog revision covers
+// (cuecatalog.RevisionInput's own doc comment).
+func putAuthorizedAudioAssetForTest(t *testing.T, st *store.Store, showID, cueID, nodeID string, now time.Time) {
+	t.Helper()
+	contentHash := "sha256:authorized-" + cueID
+	filename := "Authorized-" + cueID + ".wav"
+	if _, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: contentHash + "-node-" + nodeID, ShowID: showID, SequenceID: "asset-" + cueID,
+		TargetKind: store.AssetTargetKindNode, TargetID: nodeID, MediaType: "audio",
+		ContentHash: contentHash, RuntimeFilename: filename,
+		SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
+	}); err != nil {
+		t.Fatalf("create authorized asset for %q: %v", cueID, err)
+	}
+	if err := st.ReplaceNodeAssetInventory(context.Background(), nodeID,
+		[]store.NodeAssetInventoryRecord{{NodeID: nodeID, ContentHash: contentHash, RuntimeFilename: filename, SizeBytes: 1024, VerifiedAt: now}},
+		store.NodeAssetReportRecord{NodeID: nodeID, ReportedAt: now, Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory for %q: %v", nodeID, err)
 	}
 }
 

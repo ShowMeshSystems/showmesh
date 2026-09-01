@@ -801,7 +801,7 @@ func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fs
 	var fw *pipeline.FrameWriter
 	var err error
 	if f != nil {
-		fw, err = pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
+		fw, err = pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.fseqFilename, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
 	} else {
 		fw, err = pipeline.NewIdleFrameWriter(o.sup, surfaceID, a.width, a.height, a.pixelFormat, a.frameRate, idleOutput, o.logger)
 	}

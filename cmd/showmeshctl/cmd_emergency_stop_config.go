@@ -136,6 +136,7 @@ func cmdEmergencyStopConfigSet(args []string, stdout, stderr io.Writer, clock fu
 		_, _ = fmt.Fprintf(stderr, "usage: %s [flags]\n", cmdLabel)
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.emergencystop configuration revision (a full replacement:")
 		_, _ = fmt.Fprintln(stderr, "all three level keys required, each with its own required actions array).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"emergency-stop config get --output json\" prints.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -150,6 +151,10 @@ func cmdEmergencyStopConfigSet(args []string, stdout, stderr io.Writer, clock fu
 	}
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "%v", err))
+	}
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "%v", err))
 	}

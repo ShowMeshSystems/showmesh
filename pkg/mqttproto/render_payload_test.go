@@ -217,6 +217,60 @@ func TestRenderPayloadValidateRejectsUnrecognizedFailureOutput(t *testing.T) {
 	}
 }
 
+// TestRenderPayloadValidateAcceptsStaleDrawing proves the fourth drawing
+// state is a legal report with no idleMode and no failureOutput: a
+// filename mismatch is neither an operator-chosen idle cycle nor an
+// extraction failure.
+func TestRenderPayloadValidateAcceptsStaleDrawing(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				Drawing:       RenderDrawingStale,
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate() with drawing=stale returned an error: %v", err)
+	}
+}
+
+// TestRenderPayloadValidateRejectsStaleWithIdleModeOrFailureOutput proves
+// drawing=stale carries neither companion field: reporting an idleMode
+// there would make a filename mismatch read as an operator-chosen idle
+// cycle again, and reporting a failureOutput would make it read as the
+// unrelated extraction-failure condition.
+func TestRenderPayloadValidateRejectsStaleWithIdleModeOrFailureOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		idleMode      string
+		failureOutput string
+	}{
+		{"idleMode set", RenderIdleOutputBlack, ""},
+		{"failureOutput set", "", RenderFailureOutputBlack},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := RenderPayload{
+				Surfaces: []RenderSurfaceReport{
+					{
+						SurfaceID:     "surface-1",
+						PipelineState: RenderPipelineStateRunning,
+						Drawing:       RenderDrawingStale,
+						IdleMode:      tc.idleMode,
+						FailureOutput: tc.failureOutput,
+						ObservedAt:    time.Now(),
+					},
+				},
+			}
+			if err := p.Validate(); err == nil {
+				t.Fatalf("Validate() returned no error for drawing=stale with idleMode=%q failureOutput=%q", tc.idleMode, tc.failureOutput)
+			}
+		})
+	}
+}
+
 // TestRenderPayloadValidateRejectsUnrecognizedDrawing proves Drawing's
 // closed vocabulary is actually enforced, not merely documented.
 func TestRenderPayloadValidateRejectsUnrecognizedDrawing(t *testing.T) {

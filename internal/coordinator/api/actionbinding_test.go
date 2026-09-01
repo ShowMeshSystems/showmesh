@@ -8,6 +8,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
@@ -54,6 +55,125 @@ func TestActionBindingFPPOKAndBroken(t *testing.T) {
 	}
 	if reason, _ := binding2["reason"].(string); !strings.Contains(reason, "player-01") {
 		t.Errorf("broken reason = %q, want it to name the missing instance id", reason)
+	}
+}
+
+// TestActionBindingAudioOKAndBroken proves the audio branch of the
+// binding check: broken naming the undeclared node when no audio.node
+// object exists for audioNodeId, ok once one is declared, and broken
+// again — naming the operation — when audioAction is edited (bypassing
+// this coordinator's own decoder) to a value showActionAudioActions no
+// longer carries. Before this branch existed, an audio action always fell
+// into checkActionBindingTarget's default case and reported "unknown:
+// unrecognized integration \"audio\"", never ok or broken, for every
+// audio show.action regardless of whether its node was actually declared.
+func TestActionBindingAudioOKAndBroken(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-announcement", validShowActionAudioBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	// No audio.node named "node-a" has been declared yet: broken, naming it.
+	_, brokenBody := doRequest(t, api.Handler, "GET", "/api/v1/actions/start-announcement/binding", nil)
+	brokenMap := decodeMap(t, brokenBody)
+	broken, _ := brokenMap["binding"].(map[string]any)
+	if broken["state"] != "broken" {
+		t.Fatalf("binding state = %v, want broken; body: %s", broken["state"], brokenBody)
+	}
+	if reason, _ := broken["reason"].(string); !strings.Contains(reason, "node-a") {
+		t.Errorf("broken reason = %q, want it to name the undeclared node id", reason)
+	}
+
+	// Declaring the node (evidenced placement, mirroring audionode_test.go's
+	// own TestPutAudioNodeAcceptsEvidencedPlacement) turns the binding ok.
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("node-a", []string{"hw:0,0"}, []string{"hw:0,0"}),
+	})
+	if status, putBody := mustPutAudioNode(t, api, token, "node-a", validAudioNodeBody); status != http.StatusOK {
+		t.Fatalf("PUT audio.node: status = %d; body: %s", status, putBody)
+	}
+	_, okBody := doRequest(t, api.Handler, "GET", "/api/v1/actions/start-announcement/binding", nil)
+	okMap := decodeMap(t, okBody)
+	ok, _ := okMap["binding"].(map[string]any)
+	if ok["state"] != "ok" {
+		t.Fatalf("binding state = %v, want ok; body: %s", ok["state"], okBody)
+	}
+	if reason, _ := ok["reason"].(string); reason == "" {
+		t.Fatalf("binding reason must be non-empty for state ok")
+	}
+}
+
+// TestActionBindingAudioChecksEveryTargetNodeNotOnlyTheFirst pins
+// checkAudioActionBinding's own documented contract (api/openapi.yaml's
+// ConfigShowActionTarget.audioNodeId doc comment): configuration
+// validation is not a dispatch consumer, so it verifies every named node
+// is declared, regardless of which node an ordinary dispatch would reach
+// (the first). Names three distinct node ids where the FIRST TWO are
+// declared and only the THIRD, "attic-node", is not - a validator that
+// checked only the first element would report this binding ok, which is
+// exactly the false confidence a night-session announcement bound to this
+// same target (which uses every listed node) cannot afford.
+func TestActionBindingAudioChecksEveryTargetNodeNotOnlyTheFirst(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	// yard-node is program-only (role "program"): only one audio.node
+	// across the installation may hold the default role "program+ltc"
+	// (ADR-018's one clock domain), so porch-node and yard-node cannot
+	// both take the default.
+	const yardNodeBody = `{"programRoute":"hw:0,1","programChannels":[1,2],` +
+		`"clockDomain":"second-interface","clockDomainProvenance":"second physical interface, program only",` +
+		`"role":"program"}`
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("porch-node", []string{"hw:0,0"}, []string{"hw:0,0"}),
+		nodeViewWithAudioCapabilities("yard-node", []string{"hw:0,1"}, nil),
+	})
+	if status, putBody := mustPutAudioNode(t, api, token, "porch-node", validAudioNodeBody); status != http.StatusOK {
+		t.Fatalf("PUT audio.node porch-node: status = %d; body: %s", status, putBody)
+	}
+	if status, putBody := mustPutAudioNode(t, api, token, "yard-node", yardNodeBody); status != http.StatusOK {
+		t.Fatalf("PUT audio.node yard-node: status = %d; body: %s", status, putBody)
+	}
+	// "attic-node" is deliberately never declared.
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-multi-target", `{
+		"show": "halloween-2026",
+		"label": "Start on a multi-node target",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": ["porch-node", "yard-node", "attic-node"],
+			"audioSessionId": "announcement",
+			"audioAction": "audio.session.start"
+		}
+	}`, map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.action: status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	_, bindBody := doRequest(t, api.Handler, "GET", "/api/v1/actions/start-multi-target/binding", nil)
+	m := decodeMap(t, bindBody)
+	binding, _ := m["binding"].(map[string]any)
+	if binding["state"] != "broken" {
+		t.Fatalf("binding state = %v, want broken (attic-node, the third listed node, was never declared); body: %s", binding["state"], bindBody)
+	}
+	reason, _ := binding["reason"].(string)
+	if !strings.Contains(reason, "attic-node") {
+		t.Fatalf("broken reason = %q, want it to name the undeclared node id attic-node", reason)
 	}
 }
 

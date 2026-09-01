@@ -174,7 +174,7 @@ func (h *handlers) dispatchShowmeshAudioStep(ctx context.Context, now time.Time,
 		params[k] = v
 	}
 
-	in := audioDispatchInput{
+	in := AudioDispatchInput{
 		Action: "audio.session." + step, NodeID: nodeID, SessionID: string(cueactivation.BackgroundSessionID),
 		Params: params, Revision: revision, IdempotencyKey: idempotencyKey,
 		IssuerID: showmeshAudioIssuerPrincipalID, IssuerName: "showmesh-audio runner",

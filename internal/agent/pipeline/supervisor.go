@@ -143,8 +143,8 @@ type Snapshot struct {
 	TimelinePositionMS *int64
 
 	// Drawing is what the writer actually wrote to the pipeline's stdin on
-	// its most recent tick: [DrawingContent], [DrawingIdle], or
-	// [DrawingFailure]. This is the
+	// its most recent tick: [DrawingContent], [DrawingIdle],
+	// [DrawingFailure], or [DrawingStale]. This is the
 	// evidence the build contract names explicitly: "the process is up" is
 	// not "frames are arriving somewhere," and a report that only carries
 	// PipelineState=running cannot tell an operator apart from a node
@@ -153,13 +153,17 @@ type Snapshot struct {
 
 	// IdleMode is the configured idle output ([IdleOutputBlack],
 	// [IdleOutputHold], or [IdleOutputDiagnostic]) whenever Drawing is
-	// [DrawingIdle]; "" for every other Drawing value, [DrawingFailure]
-	// included, because a failure is not an idle mode.
+	// [DrawingIdle]; "" for every other Drawing value, [DrawingFailure] and
+	// [DrawingStale] included, because neither a failure nor a stale
+	// mismatch is an idle mode: [DrawingStale] always draws black, never
+	// the operator's configured idle output (see frame.go's writeOneFrame
+	// for why [IdleOutputHold] in particular cannot be honored there).
 	IdleMode string
 
 	// FailureOutput is what a [DrawingFailure] tick actually wrote,
 	// [FailureOutputAlert] or [FailureOutputBlack]; "" for every other
-	// Drawing value.
+	// Drawing value, [DrawingStale] included — a stale mismatch is not the
+	// extraction failure this field describes.
 	FailureOutput string
 
 	// Generation identifies which process attempt r.snap's State currently
@@ -389,13 +393,24 @@ func (r *runner) setFrameCounts(written, late, dropped int64, rate *float64, obs
 	r.mu.Unlock()
 }
 
-// DrawingContent, DrawingIdle, and DrawingFailure are the three values
-// [Snapshot.Drawing] (and [mqttproto.RenderSurfaceReport.Drawing]) can
-// carry. See frame.go's FrameWriter, the only writer of this evidence.
+// DrawingContent, DrawingIdle, DrawingFailure, and DrawingStale are the
+// four values [Snapshot.Drawing] (and [mqttproto.RenderSurfaceReport.
+// Drawing]) can carry. See frame.go's FrameWriter, the only writer of this
+// evidence.
+//
+// DrawingStale is neither DrawingIdle nor DrawingFailure on purpose:
+// the timeline is reporting a filename this writer never opened,
+// so what this surface would otherwise draw is real, successfully
+// extracted content for the WRONG sequence — not an operator-chosen idle
+// cycle (DrawingIdle) and not a failure to extract anything at all
+// (DrawingFailure). Reporting it as idle would make an operator reading
+// this evidence unable to tell "nothing to draw, as configured" apart from
+// "this surface lost track of what it should be drawing."
 const (
 	DrawingContent = "content"
 	DrawingIdle    = "idle"
 	DrawingFailure = "failure"
+	DrawingStale   = "stale"
 )
 
 // FailureOutputAlert and FailureOutputBlack are the two values

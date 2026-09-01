@@ -861,6 +861,15 @@ func Run() int {
 	// synchronously, before this coordinator starts listening (ADR-031
 	// decision 4), alongside api.ReconcileStrandedFPPCommands.
 	macroDispatcher := api.NewFPPCommandDispatcher(apiDeps, apiOpts)
+	// audioDispatcher is the audio integration's own mirror of
+	// macroDispatcher immediately above: a second, independently-
+	// constructed *handlers wrapping the SAME apiDeps/apiOpts
+	// api.New itself uses, so a macro's audio step and every
+	// audio.session.*/audio.gain.*/audio.output.* HTTP route dispatch
+	// through the identical core — see api.NewAudioActionDispatcher's own
+	// doc comment for why that is safe to build twice rather than sharing
+	// one *handlers value.
+	audioDispatcher := api.NewAudioActionDispatcher(apiDeps, apiOpts)
 	macroExecutor := macro.NewExecutor(macro.Dependencies{
 		Store:    st,
 		Identity: identitySvc,
@@ -872,6 +881,7 @@ func Run() int {
 		// through the identical api.ResolumeActionDispatcher, never two
 		// independently-wired copies of it.
 		ResolumeActions: apiDeps.ResolumeActions,
+		AudioActions:    audioDispatcher,
 		Notify:          notifyHub,
 		Clock:           time.Now,
 		Logger:          logger,
@@ -889,6 +899,7 @@ func Run() int {
 	// further down, alongside every other background reconcile loop.
 	cueActivationLoop := api.NewCueActivationLoop(apiDeps, apiOpts)
 	apiDeps.CueActivationNudger = cueActivationLoop
+	apiDeps.CueActivationPinStatus = cueActivationLoop
 
 	apiInst := api.New(apiDeps, apiOpts)
 	hub = apiInst.Hub

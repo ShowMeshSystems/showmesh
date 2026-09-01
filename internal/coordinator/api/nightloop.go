@@ -131,9 +131,12 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	}
 
 	// Track F seam F5: resting.backgroundAudio runs for the WHOLE resting
-	// presentation, not on one state's own tick alone - end-of-night-
-	// resting has no autonomous FPP action (this switch's own comment
-	// below), but background audio still advances there.
+	// presentation, not on one state's own tick alone - preshow and
+	// end-of-night-resting have no autonomous FPP action of their own
+	// (this switch's own comment below for end-of-night-resting), but
+	// background audio still advances in both, per RESTING-MODE.md §4.3/
+	// §5: the bed plays through pre-show, inter-show resting, and
+	// post-show alike, never just the two inter-show states.
 	//
 	// transition-to-show deliberately does NOT stop it: RESTING-MODE.md
 	// section 7.1 stages the audio fade beginning at E minus the audio
@@ -148,14 +151,36 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// invented here), so the bounded fix is: let it keep playing through
 	// the transition, and suspend only once boundary E has actually
 	// passed (nightStateLive) or the night otherwise leaves resting.
-	// Every OTHER non-resting state stops a still-playing background
-	// session idempotently; a session already stopped or never started
-	// costs nothing to check.
+	// Every OTHER state stops a still-playing background session
+	// idempotently; a session already stopped or never started costs
+	// nothing to check.
 	switch rec.State {
-	case nightStateRestingIntershow, nightStateEndOfNightResting:
+	case nightStatePreshow, nightStateRestingIntershow, nightStateEndOfNightResting:
 		h.nightAdvanceBackgroundAudio(ctx, now, rec)
 	case nightStateTransitionToShow:
 		// Intentionally no action: see this switch's own comment above.
+	case nightStateStopped:
+		// end-session's own clear (nightClearBackgroundAudioAtEndSession,
+		// called from handleNightCommand the moment the session record
+		// commits to stopped) is warn-and-proceed, not guaranteed: when
+		// the node is unreachable, refused, or unacknowledged, that one
+		// synchronous attempt never lands. Falling into the default
+		// branch below (nightStopBackgroundAudioIfRunning) would be wrong
+		// two ways at once - a stop/pause leaves the node's own persisted
+		// session record in place for its RestoreAll to resurrect the
+		// bed, which is exactly what a clear (and ADR-038's promise of no
+		// resume) exists to prevent; and doing nothing at all, as this
+		// case once did, leaves the bed audibly playing over a session
+		// the operator was told is stopped, for as long as this record
+		// stays current - the same defect background audio's own clear
+		// was built to fix, one layer down. So this retries the CLEAR
+		// itself, through nightRetryEndSessionClear: every tick mints a
+		// fresh idempotency key (nightEndSessionClearIdempotencyKey) so a
+		// retry can never be answered by the first attempt's own cached,
+		// failed outcome, and the retry stops the moment a clear
+		// genuinely confirms - a session that already cleared costs only
+		// a JSON decode to recheck, never another dispatch.
+		h.nightRetryEndSessionClear(ctx, now, rec)
 	default:
 		h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
 	}
@@ -312,8 +337,13 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 	// The anchor carries observed evidence, but a PRIOR tick may already
 	// have invalidated the boundary derived from it (contradiction found
 	// then, evidence agreeing again now) - that invalidation is
-	// load-bearing and must not be silently recomputed past.
+	// load-bearing and must not be silently recomputed past. That silence
+	// must not be invisible, though: mark the session degraded (once -
+	// nightDegradeSession is one-shot) naming the invalid boundary, since
+	// today the ONLY recovery is end-session then prepare-site and the
+	// operator is never told that is what is needed.
 	if persisted, hasBoundary := decodeNightBoundary(rec.BoundaryJSON); hasBoundary && persisted.State == nightBoundaryStateInvalid {
+		h.nightDegradeSession(ctx, now, rec, "resting-intershow's content boundary was invalidated ("+persisted.Reason+") and is never recomputed; run end-session, then prepare-site, to recover")
 		return
 	}
 
@@ -402,7 +432,13 @@ func (h *handlers) nightMarkAttributionDegraded(ctx context.Context, now time.Ti
 // it (nightTick's own top-level guard skips a degraded session) - used
 // where an assumption this state depends on (its own boundary, or the
 // clock) is no longer trustworthy, rather than silently substituting one.
+// One-shot like [handlers.nightMarkAttributionDegraded]: a caller invoked
+// more than once for an already-degraded session (directly, rather than
+// through nightTick's own guard) must not re-warn or re-log every time.
 func (h *handlers) nightDegradeSession(ctx context.Context, now time.Time, rec store.NightSessionRecord, reason string) {
+	if rec.Degraded {
+		return
+	}
 	h.logWarn("night loop: session degraded", "sessionId", rec.ID, "reason", reason)
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.Degraded = true
@@ -547,22 +583,52 @@ func (h *handlers) nightShowLaunchIfBusy(ctx context.Context, now time.Time, pay
 	return fppIfBusyReplace
 }
 
+// nightAdvanceLiveDeadline bounds how long nightAdvanceLive may wait, from
+// the moment the session entered nightStateLive, for the three completion
+// conditions below to all be met. A SHOWMESH HYPOTHESIS, not a measured
+// value: long enough that no real show's own end-of-show evidence is
+// mistaken for a stall, short enough that a genuinely missing FPP observer
+// does not leave the night silently live until morning. Exceeding it never
+// forces the transition (that would fabricate end evidence rule 4
+// specifically forbids); it only ends the SILENCE, via
+// [handlers.nightDegradeSession]. A var so a test can drive it down.
+var nightAdvanceLiveDeadline = 90 * time.Minute
+
 // nightAdvanceLive is rule 4: completion evidence, never graceful-stop
 // acceptance. F0's own captured shape is the exact condition checked -
 // status_name is "idle" AND current_playlist has genuinely cleared -
 // which requires the playlist-name evidence to be CURRENT: an absent,
 // stale, or unsupported reading also decodes to "", indistinguishable
 // from genuine idle unless currency is checked separately.
+//
+// Absent or stale end-of-show evidence must not leave the night live
+// forever with no operator-visible sign of why: past
+// [nightAdvanceLiveDeadline], this WARNs with whichever of the three
+// conditions is unmet - they are three different faults - and degrades the
+// session, without ever moving it out of live on a timeout alone.
 func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
 	anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON)
 	if !has || anchor.Purpose != nightAnchorPurposeShow {
 		return
 	}
 	obs := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, anchor.ObservedAt, now)
-	if !obs.Current || obs.Status != fppStatusValueIdle {
-		return
+	var unmet string
+	switch {
+	case !obs.Current:
+		unmet = fmt.Sprintf("playback status/position evidence for FPP instance %q is not current", anchor.FPPInstanceID)
+	case obs.Status != fppStatusValueIdle:
+		unmet = fmt.Sprintf("playback status is %q, not idle", obs.Status)
+	case !obs.PlaylistCurrent:
+		unmet = fmt.Sprintf("current-playlist evidence for FPP instance %q is not current", anchor.FPPInstanceID)
+	case obs.Playlist != "":
+		unmet = fmt.Sprintf("current playlist is still named %q, not cleared", obs.Playlist)
 	}
-	if !obs.PlaylistCurrent || obs.Playlist != "" {
+	if unmet != "" {
+		if now.Sub(rec.StateEnteredAt) >= nightAdvanceLiveDeadline {
+			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
+				"live has produced no end-of-show completion evidence for %s: %s; run end-session, then prepare-site, to recover",
+				nightAdvanceLiveDeadline, unmet))
+		}
 		return
 	}
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {

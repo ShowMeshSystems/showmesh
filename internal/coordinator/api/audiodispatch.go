@@ -102,10 +102,14 @@ type AudioSessionPublisher interface {
 // [Dependencies.AudioSessions]'s doc comment. GetAudioSession lets a
 // dispatch merge a command's own params onto the session's prior desired
 // state rather than replacing it outright with one command's own
-// (commonly partial) params.
+// (commonly partial) params. GetAudioSession is scoped by node id (store
+// schemaV20): a session id such as the cue or blackAndSilence
+// session is a global constant, not unique per node, so an unscoped
+// lookup could merge onto a DIFFERENT node's desired state for a session
+// sharing the same id.
 type AudioSessionStore interface {
 	PutAudioSession(ctx context.Context, rec store.AudioSessionRecord) error
-	GetAudioSession(ctx context.Context, id string) (store.AudioSessionRecord, error)
+	GetAudioSession(ctx context.Context, nodeID, id string) (store.AudioSessionRecord, error)
 }
 
 // noAudioSessionPublisher is [Dependencies.AudioPublisher]'s no-op
@@ -132,7 +136,7 @@ func (noAudioSessionStore) PutAudioSession(context.Context, store.AudioSessionRe
 	return nil
 }
 
-func (noAudioSessionStore) GetAudioSession(context.Context, string) (store.AudioSessionRecord, error) {
+func (noAudioSessionStore) GetAudioSession(context.Context, string, string) (store.AudioSessionRecord, error) {
 	return store.AudioSessionRecord{}, store.ErrAudioSessionNotFound
 }
 
@@ -252,7 +256,7 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 	// every dispatch outright with "params.revision is required".
 	params["revision"] = body.Revision
 
-	result, problem, err := h.executeAudioSessionDispatch(ctx, now, audioDispatchInput{
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: action, NodeID: nodeID, SessionID: sessionID, Params: params,
 		Revision: body.Revision, IdempotencyKey: idempotencyKey,
 		IssuerID: issuerID, IssuerName: issuerName,
@@ -270,7 +274,11 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 	jsonWrite(w, v1.AudioSessionCommandResponse{ServerTime: formatTime(h.now()), Command: result})
 }
 
-type audioDispatchInput struct {
+// AudioDispatchInput is [handlers.executeAudioSessionDispatch]'s input,
+// exported so [AudioActionDispatcher.Dispatch] (audiodispatch_export.go)
+// can build one from another package, mirroring [FPPCommandInput]'s
+// identical exported-for-cross-package-dispatch role.
+type AudioDispatchInput struct {
 	Action         string
 	NodeID         string
 	SessionID      string
@@ -293,7 +301,7 @@ type audioDispatchInput struct {
 // error with a non-nil problem means "the request was refused"; a
 // non-nil error means an internal failure this coordinator cannot
 // attribute to the caller.
-func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Time, in audioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error) {
+func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Time, in AudioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error) {
 	if h.deps.Commands == nil {
 		return v1.AudioSessionCommandResult{}, nil, errors.New("no command store is configured")
 	}
@@ -518,10 +526,10 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 // commanded, never only of what was confirmed (see
 // [audioOutcomeShouldPersist]). The write is bounded so a locked store
 // cannot block this detached-completion path forever.
-func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in audioDispatchInput) {
+func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in AudioDispatchInput) {
 	ctx, cancel := context.WithTimeout(parent, dbWriteTimeout)
 	defer cancel()
-	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.SessionID)
+	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.NodeID, in.SessionID)
 	existingJSON := ""
 	if err == nil {
 		existingJSON = existing.DesiredJSON

@@ -167,7 +167,7 @@ var (
 	nightSessionShowPlaylistKeys   = map[string]bool{"fppInstanceId": true, "playlist": true}
 	nightSessionRestingKeys        = map[string]bool{"fppInstanceId": true, "playlist": true, "endOfNightPlaylist": true, "timelineAsset": true, "endOfNightRepeat": true, "backgroundAudio": true}
 	nightSessionAssetRefKeys       = map[string]bool{"show": true, "sequence": true, "target": true}
-	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true}
+	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true, "fadeOutMs": true, "fadeInMs": true}
 	nightSessionBackgroundItemKeys = map[string]bool{"itemId": true, "show": true, "sequence": true, "target": true}
 	nightSessionTransitionKeys     = map[string]bool{"cues": true, "blackoutHoldMs": true}
 	nightSessionRestingTransKeys   = map[string]bool{"cues": true, "blackoutAfterShowMs": true}
@@ -268,11 +268,17 @@ func (i *NightSessionBackgroundAudioItem) UnmarshalJSON(b []byte) error {
 
 // NightSessionBackgroundAudio is night.session.resting.backgroundAudio,
 // present only when the deployment configures background audio at all.
-// Every item's own Asset.Target names the SAME audio.node id (enforced by
-// [DecodeNightSessionPayload]): the coordinator has no separate
-// "which output" field for background audio, so item.Asset.Target
-// (ADR-028's own per-target asset identity) doubles as the audio node
-// this whole playlist plays on. OutputNodeID exposes that shared value.
+// The bed plays on every DISTINCT audio.node id its own items name - the
+// coordinator has no separate "which output(s)" field for background
+// audio, so item.Asset.Target (ADR-028's own per-target asset identity)
+// doubles as the set of audio nodes this playlist plays on.
+// OutputNodeIDs exposes that set (sorted, deduplicated); every item whose
+// Asset.Target equals one node is that node's own playlist, resolved and
+// dispatched independently of any other node's (see ItemsForTarget) - a
+// refused step on one node never blocks another's. A single-target
+// installation (every item sharing one target, the only shape this
+// package used to require) is the len(OutputNodeIDs())==1 case and
+// behaves exactly as it always has.
 // CrossfadeMs is a pointer, not a plain int with "omitempty": the
 // validator REQUIRES the key present (0 is a legal value - an immediate
 // cut) whenever ItemTransition is "crossfade" and requires it ABSENT
@@ -283,6 +289,18 @@ func (i *NightSessionBackgroundAudioItem) UnmarshalJSON(b []byte) error {
 // nil means "not applicable"; non-nil (including *CrossfadeMs == 0) means
 // "present on the wire", matching FadeDurationMs's existing pointer
 // pattern one field over.
+// FadeOutMs and FadeInMs are the show-boundary fade pair: FadeOutMs fades
+// the bed to silence before it is paused or stopped for a real show,
+// FadeInMs fades it back up to MaxGainDb after it resumes or restarts -
+// a duck-style DOWN/UP pair with two independent durations, following
+// audio.settings' own duckFadeDurationMs/duckRestoreFadeDurationMs
+// precedent (a fast duck and a slow restore are deliberately different
+// numbers). Both nil is a fully supported, unchanged-behavior
+// configuration: the boundary cuts instantly, exactly as before this
+// pair existed. They are validated to be configured together or not at
+// all - a bed faded down with no way to fade back up would stay silent
+// forever, matching CrossfadeMs's own present-together validation
+// pattern one field over.
 type NightSessionBackgroundAudio struct {
 	Items          []NightSessionBackgroundAudioItem `json:"items"`
 	Repeat         string                            `json:"repeat"`
@@ -290,16 +308,40 @@ type NightSessionBackgroundAudio struct {
 	ItemTransition string                            `json:"itemTransition"`
 	CrossfadeMs    *int                              `json:"crossfadeMs,omitempty"`
 	MaxGainDb      float64                           `json:"maxGainDb"`
+	FadeOutMs      *int                              `json:"fadeOutMs,omitempty"`
+	FadeInMs       *int                              `json:"fadeInMs,omitempty"`
 }
 
-// OutputNodeID returns the audio.node id every item plays on (item 0's
-// own Asset.Target), or "" if Items is empty. DecodeNightSessionPayload
-// already enforces every item agrees, so any item's Target would do.
-func (b NightSessionBackgroundAudio) OutputNodeID() string {
-	if len(b.Items) == 0 {
-		return ""
+// OutputNodeIDs returns every distinct audio.node id this bed plays on,
+// sorted: the set of every item's own Asset.Target. Empty if Items is
+// empty. A single-target installation (every item sharing one target)
+// returns a one-element slice, unchanged from OutputNodeID's old
+// contract.
+func (b NightSessionBackgroundAudio) OutputNodeIDs() []string {
+	seen := make(map[string]bool, len(b.Items))
+	var out []string
+	for _, item := range b.Items {
+		if !seen[item.Asset.Target] {
+			seen[item.Asset.Target] = true
+			out = append(out, item.Asset.Target)
+		}
 	}
-	return b.Items[0].Asset.Target
+	sort.Strings(out)
+	return out
+}
+
+// ItemsForTarget returns, in their configured order, every item whose own
+// Asset.Target is nodeID - one node's own slice of the shared bed
+// playlist, resolved and dispatched independently of every other node's
+// (see [NightSessionBackgroundAudio]'s own doc comment).
+func (b NightSessionBackgroundAudio) ItemsForTarget(nodeID string) []NightSessionBackgroundAudioItem {
+	var out []NightSessionBackgroundAudioItem
+	for _, item := range b.Items {
+		if item.Asset.Target == nodeID {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // NightSessionCue is one entry of enterShow.cues or enterResting.cues.
@@ -717,14 +759,11 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		items = append(items, NightSessionBackgroundAudioItem{ItemID: itemID, Asset: asset})
 	}
 
-	for i, item := range items {
-		if item.Asset.Target != items[0].Asset.Target {
-			return NightSessionBackgroundAudio{}, &ValidationError{
-				Code: ValidationCodeBackgroundAudioMixedTargets, Field: fmt.Sprintf("resting.backgroundAudio.items[%d].target", i),
-				Detail: fmt.Sprintf("item %d names target %q, but item 0 names %q; a background-audio playlist plays on exactly one audio output", i, item.Asset.Target, items[0].Asset.Target),
-			}
-		}
-	}
+	// Items are no longer required to share one target. Every distinct
+	// Asset.Target among them is its own audio.node the bed plays on
+	// (NightSessionBackgroundAudio.OutputNodeIDs/ItemsForTarget);
+	// this decoder validates only that each item's own asset reference
+	// resolves (above), not that items agree with each other.
 
 	repeat, verr := decodeDefaultedEnum(fields, "repeat", "resting.backgroundAudio.repeat", NightSessionBackgroundRepeatNone, nightSessionBackgroundRepeatValues)
 	if verr != nil {
@@ -773,9 +812,45 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		}
 	}
 
+	_, fadeOutPresent := fields["fadeOutMs"]
+	_, fadeInPresent := fields["fadeInMs"]
+	var fadeOutMs, fadeInMs *int
+	if fadeOutPresent != fadeInPresent {
+		return NightSessionBackgroundAudio{}, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: "resting.backgroundAudio.fadeOutMs",
+			Detail: "resting.backgroundAudio.fadeOutMs and fadeInMs must be configured together, or both omitted for no fade",
+		}
+	}
+	if fadeOutPresent {
+		v, verr := decodeRequiredNonNegativeInt(fields, "fadeOutMs", "resting.backgroundAudio.fadeOutMs")
+		if verr != nil {
+			return NightSessionBackgroundAudio{}, verr
+		}
+		if v == 0 {
+			return NightSessionBackgroundAudio{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.fadeOutMs",
+				Detail: "resting.backgroundAudio.fadeOutMs must be positive when configured; omit fadeOutMs and fadeInMs together for no fade",
+			}
+		}
+		fadeOutMs = &v
+
+		v2, verr := decodeRequiredNonNegativeInt(fields, "fadeInMs", "resting.backgroundAudio.fadeInMs")
+		if verr != nil {
+			return NightSessionBackgroundAudio{}, verr
+		}
+		if v2 == 0 {
+			return NightSessionBackgroundAudio{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.fadeInMs",
+				Detail: "resting.backgroundAudio.fadeInMs must be positive when configured; omit fadeOutMs and fadeInMs together for no fade",
+			}
+		}
+		fadeInMs = &v2
+	}
+
 	return NightSessionBackgroundAudio{
 		Items: items, Repeat: repeat, Resume: resume, ItemTransition: itemTransition,
 		CrossfadeMs: crossfadeMs, MaxGainDb: maxGainDb,
+		FadeOutMs: fadeOutMs, FadeInMs: fadeInMs,
 	}, nil
 }
 

@@ -186,7 +186,8 @@ Commands:
   macro put <id>                      write a new show.macro revision (write, full replacement,
                                        requires config:write)
   run show <runId> [--follow]         show one macro run, including every step's outcome
-  run list [--macro <id>] [--state]   list macro runs, most recent first
+  run list [--macro <id>] [--show <id>] [--state]
+                                       list macro runs, most recent first
   action list                         enumerate show.action objects
   action show <id>                    show one action's full definition
   action put <id>                     write a new show.action revision (write, full replacement,

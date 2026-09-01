@@ -105,6 +105,11 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 	// audio.node's mere existence.
 	nodeHasLTC := nodeHasAudioNode && audioNode.LTCRoute != ""
 
+	targets, err := loadAudioTargets(ctx, st, nodeID)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
+	}
+
 	claimCtx := config.ShowCueClaimContext{
 		RenderSurfaceIDs: surfaceIDs,
 	}
@@ -124,7 +129,7 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		if err != nil {
 			return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
 		}
-		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue)
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
 		if verr != nil {
 			return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: decode stored show.cue %q: %s", obj.ID, verr.Detail)
 		}
@@ -152,10 +157,10 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		entries = append(entries, cuecatalog.Entry{
 			CueID:       obj.ID,
 			CueRevision: obj.CurrentRevision,
-			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, assetsBySequence),
+			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets, assetsBySequence),
 		})
 
-		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC)
+		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets)
 		conflict, err := detectClaimConflicts(claimants, claimant{cueID: obj.ID, playlists: referencingPlaylists[obj.ID]}, scoped, claimCtx)
 		if err != nil {
 			return Catalog{}, err
@@ -221,7 +226,7 @@ func (c CatalogConflict) Detail() string {
 
 // resolveCueOutputs projects payload's declared outputs onto
 // [cuecatalog.Outputs], restricted per this file's own doc comment.
-func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool, assetsBySequence map[string][]ExpectedAsset) cuecatalog.Outputs {
+func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool, targets audioTargets, assetsBySequence map[string][]ExpectedAsset) cuecatalog.Outputs {
 	var out cuecatalog.Outputs
 
 	if payload.Outputs.Render != nil && nodeHasSurface {
@@ -232,7 +237,7 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 			AssetHashes: hashes,
 		}
 	}
-	if payload.Outputs.Audio != nil && nodeHasAudioNode {
+	if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Audio.Target) {
 		// assetsBySequence is keyed by AssetRecord.SequenceID, and
 		// payload.Outputs.Audio.Asset IS that same identity, not
 		// AssetRecord.ID: every asset, audio or render, is uploaded
@@ -250,10 +255,10 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 			AssetHashes:       hashes,
 		}
 	}
-	if payload.Outputs.LTC != nil && nodeHasLTC {
+	if payload.Outputs.LTC != nil && nodeHasLTC && targets.Owns(payload.Outputs.LTC.Target) {
 		out.LTC = &cuecatalog.LTCOutput{StartOffsetMillis: payload.Outputs.LTC.StartOffsetMillis}
 	}
-	if payload.Outputs.Announcement != nil && nodeHasAudioNode {
+	if payload.Outputs.Announcement != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Announcement.Target) {
 		out.Announcement = &cuecatalog.AnnouncementOutput{
 			Policy:     payload.Outputs.Announcement.Policy,
 			DuckGainDb: payload.Outputs.Announcement.DuckGainDb,
@@ -302,6 +307,12 @@ func loadAudioNodePayload(ctx context.Context, st *store.Store, nodeID string) (
 // catalog resolution outright instead of correctly producing no render
 // claim for a node the render output was never meant to concern.
 //
+// targets narrows the same three outputs a second time, by ADR-045's
+// optional target node: an output naming a target concerns only that node,
+// and one naming none concerns only the installation's sole program+ltc
+// node. Capability and target are both required, so a program node named
+// as the target of an LTC output still receives nothing.
+//
 // nodeHasLTC is deliberately separate from nodeHasAudioNode rather than
 // derived from it. A program-only audio.node exists and carries
 // a ProgramRoute but no LTCRoute, so "has an audio.node" no longer
@@ -310,16 +321,18 @@ func loadAudioNodePayload(ctx context.Context, st *store.Store, nodeID string) (
 // predicate would leave Outputs.LTC standing against an empty LTC
 // context, which DeriveShowCueClaims refuses — failing resolution for
 // EVERY cue on that node, not just the one declaring LTC.
-func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool) config.ShowCuePayload {
+func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool, targets audioTargets) config.ShowCuePayload {
 	scoped := payload
 	if !nodeHasSurface {
 		scoped.Outputs.Render = nil
 	}
-	if !nodeHasAudioNode {
+	if scoped.Outputs.Audio != nil && (!nodeHasAudioNode || !targets.Owns(scoped.Outputs.Audio.Target)) {
 		scoped.Outputs.Audio = nil
+	}
+	if scoped.Outputs.Announcement != nil && (!nodeHasAudioNode || !targets.Owns(scoped.Outputs.Announcement.Target)) {
 		scoped.Outputs.Announcement = nil
 	}
-	if !nodeHasLTC {
+	if scoped.Outputs.LTC != nil && (!nodeHasLTC || !targets.Owns(scoped.Outputs.LTC.Target)) {
 		scoped.Outputs.LTC = nil
 	}
 	return scoped

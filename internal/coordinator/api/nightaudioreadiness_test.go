@@ -91,7 +91,7 @@ func TestNightCheckBackgroundAudioItemTransition_SequentialAlwaysPasses(t *testi
 	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
 	ba := &config.NightSessionBackgroundAudio{ItemTransition: config.NightSessionItemTransitionSequential}
 
-	check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+	check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, "", ba)
 
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("check = %+v, want healthy", check)
@@ -128,7 +128,7 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 				ItemTransition: tc.transition,
 			}
 
-			check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, "node-a", ba)
 			if check.health != nightCheckStateNotVerifiable {
 				t.Fatalf("output never seen in inventory: check = %+v, want not_verifiable", check)
 			}
@@ -136,7 +136,7 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 				nodeViewWithGenericCapabilities("node-a"),
 			})
-			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, "node-a", ba)
 			if check.health != nightHealthFailed() {
 				t.Fatalf("live output declaring nothing: check = %+v, want failed", check)
 			}
@@ -144,7 +144,7 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 				nodeViewWithGenericCapabilitiesOffline("node-a", tc.confirmingID),
 			})
-			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, "node-a", ba)
 			if check.health != nightHealthUnknown() {
 				t.Fatalf("offline output whose retained hello DOES declare %q: check = %+v, want unknown (stale evidence must not read as healthy or failed)", tc.confirmingID, check)
 			}
@@ -152,7 +152,7 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 				nodeViewWithGenericCapabilities("node-a", tc.confirmingID),
 			})
-			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, "node-a", ba)
 			if check.health != nightHealthHealthy() {
 				t.Fatalf("live output declaring %q: check = %+v, want healthy", tc.confirmingID, check)
 			}
@@ -178,7 +178,7 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 		Repeat: config.NightSessionBackgroundRepeatPlaylist,
 	}
 
-	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 	if check.health != nightCheckStateNotVerifiable {
 		t.Fatalf("node never seen in inventory: check = %+v, want not_verifiable", check)
 	}
@@ -196,7 +196,7 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	h.deps.Audio.(*fakeNodeAudioLister).setObservations("node-a", []observation.Observation{
 		nodeAudioEngineStateObservation("node-a", nodeaudio.StateUnavailable, testNow),
 	})
-	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 	if check.health != nightHealthFailed() {
 		t.Fatalf("live node declaring nothing, engine confirmed unavailable: check = %+v, want failed", check)
 	}
@@ -207,7 +207,7 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 		nodeViewWithGenericCapabilities("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain"),
 	})
-	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 	if check.health != nightHealthFailed() {
 		t.Fatalf("missing only loop: check = %+v, want failed", check)
 	}
@@ -218,7 +218,7 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 		nodeViewWithGenericCapabilitiesOffline("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop"),
 	})
-	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 	if check.health != nightHealthUnknown() {
 		t.Fatalf("offline node whose retained hello declares every required capability: check = %+v, want unknown", check)
 	}
@@ -226,7 +226,7 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 		nodeViewWithGenericCapabilities("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop"),
 	})
-	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("every required capability declared by a live node: check = %+v, want healthy", check)
 	}
@@ -256,7 +256,7 @@ func TestNightCheckAudioOutputCapabilities_OldAgentNeverPublishedIsNotVerifiable
 		{NodeID: "node-a", Liveness: inventory.LivenessOnline},
 	})
 
-	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 	if check.health != nightCheckStateNotVerifiable {
 		t.Fatalf("node in inventory with Hello == nil: check = %+v, want not_verifiable", check)
 	}
@@ -275,7 +275,7 @@ func TestNightCheckAudioOutputCapabilities_NoRepeatDoesNotRequireLoop(t *testing
 		nodeViewWithGenericCapabilities("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain"),
 	})
 
-	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("check = %+v, want healthy (repeat=none never requires loop)", check)
 	}
@@ -324,7 +324,7 @@ func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T
 			nodeAudioEngineStateObservation("node-a", nodeaudio.StateUsable, testNow),
 		})
 
-		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 		if check.health != nightHealthUnknown() {
 			t.Fatalf("engine confirmed usable, hello capabilities empty: check = %+v, want unknown", check)
 		}
@@ -339,7 +339,7 @@ func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T
 			nodeAudioEngineStateObservation("node-a", nodeaudio.StateUnavailable, testNow),
 		})
 
-		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 		if check.health != nightHealthFailed() {
 			t.Fatalf("engine confirmed unavailable, hello capabilities empty: check = %+v, want failed (no probing evidence excuses this)", check)
 		}
@@ -356,7 +356,7 @@ func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T
 		// after connect). Evidence that cannot exist yet is not evidence
 		// of absence, so this must read unknown, not failed.
 
-		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 		if check.health != nightHealthUnknown() {
 			t.Fatalf("no independent engine-state evidence at all: check = %+v, want unknown", check)
 		}
@@ -371,7 +371,7 @@ func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T
 		stale.ValidFor = 45 * time.Second // nodeaudio.DefaultValidFor
 		h.deps.Audio.(*fakeNodeAudioLister).setObservations("node-a", []observation.Observation{stale})
 
-		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, "node-a", ba)
 		if check.health != nightHealthUnknown() {
 			t.Fatalf("stale (aged past ValidFor) engine-state evidence, even reading unavailable: check = %+v, want unknown, not failed", check)
 		}
