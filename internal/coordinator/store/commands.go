@@ -156,7 +156,7 @@ func getCommandByIdempotencyKey(ctx context.Context, q querier, key string) (Com
 	return rec, nil
 }
 
-func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, now time.Time) (CommandRecord, error) {
+func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, now time.Time, hooks commitHook) (CommandRecord, error) {
 	rec.CreatedAt = now
 	if rec.State == "" {
 		return CommandRecord{}, fmt.Errorf("store: insert command %q: State is empty", rec.ID)
@@ -194,8 +194,12 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 
 	// Same two independent triggers as [appendAuditEntry] (audit.go): insert
 	// volume and elapsed wall-clock time since the last prune pass. See
-	// retention.go's pruneEveryNCommands/pruneCheckInterval doc comments.
-	byCount := s.commandInsertCount.Add(1)%pruneEveryNCommands == 0
+	// retention.go's pruneEveryNCommands/pruneCheckInterval doc comments,
+	// and [commitHook]'s doc comment for why the mutation itself is queued
+	// through hooks (immediate via [Store.InsertCommand]'s own q = s.db,
+	// deferred to commit via [Tx.InsertCommand]'s caller-owned transaction)
+	// rather than applied here directly.
+	byCount := (s.commandInsertCount.Load()+1)%pruneEveryNCommands == 0
 	byAge := false
 	if !byCount {
 		last := s.lastCommandPruneAtNanos.Load()
@@ -205,8 +209,10 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 		if err := s.pruneCommands(ctx, q); err != nil {
 			return CommandRecord{}, fmt.Errorf("store: insert command %q: %w", rec.ID, err)
 		}
-		s.lastCommandPruneAtNanos.Store(s.now().UnixNano())
+		prunedAt := s.now()
+		hooks.after(func() { s.lastCommandPruneAtNanos.Store(prunedAt.UnixNano()) })
 	}
+	hooks.after(func() { s.commandInsertCount.Add(1) })
 
 	// The INSERT above hardcodes dispatched_at/resolved_at to NULL — see
 	// [Store.InsertCommand]'s doc comment — but rec, at this point, is
@@ -238,7 +244,7 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 // audit entry rather than dispatching the command a second time.
 func (s *Store) InsertCommand(ctx context.Context, rec CommandRecord) (CommandRecord, error) {
 	guardNotInTx(ctx, "Store.InsertCommand")
-	return insertCommand(ctx, s.db, s, rec, s.now())
+	return insertCommand(ctx, s.db, s, rec, s.now(), immediateHook{})
 }
 
 // InsertCommand is [Store.InsertCommand]'s [Tx] form — needed because
@@ -247,7 +253,7 @@ func (s *Store) InsertCommand(ctx context.Context, rec CommandRecord) (CommandRe
 // transaction as the insert, exactly as the same-transaction rule requires
 // for a coordinator-local change.
 func (t *Tx) InsertCommand(ctx context.Context, rec CommandRecord) (CommandRecord, error) {
-	return insertCommand(ctx, t.tx, t.s, rec, t.s.now())
+	return insertCommand(ctx, t.tx, t.s, rec, t.s.now(), t)
 }
 
 func getCommand(ctx context.Context, q querier, id string) (CommandRecord, error) {
