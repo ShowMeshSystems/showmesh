@@ -38,6 +38,7 @@ import {
   Field,
   FieldGrid,
   Input,
+  LifecycleCommands,
   Panes,
   RevisionHistory,
   RuledStrip,
@@ -47,6 +48,7 @@ import {
   StatusPair,
   Table,
   TableWrap,
+  type LifecycleCommandSpec,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -345,37 +347,45 @@ export function ShowNight() {
           </span>
         }
       >
-        <div className="sm-grid sm-grid--auto sm-lifecycle-commands">
-          {(
-            [
-              ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
-              ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
-              ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
-              ['request-final-show', 'Request final show', 'The next normally timed show becomes the last. Admission closes; this show finishes.'],
-              ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
-              ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
-              ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock.'],
-            ] as const
-          ).map(([command, label, detail]) => (
-            <div key={command} className={`sm-lifecycle-command sm-lifecycle-command--${command}`}>
-              <Button size="gloved" disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={() => send(command)}>
-                {label}
-              </Button>
-              <p className="sm-small sm-muted">{gate.allowed ? detail : gate.reason}</p>
-              {command === 'start-night' && (
-                <label className="sm-choice sm-choice--gloved">
-                  <input
-                    type="checkbox"
-                    checked={skipEnterShowLead}
-                    disabled={!gate.allowed}
-                    onChange={(e) => setSkipEnterShowLead(e.target.checked)}
-                  />
-                  <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
-                </label>
-              )}
-            </div>
-          ))}
-        </div>
+        <LifecycleCommands
+          groups={[
+            {
+              id: 'sn-commands-grid',
+              commands: (
+                [
+                  ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
+                  ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
+                  ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
+                  ['request-final-show', 'Request final show', 'The next normally timed show becomes the last. Admission closes; this show finishes.'],
+                  ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
+                  ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
+                  ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock.'],
+                ] as const
+              ).map(
+                ([command, label, detail]): LifecycleCommandSpec => ({
+                  command,
+                  label,
+                  detail,
+                  disabled: !gate.allowed,
+                  disabledReason: gate.allowed ? undefined : gate.reason,
+                  onRun: () => send(command),
+                  options:
+                    command === 'start-night' ? (
+                      <label className="sm-choice sm-choice--gloved">
+                        <input
+                          type="checkbox"
+                          checked={skipEnterShowLead}
+                          disabled={!gate.allowed}
+                          onChange={(e) => setSkipEnterShowLead(e.target.checked)}
+                        />
+                        <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
+                      </label>
+                    ) : undefined,
+                }),
+              ),
+            },
+          ]}
+        />
         {outcome !== null && (
           <div className="sm-outcome">
             <StatusPair tone={outcome.tone} label={outcome.label} />

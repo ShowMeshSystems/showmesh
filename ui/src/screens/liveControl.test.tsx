@@ -196,7 +196,12 @@ describe('Live Control', () => {
     } as AudioSessionCommandResult
   }
 
-  /** One declared audio.node, no observed sessions, and a typed session id: the minimal ready state every dispatch test builds on. */
+  /**
+   * One declared audio.node, no observed sessions, and a typed session id,
+   * with the floating controls drawer opened: the minimal ready state every
+   * dispatch test builds on. Returns the drawer, where the transport, seek,
+   * gain, mute and clear controls now live.
+   */
   async function renderAudioSessionsReady(opts: { fps?: number } = {}) {
     stubs.listConfigObjects = ((kind: string) => {
       if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
@@ -210,7 +215,8 @@ describe('Live Control', () => {
     renderScreen({ session: audioAllowedSession })
     const region = await screen.findByRole('region', { name: 'Audio sessions' })
     fireEvent.change(within(region).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
-    return region
+    fireEvent.click(within(region).getByRole('button', { name: 'Open' }))
+    return screen.findByRole('dialog')
   }
 
   it('keeps the Resolume emergency path between output evidence and night lifecycle', () => {
@@ -605,7 +611,9 @@ describe('Live Control', () => {
 
     const region = await screen.findByRole('region', { name: 'Audio sessions' })
     fireEvent.change(within(region).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
-    const prepare = within(region).getByRole('button', { name: 'Prepare' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Open' }))
+    const dialog = await screen.findByRole('dialog')
+    const prepare = within(dialog).getByRole('button', { name: 'Prepare' })
     expect(prepare).toBeDisabled()
     expect(prepare).toHaveAttribute('title', expect.stringContaining('audio:command'))
   })

@@ -136,4 +136,67 @@ describe('Monitor · Activity', () => {
     renderScreen({ events: [event()], eventsGap: false, snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
     expect(screen.queryByText(/permanently lost to retention/)).not.toBeInTheDocument()
   })
+
+  it('reads a refused action as bad, worded "Refused", never a green check', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-28T21:07:00Z',
+      order: 'desc',
+      oldestRetainedId: 1,
+      entries: [auditEntry({ outcome: 'refused', outcomeState: '', outcomeReason: 'Current session does not exist' })],
+    })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await waitFor(() => expect(screen.getByText('Refused')).toBeInTheDocument())
+    const status = screen.getByText('Refused').closest('.sm-status')
+    expect(status).not.toBeNull()
+    expect(status?.className).toContain('sm-status--bad')
+    expect(status?.className).not.toContain('sm-status--good')
+  })
+
+  it('reads a failed action as bad, worded "Failed"', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-28T21:07:00Z',
+      order: 'desc',
+      oldestRetainedId: 1,
+      entries: [auditEntry({ outcome: 'failed', outcomeState: '', outcomeReason: 'Node did not answer' })],
+    })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await waitFor(() => expect(screen.getByText('Failed')).toBeInTheDocument())
+    expect(screen.getByText('Failed').closest('.sm-status')?.className).toContain('sm-status--bad')
+  })
+
+  it('reads an unconfirmable action as warn, never good or bad', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-28T21:07:00Z',
+      order: 'desc',
+      oldestRetainedId: 1,
+      entries: [auditEntry({ outcome: 'unconfirmable', outcomeState: '', outcomeReason: 'Clip was already playing' })],
+    })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await waitFor(() => expect(screen.getByText('Unconfirmable')).toBeInTheDocument())
+    expect(screen.getByText('Unconfirmable').closest('.sm-status')?.className).toContain('sm-status--warn')
+  })
+
+  it('reads a confirmed action as good, worded "Confirmed", only for an actually confirmed outcome', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-28T21:07:00Z',
+      order: 'desc',
+      oldestRetainedId: 1,
+      entries: [auditEntry({ outcome: 'confirmed', outcomeState: 'current', outcomeReason: 'Surface applied' })],
+    })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await waitFor(() => expect(screen.getByText('Confirmed')).toBeInTheDocument())
+    expect(screen.getByText('Confirmed').closest('.sm-status')?.className).toContain('sm-status--good')
+  })
+
+  it('never colors a dispatch/replay entry from a stray outcomeState (no outcome word to report)', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-28T21:07:00Z',
+      order: 'desc',
+      oldestRetainedId: 1,
+      entries: [auditEntry({ kind: 'dispatch', outcome: '', outcomeState: 'current', outcomeReason: '' })],
+    })
+    renderScreen({ events: [], snapshotReceivedAt: Date.now(), session: session(['audit:read']) })
+    await waitFor(() => expect(screen.getByText(/night.start-night/)).toBeInTheDocument())
+    expect(screen.queryByText('Current')).not.toBeInTheDocument()
+  })
 })

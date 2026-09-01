@@ -86,6 +86,11 @@ export function RailBadge({ tone, count }: { tone: 'bad' | 'warn' | 'live'; coun
   return <span className={`sm-rail__badge sm-rail__badge--${tone}`}>{count}</span>
 }
 
+/** Sits below the nav links, pinned to the rail's bottom edge. */
+export function RailFooter({ children }: { children: ReactNode }) {
+  return <div className="sm-rail__footer">{children}</div>
+}
+
 type PanesProps = {
   children: ReactNode
   /** Whether the current selection opens the inspector drawer. */

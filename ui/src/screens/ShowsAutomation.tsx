@@ -555,7 +555,7 @@ function MacroCard({
             <li
               key={step.id}
               aria-current={selectedStep === index ? 'true' : undefined}
-              className={selectedStep === index ? 'sm-table__row--current' : undefined}
+              className={`sm-step-row${selectedStep === index ? ' sm-table__row--current' : ''}`}
               draggable
               onDragStart={() => setDragIndex(index)}
               onDragOver={(e) => e.preventDefault()}
@@ -564,6 +564,10 @@ function MacroCard({
                 setDragIndex(null)
               }}
               onDragEnd={() => setDragIndex(null)}
+              onClick={(e) => {
+                if ((e.target as Element).closest('button, .sm-handle')) return
+                onSelectStep(index)
+              }}
             >
               <span className="sm-handle" aria-hidden="true">
                 ⠿

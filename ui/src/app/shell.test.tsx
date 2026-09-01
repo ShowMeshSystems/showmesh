@@ -21,6 +21,7 @@ const getCurrentNightSessionMock = vi.fn()
 const listConfigObjectsMock = vi.fn()
 const getShowActiveMock = vi.fn()
 const putShowActiveMock = vi.fn()
+const getServiceDescriptorMock = vi.fn()
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -35,6 +36,7 @@ vi.mock('../api', async () => {
     listConfigObjects: (...args: unknown[]) => listConfigObjectsMock(...args),
     getShowActive: (...args: unknown[]) => getShowActiveMock(...args),
     putShowActive: (...args: unknown[]) => putShowActiveMock(...args),
+    getServiceDescriptor: (...args: unknown[]) => getServiceDescriptorMock(...args),
   }
 })
 
@@ -90,6 +92,7 @@ describe('app shell', () => {
     listConfigObjectsMock.mockReset()
     getShowActiveMock.mockReset().mockReturnValue(new Promise(() => {}))
     putShowActiveMock.mockReset()
+    getServiceDescriptorMock.mockReset().mockReturnValue(new Promise(() => {}))
     clearStoredToken()
   })
   afterEach(cleanup)
@@ -194,6 +197,31 @@ describe('app shell', () => {
     renderShell({})
     const rail = screen.getByRole('navigation', { name: 'Primary' })
     expect(rail.querySelectorAll('.sm-rail__badge')).toHaveLength(0)
+  })
+
+  it('shows nothing in the rail footer while the coordinator build is unread', () => {
+    renderShell({})
+    const rail = screen.getByRole('navigation', { name: 'Primary' })
+    expect(rail.querySelector('.sm-rail__footer')?.textContent).toBe('')
+  })
+
+  it('shows the coordinator version and a short commit in the rail footer, titled with the full commit', async () => {
+    getServiceDescriptorMock.mockResolvedValue({
+      serverTime: '2026-09-01T00:00:00Z',
+      apiVersion: 1,
+      supportedVersions: [1],
+      coordinator: { version: '2026.09.0', commit: 'abc1234def5678', buildDate: '2026-09-01T00:00:00Z', goVersion: 'go1.23' },
+    })
+    renderShell({})
+    expect(await screen.findByText('2026.09.0')).toBeInTheDocument()
+    const commit = await screen.findByText('abc1234')
+    expect(commit.title).toBe('abc1234def5678')
+  })
+
+  it('says the coordinator build was not reported when the descriptor read fails', async () => {
+    getServiceDescriptorMock.mockRejectedValue(new Error('unreachable'))
+    renderShell({})
+    expect(await screen.findByText('Coordinator build not reported')).toBeInTheDocument()
   })
 
   it('renders signed out as a band with the rail still present', () => {

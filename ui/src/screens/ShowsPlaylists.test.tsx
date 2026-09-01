@@ -147,6 +147,12 @@ function withPlaylistList(kind: string, cues: ConfigObjectSummary[]) {
   return withCues(kind, cues)
 }
 
+/** The list is the whole page; a row must be clicked to open the playlist's editor in the inspector drawer. */
+async function openPlaylistRow(label: string) {
+  const row = await screen.findByRole('row', { name: `Edit ${label}` })
+  fireEvent.click(row)
+}
+
 describe('Shows · Playlists tab editing', () => {
   afterEach(() => {
     cleanup()
@@ -164,6 +170,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('save and discard are disabled without config:write and are actually inert', async () => {
       setup([])
+      await openPlaylistRow('Background Music')
       const table = await screen.findByRole('region', { name: 'Playlist entries, scrollable' })
       await waitFor(() => expect(within(table).getByText('Winter Bed Track 1')).toBeInTheDocument())
       const save = screen.getByRole('button', { name: 'Save playlist' })
@@ -179,6 +186,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('adding, removing and reordering an entry each produce the payload expected, and repeat round-trips', async () => {
       setup()
+      await openPlaylistRow('Background Music')
       const table = await screen.findByRole('region', { name: 'Playlist entries, scrollable' })
       await waitFor(() => expect(within(table).getByText('Winter Bed Track 1')).toBeInTheDocument())
 
@@ -213,6 +221,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('reports a write refusal and keeps the operator’s edits on screen rather than discarding them', async () => {
       setup()
+      await openPlaylistRow('Background Music')
       const table = await screen.findByRole('region', { name: 'Playlist entries, scrollable' })
       await waitFor(() => expect(within(table).getByText('Winter Bed Track 1')).toBeInTheDocument())
 
@@ -259,6 +268,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('each editable field round-trips into the payload sent to putShowPlaylist, including binding an entry to a cue', async () => {
       setup({ storedMismatchPolicy: 'blackAndSilence' })
+      await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
 
       const selects = screen.getAllByRole('combobox', { name: /Bound cue for/ })
@@ -309,6 +319,7 @@ describe('Shows · Playlists tab editing', () => {
             id,
           ),
         )
+      await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
 
       // Make an unrelated edit so Save is enabled, without touching entry e1.
@@ -341,6 +352,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('never invents a mismatch policy the playlist does not store', async () => {
       setup()
+      await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       // Save needs a real edit before it is enabled, so make an unrelated one.
       const selects = screen.getAllByRole('combobox', { name: /Bound cue for/ })
@@ -357,6 +369,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('draws the mismatch control inert, as the mock says it is not per playlist', async () => {
       setup({ storedMismatchPolicy: 'blackAndSilence' })
+      await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       expect(screen.getByRole('button', { name: 'Black & silence' })).toBeDisabled()
       expect(screen.getByText(/Show versus Program mode/)).toBeInTheDocument()
@@ -364,6 +377,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('save and discard are disabled without config:write and are actually inert', async () => {
       setup({ scopes: [] })
+      await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       expect(screen.getByRole('button', { name: 'Save playlist' })).toBeDisabled()
       expect(screen.getByRole('button', { name: 'Discard changes' })).toBeDisabled()
@@ -371,6 +385,7 @@ describe('Shows · Playlists tab editing', () => {
 
     it('rebinding the FPP source playlist renders inert, citing the OPEN-DECISIONS entry', async () => {
       setup()
+      await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       expect(screen.getByRole('combobox', { name: 'Instance' })).toBeDisabled()
       expect(screen.getByRole('combobox', { name: 'FPP playlist' })).toBeDisabled()

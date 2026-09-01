@@ -110,10 +110,24 @@
 
 /* Fields */
 
+/*
+ * Deterministic field box: label, then a full-width control, then help, then
+ * error, each in its own row. `align-content: start` keeps the label and
+ * control pinned to the top of the box even when the field's grid area is
+ * stretched taller than its own content by a sibling's longer help text (see
+ * `.sm-field-grid`) -- without it, the extra space would be shared across
+ * the auto rows and shift the control down.
+ */
 .sm-field {
   display: grid;
+  grid-template-rows: auto auto auto auto;
+  align-content: start;
   gap: 6px;
   min-width: 0;
+}
+
+.sm-field > :is(.sm-input, .sm-select, .sm-textarea, .sm-segmented) {
+  width: 100%;
 }
 
 .sm-field__label {

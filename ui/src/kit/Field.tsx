@@ -15,18 +15,18 @@ export function Field({ label, help, error, children }: FieldProps) {
   const id = useId()
   const helpId = help === undefined ? undefined : `${id}-help`
   const errorId = error === undefined ? undefined : `${id}-error`
-  const describedBy = [errorId, helpId].filter(Boolean).join(' ') || undefined
+  const describedBy = [helpId, errorId].filter(Boolean).join(' ') || undefined
   return (
     <div className="sm-field">
       <label className="sm-field__label" htmlFor={id}>{label}</label>
       {children({ id, 'aria-describedby': describedBy, 'aria-invalid': error === undefined ? undefined : true })}
+      {help !== undefined && <span className="sm-field__help" id={helpId}>{help}</span>}
       {error !== undefined && (
         <span className="sm-field__error" id={errorId}>
           <span aria-hidden="true">✕</span>
           {error}
         </span>
       )}
-      {help !== undefined && <span className="sm-field__help" id={helpId}>{help}</span>}
     </div>
   )
 }

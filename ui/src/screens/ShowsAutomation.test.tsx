@@ -268,6 +268,13 @@ describe('Shows · Automation tab', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('opens the step editor from a click anywhere on the row, not only the action link', async () => {
+    setup()
+    const stepId = await screen.findByText('start-preshow')
+    fireEvent.click(stepId)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
   it('a step cannot be saved without a local-fallback reason', async () => {
     setup()
     const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
@@ -328,6 +335,23 @@ describe('Shows · Automation tab', () => {
       stubs.listActionBindings = () => Promise.resolve([binding(), binding({ actionId: 'second-action', label: 'Second Step Action' })])
       return renderWorkspace({ session: signedIn(['config:write', 'show:macro:run', 'show:action:invoke']) })
     }
+
+    it('does not open the step editor from the drag handle or a Move/Remove button', async () => {
+      const { container } = setupTwoStepMacro()
+      const handle = await waitFor(() => {
+        const el = container.querySelector('.sm-handle')
+        expect(el).not.toBeNull()
+        return el as HTMLElement
+      })
+      fireEvent.click(handle)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Move down' })[0]!)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]!)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
 
     it('adds a step from the card and saves it with a fresh id', async () => {
       const putSpy = vi.fn((id: string, payload: ConfigShowMacro) => {

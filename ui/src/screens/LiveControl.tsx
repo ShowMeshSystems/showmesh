@@ -45,8 +45,10 @@ import {
   ButtonRule,
   Callout,
   Choice,
+  Drawer,
   Field,
   Input,
+  LifecycleCommands,
   NotWired,
   NotWiredBanner,
   RuledStrip,
@@ -56,6 +58,7 @@ import {
   StatusPair,
   Table,
   TableWrap,
+  type LifecycleCommandSpec,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -416,37 +419,41 @@ export function LiveControl() {
           Every command here answers 202. The UI reports that it was accepted, never that it is done; Show Night carries
           what the session then reports.
         </p>
-        <NightGroup
-          id="lc-prep"
-          title="Prepare"
-          commands={[
-            ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
-            ['run-readiness', 'Run readiness', 'Re-runs every readiness check against this epoch.'],
+        <LifecycleCommands
+          groups={[
+            {
+              id: 'lc-prep',
+              title: 'Prepare',
+              commands: (
+                [
+                  ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
+                  ['run-readiness', 'Run readiness', 'Re-runs every readiness check against this epoch.'],
+                ] as const
+              ).map(nightCommandSpec(nightGate, night)),
+            },
+            {
+              id: 'lc-start',
+              title: 'Start',
+              commands: (
+                [
+                  ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
+                  ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
+                ] as const
+              ).map(nightCommandSpec(nightGate, night)),
+            },
+            {
+              id: 'lc-end',
+              title: 'End the night',
+              commands: (
+                [
+                  ['request-final-show', 'Request final show', 'Closes admission. The next normally timed show becomes the last.'],
+                  ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
+                  ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
+                  ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock; prepare-site then starts a fresh one.'],
+                ] as const
+              ).map(nightCommandSpec(nightGate, night)),
+            },
           ]}
-          gate={nightGate}
-          onRun={night}
-        />
-        <NightGroup
-          id="lc-start"
-          title="Start"
-          commands={[
-            ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
-            ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
-          ]}
-          gate={nightGate}
-          onRun={night}
-        />
-        <NightGroup
-          id="lc-end"
-          title="End the night"
-          commands={[
-            ['request-final-show', 'Request final show', 'Closes admission. The next normally timed show becomes the last.'],
-            ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
-            ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
-            ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock; prepare-site then starts a fresh one.'],
-          ]}
-          gate={nightGate}
-          onRun={night}
         />
         <Outcome outcome={nightOutcome} />
       </Section>
@@ -732,10 +739,12 @@ function audioSessionSignal(observations: ObservationEntry[], sessionId: string,
 }
 
 /**
- * SM-269 design section 3: target picker (node, then a real session id),
- * a gloved transport row, seek, gain set/fade, mute/unmute, and a typed
- * clear confirmation. `apply` is deliberately excluded — loading media
- * into a session is authoring, not live control.
+ * SM-269 design section 3, collapsed per 2026-09-01 owner feedback: the
+ * block itself is just the target picker (node, then a real session id).
+ * The gloved transport row, seek, gain set/fade, mute/unmute, and the
+ * typed clear confirmation live in a floating inspector opened from here.
+ * `apply` is deliberately excluded — loading media into a session is
+ * authoring, not live control.
  */
 function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null }) {
   const nodesState = useAudioNodes()
@@ -753,6 +762,7 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
   const [fadeDurationMs, setFadeDurationMs] = useState('')
   const [clearConfirm, setClearConfirm] = useState('')
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
+  const [controlsOpen, setControlsOpen] = useState(false)
 
   useEffect(() => {
     if (selectedNodeId === null && nodesState.kind === 'loaded' && nodesState.nodes[0] !== undefined) {
@@ -898,8 +908,30 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
                 )}
               </p>
             )}
+            <ButtonRow>
+              <Button
+                variant="primary"
+                disabled={nodeId === '' || trimmedSessionId === ''}
+                title={nodeId === '' || trimmedSessionId === '' ? 'Choose a node and a session id first.' : undefined}
+                onClick={() => setControlsOpen(true)}
+              >
+                Open
+              </Button>
+            </ButtonRow>
           </div>
 
+          <p className="sm-section__footnote">
+            Loading media into a session is authoring, not live control. A session gets its content from its cue, its playlist, or an audio
+            action.
+          </p>
+        </>
+      )}
+
+      <Drawer open={controlsOpen} onClose={() => setControlsOpen(false)} labelledBy="lc-audio-controls" width="wide">
+        <Section
+          id="lc-audio-controls"
+          title={trimmedSessionId === '' ? 'Audio session controls' : `Audio session controls · ${trimmedSessionId}`}
+        >
           <div className="sm-panel">
             <h3 className="sm-subsection__title">Transport</h3>
             <ButtonRow>
@@ -1015,14 +1047,9 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
             </ButtonRow>
           </div>
 
-          <p className="sm-section__footnote">
-            Loading media into a session is authoring, not live control. A session gets its content from its cue, its playlist, or an audio
-            action.
-          </p>
-
           <Outcome outcome={outcome} />
-        </>
-      )}
+        </Section>
+      </Drawer>
     </Section>
   )
 }
@@ -1083,41 +1110,16 @@ function PageHeader() {
 
 type Gate = { allowed: true } | { allowed: false; reason: string }
 
-function NightGroup({
-  id,
-  title,
-  commands,
-  gate,
-  onRun,
-}: {
-  id: string
-  title: string
-  commands: readonly (readonly [NightCommandName, string, string])[]
-  gate: Gate
-  onRun: (command: NightCommandName) => void
-}) {
-  return (
-    <section aria-labelledby={id} className="sm-subsection">
-      <h3 id={id} className="sm-subsection__title">
-        {title}
-      </h3>
-      <div className="sm-grid sm-grid--auto sm-control-grid">
-        {commands.map(([command, label, detail]) => (
-          <div key={command}>
-            <Button
-              size="gloved"
-              disabled={!gate.allowed}
-              title={gate.allowed ? undefined : gate.reason}
-              onClick={() => onRun(command)}
-            >
-              {label}
-            </Button>
-            <p className="sm-small sm-muted">{gate.allowed ? detail : gate.reason}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
+/** Turns a `[command, label, detail]` tuple into a `LifecycleCommands` spec, gated the same way every night command on this page is. */
+function nightCommandSpec(gate: Gate, onRun: (command: NightCommandName) => void) {
+  return ([command, label, detail]: readonly [NightCommandName, string, string]): LifecycleCommandSpec => ({
+    command,
+    label,
+    detail,
+    disabled: !gate.allowed,
+    disabledReason: gate.allowed ? undefined : gate.reason,
+    onRun: () => onRun(command),
+  })
 }
 
 function RunList({

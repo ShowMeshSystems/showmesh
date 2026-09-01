@@ -83,6 +83,12 @@ function audioPlaylist(overrides: Partial<ConfigShowPlaylist> = {}): ConfigShowP
   } as ConfigShowPlaylist
 }
 
+/** The list is the whole page; a row must be clicked to open the playlist's editor in the inspector drawer. */
+async function openPlaylistRow(label: string) {
+  const row = await screen.findByRole('row', { name: `Edit ${label}` })
+  fireEvent.click(row)
+}
+
 function renderWorkspace(model: Partial<Model> = {}, path = '/shows/winter-ridge-2026/playlists') {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), ...model }}>
@@ -249,6 +255,7 @@ describe('Shows · Playlists tab', () => {
 
     renderWorkspace()
     await waitFor(() => expect(screen.getByText('Main Show')).toBeInTheDocument())
+    await openPlaylistRow('Main Show')
     expect(screen.getByText('Editing')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
     expect(screen.getByText('Bound')).toBeInTheDocument()
@@ -274,6 +281,7 @@ describe('Shows · Playlists tab', () => {
       })
 
     renderWorkspace()
+    await openPlaylistRow('Main Show')
     await waitFor(() => expect(screen.getByText('Hash changed')).toBeInTheDocument())
   })
 
@@ -292,6 +300,7 @@ describe('Shows · Playlists tab', () => {
       Promise.resolve({ playlistId, ready: false, failingCondition: 'entry-not-in-definition', reason: 'Entry Main·3 is not in the stored definition.', serverTime: '2026-08-30T21:00:00Z' })
 
     renderWorkspace()
+    await openPlaylistRow('Main Show')
     await waitFor(() => expect(screen.getByRole('heading', { level: 3, name: 'Playlist readiness' })).toBeInTheDocument())
     const heading = screen.getByRole('heading', { level: 3, name: 'Playlist readiness' })
     within(heading.parentElement as HTMLElement).getByRole('button', { name: 'Check readiness' }).click()
@@ -311,6 +320,7 @@ describe('Shows · Playlists tab', () => {
       Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show.playlist', id, revision: 1, payload: audioPlaylist(), updatedAt: '2026-08-30T18:22:00Z', createdByPrincipalId: null, createdByPrincipalName: null, source: 'api' })
 
     renderWorkspace()
+    await openPlaylistRow('Background Music')
     const table = await screen.findByRole('region', { name: 'Playlist entries, scrollable' })
     await waitFor(() => expect(within(table).getByText('Winter Bed Track 1')).toBeInTheDocument())
     expect(within(table).getByText('not reported')).toBeInTheDocument()

@@ -16,7 +16,7 @@ import {
   type ShowPlaylistConfigResponse,
 } from '../api'
 import { randomUUIDv4 } from '../api/uuid'
-import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, Panes, RevisionHistory, RuledStrip, Section, SelectableRow, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -120,7 +120,7 @@ export function ShowsPlaylists() {
   const [drafting, setDrafting] = useState(false)
 
   const playlists = state.kind === 'loaded' ? state.playlists : []
-  const selected = playlists.find((p) => p.id === selectedId) ?? playlists[0] ?? null
+  const selected = playlists.find((p) => p.id === selectedId) ?? null
   const evidence = useFPPEvidence(!drafting && selected !== null && selected.payload.runner === 'fpp' ? selected : null)
   const readiness = useReadiness(drafting ? null : (selected?.id ?? null))
   const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -151,79 +151,105 @@ export function ShowsPlaylists() {
   }
 
   const rows = playlistRows(playlists)
+  const closeInspector = () => {
+    setDrafting(false)
+    setSelectedId(null)
+  }
 
   return (
-    <>
-      <Section
-        id="pl-list"
-        title="Playlists in this show"
-        aside={
-          <Button
-            onClick={() => setDrafting(true)}
-            disabled={drafting || !createGate.allowed}
-            title={!createGate.allowed ? createGate.reason : undefined}
-          >
-            New playlist
-          </Button>
-        }
-      >
-        {rows.length === 0 ? (
-          <RuledStrip absence="empty" label="None" fact="This show has no playlist configured." />
-        ) : (
-          <ul className="sm-plain-list">
-            {rows.map((row) => (
-              <li key={row.id}>
-                <button
-                  type="button"
-                  className="sm-linkbutton"
-                  aria-pressed={selected?.id === row.id}
-                  onClick={() => setSelectedId(row.id)}
-                >
-                  {row.label}
-                </button>{' '}
-                <span className="sm-small sm-faint">{row.runnerLabel}</span>
-                {selected?.id === row.id && <span className="sm-viewing">Editing</span>}
-                <br />
-                <span className="sm-small sm-muted">{row.detail}</span>
-              </li>
-            ))}
-          </ul>
+    <Panes inspectorOpen={drafting || selected !== null} onInspectorClose={closeInspector} inspectorLabelledBy="pl-editor" inspectorWidth="wide">
+      <div>
+        <Section
+          id="pl-list"
+          title="Playlists in this show"
+          aside={
+            <Button
+              onClick={() => {
+                setDrafting(true)
+                setSelectedId(null)
+              }}
+              disabled={drafting || !createGate.allowed}
+              title={!createGate.allowed ? createGate.reason : undefined}
+            >
+              New playlist
+            </Button>
+          }
+        >
+          {rows.length === 0 ? (
+            <RuledStrip absence="empty" label="None" fact="This show has no playlist configured." />
+          ) : (
+            <div className="sm-stack-3">
+              <TableWrap label="Playlists, scrollable">
+                <Table minWidth={480}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Playlist</th>
+                      <th scope="col">Runner</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <SelectableRow
+                        key={row.id}
+                        selected={selected?.id === row.id}
+                        onActivate={() => {
+                          setSelectedId(row.id)
+                          setDrafting(false)
+                        }}
+                        ariaLabel={`Edit ${row.label}`}
+                      >
+                        <td>
+                          <strong>{row.label}</strong>
+                          {selected?.id === row.id && <span className="sm-viewing">Editing</span>}
+                          <br />
+                          <span className="sm-small sm-muted">{row.detail}</span>
+                        </td>
+                        <td className="sm-small sm-muted">{row.runnerLabel}</td>
+                      </SelectableRow>
+                    ))}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            </div>
+          )}
+        </Section>
+
+        {playlists.length > 1 && (
+          <Callout>
+            Multiple playlists in the same show run concurrently. FPP advances the lighting sequence while ShowMesh
+            independently advances the music bed; two runners are never authoritative for the same playlist.
+          </Callout>
         )}
-      </Section>
+      </div>
 
-      {playlists.length > 1 && (
-        <Callout>
-          Multiple playlists in the same show run concurrently. FPP advances the lighting sequence while ShowMesh
-          independently advances the music bed; two runners are never authoritative for the same playlist.
-        </Callout>
-      )}
+      <aside>
+        {drafting && (
+          <PlaylistDraft
+            showId={showId}
+            cues={state.kind === 'loaded' ? state.cues : []}
+            model={model}
+            onCreated={(response) => {
+              setSelectedId(response.id)
+              setDrafting(false)
+              reload()
+            }}
+            onDiscard={() => setDrafting(false)}
+            onOpenExisting={(id) => {
+              setSelectedId(id)
+              setDrafting(false)
+            }}
+          />
+        )}
 
-      {drafting && (
-        <PlaylistDraft
-          showId={showId}
-          cues={state.kind === 'loaded' ? state.cues : []}
-          model={model}
-          onCreated={(response) => {
-            setSelectedId(response.id)
-            setDrafting(false)
-            reload()
-          }}
-          onDiscard={() => setDrafting(false)}
-          onOpenExisting={(id) => {
-            setSelectedId(id)
-            setDrafting(false)
-          }}
-        />
-      )}
+        {!drafting && selected !== null && selected.payload.runner === 'fpp' && (
+          <FPPPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} evidence={evidence} readiness={readiness} model={model} onSaved={updatePlaylist} />
+        )}
 
-      {!drafting && selected !== null && selected.payload.runner === 'fpp' && (
-        <FPPPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} evidence={evidence} readiness={readiness} model={model} onSaved={updatePlaylist} />
-      )}
-
-      {!drafting && selected !== null && selected.payload.runner === 'showmesh-audio' && (
-        <AudioPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} model={model} onSaved={updatePlaylist} />
-      )}
-    </>
+        {!drafting && selected !== null && selected.payload.runner === 'showmesh-audio' && (
+          <AudioPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} model={model} onSaved={updatePlaylist} />
+        )}
+      </aside>
+    </Panes>
   )
 }
 
@@ -355,7 +381,7 @@ function FPPPlaylistEditor({
   const canEditEntries = evidence.state === 'loaded'
 
   return (
-    <Section id="pl-fpp" title={`Editing ${playlist.payload.name}`} eyebrow="FPP runner">
+    <Section id="pl-editor" title={`Editing ${playlist.payload.name}`} eyebrow="FPP runner">
       <div className="sm-panel">
         <div className="sm-section__head">
           <p className="sm-eyebrow sm-flat">
@@ -666,7 +692,7 @@ function AudioPlaylistEditor({
   }
 
   return (
-    <Section id="pl-audio" title={`Editing ${playlist.payload.name}`} eyebrow="ShowMesh audio">
+    <Section id="pl-editor" title={`Editing ${playlist.payload.name}`} eyebrow="ShowMesh audio">
       <div className="sm-attn">
         <span className="sm-strip__label">Authority</span>
         <div>
@@ -952,7 +978,7 @@ function PlaylistDraft({
   }
 
   return (
-    <Section id="pl-draft" title="New playlist" eyebrow={runner === '' ? 'Draft · gate unanswered' : runner === 'fpp' ? 'Draft · FPP' : 'Draft · ShowMesh audio'}>
+    <Section id="pl-editor" title="New playlist" eyebrow={runner === '' ? 'Draft · gate unanswered' : runner === 'fpp' ? 'Draft · FPP' : 'Draft · ShowMesh audio'}>
       <Segmented<Runner | ''>
         label="Runner"
         value={runner}

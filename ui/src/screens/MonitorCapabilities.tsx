@@ -1,39 +1,13 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { getServiceDescriptor, type ServiceDescriptor } from '../api'
-import { DefinitionStrip, RuledStrip, Section, SelectableRow, Table, TableWrap } from '../kit'
+import { Link } from 'react-router-dom'
+import { RuledStrip, Section } from '../kit'
 import { useModelContext } from '../app/ModelContext'
-import { describeApiError } from '../domain/session'
 import { MonitorHead } from './Monitor'
-import { capabilityGroups, type CapabilityGroup } from './monitorModel'
-
-type BuildState = { kind: 'loading' } | { kind: 'loaded'; descriptor: ServiceDescriptor } | { kind: 'failed'; reason: string }
-
-/** D-002: the coordinator build string lives here, as a definition row inside this page's one existing block, never a new section. */
-function useCoordinatorBuild(): BuildState {
-  const [state, setState] = useState<BuildState>({ kind: 'loading' })
-  useEffect(() => {
-    let cancelled = false
-    getServiceDescriptor()
-      .then((descriptor) => {
-        if (!cancelled) setState({ kind: 'loaded', descriptor })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  return state
-}
+import { capabilityGroups, capabilityLine, type CapabilityGroup } from './monitorModel'
 
 export function MonitorCapabilities() {
   const model = useModelContext()
-  const navigate = useNavigate()
   const groups = capabilityGroups(model)
   const total = groups.reduce((sum, group) => sum + group.capabilities.length, 0)
-  const build = useCoordinatorBuild()
 
   return (
     <>
@@ -44,19 +18,6 @@ export function MonitorCapabilities() {
         title="Capabilities"
         detail="What each node has actually advertised, grouped by node. A capability a node has never advertised is nothing to observe, not a failure."
       >
-        {build.kind === 'failed' ? (
-          <RuledStrip absence="failed" label="Build unread" fact={build.reason} detail="The rest of this page's node capabilities are unaffected." />
-        ) : build.kind === 'loaded' ? (
-          <DefinitionStrip
-            items={[
-              {
-                term: 'Coordinator',
-                value: <span className="sm-data">{build.descriptor.coordinator.version} · {build.descriptor.coordinator.commit}</span>,
-                detail: <span className="sm-small sm-muted">Serving API version {build.descriptor.apiVersion}</span>,
-              },
-            ]}
-          />
-        ) : null}
         {groups.length === 0 ? (
           <RuledStrip
             absence={model.snapshotReceivedAt === null ? 'loading' : 'empty'}
@@ -65,21 +26,9 @@ export function MonitorCapabilities() {
           />
         ) : (
           <>
-            <TableWrap label="Node capabilities, scrollable">
-              <Table minWidth={520}>
-                <thead>
-                  <tr>
-                    <th scope="col">Node</th>
-                    <th scope="col">Capabilities</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groups.map((group) => (
-                    <CapabilityTableRow key={group.key} group={group} onOpen={() => navigate(group.nodeTo)} />
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
+            {groups.map((group) => (
+              <CapabilityNodeGroup key={group.key} group={group} />
+            ))}
             <p className="sm-section__footnote">
               {groups.length} {groups.length === 1 ? 'node' : 'nodes'} · {total}{' '}
               {total === 1 ? 'capability' : 'capabilities'} advertised in total.
@@ -91,26 +40,27 @@ export function MonitorCapabilities() {
   )
 }
 
-function CapabilityTableRow({ group, onOpen }: { group: CapabilityGroup; onOpen: () => void }) {
+function CapabilityNodeGroup({ group }: { group: CapabilityGroup }) {
+  const headingId = `mo-cap-${group.key}`
   return (
-    <SelectableRow onActivate={onOpen} ariaLabel={`Open ${group.node}`}>
-      <td>
-        <strong>{group.node}</strong>
-      </td>
-      <td>
-        {group.capabilities.length === 0 ? (
-          <RuledStrip
-            absence="unobserved"
-            label="Never advertised"
-            fact="Nothing to observe"
-            detail="This node has never advertised a capability. Distinct from a capability that is failing."
-          />
-        ) : (
-          <span className="sm-data">
-            {group.capabilities.map((capability) => `${capability.id} · v${capability.version}`).join(', ')}
-          </span>
-        )}
-      </td>
-    </SelectableRow>
+    <section className="sm-subsection" aria-labelledby={headingId}>
+      <h3 id={headingId} className="sm-subsection__title">
+        <Link to={group.nodeTo}>{group.heading}</Link>
+      </h3>
+      {group.capabilities.length === 0 ? (
+        <RuledStrip
+          absence="unobserved"
+          label="Never advertised"
+          fact="Nothing to observe"
+          detail="This node has never advertised a capability. Distinct from a capability that is failing."
+        />
+      ) : (
+        group.capabilities.map((capability, index) => (
+          <p key={`${group.key}:${capability.id}:${index}`} className="sm-data">
+            {capabilityLine(capability)}
+          </p>
+        ))
+      )}
+    </section>
   )
 }

@@ -17,7 +17,7 @@ The index below is the working list; the entries keep their full reasoning.
 | # | Ruling | What it obliges the rebuild to do |
 |---|---|---|
 | D-001 | Density ships in the kit, no UI switch | Done |
-| D-002 | No build string in the chrome bar | Place it on Settings or Monitor · Capabilities |
+| D-002 | No build string in the chrome bar | Re-ruled 2026-09-01: rail footer, not Monitor · Capabilities |
 | D-003 | Fold the five mock-less routes into mocked screens | `/assets` is a rail destination built from `Show Assets.dc.html` |
 | D-004 | Sequential, one PR per screen, one worktree | Standing |
 | D-005 | Dashboard keeps the mock's three blocks | Done |
@@ -752,11 +752,17 @@ reads its height from `--ctrl-h` / `--row-h`, with `[data-density='compact']`
 swapping 34px for 30px. No UI switches it until Eric asks for one; the specimen
 exposes it for inspection.
 
-### D-002 Where the coordinator build string lives — 2026-08-29
+### D-002 Where the coordinator build string lives — 2026-08-29, re-ruled 2026-09-01
 
-**Ruling: A.** The guide's §2 list is the chrome bar's contents. No build string
-in the bar. It goes on Settings or the Monitor Capabilities facet, decided in
-that screen. The now-playing group keeps its horizontal room.
+**Ruling: A (2026-08-29).** The guide's §2 list is the chrome bar's contents. No
+build string in the bar. It goes on Settings or the Monitor Capabilities facet,
+decided in that screen. The now-playing group keeps its horizontal room.
+
+**Re-ruled (Eric, 2026-09-01).** Small, darker text at the bottom of the rail:
+version on one line, short commit on the next, in the faint text token, commit
+in `sm-data`, full commit in the `title`. Removed from Monitor · Capabilities so
+the fact lives once. The chrome bar is still off-limits; the rail footer is not
+the bar.
 
 ### D-003 The five routed screens with no mock — 2026-08-29
 

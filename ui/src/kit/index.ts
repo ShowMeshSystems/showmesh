@@ -4,6 +4,7 @@ export { Callout, DefinitionStrip, Notice, PageTitle, Section, type Definition }
 export { ClockSkewStrip } from './ClockSkewStrip'
 export { Choice, ChoiceRow, Field, FieldGrid, Input, Select, Textarea } from './Field'
 export { Freshness, SelectableRow, Table, TableWrap } from './Table'
+export { LifecycleCommands, type LifecycleCommandGroup, type LifecycleCommandSpec } from './LifecycleCommands'
 export { Segmented } from './Segmented'
 export { StatusPair } from './Status'
 export { BlankingPlate, RuledStrip, type Absence } from './StateBlocks'
@@ -18,6 +19,7 @@ export {
   Panes,
   Rail,
   RailBadge,
+  RailFooter,
   RailGroup,
   RailLink,
   ShellBody,

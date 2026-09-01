@@ -359,6 +359,11 @@ a.sm-tile:hover {
   border-bottom: 1px solid var(--border);
 }
 
+/* A macro step row: click anywhere but the handle or Move/Remove to open it. */
+.sm-step-row {
+  cursor: pointer;
+}
+
 /* Reorderable list handle (guide §6): U+283F, grab cursor, dragged by the row. */
 .sm-handle {
   display: inline-block;
@@ -555,22 +560,12 @@ a.sm-tile:hover {
   margin: -2px 0 0;
 }
 
-/* The authoring mock gives the list and editor the whole post-rail spine;
-   only the title block keeps the ordinary 28px page gutter. */
-.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] {
-  margin-inline: -28px;
-}
-
-.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] > .sm-panes {
-  gap: 0;
-}
-
-.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] .sm-table-wrap {
-  margin-inline: 28px;
-}
-
+/* The inspector now floats in a Drawer (D-021/D-022) rather than sharing the
+   post-rail spine with the list, so the tab body keeps the ordinary 28px
+   page gutter on every side; only the first section's top gap is tightened
+   to the authoring mock's 20px rhythm below the tab strip. */
 .sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] .sm-panes > :first-child > .sm-section:first-child {
-  margin-top: 0;
+  margin-top: 20px;
 }
 
 .sm-main:has(.sm-rails) > .sm-page__head .sm-eyebrow {

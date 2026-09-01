@@ -220,7 +220,7 @@ describe('Resolume config', () => {
 
     await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument())
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Stored composition', 'Clips that cannot be named', 'Recovery', 'What Arena is reporting'])
+    expect(headings).toEqual(['Stored composition', 'Clips that cannot be named', 'Recovery', 'Last restore', 'What Arena is reporting'])
   })
 
   it('renders the compact active-revision summary for the recovery config, not a list heading', async () => {

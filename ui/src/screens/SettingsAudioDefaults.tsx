@@ -164,11 +164,13 @@ export function SettingsAudioDefaults() {
         <>
           <Section id="st-fades" title="Fades and gain">
             <div className="sm-grid sm-grid--auto">
-              <div className="sm-field">
-                <span className="sm-field__label">Default fade curve</span>
-                <p className="sm-input sm-data sm-muted">linear</p>
-                <span className="sm-field__help">Linear is the only curve implemented. More would be an audio-engine change, not a setting.</span>
-              </div>
+              <Field label="Default fade curve" help="Linear is the only curve implemented.">
+                {(props) => (
+                  <p {...props} className="sm-input sm-data sm-muted">
+                    linear
+                  </p>
+                )}
+              </Field>
               <Field label="Default fade duration (ms)">
                 {(props) => (
                   <Input
@@ -183,7 +185,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Max background gain (dB)" help="Ceiling for the bed. A night session can lower it, never raise it.">
+              <Field label="Max background gain (dB)" help="Ceiling for the bed; a night session can lower it, never raise it.">
                 {(props) => (
                   <Input
                     {...props}
@@ -196,7 +198,7 @@ export function SettingsAudioDefaults() {
                   />
                 )}
               </Field>
-              <Field label="Duck target gain (dB)" help="Below 0. A cue may override it. Provisional, not measured.">
+              <Field label="Duck target gain (dB)" help="Below zero; a cue may override it, and this default is provisional, not measured.">
                 {(props) => (
                   <Input
                     {...props}
@@ -225,7 +227,7 @@ export function SettingsAudioDefaults() {
               </Field>
               <Field
                 label="Duck restore fade duration (ms)"
-                help="How long a bed takes to fade back up once its last ducker releases it. Deliberately longer than the duck fade duration by default: fast down, slower back up."
+                help="How long a bed takes to fade back up once its last ducker releases it, longer than the duck fade duration by default so it comes back slower than it went down."
               >
                 {(props) => (
                   <Input
@@ -277,7 +279,7 @@ export function SettingsAudioDefaults() {
                   </Select>
                 )}
               </Field>
-              <Field label="LTC default start offset" help="HH:MM:SS:FF, non-drop-frame. A cue's own offset wins over this.">
+              <Field label="LTC default start offset" help="HH:MM:SS:FF, non-drop-frame; a cue's own offset wins over this default.">
                 {(props) => (
                   <Input
                     {...props}

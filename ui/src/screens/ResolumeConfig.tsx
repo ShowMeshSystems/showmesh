@@ -352,6 +352,8 @@ export function ResolumeConfig() {
         missing="way to test a configured Resolume address on demand"
       />
 
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(520px, 1fr))', gap: 'var(--s-5)', alignItems: 'start' }}>
+        <div>
       <Section id="rz-comp" title="Stored composition" aside={<span className="sm-small sm-muted">Uploaded, not read live</span>}>
         <p className="sm-small sm-muted">
           ShowMesh stores an id map of the composition so actions can name a layer or clip instead of an object id. Re-export and re-upload
@@ -689,17 +691,38 @@ export function ResolumeConfig() {
                 </TableWrap>
               </>
             )}
-
-            {recoveryState.response.lastRestore === null ? (
-              <>
-                <h3 className="sm-subsection__title">Last restore</h3>
-                <RuledStrip absence="empty" label="None" fact="No restore has run yet." />
-              </>
-            ) : (
-              <RestoreReportSection report={recoveryState.response.lastRestore} />
-            )}
           </>
         )}
+      </Section>
+        </div>
+
+        <div>
+      <Section id="rz-last-restore" title="Last restore">
+        {recoveryState.kind === 'loading' && (
+          <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for recovery state." />
+        )}
+        {recoveryState.kind === 'failed' && (
+          <RuledStrip
+            absence="failed"
+            label="Read failed"
+            fact={recoveryState.reason}
+            detail={
+              <button type="button" className="sm-linkbutton" onClick={reloadRecovery}>
+                Try again
+              </button>
+            }
+          />
+        )}
+        {recoveryState.kind === 'loaded' && !recoveryState.response.resolumeConfigured && (
+          <RuledStrip absence="unavailable" label="Unavailable" fact="Resolume is not configured on this coordinator, so recovery cannot run." />
+        )}
+        {recoveryState.kind === 'loaded' &&
+          recoveryState.response.resolumeConfigured &&
+          (recoveryState.response.lastRestore === null ? (
+            <RuledStrip absence="empty" label="None" fact="No restore has run yet." />
+          ) : (
+            <RestoreReportSection report={recoveryState.response.lastRestore} />
+          ))}
       </Section>
 
       <ResolumeSignalsSection
@@ -709,6 +732,8 @@ export function ResolumeConfig() {
         compositionLayers={compositionState.kind === 'loaded' ? compositionState.response.layers : []}
         nowIso={nowIso}
       />
+        </div>
+      </div>
     </div>
   )
 }
@@ -718,7 +743,7 @@ function RestoreReportSection({ report }: { report: NonNullable<ResolumeRecovery
     <section aria-labelledby="rz-restore">
       <div className="sm-inline-row" style={{ justifyContent: 'space-between' }}>
         <h3 id="rz-restore" className="sm-subsection__title">
-          Last restore · {formatClock(report.startedAt) ?? 'an unrecorded time'}
+          {formatClock(report.startedAt) ?? 'an unrecorded time'}
         </h3>
         <StatusPair tone={RESTORE_OUTCOME_TONE[report.outcome]} label={RESTORE_OUTCOME_LABEL[report.outcome]} />
       </div>

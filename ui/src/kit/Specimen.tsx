@@ -17,6 +17,7 @@ import {
   FieldGrid,
   Freshness,
   Input,
+  LifecycleCommands,
   Notice,
   NotWired,
   NotWiredBanner,
@@ -460,6 +461,65 @@ export function Specimen() {
               <Button variant="quiet" onClick={() => setDrawerOpen(false)}>Cancel</Button>
             </ButtonRow>
           </Drawer>
+        </SpecSection>
+
+        <SpecSection
+          number="11 · Lifecycle commands"
+          id="specimen-lifecycle"
+          title="One element, two layouts"
+          detail="An untitled group renders Show Night's flat grid; a titled group renders Live Control's subsection. Start night's option renders under its own consequence line, never beside the button."
+        >
+          <p className="sm-small sm-muted">Untitled group (Show Night):</p>
+          <LifecycleCommands
+            groups={[
+              {
+                id: 'specimen-lc-flat',
+                commands: [
+                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: () => {} },
+                  {
+                    command: 'start-night',
+                    label: 'Start night',
+                    detail: 'Commits the armed show and starts the first cycle.',
+                    onRun: () => {},
+                    options: (
+                      <Choice label="Skip the enter-show lead." checked={false} onChange={() => {}} />
+                    ),
+                  },
+                  {
+                    command: 'end-session',
+                    label: 'End session',
+                    detail: 'Abandons the session.',
+                    disabled: true,
+                    disabledReason: 'Requires night:command.',
+                    onRun: () => {},
+                  },
+                ],
+              },
+            ]}
+          />
+          <p className="sm-small sm-muted" style={{ marginTop: '20px' }}>
+            Titled groups (Live Control):
+          </p>
+          <LifecycleCommands
+            groups={[
+              {
+                id: 'specimen-lc-prepare',
+                title: 'Prepare',
+                commands: [
+                  { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: () => {} },
+                  { command: 'run-readiness', label: 'Run readiness', detail: 'Re-runs every readiness check.', onRun: () => {} },
+                ],
+              },
+              {
+                id: 'specimen-lc-end',
+                title: 'End the night',
+                commands: [
+                  { command: 'fade-out-night', label: 'Fade out night', detail: 'This show finishes, then the fade begins.', onRun: () => {} },
+                  { command: 'end-session', label: 'End session', detail: 'Abandons the session.', onRun: () => {} },
+                ],
+              },
+            ]}
+          />
         </SpecSection>
       </div>
     </div>

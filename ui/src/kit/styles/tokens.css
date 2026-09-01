@@ -75,7 +75,7 @@
   --rail-w: 212px;
   /* The 49px chrome includes the separate 3px progress strip. */
   --chrome-h: 46px;
-  --page-max: 1120px;
+  --page-max: 1200px;
 }
 
 [data-density='compact'] {

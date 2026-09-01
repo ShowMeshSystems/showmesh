@@ -231,6 +231,8 @@
 }
 
 .sm-rail {
+  display: flex;
+  flex-direction: column;
   position: sticky;
   top: calc(var(--chrome-h) + 1px);
   align-self: start;
@@ -326,6 +328,16 @@
   border-color: transparent;
   background: transparent;
   color: var(--accent);
+}
+
+/* Coordinator version/commit, pinned below the nav links. Empty while
+   loading: an unstaffed line here would read as a fact. */
+.sm-rail__footer {
+  margin-top: auto;
+  padding: 10px 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sm-main {

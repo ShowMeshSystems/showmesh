@@ -1,4 +1,4 @@
-import type { AuditEntry, Evidence, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
+import type { AuditEntry, Capability, Evidence, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
 import type { Connection, Tone } from '../kit'
 import { countSignals, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
@@ -497,18 +497,41 @@ export function signalSummary(rows: readonly SignalRow[]): string {
 
 export type CapabilityGroup = {
   key: string
-  node: string
+  nodeId: string
+  /** Id and label together, deduplicated when the label is just the id. */
+  heading: string
   nodeTo: string
-  capabilities: readonly { id: string; version: number }[]
+  capabilities: readonly Capability[]
 }
 
 export function capabilityGroups(model: Model): CapabilityGroup[] {
   return model.nodes.map((node) => ({
     key: node.nodeId,
-    node: node.label ?? node.nodeId,
+    nodeId: node.nodeId,
+    heading: node.label !== null && node.label !== node.nodeId ? `${node.label} · ${node.nodeId}` : node.nodeId,
     nodeTo: `/monitor/fleet/node/${node.nodeId}`,
     capabilities: node.capabilities,
   }))
+}
+
+function formatAttributeValue(value: unknown): string {
+  if (value === null || value === undefined) return 'none'
+  if (Array.isArray(value)) return value.map(formatAttributeValue).join(', ')
+  if (typeof value === 'object') return Object.entries(value as Record<string, unknown>).map(([key, entry]) => `${key}: ${formatAttributeValue(entry)}`).join(', ')
+  return String(value)
+}
+
+/** A capability's declared attributes, in plain words - never a raw JSON blob. */
+function summarizeAttributes(attributes: Capability['attributes']): string | null {
+  const entries = Object.entries(attributes ?? {})
+  if (entries.length === 0) return null
+  return entries.map(([key, value]) => `${key}: ${formatAttributeValue(value)}`).join(', ')
+}
+
+/** One capability, as one line: id, version, and its attributes in plain words. */
+export function capabilityLine(capability: Capability): string {
+  const summary = summarizeAttributes(capability.attributes)
+  return summary === null ? `${capability.id} · v${capability.version}` : `${capability.id} · v${capability.version} · ${summary}`
 }
 
 // ---------------------------------------------------------------------
@@ -518,13 +541,51 @@ export function capabilityGroups(model: Model): CapabilityGroup[] {
 
 type TimedRow = ActivityRow & { atMs: number }
 
-const AUDIT_TONE: Record<string, Tone> = {
-  current: 'good',
-  stale: 'warn',
-  unknown_age: 'unknown',
-  not_collected: 'unknown',
-  collection_failed: 'bad',
-  unsupported: 'unknown',
+/**
+ * Every command-family outcome word the API defines on an audit entry's
+ * `outcome` (FPPCommandResult, ResolumeActionResult, AudioSessionResult,
+ * EmergencyStopInstanceOutcome/FollowUpResult, NightPhase/AudioPhase step
+ * outcomes, CatalogDispatchResult), keyed to a tone by what actually
+ * happened, never by an unrelated evidence-freshness signal. A word this
+ * map has not seen yet reads as `unknown`, never a silent `good`.
+ */
+const AUDIT_OUTCOME_TONE: Record<string, Tone> = {
+  confirmed: 'good',
+  started: 'good',
+  completed: 'good',
+  restored: 'good',
+  applied: 'good',
+  ready: 'good',
+  resolved: 'good',
+  unconfirmed: 'warn',
+  unconfirmable: 'warn',
+  ambiguous: 'warn',
+  partial: 'warn',
+  not_ready: 'warn',
+  'stale-import': 'warn',
+  'evidence-mismatch': 'warn',
+  refused: 'bad',
+  failed: 'bad',
+  'identity-unavailable': 'bad',
+  'unknown-entry': 'bad',
+  'cross-show': 'bad',
+  position: 'pending',
+  stopped: 'pending',
+  nothing_to_do: 'pending',
+  idempotent_no_op: 'pending',
+  skipped: 'pending',
+  unbound: 'pending',
+  unknown: 'unknown',
+}
+
+function humanizeOutcome(outcome: string): string {
+  return outcome.replace(/[-_]/g, ' ').replace(/^./, (c) => c.toUpperCase())
+}
+
+/** `null` on every entry that is not an outcome-kind entry (`outcome` is `""`). */
+function auditOutcomeInfo(outcome: string): { tone: Tone; label: string } | null {
+  if (outcome === '') return null
+  return { tone: AUDIT_OUTCOME_TONE[outcome] ?? 'unknown', label: humanizeOutcome(outcome) }
 }
 
 function eventRow(event: Event): TimedRow {
@@ -546,13 +607,14 @@ function auditSummary(entry: AuditEntry): string {
 }
 
 function auditRow(entry: AuditEntry): TimedRow {
+  const outcome = auditOutcomeInfo(entry.outcome)
   return {
     key: `audit:${entry.id}`,
     time: formatClock(entry.timestamp) ?? 'unrecorded',
     summary: auditSummary(entry),
     source: entry.principalName,
-    state: entry.outcomeState === '' ? null : (EVIDENCE_LABEL[entry.outcomeState as Evidence['state']] ?? entry.outcomeState),
-    tone: entry.outcomeState === '' ? 'pending' : (AUDIT_TONE[entry.outcomeState] ?? 'unknown'),
+    state: outcome?.label ?? null,
+    tone: outcome?.tone ?? 'pending',
     atMs: parseIsoMs(entry.timestamp) ?? 0,
   }
 }

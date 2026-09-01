@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 
 afterEach(cleanup)
 
@@ -175,6 +175,23 @@ describe('Field', () => {
     const input = screen.getByLabelText('FPP endpoint address')
     expect(input.getAttribute('aria-invalid')).toBeNull()
     expect(input.getAttribute('aria-describedby')).toBeNull()
+  })
+
+  it('puts help below the control and error below help, in both DOM order and aria-describedby', () => {
+    const { container } = render(
+      <Field label="Idle output" help="Reachable from the coordinator." error="Rejected an empty value.">
+        {(props) => <Input defaultValue="" {...props} />}
+      </Field>,
+    )
+    const help = screen.getByText('Reachable from the coordinator.')
+    const error = screen.getByText('Rejected an empty value.')
+    expect(help.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const input = screen.getByLabelText('Idle output')
+    const [firstId = '', secondId = ''] = (input.getAttribute('aria-describedby') ?? '').split(' ')
+    expect(document.getElementById(firstId)).toBe(help)
+    expect(document.getElementById(secondId)).toBe(error)
+    // Label, control, help, error: never side by side.
+    expect(container.querySelector('.sm-field')?.children.length).toBe(4)
   })
 })
 
@@ -374,5 +391,113 @@ describe('Panes', () => {
     screen.getByRole('dialog', { name: 'Row a' })
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('LifecycleCommands', () => {
+  it('renders an untitled group as a flat grid with no subsection heading', () => {
+    const { container } = render(
+      <LifecycleCommands
+        groups={[
+          {
+            id: 'flat',
+            commands: [
+              { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: vi.fn() },
+            ],
+          },
+        ]}
+      />,
+    )
+    expect(container.querySelector('.sm-lifecycle-commands')).not.toBeNull()
+    expect(container.querySelector('h3')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Prepare site' })).toBeInTheDocument()
+  })
+
+  it('renders a titled group as a labelled subsection with the control grid', () => {
+    render(
+      <LifecycleCommands
+        groups={[
+          {
+            id: 'lc-prepare',
+            title: 'Prepare',
+            commands: [
+              { command: 'run-readiness', label: 'Run readiness', detail: 'Re-runs every readiness check.', onRun: vi.fn() },
+            ],
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByRole('heading', { level: 3, name: 'Prepare' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Prepare' })).toBeInTheDocument()
+  })
+
+  it('calls onRun with no arguments when its button is pressed', async () => {
+    const onRun = vi.fn()
+    render(
+      <LifecycleCommands
+        groups={[{ id: 'flat', commands: [{ command: 'end-session', label: 'End session', detail: 'Abandons the session.', onRun }] }]}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(onRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables the button and swaps the consequence line for the reason', () => {
+    render(
+      <LifecycleCommands
+        groups={[
+          {
+            id: 'flat',
+            commands: [
+              {
+                command: 'end-session',
+                label: 'End session',
+                detail: 'Abandons the session.',
+                disabled: true,
+                disabledReason: 'Requires night:command.',
+                onRun: vi.fn(),
+              },
+            ],
+          },
+        ]}
+      />,
+    )
+    const button = screen.getByRole('button', { name: 'End session' })
+    expect(button).toBeDisabled()
+    expect(button.getAttribute('title')).toBe('Requires night:command.')
+    expect(screen.getByText('Requires night:command.')).toBeInTheDocument()
+    expect(screen.queryByText('Abandons the session.')).not.toBeInTheDocument()
+  })
+
+  it('renders a command’s options inside its own cell, under the consequence line, not beside the button', () => {
+    render(
+      <LifecycleCommands
+        groups={[
+          {
+            id: 'flat',
+            commands: [
+              {
+                command: 'start-night',
+                label: 'Start night',
+                detail: 'Commits the armed show and starts the first cycle.',
+                onRun: vi.fn(),
+                options: <span data-testid="skip-option">Skip the enter-show lead.</span>,
+              },
+              { command: 'prepare-site', label: 'Prepare site', detail: 'Opens a preparation epoch.', onRun: vi.fn() },
+            ],
+          },
+        ]}
+      />,
+    )
+    const option = screen.getByTestId('skip-option')
+    const cell = option.closest('.sm-lifecycle-command--start-night')
+    expect(cell).not.toBeNull()
+    expect(cell?.querySelector('.sm-btn')).not.toBeNull()
+    // The consequence line precedes the option within the same cell.
+    const detail = screen.getByText('Commits the armed show and starts the first cycle.')
+    expect(cell?.contains(detail)).toBe(true)
+    expect(detail.compareDocumentPosition(option) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // It never lands in the neighbouring command's cell.
+    expect(cell?.querySelector('[data-testid="skip-option"]')?.closest('.sm-lifecycle-command--prepare-site')).toBeFalsy()
   })
 })

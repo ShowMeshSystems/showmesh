@@ -9,6 +9,7 @@ import {
   Notice,
   Popover,
   Rail,
+  RailFooter,
   RailGroup,
   RailLink,
   RuledStrip,
@@ -18,6 +19,7 @@ import {
 import {
   ApiError,
   getCurrentNightSession,
+  getServiceDescriptor,
   getShowActive,
   getShowModeConfig,
   listConfigObjects,
@@ -131,6 +133,49 @@ function useNightSessionSeed(model: Model): NightSessionState | null {
   }, [])
 
   return model.nightSession ?? seeded
+}
+
+type CoordinatorBuildState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; version: string; commit: string }
+  | { kind: 'failed' }
+
+/** D-002 (re-ruled, 2026-09-01): the coordinator's version and commit live once, in the rail footer. */
+function useCoordinatorBuild(): CoordinatorBuildState {
+  const [state, setState] = useState<CoordinatorBuildState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    getServiceDescriptor()
+      .then((descriptor) => {
+        if (!cancelled) {
+          setState({ kind: 'loaded', version: descriptor.coordinator.version, commit: descriptor.coordinator.commit })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setState({ kind: 'failed' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+/** The rail footer shows a short commit and titles the full one; empty while loading, never a guess. */
+function RailBuild() {
+  const build = useCoordinatorBuild()
+  if (build.kind === 'loading') return null
+  if (build.kind === 'failed') {
+    return <span className="sm-small sm-faint">Coordinator build not reported</span>
+  }
+  return (
+    <>
+      <span className="sm-small sm-faint">{build.version}</span>
+      <span className="sm-data sm-small sm-faint" title={build.commit}>
+        {build.commit.slice(0, 7)}
+      </span>
+    </>
+  )
 }
 
 /** No `show.active` object has ever existed: the 404 the store documents, translated so `guardedSave` never special-cases it. Mirrors Shows.tsx's identical helper. */
@@ -587,6 +632,9 @@ export function Layout() {
           <RailGroup>System</RailGroup>
           <RailLink to="/monitor">Monitor</RailLink>
           <RailLink to="/settings">Settings</RailLink>
+          <RailFooter>
+            <RailBuild />
+          </RailFooter>
         </Rail>
         <main className="sm-main">
           {signIn.kind === 'signed_out' ? (
