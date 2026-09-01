@@ -139,6 +139,41 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-09-01
+
+**Goal:** land the multi-node audio contract on `main` and clear a handful of standing PRs (PR template convention, register bookkeeping, a render-surface staleness fix, and a store-connection-pool regression test).
+
+**Completed:**
+
+- The `audio_sessions` re-key migration was renumbered from v21 to v27 on `dev/multi-audio` itself, pull request #274, merged at `6505b5d` into `dev/multi-audio` (not `main`). This matched the number `main`'s own `docs/build/IDENTIFIER-REGISTER.md` already reserved for the re-key, so a released binary that had already stamped a store at `main`'s shipped maximum (26) actually runs the re-key instead of silently skipping it. A new test, `TestMigrateV27AppliesToAStoreStampedAtMainsShippedMaximum`, migrates a store stamped at `PRAGMA user_version = 26` and asserts the composite key is enforced and every seeded row's data survives.
+- `dev/multi-audio`'s content reached `main` through a fresh branch, `dev/multi-audio-rebuild`, rather than through `dev/multi-audio` itself. Pull request #280 transplanted all nine non-merge commits from `dev/multi-audio` onto current `main` (completeness proven by full-tree accounting per the PR body) and merged at `be44bfa`. `main` now carries: `audio.node` role and zone declarations, per-Cue audio/LTC/announcement output targets that can address one node or fan out across several, three new readiness conditions (`audio-ltc-emitter-ambiguous`, `audio-target-unbound`, `audio-target-unresolved`), the night-mode bed and announcements fanned out across configured target nodes, and the `audio_sessions` re-key at schema v27 (unchanged from what #274 had already set on `dev/multi-audio`). ADR-045 records the contract. The pull request originally tracking this fold, #234 (`dev/multi-audio` to `main` directly), is closed as superseded by #280; its branch is kept only for reference.
+- `main`'s schema version now runs to v27 (`internal/coordinator/store/migrations.go`), one past the v26 backfill rename that shipped earlier the same day.
+- Pull request #272 replaced the two em-dash separators in `.github/pull_request_template.md`'s verification table with colons, merged at `7348b20`. Every PR body written by following the template verbatim had inherited an em-dash and failed the repository's no-em-dash convention at the final gate.
+- Pull request #273 corrected `docs/build/IDENTIFIER-REGISTER.md`'s v26 row from "reserved" to "shipped", matching `migrations.go`, merged at `ae08e93`.
+- Pull request #275 stopped a render surface from continuing to draw its last held sequence once FPP's MultiSync timeline moved on to a sequence that surface has no content for. `internal/agent/pipeline/frame.go`'s frame writer now compares the timeline's reported filename against the sequence it actually opened on every content tick, falls to black, and reports a new, fourth `Drawing` state (`stale`) rather than falling through to the operator's configured idle output. Merged at `c9e25ff`.
+- Pull request #276 added `TestOpenPinsMaxOpenConnsToOne` in `internal/coordinator/store/store_test.go`, pinning the asset store's connection pool at one open connection so a future widening fails this test by name instead of surfacing later as an intermittent UNIQUE constraint failure under concurrent asset upload. Merged at `4d070a9`.
+- `main` is now at `be44bfa`, in merge order: `7348b20` (#272), `ae08e93` (#273), `c9e25ff` (#275), `4d070a9` (#276), `be44bfa` (#280).
+
+**Decisions made:** none recorded as new decisions this session; ADR-045 (multi-node audio contract) is carried in from `dev/multi-audio` by #280, not authored in this session.
+
+**Questions raised with the owner:** none this session.
+
+**Deferred:**
+
+- The two-node hardware acceptance for the multi-node audio work is owner-owned and was not run; #280's PR body states this explicitly, and #234's closing comment restates it.
+- `dev/multi-audio`'s own migrations list and `IDENTIFIER-REGISTER.md` copy still stop at v21 in structure (per #274's PR body); reconciling that against `main`'s v22 through v26 was out of scope for #274 and is now moot for `main` itself since #280 transplanted the content directly rather than merging the branch.
+
+**Verification gates:** state as recorded in each pull request's own body; none of it re-run in this session.
+
+- #274: `showmesh-check` passed at `363069a3` (fmt-check, vet, lint, test, ui-lint, ui-test, ui-build, ui-gen-check). Mutation proof: reverting the migration entry back to version 21 fails the new test; restoring version 27 passes it. No integration run (store-schema renumber only, no FPP or hardware surface).
+- #280: local gate passed at `d031600b` (fmt-check, vet, lint, gstengine, everything else, ui-lint, ui-test, ui-build, ui-gen-check). `make test-integration` passed at `d031600b` (0 failed). `SHOWMESH_FPP_TEST_PREBUILT=1 make test-integration-fpp` passed at `d031600b` against pinned image digest `ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:94c38cd2168ae9d5da820a678360a55837685915ffc4deb1a283604e5f01d1ff` (0 failed). GitHub checks passed (12 checks) at `d031600b`. No browser, deployment, or live-show verification performed.
+- #272: local `grep -c` check passed (0 em-dashes); no integration run (documentation-only).
+- #273: no local or integration run (documentation-only, one word in a status cell).
+- #275: `make check` passed against the pushed head `4c5605a7` (all eight targets). `make test-integration` explicitly withheld this session (shared broker/ports in use). GitHub checks settled after the body was written: all 12 passed and the repository's pr-ready-check reported PASS at `4c5605a7` before the merge (orchestrator-observed). No real-hardware or wall confirmation performed; the filename-match assumption this fix relies on has not been verified against real FPP MultiSync wire traffic.
+- #276: `go test ./internal/coordinator/store/... -run TestOpenPinsMaxOpenConnsToOne -race -count=1` passed at `b8484ea0`. Mutation proof: widening the pool to 2 connections fails the test with a named message; reverted and reconfirmed passing. Full package test passed at the same commit. No integration run. GitHub checks: one required test leg went red on its first run on an unrelated wall-clock budget test in an untouched package (same-commit sibling leg green, base green); one labeled re-run was authorized with the red recorded permanently, after which all 12 checks passed and pr-ready-check reported PASS at `b8484ea0` (orchestrator-observed).
+
+**CORRECTION:** earlier dated entries in this log describing the `audio_sessions` re-key migration as v21 are superseded. The migration is v27 on `main` as of `be44bfa` (pull request #280), renumbered from v21 by pull request #274 before the fold, because `main` had already shipped v21 through v26 as other migrations by the time `dev/multi-audio` reached it. This does not rewrite the earlier entries; it supersedes their v21 statements going forward.
+
 ## 2026-08-30 (`dev/multi-audio` takes `main`: schema v21, and the role default meets the optional LTC pair)
 
 **Goal:** bring `main` into the multi-audio branch so the remaining SM-308
