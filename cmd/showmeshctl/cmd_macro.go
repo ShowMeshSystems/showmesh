@@ -202,6 +202,7 @@ func cmdMacroPut(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "steps. Validated before activation: an invalid payload, an unknown action")
 		_, _ = fmt.Fprintln(stderr, "reference, or a fallback-class mismatch is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"macro show --output json\" prints.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -218,6 +219,10 @@ func cmdMacroPut(args []string, stdout, stderr io.Writer, clock func() time.Time
 	id := rest[0]
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "macro put", newCLIError(exitUsage, "%v", err))
+	}
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "macro put", newCLIError(exitUsage, "%v", err))
 	}

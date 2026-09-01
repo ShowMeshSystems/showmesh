@@ -201,6 +201,7 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "The payload is a full show.action object: show, label, safetyClass, and")
 		_, _ = fmt.Fprintln(stderr, "target. Validated before activation: an invalid payload, or a reference")
 		_, _ = fmt.Fprintln(stderr, "that does not resolve, is rejected and appends no revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"action show --output json\" prints.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -217,6 +218,10 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	id := rest[0]
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "action put", newCLIError(exitUsage, "%v", err))
+	}
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "action put", newCLIError(exitUsage, "%v", err))
 	}

@@ -255,6 +255,7 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"audio settings get --output json\" prints.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -269,6 +270,10 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 	}
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "audio settings set", newCLIError(exitUsage, "%v", err))
+	}
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "audio settings set", newCLIError(exitUsage, "%v", err))
 	}

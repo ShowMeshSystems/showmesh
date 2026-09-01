@@ -120,6 +120,58 @@ func TestCmdNightSetSendsFullReplacementBody(t *testing.T) {
 	}
 }
 
+// TestCmdNightSetAcceptsAFullNightGetResponse is the night.session half of
+// generalizing parseConfigSetPayload's fpp.endpoints-only round-trip fix
+// (cmd_config.go, unwrapConfigGetResponse) to every config kind: feed
+// "night set" the EXACT bytes "night get --output json" prints
+// (nightSessionSampleJSON), and prove the PUT body carries the bare
+// payload object directly at the top level, not still wrapped under
+// "payload".
+func TestCmdNightSetAcceptsAFullNightGetResponse(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, nightSessionSampleJSON)
+	}))
+	defer ts.Close()
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+	go func() {
+		// The EXACT shape `night get --output json` emits.
+		_, _ = w.Write([]byte(nightSessionSampleJSON))
+		_ = w.Close()
+	}()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"set", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+
+	var sentTop map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &sentTop); err != nil {
+		t.Fatalf("PUT body was not a JSON object: %v; body=%s", err, gotBody)
+	}
+	if _, stillWrapped := sentTop["payload"]; stillWrapped {
+		t.Fatalf("PUT body = %s, still has a top-level \"payload\" key — the wrapper was sent unmodified, not unwrapped", gotBody)
+	}
+	var label string
+	if err := json.Unmarshal(sentTop["label"], &label); err != nil {
+		t.Fatalf("PUT body's \"label\" did not decode: %v; body=%s", err, gotBody)
+	}
+	if label != "Halloween main loop" {
+		t.Fatalf("PUT body label = %q, want %q from the \"night get\" response — the round trip must survive", label, "Halloween main loop")
+	}
+}
+
 func TestCmdNightActiveDeactivateSendsEmptySession(t *testing.T) {
 	var gotBody []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -165,6 +165,7 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): dispatch resolves the")
 		_, _ = fmt.Fprintln(stderr, "endpoint list per request, and the collector set follows within about")
 		_, _ = fmt.Fprintln(stderr, "ten seconds.")
+		_, _ = fmt.Fprintln(stderr, "\nAccepts either a bare {\"endpoints\":[...]} payload, or the full object \"config get --output json\" prints.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -179,6 +180,10 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	}
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "config set", newCLIError(exitUsage, "%v", err))
+	}
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "config set", newCLIError(exitUsage, "%v", err))
 	}
@@ -228,6 +233,61 @@ func readConfigPayload(file string) ([]byte, error) {
 		return nil, fmt.Errorf("reading payload from %s: %w", file, err)
 	}
 	return raw, nil
+}
+
+// unwrapConfigGetResponse generalizes parseConfigSetPayload's own wrapper
+// detection (below) to every config kind: every "<kind> get --output
+// json" response is the same five-field wrapper (kind, revision, payload,
+// updatedAt, source), and every "<kind> set" command's own decoder wants
+// the bare payload object those responses carry under "payload" — so this
+// is what makes "<kind> get --output json | <kind> set" a round trip that
+// actually works, for every kind, not just fpp.endpoints.
+//
+// The wrapper shape is recognised ONLY on a positive, specific signature:
+// a top-level "payload" key present TOGETHER WITH the wrapper's own
+// marker keys "kind" and "revision", which are present in every get
+// response. This is deliberately not "has a payload key" alone — a bare
+// payload could legitimately have its own field named "payload", and a
+// permissive match would silently misinterpret it instead of refusing.
+//
+//   - No "payload" key at the top level: raw is returned unchanged — this
+//     is today's behavior, the bare payload shape.
+//   - "payload" key present together with both "kind" and "revision": the
+//     wrapper shape. Its payload value is returned. A JSON `null` payload
+//     is refused rather than silently unwrapped to a zero value — a JSON
+//     null is not an absent key.
+//   - "payload" key present without both "kind" and "revision": refused
+//     as ambiguous, naming both shapes this helper accepts, rather than
+//     guessing which one was meant.
+//
+// raw that does not parse as a JSON object at all (invalid JSON, a JSON
+// array, ...) is returned unchanged; the caller's own per-kind decode is
+// what reports the appropriate parse error for that shape.
+func unwrapConfigGetResponse(raw []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return raw, nil
+	}
+
+	payloadRaw, hasPayload := top["payload"]
+	if !hasPayload {
+		return raw, nil
+	}
+
+	_, hasKind := top["kind"]
+	_, hasRevision := top["revision"]
+	if !hasKind || !hasRevision {
+		return nil, errors.New(
+			`top level has a "payload" key but not both "kind" and "revision"; this command accepts either ` +
+				`a bare payload object, or the full object the matching "get --output json" prints`)
+	}
+
+	if bytes.Equal(bytes.TrimSpace(payloadRaw), []byte("null")) {
+		return nil, errors.New(
+			`"payload" is JSON null, not an object; this does not look like a usable "get --output json" response`)
+	}
+
+	return payloadRaw, nil
 }
 
 // parseConfigSetPayload implements `config set`'s own half of Step 7 seam
