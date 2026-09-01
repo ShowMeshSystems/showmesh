@@ -51,7 +51,7 @@ if ! [[ "$NODE_ID" =~ ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$ ]]; then
 fi
 
 case "$NODE_ID" in
-  coordinator|fpp|healthcheck)
+  coordinator|fpp|healthcheck|observer)
     echo "add-agent-credential: '$NODE_ID' is reserved for a fixed broker role and cannot be used as an agent node id." >&2
     exit 1
     ;;

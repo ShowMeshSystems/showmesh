@@ -49,7 +49,7 @@ MOSQUITTO_IMAGE="eclipse-mosquitto:2.0.22"
 
 is_fixed_role() {
   case "$1" in
-    coordinator|fpp|healthcheck) return 0 ;;
+    coordinator|fpp|healthcheck|observer) return 0 ;;
     *) return 1 ;;
   esac
 }
