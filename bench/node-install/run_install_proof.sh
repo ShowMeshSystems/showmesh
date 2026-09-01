@@ -102,6 +102,37 @@ if ! echo "$LDDR_OUT" | grep -q 'undefined symbol'; then
   exit 1
 fi
 echo "OK: plain ldd stays clean but ldd -r reports the missing symbol"
+
+# The two checks above prove ldd -r can detect this case; they do not
+# prove install.sh actually uses ldd -r to detect it. A regression that
+# reverted install.sh to plain ldd, or dropped the undefined-symbol
+# pattern from its grep, would pass both of them and pass step 1c below
+# too (hiding libgstapp entirely is a "not found" case plain ldd also
+# catches). Only running install.sh itself against this exact
+# missing-symbol library pins that. The missing-symbol library is still
+# in place at this point; preflight.sh's own checks are unrelated to
+# which binary path install.sh is handed, so this call reaches the ldd
+# check and refuses there before touching anything else on the host.
+set +e
+OUT="$(cd "$REPO/deploy/node" && ./install.sh "$LDDR_WORK/consumer" 2>&1)"
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+  echo "FAIL: install.sh accepted a binary that resolves against a library missing a symbol it needs; the version-floor check it is supposed to run is not wired up (reverted to plain ldd, or the undefined-symbol pattern was dropped)" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+if ! echo "$OUT" | grep -q 'undefined symbol'; then
+  echo "FAIL: install.sh refused, but not by naming an undefined symbol" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+if ! echo "$OUT" | grep -q 'needed_symbol'; then
+  echo "FAIL: install.sh refused for an undefined symbol, but not the specific one this mutation removed" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+echo "OK: install.sh itself refuses the missing-symbol binary and names the undefined symbol"
 rm -rf "$LDDR_WORK"
 echo
 
