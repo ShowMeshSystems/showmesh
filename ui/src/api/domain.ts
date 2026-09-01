@@ -230,6 +230,7 @@ export type ResolumeRecoveryRestoreLayer = components['schemas']['ResolumeRecove
 export type ResolumeRecoveryRestoreReport = components['schemas']['ResolumeRecoveryRestoreReport']
 export type ResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 export type ResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+export type ResolumeRecoveryChangedEvent = components['schemas']['ResolumeRecoveryChangedEvent']
 export type ConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 export type ResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 
@@ -531,6 +532,20 @@ export interface Model {
    */
   nightSession: NightSessionState | null
   /**
+   * Track D seam D-3a: the Resolume crash-recovery toggle/record/last-restore
+   * state, kept live by `resolumeRecovery.changed` frames (store.ts's
+   * applyResolumeRecoveryChanged) — a whole-object replace, matching
+   * `nightSession`'s exact same posture and for the identical reason (no
+   * delta kind exists for this resource, and `Snapshot` carries no
+   * `resolumeRecovery` field). Stays `null` until either the first live
+   * frame arrives or a view's own `GET /resolume/recovery` call seeds it
+   * (screens/ResolumeConfig.tsx). Cleared back to `null` by every
+   * `applySnapshot`, matching `nightSession` again: a stale value from a
+   * prior connection generation must not keep rendering as current across
+   * one it was never confirmed against.
+   */
+  resolumeRecovery: ResolumeRecoveryResponse | null
+  /**
    * Each FPP instance's latest accepted playlist-entry
    * observation, kept live by `fppPlaylistEntry.changed` frames (store.ts's
    * applyFppPlaylistEntryChanged), a whole-object replace per
@@ -606,6 +621,7 @@ export function initialModel(): Model {
     resolume: [],
     auditStore: null,
     nightSession: null,
+    resolumeRecovery: null,
     fppPlaylistEntryObservations: [],
     events: [],
     eventsGap: false,

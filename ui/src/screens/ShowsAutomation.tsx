@@ -227,7 +227,7 @@ export function ShowsAutomation() {
 
         <Section id="au-attn" title="Needs you" aside={broken.length > 0 ? <span className="sm-small sm-muted">{broken.length} items</span> : undefined}>
           {broken.length === 0 ? (
-            <BlankingPlate
+            <BlankingPlate headingLevel={3}
               absence="empty"
               stamp="Clear"
               eyebrow="Bindings · empty"

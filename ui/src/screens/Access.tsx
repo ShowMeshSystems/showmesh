@@ -8,6 +8,7 @@ import {
   listPrincipalTokens,
   revokePrincipalToken,
   type CreatePrincipalRequest,
+  type IssueTokenRequest,
   type IssueTokenResponse,
   type Model,
   type NightSessionState,
@@ -42,7 +43,16 @@ import {
   type TokenRead,
 } from './accessModel'
 
-const CREATABLE_ROLES: readonly PrincipalObject['role'][] = ['viewer', 'operator', 'admin', 'scheduler']
+const CREATABLE_ROLES: readonly PrincipalObject['role'][] = ['viewer', 'operator', 'admin', 'scheduler', 'recovery']
+
+/** One plain sentence per role for the create-principal picker; only recovery is non-obvious from its name. */
+const ROLE_HELP: Readonly<Record<PrincipalObject['role'], string>> = {
+  viewer: 'Can read everything and change nothing.',
+  operator: 'Runs the show night-to-night: macros, night commands, and the usual live controls.',
+  admin: 'Everything, including managing other principals.',
+  scheduler: 'Runs macros on a schedule, nothing else.',
+  recovery: 'Holds exactly one scope, Resolume action requests, the narrow bundle the built-in automatic-recovery principal uses rather than a general operator or machine login.',
+}
 
 type AccessData =
   | { kind: 'denied'; reason: string }
@@ -458,6 +468,7 @@ function CreatePrincipalPanel({
             options={CREATABLE_ROLES.map((option) => ({ value: option, label: option }))}
             onChange={setRole}
           />
+          <p className="sm-small sm-faint">{ROLE_HELP[role]}</p>
         </div>
         {kind === 'human' && (
           <Field label="Password · optional" help="Leave it blank for a principal that will only ever use an issued token.">
@@ -507,6 +518,7 @@ function CredentialsPanel({
   onChanged: () => void
 }) {
   const [label, setLabel] = useState('')
+  const [expiresLocal, setExpiresLocal] = useState('')
   const [issuing, setIssuing] = useState(false)
   const [issueError, setIssueError] = useState<string | null>(null)
 
@@ -518,10 +530,13 @@ function CredentialsPanel({
   const issue = () => {
     setIssuing(true)
     setIssueError(null)
-    issuePrincipalToken(principal.id, label === '' ? {} : { label })
+    const payload: IssueTokenRequest = label === '' ? {} : { label }
+    if (expiresLocal !== '') payload.expiresAt = new Date(expiresLocal).toISOString()
+    issuePrincipalToken(principal.id, payload)
       .then((response) => {
         onIssued(response)
         setLabel('')
+        setExpiresLocal('')
         onChanged()
       })
       .catch((err: unknown) => setIssueError(describeApiError(err)))
@@ -633,6 +648,9 @@ function CredentialsPanel({
 
       <ButtonRow>
         <Field label="Label · optional">{(props) => <Input {...props} value={label} onChange={(e) => setLabel(e.target.value)} />}</Field>
+        <Field label="Expires · optional" help="Leave it blank and this token never expires.">
+          {(props) => <Input {...props} type="datetime-local" value={expiresLocal} onChange={(e) => setExpiresLocal(e.target.value)} />}
+        </Field>
         <Button onClick={issue} disabled={issuing || !writeGate.allowed} title={writeGate.allowed ? undefined : writeGate.reason}>
           {issuing ? 'Issuing…' : 'Issue credential'}
         </Button>

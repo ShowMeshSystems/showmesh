@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { BlankingPlate, ButtonRow, PageTitle, Section, Table, TableWrap } from '../kit'
+import { ButtonRow, Section, Table, TableWrap } from '../kit'
 
 /** The mock's six folded destinations. `prefixes` matches the address hit. */
 const MOVED: readonly { prefixes: readonly string[]; from: string; to: string; label: string; note?: string }[] = [
@@ -66,30 +66,32 @@ export function NotFound() {
 
   return (
     <>
-      <PageTitle title="No page at this address" lede={pathname} />
-      <BlankingPlate
-        absence="empty"
-        stamp="404"
-        eyebrow="This address · not routed"
-        title={moved === undefined ? 'Nothing is routed here' : `That screen is now ${moved.label}`}
-        detail="The overhaul moved every screen into seven destinations. Old addresses are not redirected, so a bookmark lands here instead of somewhere that looks right and is not."
-        actions={
-          <ButtonRow>
-            {moved === undefined ? (
-              <Link className="sm-btn sm-btn--primary" to="/">
-                Go to Dashboard
-              </Link>
-            ) : (
-              <Link className="sm-btn sm-btn--primary" to={moved.to}>
-                Go to {moved.label}
-              </Link>
-            )}
-            <Link className="sm-btn" to="/monitor/signals">
-              Open Monitor › Signals
+      <section aria-labelledby="nf-h" className="sm-notfound">
+        <p className="sm-plate__eyebrow">Not found</p>
+        <h1 className="sm-page__title" id="nf-h">No page at this address</h1>
+        <p className="sm-notfound__path sm-data">{pathname}</p>
+        <p className="sm-plate__detail">
+          The show is running normally, the bar above is live. Nothing is wrong with the installation; this address
+          just does not exist.
+        </p>
+        <p className="sm-plate__detail">
+          {moved === undefined ? 'Nothing is routed here' : `That screen is now ${moved.label}`}
+        </p>
+        <ButtonRow>
+          {moved === undefined ? (
+            <Link className="sm-btn sm-btn--primary" to="/">
+              Go to Dashboard
             </Link>
-          </ButtonRow>
-        }
-      />
+          ) : (
+            <Link className="sm-btn sm-btn--primary" to={moved.to}>
+              Go to {moved.label}
+            </Link>
+          )}
+          <Link className="sm-btn" to="/monitor/signals">
+            Open Monitor › Signals
+          </Link>
+        </ButtonRow>
+      </section>
       <Section
         id="moved"
         title="Where it probably went"

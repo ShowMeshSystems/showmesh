@@ -15,6 +15,25 @@ function renderAt(path: string) {
   )
 }
 
+describe('NotFound · shape matches the mock, not a hatched plate', () => {
+  it('renders an eyebrow, a fixed h1, the path, and the explanation sentence', () => {
+    renderAt('/observations/barn-player')
+    expect(screen.getByText('Not found')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: 'No page at this address' })).toBeInTheDocument()
+    expect(screen.getByText('/observations/barn-player')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'The show is running normally, the bar above is live. Nothing is wrong with the installation; this address just does not exist.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('carries no hatched plate: BlankingPlate is gone', () => {
+    const { container } = renderAt('/observations/barn-player')
+    expect(container.querySelector('.sm-plate')).toBeNull()
+  })
+})
+
 describe('NotFound · the four folded addresses D-003 added after the mock was drawn', () => {
   it('/monitor/readiness folded into Shows › Playlists', () => {
     renderAt('/monitor/readiness')

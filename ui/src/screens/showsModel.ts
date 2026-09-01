@@ -169,6 +169,14 @@ export type CueRow = {
   group: CueGroup
   usedByPlaylists: string[]
   announcementPolicy: string | null
+  /** This cue's audio asset (audio or announcement output) is not among the show's current assets. */
+  assetMissing: boolean
+}
+
+/** True when a cue's audio output names a sequence not among this show's current assets. Announcement cues always carry an audio output (ADR-043), so this covers both. */
+export function cueAssetMissing(outputs: ConfigShowCue['outputs'], assets: readonly Asset[]): boolean {
+  if (outputs.audio === undefined) return false
+  return !assets.some((asset) => asset.current && asset.sequence === outputs.audio?.asset)
 }
 
 /**
@@ -177,7 +185,11 @@ export type CueRow = {
  * playlist entries). Everything else is grouped by whether any playlist in
  * this show binds it to an entry.
  */
-export function cueRows(cues: readonly ShowCueConfigResponse[], playlists: readonly { payload: ConfigShowPlaylist }[]): CueRow[] {
+export function cueRows(
+  cues: readonly ShowCueConfigResponse[],
+  playlists: readonly { payload: ConfigShowPlaylist }[],
+  assets: readonly Asset[] = [],
+): CueRow[] {
   const usedBy = new Map<string, string[]>()
   for (const playlist of playlists) {
     for (const entry of playlist.payload.entries) {
@@ -200,8 +212,71 @@ export function cueRows(cues: readonly ShowCueConfigResponse[], playlists: reado
       group,
       usedByPlaylists: names,
       announcementPolicy: cue.payload.outputs.announcement !== undefined ? describeAnnouncementPolicy(cue.payload.outputs.announcement) : null,
+      assetMissing: cueAssetMissing(cue.payload.outputs, assets),
     }
   })
+}
+
+// ---------------------------------------------------------------------
+// Cue activation summary ("On activation this cue will...")
+// ---------------------------------------------------------------------
+
+export type CueActivationDraft = {
+  render: { sequence: string } | null
+  audio: { asset: string; startOffsetMillis: number; target: string } | null
+  ltc: { startOffsetMillis: number; target: string } | null
+  announcement: { policy: 'duck' | 'mix' | 'interrupt'; duckGainDb: number; fadeMillis: number; target: string } | null
+}
+
+function joinFacts(parts: readonly string[]): string {
+  if (parts.length === 0) return ''
+  if (parts.length === 1) return parts[0] ?? ''
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`
+}
+
+/**
+ * States only facts the form itself holds: no output picked yet, an
+ * unnamed sequence, an unselected asset and an unset target all say so
+ * literally rather than being silently skipped.
+ */
+export function cueActivationSummary(draft: CueActivationDraft): string {
+  if (draft.render === null && draft.audio === null && draft.ltc === null && draft.announcement === null) {
+    return 'Pick at least one output to see what this cue will do.'
+  }
+
+  const parts: string[] = []
+
+  if (draft.render !== null) {
+    parts.push(draft.render.sequence.trim() === '' ? 'render an unnamed sequence' : `render sequence ${draft.render.sequence.trim()}`)
+  }
+
+  if (draft.audio !== null) {
+    const asset = draft.audio.asset.trim() === '' ? 'an unselected asset' : draft.audio.asset
+    const offset = draft.audio.startOffsetMillis > 0 ? ` at +${draft.audio.startOffsetMillis} ms` : ''
+    const target = draft.audio.target !== '' ? ` on ${draft.audio.target}` : ''
+    parts.push(`play ${asset}${offset}${target}`)
+  }
+
+  if (draft.ltc !== null) {
+    const target = draft.ltc.target !== '' ? ` on ${draft.ltc.target}` : ''
+    parts.push(`emit LTC from ${draft.ltc.startOffsetMillis} ms${target}`)
+  }
+
+  if (draft.announcement !== null) {
+    const target = draft.announcement.target !== '' ? ` on ${draft.announcement.target}` : ''
+    if (draft.announcement.policy === 'duck') {
+      parts.push(`duck the background bed to ${draft.announcement.duckGainDb} dB over ${draft.announcement.fadeMillis} ms${target}`)
+    } else if (draft.announcement.policy === 'mix') {
+      parts.push(`mix into the background bed over ${draft.announcement.fadeMillis} ms${target}`)
+    } else {
+      parts.push(`interrupt the background bed${target}`)
+    }
+  }
+
+  if (draft.render === null) parts.push('leave FPP untouched')
+
+  return `On activation this cue will ${joinFacts(parts)}.`
 }
 
 /** Slug rule for a client-derived config object id: lowercase, hyphenated, ascii. */

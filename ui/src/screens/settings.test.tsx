@@ -199,6 +199,135 @@ describe('Settings › Connections', () => {
     expect(screen.getByText(/A password is set\. Set a new one/)).toBeInTheDocument()
     expect(screen.queryByDisplayValue(/^\*+$/)).not.toBeInTheDocument()
   })
+
+  it('loads and shows the mqtt username and host overrides', async () => {
+    stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getFPPMQTTConfig = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'fpp.mqtt',
+        revision: 1,
+        payload: {
+          brokerURL: 'mqtt://10.20.0.5:1883',
+          username: 'showmesh-collector',
+          topicPrefix: 'showmesh/fpp',
+          hosts: { 'barn-player': 'FPP-Barn' },
+          passwordSet: true,
+        },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        restartRequired: false,
+        restartRequiredReason: '',
+      })
+
+    renderAt('/settings/connections')
+
+    await waitFor(() => expect(screen.getByDisplayValue('showmesh-collector')).toBeInTheDocument())
+    const hostsPanel = within(screen.getByTestId('mqtt-hosts'))
+    expect(hostsPanel.getByDisplayValue('barn-player')).toBeInTheDocument()
+    expect(hostsPanel.getByDisplayValue('FPP-Barn')).toBeInTheDocument()
+  })
+
+  it('sends username on save', async () => {
+    stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    const mqttResponse = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'fpp.mqtt',
+        revision: 1,
+        payload: { brokerURL: 'mqtt://10.20.0.5:1883', username: 'old-name', topicPrefix: 'showmesh/fpp', hosts: {}, passwordSet: false },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        restartRequired: false,
+        restartRequiredReason: '',
+      })
+    stubs.getFPPMQTTConfig = mqttResponse
+    const putFPPMQTTConfig = vi.fn(() => mqttResponse())
+    stubs.putFPPMQTTConfig = putFPPMQTTConfig
+
+    renderAt('/settings/connections')
+
+    await waitFor(() => expect(screen.getByDisplayValue('old-name')).toBeInTheDocument())
+    fireEvent.change(screen.getByDisplayValue('old-name'), { target: { value: 'new-name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
+
+    await waitFor(() => expect(putFPPMQTTConfig).toHaveBeenCalledWith(expect.objectContaining({ username: 'new-name' })))
+  })
+
+  it('adding a host entry sends it in hosts', async () => {
+    stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    const mqttResponse = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'fpp.mqtt',
+        revision: 1,
+        payload: { brokerURL: 'mqtt://10.20.0.5:1883', username: '', topicPrefix: 'showmesh/fpp', hosts: {}, passwordSet: false },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        restartRequired: false,
+        restartRequiredReason: '',
+      })
+    stubs.getFPPMQTTConfig = mqttResponse
+    const putFPPMQTTConfig = vi.fn(() => mqttResponse())
+    stubs.putFPPMQTTConfig = putFPPMQTTConfig
+
+    renderAt('/settings/connections')
+
+    await waitFor(() => expect(screen.getByTestId('mqtt-hosts')).toBeInTheDocument())
+    fireEvent.click(within(screen.getByTestId('mqtt-hosts')).getByRole('button', { name: 'Add a host override' }))
+    fireEvent.change(screen.getByLabelText('Host id'), { target: { value: 'barn-player' } })
+    fireEvent.change(screen.getByLabelText('HostName'), { target: { value: 'FPP-Barn' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
+
+    await waitFor(() => expect(putFPPMQTTConfig).toHaveBeenCalledWith(expect.objectContaining({ hosts: { 'barn-player': 'FPP-Barn' } })))
+  })
+
+  it('removing a host entry sends the map without it', async () => {
+    stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
+    stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
+    const mqttResponse = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'fpp.mqtt',
+        revision: 1,
+        payload: {
+          brokerURL: 'mqtt://10.20.0.5:1883',
+          username: '',
+          topicPrefix: 'showmesh/fpp',
+          hosts: { 'barn-player': 'FPP-Barn', 'shed-player': 'FPP-Shed' },
+          passwordSet: false,
+        },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        restartRequired: false,
+        restartRequiredReason: '',
+      })
+    stubs.getFPPMQTTConfig = mqttResponse
+    const putFPPMQTTConfig = vi.fn(() => mqttResponse())
+    stubs.putFPPMQTTConfig = putFPPMQTTConfig
+
+    renderAt('/settings/connections')
+
+    const hostsPanel = within(await screen.findByTestId('mqtt-hosts'))
+    await waitFor(() => expect(hostsPanel.getByDisplayValue('barn-player')).toBeInTheDocument())
+    const barnRow = hostsPanel.getByDisplayValue('barn-player').closest('.sm-inline-row')
+    expect(barnRow).not.toBeNull()
+    fireEvent.click(within(barnRow as HTMLElement).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
+
+    await waitFor(() => expect(putFPPMQTTConfig).toHaveBeenCalledWith(expect.objectContaining({ hosts: { 'shed-player': 'FPP-Shed' } })))
+  })
 })
 
 describe('Settings › Content delivery', () => {

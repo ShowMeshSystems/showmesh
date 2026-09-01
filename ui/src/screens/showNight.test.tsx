@@ -796,50 +796,66 @@ describe('Show Night', () => {
     expect(calls[0]).toEqual({ session: '' })
   })
 
-  it('preserves barrier, onFailure, fadeDurationMs, and announcementPolicy on a cue when only the label changes', async () => {
-    const definitionResponse = (label: string) => ({
-      serverTime: '2026-08-28T21:07:00Z',
-      kind: 'night.session',
-      id: 'winter-ridge-2026',
-      revision: 1,
-      payload: {
-        show: 'winter-ridge',
-        label,
-        showPlaylist: { fppInstanceId: 'fpp-1', playlist: 'show' },
-        resting: {
-          fppInstanceId: 'fpp-1', playlist: 'resting', endOfNightPlaylist: 'resting', endOfNightRepeat: true,
-          timelineAsset: { show: 'winter-ridge', sequence: 'seq', target: 'target' },
-          backgroundAudio: {
-            items: [{ asset: 'bed-1', target: 'audio-01' }],
-            repeat: 'all', resume: 'restart', itemTransition: 'crossfade', crossfadeMs: 500, maxGainDb: -12,
-            fadeOutMs: 2000, fadeInMs: 1500,
-          },
+  const fullDefinitionResponse = (label: string) => ({
+    serverTime: '2026-08-28T21:07:00Z',
+    kind: 'night.session',
+    id: 'winter-ridge-2026',
+    revision: 1,
+    payload: {
+      show: 'winter-ridge',
+      label,
+      showPlaylist: { fppInstanceId: 'fpp-1', playlist: 'show' },
+      resting: {
+        fppInstanceId: 'fpp-1', playlist: 'resting', endOfNightPlaylist: 'end-of-night', endOfNightRepeat: true,
+        timelineAsset: { show: 'winter-ridge', sequence: 'seq', target: 'target' },
+        backgroundAudio: {
+          items: [{ itemId: 'bed-1', show: 'winter-ridge', sequence: 'bed-seq', target: 'audio-01' }],
+          repeat: 'playlist', resume: 'restart', itemTransition: 'crossfade', crossfadeMs: 500, maxGainDb: -12,
+          fadeOutMs: 2000, fadeInMs: 1500,
         },
-        enterShow: {
-          blackoutHoldMs: 0,
-          cues: [{ name: 'Announce', role: 'announcement', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500, announcementPolicy: 'duck' }],
-        },
-        enterResting: { blackoutAfterShowMs: 0, cues: [] },
-        announcementDefaultPolicy: 'duck',
       },
-      updatedAt: '2026-08-28T16:00:00Z',
-      createdByPrincipalId: 'p',
-      createdByPrincipalName: 'erbartos',
-      source: 'api',
-    })
-    const captured: {
-      body: { enterShow?: { cues?: unknown[] }; resting?: { backgroundAudio?: { fadeOutMs?: number; fadeInMs?: number; items?: { target?: string }[] } } } | null
-    } = { body: null }
-    stubs.listConfigObjects = () =>
-      Promise.resolve({
-        serverTime: '',
-        kind: 'night.session',
-        objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
-      })
-    stubs.getNightSessionConfig = () => Promise.resolve(definitionResponse('Winter Ridge'))
+      enterShow: {
+        blackoutHoldMs: 0,
+        cues: [{ name: 'Announce', role: 'announcement', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500, announcementPolicy: 'duck' }],
+      },
+      enterResting: { blackoutAfterShowMs: 0, cues: [] },
+      announcementDefaultPolicy: 'duck',
+      siteControl: {
+        requestThermalProfile: 'winter-thermal',
+        presentationPowerOn: { action: 'power-on', powerDomain: 'presentation', domainProvenance: 'operator-declared' },
+        presentationPowerOff: {
+          action: 'power-off', powerDomain: 'presentation', domainProvenance: 'operator-declared', removalPolicy: 'after-actions',
+          prerequisites: [{ kind: 'delay', delayMs: 5000 }],
+        },
+      },
+      interlocks: [
+        { name: 'door-sensor', phase: 'prepare-site', posture: 'block', signal: 'door-check', freshnessSeconds: 30, failureText: 'Door not confirmed shut.', onUnavailable: 'block', overridePolicy: 'authorized-operator' },
+      ],
+    },
+    updatedAt: '2026-08-28T16:00:00Z',
+    createdByPrincipalId: 'p',
+    createdByPrincipalName: 'erbartos',
+    source: 'api',
+  })
+
+  function mockListConfigObjects() {
+    stubs.listConfigObjects = ((kind: string) =>
+      kind === 'audio.node'
+        ? Promise.resolve({ serverTime: '', kind, objects: [{ id: 'audio-01', label: 'Audio 01', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }] })
+        : Promise.resolve({
+            serverTime: '',
+            kind: 'night.session',
+            objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+          })) as typeof stubs.listConfigObjects
+  }
+
+  it('round-trips every definition field through a label-only save', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     stubs.putNightSessionConfig = (...args: unknown[]) => {
-      captured.body = args[1] as typeof captured.body
-      return Promise.resolve(definitionResponse('Winter Ridge Updated'))
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge Updated'))
     }
     renderScreen({ nightSession: session(), session: configWriteSession })
     fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
@@ -848,23 +864,113 @@ describe('Show Night', () => {
     fireEvent.change(labelInput, { target: { value: 'Winter Ridge Updated' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge Updated')
-    expect(captured.body?.enterShow?.cues).toEqual([
-      { name: 'Announce', role: 'announcement', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500, announcementPolicy: 'duck' },
-    ])
-    // definitionPayload spreads base.resting, so fields it never surfaces
-    // in the form (backgroundAudio's fade pair and per-item target) still
-    // survive a save that only touched the label.
-    expect(captured.body?.resting?.backgroundAudio?.fadeOutMs).toBe(2000)
-    expect(captured.body?.resting?.backgroundAudio?.fadeInMs).toBe(1500)
-    expect(captured.body?.resting?.backgroundAudio?.items?.[0]?.target).toBe('audio-01')
+
+    expect(captured.body).toEqual(fullDefinitionResponse('Winter Ridge Updated').payload)
 
     // Changing the role off announcement must drop the policy, which the coordinator refuses on any other role.
     fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'lighting' } })
     fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Winter Ridge Relit' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge Relit')
-    expect(captured.body?.enterShow?.cues).toEqual([
-      { name: 'Announce', role: 'lighting', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500 },
+    expect(captured.body?.enterShow).toMatchObject({
+      cues: [{ name: 'Announce', role: 'lighting', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500 }],
+    })
+    expect((captured.body?.enterShow as { cues: Record<string, unknown>[] }).cues[0]).not.toHaveProperty('announcementPolicy')
+  })
+
+  it('sends the announcement default policy, end-of-night playlist, and end-of-night repeat as edited', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
+    await screen.findByLabelText('Label')
+    fireEvent.change(screen.getByLabelText('Announcement default policy'), { target: { value: 'interrupt' } })
+    fireEvent.change(screen.getByLabelText('End-of-night playlist'), { target: { value: 'holiday-cooldown' } })
+    fireEvent.click(screen.getByLabelText('Repeat the end-of-night playlist'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    expect(captured.body?.announcementDefaultPolicy).toBe('interrupt')
+    expect((captured.body?.resting as Record<string, unknown>).endOfNightPlaylist).toBe('holiday-cooldown')
+    expect((captured.body?.resting as Record<string, unknown>).endOfNightRepeat).toBe(false)
+  })
+
+  it('sends the background audio subsection with the edited item, repeat, and ceiling', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
+    await screen.findByLabelText('Label')
+    fireEvent.change(screen.getByLabelText('Item id'), { target: { value: 'bed-2' } })
+    fireEvent.change(screen.getByLabelText('Max gain (dB)'), { target: { value: '-6' } })
+    fireEvent.change(screen.getByLabelText('Repeat'), { target: { value: 'item' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    const backgroundAudio = (captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>
+    expect((backgroundAudio.items as Record<string, unknown>[])[0]).toMatchObject({ itemId: 'bed-2', target: 'audio-01' })
+    expect(backgroundAudio.maxGainDb).toBe(-6)
+    expect(backgroundAudio.repeat).toBe('item')
+  })
+
+  it('sends the site control subsection with its authored bindings', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
+    await screen.findByLabelText('Label')
+    fireEvent.change(screen.getByLabelText('Request thermal profile'), { target: { value: 'summer-thermal' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    const siteControl = captured.body?.siteControl as Record<string, unknown>
+    expect(siteControl.requestThermalProfile).toBe('summer-thermal')
+    expect(siteControl.presentationPowerOn).toMatchObject({ action: 'power-on', powerDomain: 'presentation', domainProvenance: 'operator-declared' })
+    expect(siteControl.presentationPowerOff).toMatchObject({ action: 'power-off', removalPolicy: 'after-actions', prerequisites: [{ kind: 'delay', delayMs: 5000 }] })
+  })
+
+  it('sends interlocks with an edited entry', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
+    await screen.findByLabelText('Label')
+    fireEvent.change(screen.getByLabelText('Failure text'), { target: { value: 'Door sensor unreachable.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    expect(captured.body?.interlocks).toEqual([
+      { name: 'door-sensor', phase: 'prepare-site', posture: 'block', signal: 'door-check', freshnessSeconds: 30, failureText: 'Door sensor unreachable.', onUnavailable: 'block', overridePolicy: 'authorized-operator' },
     ])
+  })
+
+  it('blocks save when only one side of the background audio fade pair is set', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    const putSpy = vi.fn(() => Promise.resolve(fullDefinitionResponse('Winter Ridge')))
+    stubs.putNightSessionConfig = putSpy
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
+    await screen.findByLabelText('Label')
+    fireEvent.change(screen.getByLabelText('Fade-in (ms)'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    expect(await screen.findByText('Background audio fade-out and fade-in must be configured together, or both left empty for an instant cut.')).toBeInTheDocument()
+    expect(putSpy).not.toHaveBeenCalled()
   })
 })

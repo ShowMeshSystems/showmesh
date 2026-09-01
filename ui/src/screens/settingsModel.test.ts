@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { audioNodeVerdict, hasAudioCapability, liveCycle } from './settingsModel'
+import { audioNodeVerdict, hasAudioCapability, hostRowsToMap, hostsMapToRows, liveCycle } from './settingsModel'
 import type { Node, NightSessionState } from '../api'
 
 describe('audioNodeVerdict', () => {
@@ -63,5 +63,29 @@ describe('liveCycle', () => {
 
   it('names the cycle when the session reports it live', () => {
     expect(liveCycle({ state: 'live', cycle: 3 } as unknown as NightSessionState)).toEqual({ cycle: 3 })
+  })
+})
+
+describe('hostsMapToRows / hostRowsToMap', () => {
+  it('round-trips an empty map to no rows', () => {
+    expect(hostsMapToRows({})).toEqual([])
+    expect(hostRowsToMap([])).toEqual({})
+  })
+
+  it('turns each map entry into a row and back', () => {
+    const map = { 'barn-player': 'FPP-Barn', 'shed-player': 'FPP-Shed' }
+    expect(hostsMapToRows(map)).toEqual([
+      { id: 'barn-player', hostName: 'FPP-Barn' },
+      { id: 'shed-player', hostName: 'FPP-Shed' },
+    ])
+    expect(hostRowsToMap(hostsMapToRows(map))).toEqual(map)
+  })
+
+  it('lets a later row with a repeated id overwrite an earlier one', () => {
+    const rows = [
+      { id: 'barn-player', hostName: 'FPP-Barn-Old' },
+      { id: 'barn-player', hostName: 'FPP-Barn-New' },
+    ]
+    expect(hostRowsToMap(rows)).toEqual({ 'barn-player': 'FPP-Barn-New' })
   })
 })

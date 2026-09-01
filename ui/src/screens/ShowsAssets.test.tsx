@@ -10,6 +10,7 @@ const stubs = vi.hoisted(() => ({
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   uploadAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAssetContent: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -20,6 +21,7 @@ vi.mock('../api', async () => {
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getShow: (...args: never[]) => stubs.getShow(...args),
     uploadAsset: (...args: never[]) => stubs.uploadAsset(...args),
+    getAssetContent: (...args: never[]) => stubs.getAssetContent(...args),
   }
 })
 
@@ -75,6 +77,14 @@ function signedIn(scopes: string[]): SessionResponse {
 
 function assetsResponse(assets: Asset[]) {
   return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets })
+}
+
+async function sha256HexFor(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  const hex = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+  return `sha256:${hex}`
 }
 
 function renderWorkspace(model: Partial<Model> = {}, path = '/shows/winter-ridge-2026/assets') {
@@ -180,5 +190,97 @@ describe('Shows · Assets tab', () => {
     expect(
       screen.getByText('These bytes matched a superseded version, which is now current again; the previously current version is now superseded.'),
     ).toBeInTheDocument()
+  })
+
+  it('confirming Make current on a superseded row posts its fetched bytes and renders the rollback outcome', async () => {
+    const current = asset({ id: 'a-current', contentHash: 'sha256:' + '55'.repeat(32), createdAt: '2026-08-26T14:02:00Z' })
+    const superseded = asset({
+      id: 'a-old',
+      contentHash: 'sha256:' + 'aa'.repeat(32),
+      current: false,
+      supersededAt: '2026-08-26T14:02:00Z',
+      createdAt: '2026-08-24T09:18:00Z',
+    })
+    setup(['asset:write'], [current, superseded])
+    fireEvent.click(await screen.findByRole('button', { name: 'media-front' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make current' }))
+    fireEvent.change(screen.getByLabelText(`Type ${superseded.sequence} to confirm the rollback`), {
+      target: { value: superseded.sequence },
+    })
+
+    const getContentSpy = vi.fn(() => Promise.resolve(new Blob(['old-bytes'])))
+    stubs.getAssetContent = getContentSpy
+    const restored = asset({ id: 'a-old', current: true, contentHash: superseded.contentHash })
+    const uploadSpy = vi.fn((file: File, fields: Record<string, unknown>) => {
+      void file
+      void fields
+      return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', asset: restored, rolledBack: true })
+    })
+    stubs.uploadAsset = uploadSpy
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm rollback' }))
+
+    expect(await screen.findByText('Rolled back')).toBeInTheDocument()
+    expect(getContentSpy).toHaveBeenCalledWith('a-old')
+    expect(uploadSpy).toHaveBeenCalledTimes(1)
+    const [file, fields] = uploadSpy.mock.calls[0]!
+    expect(file).toBeInstanceOf(File)
+    expect(file.name).toBe(superseded.runtimeFilename)
+    expect(fields).toEqual({
+      show: superseded.show,
+      sequence: superseded.sequence,
+      mediaType: superseded.mediaType,
+      targetKind: superseded.targetKind,
+      target: superseded.target,
+    })
+  })
+
+  it('per-entry history annotations reflect hash equality across the group, not a persisted flag', async () => {
+    const current = asset({ id: 'a-current', contentHash: 'sha256:' + '55'.repeat(32), createdAt: '2026-08-26T14:02:00Z', current: true, supersededAt: null })
+    const mid = asset({
+      id: 'a-mid',
+      contentHash: 'sha256:' + 'bb'.repeat(32),
+      current: false,
+      createdAt: '2026-08-24T09:18:00Z',
+      supersededAt: '2026-08-26T14:02:00Z',
+    })
+    const original = asset({
+      id: 'a-orig',
+      contentHash: current.contentHash,
+      current: false,
+      createdAt: '2026-08-11T20:41:00Z',
+      supersededAt: '2026-08-24T09:18:00Z',
+    })
+    setup(['asset:write'], [current, mid, original])
+    fireEvent.click(await screen.findByRole('button', { name: 'media-front' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+
+    expect(screen.getByText(/Rollback, these exact bytes were current before/)).toBeInTheDocument()
+    expect(screen.getByText('Same bytes as current')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Make current' })).toHaveLength(1)
+  })
+
+  it('a file matching a superseded identity warns before submit and relabels the control to Roll back', async () => {
+    const matchHash = await sha256HexFor('rollback-bytes')
+    const superseded = asset({
+      id: 'a-old',
+      current: false,
+      targetKind: 'show',
+      target: '',
+      contentHash: matchHash,
+      createdAt: '2026-08-11T20:41:00Z',
+      supersededAt: '2026-08-24T09:18:00Z',
+    })
+    setup(['asset:write'], [superseded])
+    fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+    fireEvent.change(await screen.findByLabelText('Logical sequence'), { target: { value: superseded.sequence } })
+    const file = new File(['rollback-bytes'], 'carol-of-the-bells.fseq')
+    fireEvent.change(screen.getByLabelText(/Choose a file/i, { selector: 'input' }), { target: { files: [file] } })
+
+    expect(await screen.findByText('This will be a rollback')).toBeInTheDocument()
+    const submit = (await screen.findAllByRole('button', { name: 'Roll back' }))[0] as HTMLElement
+    expect(submit).toBeInTheDocument()
   })
 })

@@ -315,6 +315,71 @@ describe('Resolume config', () => {
     expect(unknownLabels.length).toBeGreaterThan(0)
   })
 
+  it('renders recovery from model.resolumeRecovery when present, re-rendering live without a reload (SM-462)', async () => {
+    // The REST read never resolves here: if the recovery block were still
+    // reading recoveryState.kind === 'loading' from a pending fetch, the
+    // "Reading" absence strip would render, not the live record.
+    stubs.getResolumeComposition = () => new Promise(() => {})
+    stubs.getResolumeRecovery = () => new Promise(() => {})
+    stubs.getResolumeRecoveryConfig = () => new Promise(() => {})
+    stubs.getResolumeInstancesConfig = () => new Promise(() => {})
+
+    const liveRecovery = recovery({
+      lastRestore: { ...recovery().lastRestore!, outcome: 'restored', trigger: 'automatic', principal: 'coordinator' },
+    })
+
+    const { rerender } = render(
+      <ModelContext.Provider
+        value={{
+          ...initialModel(),
+          resolume: [instance()],
+          session: signedIn(['config:write']),
+          serverTime: '2026-08-30T21:07:00Z',
+          serverTimeReceivedAt: Date.now(),
+          resolumeRecovery: liveRecovery,
+        }}
+      >
+        <MemoryRouter initialEntries={['/monitor/fleet/resolume/arena-main']}>
+          <Routes>
+            <Route path="/monitor/fleet/resolume/:instanceId" element={<ResolumeConfig />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+
+    await waitFor(() => expect(screen.getAllByText('Restored').length).toBeGreaterThan(0))
+    expect(screen.queryByText('Asking the coordinator for recovery state.')).not.toBeInTheDocument()
+
+    // A restore run by the coordinator or another operator arrives as a
+    // fresh `resolumeRecovery.changed` frame — store.ts replaces
+    // model.resolumeRecovery wholesale, and this asserts the block
+    // re-renders from that new value with no reload of its own.
+    const nextRecovery = recovery({
+      lastRestore: { ...recovery().lastRestore!, outcome: 'failed', trigger: 'automatic', principal: 'coordinator', layers: [] },
+    })
+
+    rerender(
+      <ModelContext.Provider
+        value={{
+          ...initialModel(),
+          resolume: [instance()],
+          session: signedIn(['config:write']),
+          serverTime: '2026-08-30T21:08:00Z',
+          serverTimeReceivedAt: Date.now(),
+          resolumeRecovery: nextRecovery,
+        }}
+      >
+        <MemoryRouter initialEntries={['/monitor/fleet/resolume/arena-main']}>
+          <Routes>
+            <Route path="/monitor/fleet/resolume/:instanceId" element={<ResolumeConfig />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+
+    await waitFor(() => expect(screen.getAllByText('Failed').length).toBeGreaterThan(0))
+  })
+
   it('renders an unconfirmable restore step as unavailable, not a failure', async () => {
     stubs.getResolumeComposition = () => new Promise(() => {})
     stubs.getResolumeRecovery = () => Promise.resolve(recovery())

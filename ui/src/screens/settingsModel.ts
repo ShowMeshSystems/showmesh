@@ -26,6 +26,21 @@ export function resolumeHealthFor(resolume: readonly ResolumeInstance[], id: str
   return resolume.find((instance) => instance.instanceId === id) ?? null
 }
 
+/** One row of the fpp.mqtt `hosts` override editor: a coordinator FPP player id paired with the HostName that player publishes in its own MQTT topics. */
+export type MQTTHostRow = { id: string; hostName: string }
+
+/** `hosts` (id -> HostName) as editable rows, in insertion order. */
+export function hostsMapToRows(hosts: Readonly<Record<string, string>>): MQTTHostRow[] {
+  return Object.entries(hosts).map(([id, hostName]) => ({ id, hostName }))
+}
+
+/** Editable rows back to the `id -> HostName` map the PUT request sends. A later row with a repeated id overwrites an earlier one, same as `Object.fromEntries`. */
+export function hostRowsToMap(rows: readonly MQTTHostRow[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const row of rows) out[row.id] = row.hostName
+  return out
+}
+
 /** A node advertising neither audio capability is listed and marked, never hidden (guide §9 item 6). */
 export function hasAudioCapability(node: Node): boolean {
   return node.capabilities.some((c) => c.id === AUDIO_OUTPUT_LOCAL || c.id === AUDIO_OUTPUT_LTC)

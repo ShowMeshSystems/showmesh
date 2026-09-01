@@ -172,7 +172,15 @@ export function ResolumeConfig() {
   const actionGate = evaluateScope(model.session, model.sessionFetchFailed, 'resolume:action')
 
   const { state: compositionState, reload: reloadComposition } = useResolumeComposition()
-  const { state: recoveryState, reload: reloadRecovery } = useResolumeRecovery()
+  const { state: restRecoveryState, reload: reloadRecovery } = useResolumeRecovery()
+  // `model.resolumeRecovery` is kept live by `resolumeRecovery.changed`
+  // frames (store.ts's applyResolumeRecoveryChanged) and reflects a
+  // restore run by the coordinator or another operator without a reload.
+  // It stays `null` until the first live frame arrives this connection
+  // (Model.resolumeRecovery's own comment), so the REST read above is
+  // what establishes ground truth on first load and after a reconnect.
+  const recoveryState: RecoveryState =
+    model.resolumeRecovery !== null ? { kind: 'loaded', response: model.resolumeRecovery } : restRecoveryState
   const address = useResolumeAddress(instanceId, gate.allowed)
 
   const [uploading, setUploading] = useState(false)
@@ -194,11 +202,12 @@ export function ResolumeConfig() {
   // Anyone can see the toggle's value (the open `GET /resolume/recovery`
   // read); only a `config:write` device also loads the gated config it
   // needs for a revision, so a viewer without that scope still sees it.
+  const loadedAutoRestoreEnabled = recoveryState.kind === 'loaded' ? recoveryState.response.autoRestoreEnabled : null
   useEffect(() => {
-    if (recoveryState.kind === 'loaded' && pendingEnabled === null) {
-      setPendingEnabled(recoveryState.response.autoRestoreEnabled)
+    if (loadedAutoRestoreEnabled !== null && pendingEnabled === null) {
+      setPendingEnabled(loadedAutoRestoreEnabled)
     }
-  }, [recoveryState, pendingEnabled])
+  }, [loadedAutoRestoreEnabled, pendingEnabled])
 
   useEffect(() => {
     if (!gate.allowed) {

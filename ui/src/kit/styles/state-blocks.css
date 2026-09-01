@@ -172,3 +172,16 @@
   gap: 10px;
   margin-top: var(--s-4);
 }
+
+/* NotFound's address readout: a plain section, not a hatched plate, so the
+   path gets its own boxed line rather than the plate's stamp gutter. */
+.sm-notfound__path {
+  margin: var(--s-3) 0 0;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--sunken);
+  color: var(--text-muted);
+  overflow-x: auto;
+  white-space: nowrap;
+}

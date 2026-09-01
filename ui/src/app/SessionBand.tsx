@@ -62,7 +62,7 @@ export function SignedOutBand() {
   return (
     <section className="sm-band" aria-labelledby="band-signed-out">
       <div className="sm-band__head">
-        <h2 className="sm-band__title" id="band-signed-out">Signed out on this device</h2>
+        <h1 className="sm-band__title" id="band-signed-out">Signed out on this device</h1>
         <p className="sm-band__lede">
           Reads need a credential too, not just commands. The coordinator may be running a show right now, this
           device simply cannot see it.
@@ -237,7 +237,7 @@ export function BootstrapBand() {
     <section className="sm-band sm-band--alert" aria-labelledby="band-bootstrap">
       <div className="sm-band__head">
         <p className="sm-band__eyebrow">Unclaimed installation</p>
-        <h2 className="sm-band__title" id="band-bootstrap">No administrator exists on this coordinator</h2>
+        <h1 className="sm-band__title" id="band-bootstrap">No administrator exists on this coordinator</h1>
         <p className="sm-band__lede">
           It holds zero principals, so nobody can sign in and nothing can be configured. Claim the one-time code to
           create the first administrator.

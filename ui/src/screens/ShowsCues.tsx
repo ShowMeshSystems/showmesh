@@ -12,13 +12,13 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
+import { Button, Callout, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowCues, fetchShowPlaylists } from './showsData'
-import { CUE_OUTPUT_CHIP, type CueOutputKind, type CueRow, cueRows, formatBytes, slugify } from './showsModel'
+import { CUE_OUTPUT_CHIP, type CueActivationDraft, type CueOutputKind, type CueRow, cueActivationSummary, cueRows, formatBytes, slugify } from './showsModel'
 
 type ListState =
   | { kind: 'loading' }
@@ -97,7 +97,7 @@ export function ShowsCues() {
     )
   }
 
-  const rows = cueRows(state.cues, state.playlists)
+  const rows = cueRows(state.cues, state.playlists, state.assets)
   const matches = (row: CueRow) => {
     if (filterText !== '' && !row.label.toLowerCase().includes(filterText.toLowerCase()) && !row.id.toLowerCase().includes(filterText.toLowerCase())) {
       return false
@@ -268,7 +268,11 @@ function CueTable({
                     </button>
                     {selectedId === row.id && <span className="sm-viewing">Editing</span>}
                     <br />
-                    <span className="sm-data sm-small sm-faint">{row.id}</span>
+                    {row.assetMissing ? (
+                      <StatusPair tone="bad" appearance="word" label="Asset not uploaded" />
+                    ) : (
+                      <span className="sm-data sm-small sm-faint">{row.id}</span>
+                    )}
                   </td>
                   <td>
                     <span className="sm-chip-row">
@@ -367,6 +371,13 @@ function TargetNodeField({
   )
 }
 
+const OUTPUT_OPTIONS: readonly { kind: CueOutputKind; title: string; description: string }[] = [
+  { kind: 'render', title: 'Render', description: 'Drive lighting and video from a sequence' },
+  { kind: 'audio', title: 'Audience audio', description: 'Play an audio asset on the program bus' },
+  { kind: 'ltc', title: 'LTC', description: 'Emit timecode for Resolume' },
+  { kind: 'announcement', title: 'Announcement', description: 'Speak over the background bed' },
+]
+
 type Kinds = Set<CueOutputKind>
 
 function initialKinds(cue: ShowCueConfigResponse | null): Kinds {
@@ -403,6 +414,8 @@ function CueEditor({
   const [kinds, setKinds] = useState<Kinds>(initialKinds(cue))
   const [renderSequence, setRenderSequence] = useState(cue?.payload.outputs.render?.sequence ?? '')
   const [audioAsset, setAudioAsset] = useState(cue?.payload.outputs.audio?.asset ?? '')
+  const [audioStartOffsetMillis, setAudioStartOffsetMillis] = useState(String(cue?.payload.outputs.audio?.startOffsetMillis ?? 0))
+  const [ltcStartOffsetMillis, setLtcStartOffsetMillis] = useState(String(cue?.payload.outputs.ltc?.startOffsetMillis ?? 0))
   const [announcementPolicy, setAnnouncementPolicy] = useState<'duck' | 'mix' | 'interrupt'>(cue?.payload.outputs.announcement?.policy ?? 'duck')
   const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
@@ -442,6 +455,23 @@ function CueEditor({
     const fade = Number(fadeMillis)
     if (!Number.isInteger(fade) || fade < 0 || fade > 60000) blockReason = 'Fade must be a whole number of milliseconds, 0 to 60000.'
   }
+  if (blockReason === null && kinds.has('audio')) {
+    const offset = Number(audioStartOffsetMillis)
+    if (!Number.isInteger(offset) || offset < 0) blockReason = 'Audio start offset must be a whole number of milliseconds, 0 or more.'
+  }
+  if (blockReason === null && kinds.has('ltc')) {
+    const offset = Number(ltcStartOffsetMillis)
+    if (!Number.isInteger(offset) || offset < 0 || offset > 86400000) blockReason = 'LTC start offset must be a whole number of milliseconds, 0 to 86400000.'
+  }
+
+  const activationDraft: CueActivationDraft = {
+    render: kinds.has('render') ? { sequence: renderSequence } : null,
+    audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: Number(audioStartOffsetMillis) || 0, target: audioTarget } : null,
+    ltc: kinds.has('ltc') ? { startOffsetMillis: Number(ltcStartOffsetMillis) || 0, target: ltcTarget } : null,
+    announcement: kinds.has('announcement')
+      ? { policy: announcementPolicy, duckGainDb: Number(duckGainDb) || 0, fadeMillis: Number(fadeMillis) || 0, target: announcementTarget }
+      : null,
+  }
 
   const save = () => {
     if (blockReason !== null) return
@@ -451,7 +481,7 @@ function CueEditor({
         ? {
             audio: {
               asset: audioAsset,
-              startOffsetMillis: cue?.payload.outputs.audio?.startOffsetMillis ?? 0,
+              startOffsetMillis: Number(audioStartOffsetMillis),
               ...(audioTarget !== '' ? { target: audioTarget } : {}),
             },
           }
@@ -459,7 +489,7 @@ function CueEditor({
       ...(kinds.has('ltc')
         ? {
             ltc: {
-              startOffsetMillis: cue?.payload.outputs.ltc?.startOffsetMillis ?? 0,
+              startOffsetMillis: Number(ltcStartOffsetMillis),
               ...(ltcTarget !== '' ? { target: ltcTarget } : {}),
             },
           }
@@ -554,19 +584,16 @@ function CueEditor({
       <div className="sm-inspector__group">
         <h3 className="sm-subsection__title">What does this cue do?</h3>
         <p className="sm-small sm-muted">Pick at least one.</p>
-        <div className="sm-form-column">
-          <div className="sm-stack-3">
-            <Choice type="checkbox" checked={kinds.has('render')} onChange={() => toggleKind('render')} label="Render: drive lighting and video from a sequence" />
-          </div>
-          <div className="sm-stack-3">
-            <Choice type="checkbox" checked={kinds.has('audio')} onChange={() => toggleKind('audio')} label="Audience audio: play an audio asset on the program bus" />
-          </div>
-          <div className="sm-stack-3">
-            <Choice type="checkbox" checked={kinds.has('ltc')} onChange={() => toggleKind('ltc')} label="LTC: emit timecode for Resolume" />
-          </div>
-          <div className="sm-stack-3">
-            <Choice type="checkbox" checked={kinds.has('announcement')} onChange={() => toggleKind('announcement')} label="Announcement: speak over the background bed" />
-          </div>
+        <div className="sm-choice-list">
+          {OUTPUT_OPTIONS.map((option) => (
+            <label key={option.kind} className="sm-choice sm-choice--card">
+              <input type="checkbox" checked={kinds.has(option.kind)} onChange={() => toggleKind(option.kind)} />
+              <span className="sm-choice--card__body">
+                <span className="sm-choice--card__title">{option.title}</span>
+                <span className="sm-choice--card__desc">{option.description}</span>
+              </span>
+            </label>
+          ))}
         </div>
       </div>
 
@@ -596,12 +623,30 @@ function CueEditor({
             This show's current audio assets, by logical sequence. A cue stores the sequence, never an asset id:
             the coordinator resolves it that way in <span className="sm-data">assetsync/cuecatalog.go</span>.
           </p>
+          {audioAsset !== '' && !audioAssets.some((asset) => asset.sequence === audioAsset) && (
+            <RuledStrip
+              absence="failed"
+              label="Asset not uploaded"
+              fact={`${audioAsset} is not among this show's current assets.`}
+              detail="Upload it in Assets, or choose a different one."
+            />
+          )}
+          <Field label="Start offset (ms)" help="Milliseconds into the asset where playback begins.">
+            {(props) => (
+              <Input {...props} type="number" min={0} step={1} value={audioStartOffsetMillis} onChange={(e) => setAudioStartOffsetMillis(e.target.value)} />
+            )}
+          </Field>
           <TargetNodeField label="Audio target node" value={audioTarget} onChange={setAudioTarget} nodesState={audioNodes} />
         </div>
       )}
 
       {kinds.has('ltc') && (
         <div className="sm-inspector__group">
+          <Field label="Start offset (ms)" help="Milliseconds of timecode to skip before it starts emitting.">
+            {(props) => (
+              <Input {...props} type="number" min={0} max={86400000} step={1} value={ltcStartOffsetMillis} onChange={(e) => setLtcStartOffsetMillis(e.target.value)} />
+            )}
+          </Field>
           <TargetNodeField label="LTC target node" value={ltcTarget} onChange={setLtcTarget} nodesState={audioNodes} />
         </div>
       )}
@@ -628,6 +673,8 @@ function CueEditor({
           <TargetNodeField label="Announcement target node" value={announcementTarget} onChange={setAnnouncementTarget} nodesState={audioNodes} />
         </div>
       )}
+
+      <Callout>{cueActivationSummary(activationDraft)}</Callout>
 
       <div className="sm-inspector__actions">
         <span className="sm-small sm-muted">{isNew ? 'Creates revision 1' : `Active revision ${cue?.revision}`}</span>

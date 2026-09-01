@@ -275,9 +275,18 @@ export function LiveControl() {
                   <span aria-hidden="true">⏭ </span>Next item
                 </Button>
                 <ButtonRule />
-                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
-                  Stop after this item
-                </Button>
+                <div>
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
+                    Stop after this item
+                  </Button>
+                  <p className="sm-small sm-muted">FPP finishes the current item, then stops the playlist.</p>
+                </div>
+                <div>
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this loop', () => stopFPPPlaylistGracefully(instance.instanceId, true))}>
+                    Stop after this loop
+                  </Button>
+                  <p className="sm-small sm-muted">FPP finishes the current loop through the playlist, then stops.</p>
+                </div>
                 <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
                   <span aria-hidden="true">■ </span>Stop now
                 </Button>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   assetContentUrl,
+  getAssetContent,
   listAssets,
   listConfigObjects,
   uploadAsset,
@@ -9,11 +10,34 @@ import {
   type ConfigObjectSummary,
   type UploadProgress,
 } from '../api'
-import { Button, Callout, Field, Input, Panes, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, Field, Input, NotWired, Notice, Panes, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
 import { type AssetGroup, assetGroups, assetHistory, assetIdentityKey, formatBytes, hashLabel, targetLabel } from './showsModel'
+
+/**
+ * A rehashed identity, used to decide when re-uploading a file would
+ * perform ADR-028 decision 10's rollback. Reads via `FileReader` rather
+ * than `File.prototype.arrayBuffer`, not every runtime this renders in
+ * implements the latter on a `File`.
+ */
+async function fileArrayBuffer(file: File): Promise<ArrayBuffer> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the chosen file.'))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+async function sha256Hex(file: File): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', await fileArrayBuffer(file))
+  const hex = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+  return `sha256:${hex}`
+}
 
 /** Either one show's assets or every show's assets, shared by the show tab and the /assets library. */
 export type AssetScope = { kind: 'show'; showId: string } | { kind: 'all' }
@@ -165,6 +189,11 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
           <div className="sm-inline-row sm-stack-3">
             <Input aria-label="Filter assets" placeholder="Filter assets…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
             <Segmented label="Filter by media type" value={filterMedia} options={MEDIA_FILTERS} onChange={setFilterMedia} />
+            <NotWired label="Not wired">
+              <button type="button" className="sm-segmented__item">
+                Needs sync
+              </button>
+            </NotWired>
             {scope.kind === 'all' && (
               <Field label="Filter by show">
                 {(props) => (
@@ -225,6 +254,7 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
             showOptions={showOptions}
             nodes={model.nodes}
             knownSequences={knownSequences}
+            assets={state.assets}
             model={model}
             onUploaded={() => {
               reload()
@@ -232,7 +262,15 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
             onCancel={() => setUploading(false)}
           />
         )}
-        {!uploading && selectedIdentityAsset !== null && <AssetDetail asset={selectedIdentityAsset} history={assetHistory(state.assets, selectedIdentity ?? '')} />}
+        {!uploading && selectedIdentityAsset !== null && (
+          <AssetDetail
+            key={selectedIdentity}
+            asset={selectedIdentityAsset}
+            history={assetHistory(state.assets, selectedIdentity ?? '')}
+            model={model}
+            onRolledBack={() => reload()}
+          />
+        )}
       </aside>
     </Panes>
   )
@@ -281,7 +319,69 @@ function AssetGroupRows({
   )
 }
 
-function AssetDetail({ asset, history }: { asset: Asset; history: Asset[] }) {
+/**
+ * A history entry's own annotation, derived purely from the group's row
+ * data (hash equality), never from a persisted "was rolled back" flag,
+ * `GET /assets` carries no such field (docs/ui-rebuild/OPEN-DECISIONS.md
+ * D-016).
+ */
+function historyAnnotation(entry: Asset, history: readonly Asset[]): string | null {
+  const currentEntry = history.find((e) => e.current)
+  if (entry.current) {
+    const priorMatch = history.find((e) => e.id !== entry.id && e.contentHash === entry.contentHash)
+    if (priorMatch === undefined) return null
+    const restoredBefore = priorMatch.supersededAt !== null ? formatDateClock(priorMatch.supersededAt) : null
+    return `Rollback, these exact bytes were current before ${restoredBefore ?? 'an unrecorded time'}`
+  }
+  if (currentEntry !== undefined && entry.contentHash === currentEntry.contentHash) return 'Same bytes as current'
+  return null
+}
+
+type RollbackState =
+  | { kind: 'idle' }
+  | { kind: 'confirming'; entryId: string; confirmText: string }
+  | { kind: 'busy'; entryId: string }
+  | { kind: 'done'; entryId: string; rolledBack: boolean; asset: Asset }
+  | { kind: 'failed'; entryId: string; reason: string }
+
+function AssetDetail({
+  asset,
+  history,
+  model,
+  onRolledBack,
+}: {
+  asset: Asset
+  history: Asset[]
+  model: ReturnType<typeof useModelContext>
+  onRolledBack: () => void
+}) {
+  const [rollback, setRollback] = useState<RollbackState>({ kind: 'idle' })
+  const writeGate = evaluateScope(model.session, model.sessionFetchFailed, 'asset:write')
+
+  const confirmRollback = (entry: Asset) => {
+    setRollback({ kind: 'busy', entryId: entry.id })
+    getAssetContent(entry.id)
+      .then((blob) => {
+        const file = new File([blob], entry.runtimeFilename, { type: blob.type || 'application/octet-stream' })
+        return uploadAsset(
+          file,
+          {
+            show: entry.show,
+            sequence: entry.sequence,
+            mediaType: entry.mediaType,
+            targetKind: entry.targetKind,
+            ...(entry.targetKind === 'node' ? { target: entry.target } : {}),
+          },
+          () => {},
+        )
+      })
+      .then((response) => {
+        setRollback({ kind: 'done', entryId: entry.id, rolledBack: response.rolledBack, asset: response.asset })
+        onRolledBack()
+      })
+      .catch((err: unknown) => setRollback({ kind: 'failed', entryId: entry.id, reason: describeApiError(err) }))
+  }
+
   return (
     <div className="sm-inspector">
       <p className="sm-eyebrow">Asset variant</p>
@@ -317,23 +417,89 @@ function AssetDetail({ asset, history }: { asset: Asset; history: Asset[] }) {
       <section className="sm-inspector__group">
         <h3 className="sm-subsection__title">History</h3>
         <p className="sm-small sm-muted">A version can become current more than once, so this reads as events, not a one-way list.</p>
-        {history.map((entry) => (
-          <div key={`${entry.id} ${entry.createdAt}`} className="sm-readout">
-            <span className={entry.current ? 'sm-eyebrow sm-eyebrow--accent sm-flat' : 'sm-eyebrow sm-flat'}>{entry.current ? 'Current' : 'Superseded'}</span>
-            <div>
-              <p className="sm-data sm-flat">{hashLabel(entry.contentHash)}</p>
-              <p className="sm-readout__fact">
-                Uploaded {formatDateClock(entry.createdAt) ?? 'at an unrecorded time'} by {entry.createdByPrincipalName ?? 'an unknown principal'}
-              </p>
+        {history.map((entry) => {
+          const annotation = historyAnnotation(entry, history)
+          const canMakeCurrent = !entry.current && annotation !== 'Same bytes as current'
+          const isConfirming = rollback.kind === 'confirming' && rollback.entryId === entry.id
+          const isBusy = rollback.kind === 'busy' && rollback.entryId === entry.id
+          const done = rollback.kind === 'done' && rollback.entryId === entry.id ? rollback : null
+          const failed = rollback.kind === 'failed' && rollback.entryId === entry.id ? rollback : null
+          return (
+            <div key={`${entry.id} ${entry.createdAt}`} className="sm-readout">
+              <span className={entry.current ? 'sm-eyebrow sm-eyebrow--accent sm-flat' : 'sm-eyebrow sm-flat'}>{entry.current ? 'Current' : 'Superseded'}</span>
+              <div>
+                <p className="sm-data sm-flat">{hashLabel(entry.contentHash)}</p>
+                <p className="sm-readout__fact">
+                  Uploaded {formatDateClock(entry.createdAt) ?? 'at an unrecorded time'} by {entry.createdByPrincipalName ?? 'an unknown principal'}
+                </p>
+                {annotation !== null && <p className="sm-readout__fact sm-eyebrow--accent sm-flat">{annotation}</p>}
+
+                {canMakeCurrent && !isConfirming && !isBusy && done === null && (
+                  <Button
+                    variant="quiet"
+                    size="compact"
+                    onClick={() => setRollback({ kind: 'confirming', entryId: entry.id, confirmText: '' })}
+                    disabled={!writeGate.allowed}
+                    title={writeGate.allowed ? undefined : writeGate.reason}
+                  >
+                    Make current
+                  </Button>
+                )}
+
+                {isConfirming && (
+                  <div className="sm-inspector__group">
+                    <Field label={`Type ${entry.sequence} to confirm the rollback`} help="Re-uploads these exact bytes; the coordinator performs the swap (ADR-028).">
+                      {(props) => (
+                        <Input
+                          {...props}
+                          value={rollback.kind === 'confirming' ? rollback.confirmText : ''}
+                          onChange={(e) => setRollback({ kind: 'confirming', entryId: entry.id, confirmText: e.target.value })}
+                        />
+                      )}
+                    </Field>
+                    <ButtonRow>
+                      <Button variant="quiet" onClick={() => setRollback({ kind: 'idle' })}>
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="primary"
+                        disabled={!writeGate.allowed || (rollback.kind === 'confirming' && rollback.confirmText !== entry.sequence)}
+                        title={writeGate.allowed ? undefined : writeGate.reason}
+                        onClick={() => confirmRollback(entry)}
+                      >
+                        Confirm rollback
+                      </Button>
+                    </ButtonRow>
+                  </div>
+                )}
+
+                {isBusy && <p className="sm-small sm-muted">Rolling back…</p>}
+
+                {done !== null && (
+                  <p className="sm-verdict">
+                    <StatusPair tone={done.rolledBack ? 'warn' : 'good'} label={done.rolledBack ? 'Rolled back' : 'Uploaded'} />
+                    <span className="sm-verdict__detail">
+                      {done.rolledBack
+                        ? 'These bytes matched a superseded version, which is now current again; the previously current version is now superseded.'
+                        : 'Registered, and now the current asset for this identity.'}
+                    </span>
+                  </p>
+                )}
+
+                {failed !== null && <RuledStrip absence="failed" label="Rollback failed" fact={failed.reason} />}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </section>
 
       <div className="sm-inspector__actions">
         <a className="sm-small" href={assetContentUrl(asset.id)}>
           Download
         </a>
+        <NotWired>
+          <Button variant="quiet">Re-sync to node</Button>
+        </NotWired>
       </div>
     </div>
   )
@@ -344,6 +510,7 @@ function AssetUploadForm({
   showOptions,
   nodes,
   knownSequences,
+  assets,
   model,
   onUploaded,
   onCancel,
@@ -352,11 +519,13 @@ function AssetUploadForm({
   showOptions: readonly ConfigObjectSummary[]
   nodes: readonly { nodeId: string; label: string | null }[]
   knownSequences: readonly string[]
+  assets: readonly Asset[]
   model: ReturnType<typeof useModelContext>
   onUploaded: () => void
   onCancel: () => void
 }) {
   const [file, setFile] = useState<File | null>(null)
+  const [fileHash, setFileHash] = useState<string | null>(null)
   const [sequence, setSequence] = useState('')
   const [mediaType, setMediaType] = useState<'fseq' | 'audio' | 'media'>('fseq')
   const [targetKind, setTargetKind] = useState<'node' | 'show'>('show')
@@ -369,6 +538,36 @@ function AssetUploadForm({
 
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, 'asset:write')
 
+  const effectiveShowId = scope.kind === 'show' ? scope.showId : showId
+
+  useEffect(() => {
+    if (file === null) {
+      setFileHash(null)
+      return
+    }
+    let cancelled = false
+    sha256Hex(file).then((hash) => {
+      if (!cancelled) setFileHash(hash)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [file])
+
+  // A superseded entry sharing this exact identity and hash: uploading would perform ADR-028 decision 10's rollback.
+  const matchedRollback =
+    fileHash === null
+      ? null
+      : assets.find(
+          (a) =>
+            !a.current &&
+            a.contentHash === fileHash &&
+            a.show === effectiveShowId &&
+            a.sequence === sequence.trim() &&
+            a.targetKind === targetKind &&
+            (targetKind === 'show' || a.target === target),
+        ) ?? null
+
   let blockReason: string | null = null
   if (file === null) blockReason = 'Choose a file.'
   else if (sequence.trim() === '') blockReason = 'Name the logical sequence this file belongs to.'
@@ -377,7 +576,6 @@ function AssetUploadForm({
 
   const submit = () => {
     if (blockReason !== null || file === null) return
-    const effectiveShowId = scope.kind === 'show' ? scope.showId : showId
     setUploading(true)
     setError(null)
     setResult(null)
@@ -479,6 +677,15 @@ function AssetUploadForm({
         )}
       </div>
 
+      {matchedRollback !== null && (
+        <Notice
+          tone="warn"
+          headline="This will be a rollback"
+          explanation={`These exact bytes are already stored as a superseded version from ${formatDateClock(matchedRollback.createdAt) ?? 'an unrecorded time'}. Uploading makes that version current again and supersedes today's.`}
+          live="status"
+        />
+      )}
+
       <div className="sm-inspector__actions">
         <span className="sm-small sm-muted">{uploading && progress !== null ? `${progress.loaded} / ${progress.total} bytes` : 'Then syncs to the target'}</span>
         <div className="sm-btn-row">
@@ -491,7 +698,7 @@ function AssetUploadForm({
             disabled={uploading || !writeGate.allowed || blockReason !== null}
             title={!writeGate.allowed ? writeGate.reason : (blockReason ?? undefined)}
           >
-            {uploading ? 'Uploading…' : 'Upload'}
+            {uploading ? (matchedRollback !== null ? 'Rolling back…' : 'Uploading…') : matchedRollback !== null ? 'Roll back' : 'Upload'}
           </Button>
         </div>
       </div>

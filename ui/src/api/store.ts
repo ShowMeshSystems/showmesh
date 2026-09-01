@@ -125,6 +125,7 @@ type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRes
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+type SchemaResolumeRecoveryChangedEvent = components['schemas']['ResolumeRecoveryChangedEvent']
 // The pending-instanceUuid-change acknowledgement.
 type SchemaAcknowledgeFPPInstanceUUIDChangeResponse = components['schemas']['AcknowledgeFPPInstanceUUIDChangeResponse']
 // `GET /` (getServiceDescriptor): the coordinator's own self-description.
@@ -2627,6 +2628,22 @@ export class ApiStore {
   }
 
   /**
+   * `GET /api/v1/assets/{id}/content` (ADR-028), fetched into memory
+   * rather than navigated to — the "Make current" rollback control
+   * (Show Assets.dc.html) needs the superseded asset's own bytes to
+   * replay through [uploadAsset], not a browser download.
+   */
+  async getAssetContent(id: string): Promise<Blob> {
+    const controller = this.beginSideCall()
+    try {
+      const response = await this.client.request(`/assets/${encodeURIComponent(id)}/content`, controller.signal)
+      return await response.blob()
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * `GET /api/v1/assets/manifest` (ADR-028 seam E5): every declared
    * node's asset readiness, "what should it hold" versus "what does it
    * hold". `ready`/`not_ready`/`unknown` are three distinct states the
@@ -3347,6 +3364,17 @@ export class ApiStore {
         this.applyResolumeChanged(payload.instance, payload.serverTime)
         return
       }
+      case 'resolumeRecovery.changed': {
+        // Track D seam D-3a: mirrors `nightSession.changed`'s own shape —
+        // this frame's schema (ResolumeRecoveryChangedEvent) carries
+        // `serverTime` as one of its OWN top-level fields, alongside the
+        // full current recovery state, never a delta. Parsed as the whole
+        // event, matching `nightSession.changed`'s own parsing below.
+        const payload = tryParse<SchemaResolumeRecoveryChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyResolumeRecoveryChanged(payload)
+        return
+      }
       case 'macroRun.changed': {
         // Unlike every case above, this frame's own schema (MacroRunChangedEvent)
         // carries serverTime as one of its OWN top-level fields rather than
@@ -3564,6 +3592,13 @@ export class ApiStore {
       // re-establish ground truth rather than trusting a value this
       // connection has no evidence still holds.
       nightSession: null,
+      // Same "invalidate, do not carry forward" posture as `nightSession`
+      // immediately above, and for the identical reason: this is not part
+      // of `Snapshot` either (Model.resolumeRecovery's own comment), so a
+      // stale value from before a reconnect must not keep rendering as
+      // current across a generation boundary this connection cannot
+      // vouch for.
+      resolumeRecovery: null,
       // Same "invalidate, do not carry forward" posture as
       // `nightSession` immediately above, and for the identical reason:
       // this is not part of `Snapshot` either (Model.fppPlaylistEntryObservations's
@@ -3776,6 +3811,35 @@ export class ApiStore {
       clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
       serverTimeReceivedAt: receivedAt,
       nightSession: event.session,
+    })
+  }
+
+  /**
+   * `resolumeRecovery.changed` (Track D seam D-3a) carries the recovery
+   * resource's COMPLETE current representation, matching
+   * [applyNightSessionChanged]'s exact same whole-object-replace posture
+   * and for the identical reason (no delta kind exists for this resource
+   * either, and it is not part of `Snapshot` — see `Model.resolumeRecovery`'s
+   * own comment). The event's own fields, minus `seq` (per-connection
+   * only, never a durable cursor), are exactly `ResolumeRecoveryResponse`'s
+   * shape.
+   */
+  private applyResolumeRecoveryChanged(event: SchemaResolumeRecoveryChangedEvent): void {
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime: event.serverTime,
+      clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      resolumeRecovery: {
+        serverTime: event.serverTime,
+        resolumeConfigured: event.resolumeConfigured,
+        autoRestoreEnabled: event.autoRestoreEnabled,
+        autoRestoreConfigured: event.autoRestoreConfigured,
+        settleDelaySeconds: event.settleDelaySeconds,
+        record: event.record,
+        lastRestore: event.lastRestore,
+      },
     })
   }
 

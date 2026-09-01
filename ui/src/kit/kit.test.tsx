@@ -83,6 +83,20 @@ describe('BlankingPlate', () => {
     expect(container.querySelector('.sm-plate--warn')).not.toBeNull()
     expect(container.querySelector('.sm-plate--bad')).toBeNull()
   })
+
+  it('renders the title as an h2 by default, keeping the plate class', () => {
+    render(<BlankingPlate absence="empty" stamp="Empty" eyebrow="Audio · empty" title="Nothing here" />)
+    const heading = screen.getByRole('heading', { level: 2, name: 'Nothing here' })
+    expect(heading.tagName).toBe('H2')
+    expect(heading.className).toBe('sm-plate__title')
+  })
+
+  it('renders the title as an h3, same class, when headingLevel is 3 for a plate inside a Section', () => {
+    render(<BlankingPlate absence="empty" stamp="Empty" eyebrow="Audio · empty" title="Nothing here" headingLevel={3} />)
+    const heading = screen.getByRole('heading', { level: 3, name: 'Nothing here' })
+    expect(heading.tagName).toBe('H3')
+    expect(heading.className).toBe('sm-plate__title')
+  })
 })
 
 describe('Button', () => {

@@ -22,7 +22,7 @@ import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave } from '../domain/save'
 import { StaleWriteStrip, type StaleWrite } from './StaleWrite'
-import { fppHealthFor, resolumeHealthFor, HEALTH_TONE } from './settingsModel'
+import { fppHealthFor, resolumeHealthFor, hostRowsToMap, hostsMapToRows, HEALTH_TONE, type MQTTHostRow } from './settingsModel'
 
 type Load<R> = { kind: 'loading' } | { kind: 'loaded'; response: R } | { kind: 'notConfigured'; detail: string } | { kind: 'failed'; reason: string }
 
@@ -72,8 +72,10 @@ export function SettingsConnections() {
   const [instances, setInstances] = useState<ConfigResolumeInstance[]>([])
   const [instancesDirty, setInstancesDirty] = useState(false)
   const [brokerURL, setBrokerURL] = useState('')
+  const [username, setUsername] = useState('')
   const [topicPrefix, setTopicPrefix] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [hosts, setHosts] = useState<MQTTHostRow[]>([])
   const [mqttDirty, setMqttDirty] = useState(false)
 
   const [fppOutcome, setFppOutcome] = useState<RowOutcome>(null)
@@ -104,12 +106,16 @@ export function SettingsConnections() {
   useEffect(() => {
     if (mqttLoad.kind === 'loaded') {
       setBrokerURL(mqttLoad.response.payload.brokerURL)
+      setUsername(mqttLoad.response.payload.username)
       setTopicPrefix(mqttLoad.response.payload.topicPrefix)
+      setHosts(hostsMapToRows(mqttLoad.response.payload.hosts))
       setNewPassword('')
       setMqttDirty(false)
     } else if (mqttLoad.kind === 'notConfigured') {
       setBrokerURL('')
+      setUsername('')
       setTopicPrefix('')
+      setHosts([])
       setNewPassword('')
       setMqttDirty(false)
     }
@@ -192,7 +198,9 @@ export function SettingsConnections() {
       if (mqttDirty) {
         const request = {
           brokerURL,
+          username,
           topicPrefix,
+          hosts: hostRowsToMap(hosts),
           ...(newPassword !== '' ? { password: newPassword } : {}),
         }
         try {
@@ -240,10 +248,14 @@ export function SettingsConnections() {
     else setInstances([])
     if (mqttLoad.kind === 'loaded') {
       setBrokerURL(mqttLoad.response.payload.brokerURL)
+      setUsername(mqttLoad.response.payload.username)
       setTopicPrefix(mqttLoad.response.payload.topicPrefix)
+      setHosts(hostsMapToRows(mqttLoad.response.payload.hosts))
     } else {
       setBrokerURL('')
+      setUsername('')
       setTopicPrefix('')
+      setHosts([])
     }
     setNewPassword('')
     setEndpointsDirty(false)
@@ -457,6 +469,16 @@ export function SettingsConnections() {
                 />
               </label>
               <label className="sm-field">
+                <span className="sm-field__label">Username</span>
+                <Input
+                  value={username}
+                  onChange={(e) => {
+                    setUsername(e.target.value)
+                    setMqttDirty(true)
+                  }}
+                />
+              </label>
+              <label className="sm-field">
                 <span className="sm-field__label">Topic prefix</span>
                 <Input
                   value={topicPrefix}
@@ -481,6 +503,54 @@ export function SettingsConnections() {
                 />
                 <span className="sm-field__help">The stored password is never sent back to this browser; leave this blank to keep it unchanged.</span>
               </label>
+            </div>
+            <div className="sm-stack-3" data-testid="mqtt-hosts">
+              <p className="sm-field__label">Host name overrides</p>
+              <p className="sm-small sm-muted">
+                Maps a player id from FPP players above to the HostName that player publishes in its own MQTT
+                topics. Only a player id listed here is ingested.
+              </p>
+              <div className="sm-panel sm-stack-4">
+                {hosts.map((row, index) => (
+                  <div key={index} className="sm-inline-row">
+                    <Input
+                      aria-label="Host id"
+                      value={row.id}
+                      onChange={(e) => {
+                        setHosts(patchRow(hosts, index, { id: e.target.value }))
+                        setMqttDirty(true)
+                      }}
+                      style={{ maxWidth: 200 }}
+                    />
+                    <Input
+                      aria-label="HostName"
+                      value={row.hostName}
+                      onChange={(e) => {
+                        setHosts(patchRow(hosts, index, { hostName: e.target.value }))
+                        setMqttDirty(true)
+                      }}
+                      style={{ maxWidth: 200 }}
+                    />
+                    <Button
+                      variant="quiet"
+                      onClick={() => {
+                        setHosts(hosts.filter((_, i) => i !== index))
+                        setMqttDirty(true)
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <Button
+                onClick={() => {
+                  setHosts([...hosts, { id: '', hostName: '' }])
+                  setMqttDirty(true)
+                }}
+              >
+                Add a host override
+              </Button>
             </div>
           </>
         )}

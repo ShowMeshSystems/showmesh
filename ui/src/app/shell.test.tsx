@@ -9,6 +9,7 @@ import { clearStoredToken, setStoredToken } from '../api/token'
 import { initialModel } from '../api/domain'
 import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
+import { BootstrapBand, SignedOutBand } from './SessionBand'
 import { NotFound } from '../screens/NotFound'
 
 const loginMock = vi.fn()
@@ -272,6 +273,17 @@ describe('app shell', () => {
     })
     expect(bootstrapContainer.querySelector('.sm-plate--unobserved')).toBeNull()
     expect(screen.getByText('No shows, no nodes, no principals')).toBeInTheDocument()
+  })
+
+  it('gives the signed-out and bootstrap bands exactly one h1, matching the mock', () => {
+    const { unmount: unmountSignedOut } = render(<SignedOutBand />)
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'Signed out on this device' })).toBeInTheDocument()
+    unmountSignedOut()
+
+    render(<BootstrapBand />)
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'No administrator exists on this coordinator' })).toBeInTheDocument()
   })
 
   it('names both outstanding reads on the connecting band', () => {

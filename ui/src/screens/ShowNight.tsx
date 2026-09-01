@@ -27,6 +27,8 @@ import {
   BlankingPlate,
   Button,
   ButtonRow,
+  Choice,
+  ChoiceRow,
   DefinitionStrip,
   Field,
   FieldGrid,
@@ -734,7 +736,67 @@ function NightSessionActivation() {
   )
 }
 
-type CueDraft = { name: string; role: 'lighting' | 'projection' | 'audio' | 'announcement' | 'other'; action: string; offsetMs: string; base: ConfigNightSessionCue | null }
+type CueDraft = {
+  name: string
+  role: 'lighting' | 'projection' | 'audio' | 'announcement' | 'other'
+  action: string
+  offsetMs: string
+  barrier: boolean
+  onFailure: 'continue' | 'abort'
+  fadeDurationMs: string
+  announcementPolicy: '' | 'duck' | 'mix' | 'interrupt'
+  base: ConfigNightSessionCue | null
+}
+
+type BackgroundAudioItemDraft = { itemId: string; show: string; sequence: string; target: string }
+type BackgroundAudioDraft = {
+  enabled: boolean
+  items: BackgroundAudioItemDraft[]
+  repeat: 'none' | 'item' | 'playlist'
+  resume: 'resume' | 'restart'
+  itemTransition: 'sequential' | 'gapless' | 'crossfade'
+  crossfadeMs: string
+  maxGainDb: string
+  fadeOutMs: string
+  fadeInMs: string
+}
+
+type PrerequisiteDraft = { kind: 'action' | 'delay' | 'evidence'; action: string; requireConfirmation: boolean; delayMs: string }
+type SiteControlDraft = {
+  requestThermalProfile: string
+  powerOnEnabled: boolean
+  powerOnAction: string
+  powerOnDomain: 'presentation' | 'environmental' | 'mixed' | 'unknown'
+  powerOnProvenance: 'provider' | 'operator-declared'
+  powerOffEnabled: boolean
+  powerOffAction: string
+  powerOffDomain: 'presentation' | 'environmental' | 'mixed' | 'unknown'
+  powerOffProvenance: 'provider' | 'operator-declared'
+  removalPolicy: 'immediate' | 'after-actions'
+  immediateSafeAttestation: boolean
+  prerequisites: PrerequisiteDraft[]
+}
+
+type InterlockDraft = {
+  name: string
+  phase:
+    | 'prepare-site'
+    | 'presentation-power-on'
+    | 'projector-strike'
+    | 'run-readiness'
+    | 'start-preshow'
+    | 'start-night'
+    | 'enter-resting'
+    | 'fade-out-night'
+    | 'power-down-presentation'
+  posture: 'observe' | 'block' | 'disabled'
+  signal: string
+  freshnessSeconds: string
+  failureText: string
+  onUnavailable: 'block' | 'allow'
+  overridePolicy: 'none' | 'authorized-operator'
+}
+
 type DefinitionDraft = {
   id: string
   show: string
@@ -746,24 +808,211 @@ type DefinitionDraft = {
   timelineShow: string
   timelineSequence: string
   timelineTarget: string
+  endOfNightPlaylist: string
+  endOfNightRepeat: boolean
+  announcementDefaultPolicy: 'duck' | 'mix' | 'interrupt'
+  backgroundAudio: BackgroundAudioDraft
+  siteControl: SiteControlDraft
+  interlocks: InterlockDraft[]
+  blackoutHoldMs: string
+  blackoutAfterShowMs: string
   enterShow: CueDraft[]
   enterResting: CueDraft[]
   base: ConfigNightSessionWrite | null
 }
 
-const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', base: null })
-const blankDefinition = (): DefinitionDraft => ({ id: '', show: '', label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '', timelineShow: '', timelineSequence: '', timelineTarget: '', enterShow: [], enterResting: [], base: null })
+const CUE_ROLES = ['lighting', 'projection', 'audio', 'announcement', 'other'] as const
+const ANNOUNCEMENT_POLICIES = ['duck', 'mix', 'interrupt'] as const
+const BACKGROUND_AUDIO_REPEATS = ['none', 'item', 'playlist'] as const
+const BACKGROUND_AUDIO_RESUMES = ['resume', 'restart'] as const
+const BACKGROUND_AUDIO_TRANSITIONS = ['sequential', 'gapless', 'crossfade'] as const
+const POWER_DOMAINS = ['presentation', 'environmental', 'mixed', 'unknown'] as const
+const DOMAIN_PROVENANCES = ['provider', 'operator-declared'] as const
+const REMOVAL_POLICIES = ['immediate', 'after-actions'] as const
+const PREREQUISITE_KINDS = ['action', 'delay', 'evidence'] as const
+const INTERLOCK_PHASES = [
+  'prepare-site', 'presentation-power-on', 'projector-strike', 'run-readiness',
+  'start-preshow', 'start-night', 'enter-resting', 'fade-out-night', 'power-down-presentation',
+] as const
+const INTERLOCK_POSTURES = ['observe', 'block', 'disabled'] as const
+const ON_UNAVAILABLE_OPTIONS = ['block', 'allow'] as const
+const OVERRIDE_POLICIES = ['none', 'authorized-operator'] as const
+
+const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', barrier: false, onFailure: 'continue', fadeDurationMs: '', announcementPolicy: '', base: null })
+const blankBackgroundAudioItem = (): BackgroundAudioItemDraft => ({ itemId: '', show: '', sequence: '', target: '' })
+const blankBackgroundAudio = (): BackgroundAudioDraft => ({ enabled: false, items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential', crossfadeMs: '', maxGainDb: '', fadeOutMs: '', fadeInMs: '' })
+const blankPrerequisite = (): PrerequisiteDraft => ({ kind: 'action', action: '', requireConfirmation: false, delayMs: '' })
+const blankSiteControl = (): SiteControlDraft => ({
+  requestThermalProfile: '',
+  powerOnEnabled: false, powerOnAction: '', powerOnDomain: 'presentation', powerOnProvenance: 'operator-declared',
+  powerOffEnabled: false, powerOffAction: '', powerOffDomain: 'presentation', powerOffProvenance: 'operator-declared',
+  removalPolicy: 'immediate', immediateSafeAttestation: false, prerequisites: [],
+})
+const blankInterlock = (): InterlockDraft => ({ name: '', phase: 'prepare-site', posture: 'observe', signal: '', freshnessSeconds: '', failureText: '', onUnavailable: 'block', overridePolicy: 'none' })
+const blankDefinition = (): DefinitionDraft => ({
+  id: '', show: '', label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '',
+  timelineShow: '', timelineSequence: '', timelineTarget: '', endOfNightPlaylist: '', endOfNightRepeat: false,
+  announcementDefaultPolicy: 'duck', backgroundAudio: blankBackgroundAudio(), siteControl: blankSiteControl(), interlocks: [],
+  blackoutHoldMs: '0', blackoutAfterShowMs: '0',
+  enterShow: [], enterResting: [], base: null,
+})
 
 function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDraft {
   const { payload } = response
-  const cue = (item: (typeof payload.enterShow.cues)[number]): CueDraft => ({ name: item.name, role: item.role, action: item.action, offsetMs: String(item.offsetMs), base: item })
+  const cue = (item: (typeof payload.enterShow.cues)[number]): CueDraft => ({
+    name: item.name, role: item.role, action: item.action, offsetMs: String(item.offsetMs),
+    barrier: item.barrier, onFailure: item.onFailure,
+    fadeDurationMs: item.fadeDurationMs === undefined ? '' : String(item.fadeDurationMs),
+    announcementPolicy: item.announcementPolicy ?? '', base: item,
+  })
+  const bg = payload.resting.backgroundAudio
+  const backgroundAudio: BackgroundAudioDraft =
+    bg === undefined
+      ? blankBackgroundAudio()
+      : {
+          enabled: true,
+          items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target })),
+          repeat: bg.repeat, resume: bg.resume, itemTransition: bg.itemTransition,
+          crossfadeMs: bg.crossfadeMs === undefined ? '' : String(bg.crossfadeMs),
+          maxGainDb: String(bg.maxGainDb),
+          fadeOutMs: bg.fadeOutMs === undefined ? '' : String(bg.fadeOutMs),
+          fadeInMs: bg.fadeInMs === undefined ? '' : String(bg.fadeInMs),
+        }
+  const powerOn = payload.siteControl?.presentationPowerOn
+  const powerOff = payload.siteControl?.presentationPowerOff
+  const siteControl: SiteControlDraft = {
+    requestThermalProfile: payload.siteControl?.requestThermalProfile ?? '',
+    powerOnEnabled: powerOn !== undefined,
+    powerOnAction: powerOn?.action ?? '',
+    powerOnDomain: powerOn?.powerDomain ?? 'presentation',
+    powerOnProvenance: powerOn?.domainProvenance ?? 'operator-declared',
+    powerOffEnabled: powerOff !== undefined,
+    powerOffAction: powerOff?.action ?? '',
+    powerOffDomain: powerOff?.powerDomain ?? 'presentation',
+    powerOffProvenance: powerOff?.domainProvenance ?? 'operator-declared',
+    removalPolicy: powerOff?.removalPolicy ?? 'immediate',
+    immediateSafeAttestation: powerOff?.immediateSafeAttestation ?? false,
+    prerequisites: (powerOff?.prerequisites ?? []).map((p) => ({
+      kind: p.kind, action: p.action ?? '', requireConfirmation: p.requireConfirmation ?? false,
+      delayMs: p.delayMs === undefined ? '' : String(p.delayMs),
+    })),
+  }
+  const interlocks: InterlockDraft[] = (payload.interlocks ?? []).map((i) => ({
+    name: i.name, phase: i.phase, posture: i.posture, signal: i.signal ?? '',
+    freshnessSeconds: i.freshnessSeconds === undefined ? '' : String(i.freshnessSeconds),
+    failureText: i.failureText ?? '', onUnavailable: i.onUnavailable ?? 'block', overridePolicy: i.overridePolicy ?? 'none',
+  }))
   return {
     id: response.id, show: payload.show, label: payload.label,
     showFpp: payload.showPlaylist.fppInstanceId, showPlaylist: payload.showPlaylist.playlist,
     restingFpp: payload.resting.fppInstanceId, restingPlaylist: payload.resting.playlist,
     timelineShow: payload.resting.timelineAsset.show, timelineSequence: payload.resting.timelineAsset.sequence, timelineTarget: payload.resting.timelineAsset.target,
+    endOfNightPlaylist: payload.resting.endOfNightPlaylist, endOfNightRepeat: payload.resting.endOfNightRepeat,
+    announcementDefaultPolicy: payload.announcementDefaultPolicy, backgroundAudio, siteControl, interlocks,
+    blackoutHoldMs: String(payload.enterShow.blackoutHoldMs), blackoutAfterShowMs: String(payload.enterResting.blackoutAfterShowMs),
     enterShow: payload.enterShow.cues.map(cue), enterResting: payload.enterResting.cues.map(cue), base: payload,
   }
+}
+
+type BackgroundAudioWrite = NonNullable<ConfigNightSessionWrite['resting']['backgroundAudio']>
+type SiteControlWrite = NonNullable<ConfigNightSessionWrite['siteControl']>
+type InterlockWrite = NonNullable<ConfigNightSessionWrite['interlocks']>[number]
+
+function buildBackgroundAudio(audio: BackgroundAudioDraft): { ok: true; value: BackgroundAudioWrite | undefined } | { ok: false; error: string } {
+  if (!audio.enabled) return { ok: true, value: undefined }
+  if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or disable it.' }
+  const items: BackgroundAudioWrite['items'] = []
+  for (const [index, item] of audio.items.entries()) {
+    if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '' || item.target.trim() === '') {
+      return { ok: false, error: `Background audio item ${index + 1} needs an item id, show, sequence, and target node.` }
+    }
+    items.push({ itemId: item.itemId.trim(), show: item.show.trim(), sequence: item.sequence.trim(), target: item.target.trim() })
+  }
+  const maxGainDb = Number(audio.maxGainDb)
+  if (audio.maxGainDb.trim() === '' || Number.isNaN(maxGainDb) || maxGainDb > 0) {
+    return { ok: false, error: 'Background audio ceiling (max gain) must be a number no greater than 0 dB.' }
+  }
+  const fadeOutText = audio.fadeOutMs.trim()
+  const fadeInText = audio.fadeInMs.trim()
+  if ((fadeOutText === '') !== (fadeInText === '')) {
+    return { ok: false, error: 'Background audio fade-out and fade-in must be configured together, or both left empty for an instant cut.' }
+  }
+  if (audio.itemTransition === 'crossfade' && audio.crossfadeMs.trim() === '') {
+    return { ok: false, error: 'Crossfade duration is required when item transition is crossfade.' }
+  }
+  return {
+    ok: true,
+    value: {
+      items, repeat: audio.repeat, resume: audio.resume, itemTransition: audio.itemTransition, maxGainDb,
+      ...(audio.itemTransition === 'crossfade' ? { crossfadeMs: Number(audio.crossfadeMs) } : {}),
+      ...(fadeOutText === '' ? {} : { fadeOutMs: Number(fadeOutText), fadeInMs: Number(fadeInText) }),
+    },
+  }
+}
+
+function buildSiteControl(sc: SiteControlDraft): { ok: true; value: SiteControlWrite | undefined } | { ok: false; error: string } {
+  const built: SiteControlWrite = {}
+  if (sc.requestThermalProfile.trim() !== '') built.requestThermalProfile = sc.requestThermalProfile.trim()
+  if (sc.powerOnEnabled) {
+    if (sc.powerOnAction.trim() === '') return { ok: false, error: 'Presentation power-on needs an action.' }
+    built.presentationPowerOn = { action: sc.powerOnAction.trim(), powerDomain: sc.powerOnDomain, domainProvenance: sc.powerOnProvenance }
+  }
+  if (sc.powerOffEnabled) {
+    if (sc.powerOffAction.trim() === '') return { ok: false, error: 'Presentation power-off needs an action.' }
+    if (sc.removalPolicy === 'immediate' && !sc.immediateSafeAttestation) {
+      return { ok: false, error: 'Immediate removal requires the safe-to-remove attestation.' }
+    }
+    if (sc.removalPolicy === 'after-actions' && sc.prerequisites.length === 0) {
+      return { ok: false, error: 'After-actions removal requires at least one prerequisite.' }
+    }
+    const prerequisites: NonNullable<SiteControlWrite['presentationPowerOff']>['prerequisites'] = []
+    for (const [index, p] of sc.prerequisites.entries()) {
+      if (p.kind === 'delay') {
+        const delayMs = Number(p.delayMs)
+        if (p.delayMs.trim() === '' || !Number.isInteger(delayMs) || delayMs < 0) {
+          return { ok: false, error: `Prerequisite ${index + 1} needs a whole, non-negative delay in milliseconds.` }
+        }
+        prerequisites.push({ kind: 'delay', delayMs })
+      } else {
+        if (p.action.trim() === '') return { ok: false, error: `Prerequisite ${index + 1} needs an action.` }
+        prerequisites.push({ kind: p.kind, action: p.action.trim(), ...(p.kind === 'action' ? { requireConfirmation: p.requireConfirmation } : {}) })
+      }
+    }
+    built.presentationPowerOff = {
+      action: sc.powerOffAction.trim(), powerDomain: sc.powerOffDomain, domainProvenance: sc.powerOffProvenance, removalPolicy: sc.removalPolicy,
+      ...(sc.removalPolicy === 'immediate' ? { immediateSafeAttestation: true } : {}),
+      ...(sc.removalPolicy === 'after-actions' ? { prerequisites } : {}),
+    }
+  }
+  return { ok: true, value: Object.keys(built).length === 0 ? undefined : built }
+}
+
+function buildInterlocks(items: InterlockDraft[]): { ok: true; value: InterlockWrite[] | undefined } | { ok: false; error: string } {
+  if (items.length === 0) return { ok: true, value: undefined }
+  const built: InterlockWrite[] = []
+  for (const [index, item] of items.entries()) {
+    if (item.name.trim() === '') return { ok: false, error: `Interlock ${index + 1} needs a name.` }
+    if (item.posture === 'disabled') {
+      built.push({ name: item.name.trim(), phase: item.phase, posture: 'disabled' })
+      continue
+    }
+    if (item.signal.trim() === '') return { ok: false, error: `Interlock ${index + 1} needs a signal action.` }
+    const entry: InterlockWrite = { name: item.name.trim(), phase: item.phase, posture: item.posture, signal: item.signal.trim() }
+    if (item.freshnessSeconds.trim() !== '') {
+      const freshness = Number(item.freshnessSeconds)
+      if (!Number.isInteger(freshness) || freshness < 0) {
+        return { ok: false, error: `Interlock ${index + 1}'s freshness must be a whole, non-negative number of seconds.` }
+      }
+      entry.freshnessSeconds = freshness
+    }
+    if (item.failureText.trim() !== '') entry.failureText = item.failureText.trim()
+    if (item.posture === 'block') {
+      entry.onUnavailable = item.onUnavailable
+      entry.overridePolicy = item.overridePolicy
+    }
+    built.push(entry)
+  }
+  return { ok: true, value: built }
 }
 
 function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { error: string } {
@@ -778,9 +1027,17 @@ function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { 
     for (const [index, item] of items.entries()) {
       const offset = Number(item.offsetMs)
       if (item.name.trim() === '' || item.action.trim() === '' || !Number.isInteger(offset)) return { ok: false, error: `${phase} transition step ${index + 1} needs a name, action, and whole-millisecond offset.` }
-      const carried: Partial<ConfigNightSessionCue> = { ...item.base }
-      if (item.role !== 'announcement') delete carried.announcementPolicy
-      result.push({ ...carried, name: item.name.trim(), role: item.role, action: item.action.trim(), offsetMs: offset })
+      const fadeText = item.fadeDurationMs.trim()
+      const fade = fadeText === '' ? null : Number(fadeText)
+      if (fade !== null && (!Number.isInteger(fade) || fade < 0)) {
+        return { ok: false, error: `${phase} transition step ${index + 1}'s fade duration must be a whole, non-negative number of milliseconds.` }
+      }
+      result.push({
+        name: item.name.trim(), role: item.role, action: item.action.trim(), offsetMs: offset,
+        barrier: item.barrier, onFailure: item.onFailure,
+        ...(fade === null ? {} : { fadeDurationMs: fade }),
+        ...(item.role === 'announcement' && item.announcementPolicy !== '' ? { announcementPolicy: item.announcementPolicy } : {}),
+      })
     }
     return { ok: true, cues: result }
   }
@@ -788,23 +1045,50 @@ function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { 
   if (!enteringShow.ok) return { error: enteringShow.error }
   const enteringResting = buildCues(draft.enterResting, 'Enter-resting')
   if (!enteringResting.ok) return { error: enteringResting.error }
+  const backgroundAudio = buildBackgroundAudio(draft.backgroundAudio)
+  if (!backgroundAudio.ok) return { error: backgroundAudio.error }
+  const siteControl = buildSiteControl(draft.siteControl)
+  if (!siteControl.ok) return { error: siteControl.error }
+  const interlocks = buildInterlocks(draft.interlocks)
+  if (!interlocks.ok) return { error: interlocks.error }
+  const blackoutHoldMs = Number(draft.blackoutHoldMs)
+  if (!Number.isInteger(blackoutHoldMs) || blackoutHoldMs < 0) return { error: 'Enter-show blackout hold must be a whole, non-negative number of milliseconds.' }
+  const blackoutAfterShowMs = Number(draft.blackoutAfterShowMs)
+  if (!Number.isInteger(blackoutAfterShowMs) || blackoutAfterShowMs < 0) return { error: 'Enter-resting blackout-after-show must be a whole, non-negative number of milliseconds.' }
+
   const base = draft.base
-  return {
+  const resting: ConfigNightSessionWrite['resting'] = {
+    ...(base?.resting ?? {}), fppInstanceId: draft.restingFpp.trim(), playlist: draft.restingPlaylist.trim(),
+    timelineAsset: { ...(base?.resting?.timelineAsset ?? {}), show: draft.timelineShow.trim(), sequence: draft.timelineSequence.trim(), target: draft.timelineTarget.trim() },
+    endOfNightRepeat: draft.endOfNightRepeat,
+  }
+  if (draft.endOfNightPlaylist.trim() === '') delete resting.endOfNightPlaylist
+  else resting.endOfNightPlaylist = draft.endOfNightPlaylist.trim()
+  if (backgroundAudio.value === undefined) delete resting.backgroundAudio
+  else resting.backgroundAudio = backgroundAudio.value
+
+  const result: ConfigNightSessionWrite = {
     ...(base ?? {}), show: draft.show.trim(), label: draft.label.trim(),
     showPlaylist: { ...(base?.showPlaylist ?? {}), fppInstanceId: draft.showFpp.trim(), playlist: draft.showPlaylist.trim() },
-    resting: {
-      ...(base?.resting ?? {}), fppInstanceId: draft.restingFpp.trim(), playlist: draft.restingPlaylist.trim(),
-      timelineAsset: { ...(base?.resting?.timelineAsset ?? {}), show: draft.timelineShow.trim(), sequence: draft.timelineSequence.trim(), target: draft.timelineTarget.trim() },
-    },
-    enterShow: { ...(base?.enterShow ?? {}), blackoutHoldMs: base?.enterShow?.blackoutHoldMs ?? 0, cues: enteringShow.cues },
-    enterResting: { ...(base?.enterResting ?? {}), blackoutAfterShowMs: base?.enterResting?.blackoutAfterShowMs ?? 0, cues: enteringResting.cues },
+    resting,
+    enterShow: { ...(base?.enterShow ?? {}), blackoutHoldMs, cues: enteringShow.cues },
+    enterResting: { ...(base?.enterResting ?? {}), blackoutAfterShowMs, cues: enteringResting.cues },
+    announcementDefaultPolicy: draft.announcementDefaultPolicy,
   }
+  if (siteControl.value === undefined) delete result.siteControl
+  else result.siteControl = siteControl.value
+  if (interlocks.value === undefined) delete result.interlocks
+  else result.interlocks = interlocks.value
+  return result
 }
+
+type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
 
 function NightSessionDefinitions() {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [objects, setObjects] = useState<ConfigObjectSummary[] | null>(null)
+  const [audioNodes, setAudioNodes] = useState<AudioNodesState>({ kind: 'loading' })
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<DefinitionDraft>(blankDefinition)
   const [loaded, setLoaded] = useState<NightSessionConfigResponse | null>(null)
@@ -820,6 +1104,14 @@ function NightSessionDefinitions() {
       .catch((err: unknown) => { if (!cancelled) setError(describeApiError(err)) })
     return () => { cancelled = true }
   }, [reloadKey])
+
+  useEffect(() => {
+    let cancelled = false
+    listConfigObjects('audio.node')
+      .then((response) => { if (!cancelled) setAudioNodes({ kind: 'loaded', nodes: response.objects }) })
+      .catch((err: unknown) => { if (!cancelled) setAudioNodes({ kind: 'failed', reason: describeApiError(err) }) })
+    return () => { cancelled = true }
+  }, [])
 
   const selectDefinition = (id: string) => {
     setSelected(id); setError(null); setRevision(null)
@@ -840,6 +1132,24 @@ function NightSessionDefinitions() {
   }
   const addCue = (which: 'enterShow' | 'enterResting') => setDraft((current) => ({ ...current, [which]: [...current[which], blankCue()] }))
 
+  const updateBackgroundAudio = (patch: Partial<BackgroundAudioDraft>) => setDraft((current) => ({ ...current, backgroundAudio: { ...current.backgroundAudio, ...patch } }))
+  const updateBackgroundAudioItem = (index: number, patch: Partial<BackgroundAudioItemDraft>) =>
+    setDraft((current) => ({ ...current, backgroundAudio: { ...current.backgroundAudio, items: current.backgroundAudio.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) } }))
+  const addBackgroundAudioItem = () => setDraft((current) => ({ ...current, backgroundAudio: { ...current.backgroundAudio, items: [...current.backgroundAudio.items, blankBackgroundAudioItem()] } }))
+  const removeBackgroundAudioItem = (index: number) =>
+    setDraft((current) => ({ ...current, backgroundAudio: { ...current.backgroundAudio, items: current.backgroundAudio.items.filter((_, itemIndex) => itemIndex !== index) } }))
+
+  const updateSiteControl = (patch: Partial<SiteControlDraft>) => setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, ...patch } }))
+  const updatePrerequisite = (index: number, patch: Partial<PrerequisiteDraft>) =>
+    setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, prerequisites: current.siteControl.prerequisites.map((p, itemIndex) => itemIndex === index ? { ...p, ...patch } : p) } }))
+  const addPrerequisite = () => setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, prerequisites: [...current.siteControl.prerequisites, blankPrerequisite()] } }))
+  const removePrerequisite = (index: number) =>
+    setDraft((current) => ({ ...current, siteControl: { ...current.siteControl, prerequisites: current.siteControl.prerequisites.filter((_, itemIndex) => itemIndex !== index) } }))
+
+  const updateInterlock = (index: number, patch: Partial<InterlockDraft>) => setDraft((current) => ({ ...current, interlocks: current.interlocks.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
+  const addInterlock = () => setDraft((current) => ({ ...current, interlocks: [...current.interlocks, blankInterlock()] }))
+  const removeInterlock = (index: number) => setDraft((current) => ({ ...current, interlocks: current.interlocks.filter((_, itemIndex) => itemIndex !== index) }))
+
   return (
     <Section id="sn-definitions" title="Night session definitions" aside={<span className="sm-small sm-muted">Definitions change the next armed night, never the one running now</span>}>
       {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : (
@@ -859,8 +1169,181 @@ function NightSessionDefinitions() {
             <Field label="Resting playlist">{(field) => <Input {...field} value={draft.restingPlaylist} onChange={(event) => setDraft((current) => ({ ...current, restingPlaylist: event.target.value }))} />}</Field>
             <Field label="Resting timeline sequence">{(field) => <Input {...field} value={draft.timelineSequence} onChange={(event) => setDraft((current) => ({ ...current, timelineSequence: event.target.value }))} />}</Field>
             <Field label="Resting timeline target">{(field) => <Input {...field} value={draft.timelineTarget} onChange={(event) => setDraft((current) => ({ ...current, timelineTarget: event.target.value }))} />}</Field>
+            <Field label="Announcement default policy" help="Applies to any announcement-role cue that does not name its own announcement policy.">
+              {(field) => <Select {...field} value={draft.announcementDefaultPolicy} onChange={(event) => setDraft((current) => ({ ...current, announcementDefaultPolicy: event.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{ANNOUNCEMENT_POLICIES.map((policy) => <option key={policy} value={policy}>{policy}</option>)}</Select>}
+            </Field>
+          </FieldGrid>
+
+          <section className="sm-subsection" aria-label="Resting">
+            <h3 className="sm-subsection__title">Resting</h3>
+            <FieldGrid>
+              <Field label="End-of-night playlist" help="Defaults to the resting playlist above when left blank.">
+                {(field) => <Input {...field} value={draft.endOfNightPlaylist} onChange={(event) => setDraft((current) => ({ ...current, endOfNightPlaylist: event.target.value }))} />}
+              </Field>
+            </FieldGrid>
+            <ChoiceRow><Choice type="checkbox" label="Repeat the end-of-night playlist" checked={draft.endOfNightRepeat} onChange={(event) => setDraft((current) => ({ ...current, endOfNightRepeat: event.target.checked }))} /></ChoiceRow>
+
+            <section className="sm-subsection" aria-label="Background audio">
+              <h3 className="sm-subsection__title">Background audio</h3>
+              <ChoiceRow><Choice type="checkbox" label="Configure background audio for resting" checked={draft.backgroundAudio.enabled} onChange={(event) => updateBackgroundAudio({ enabled: event.target.checked })} /></ChoiceRow>
+              {draft.backgroundAudio.enabled && (
+                <>
+                  <FieldGrid>
+                    <Field label="Repeat">{(field) => <Select {...field} value={draft.backgroundAudio.repeat} onChange={(event) => updateBackgroundAudio({ repeat: event.target.value as BackgroundAudioDraft['repeat'] })}>{BACKGROUND_AUDIO_REPEATS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                    <Field label="Resume policy" help="How the bed resumes after a show returns to resting.">
+                      {(field) => <Select {...field} value={draft.backgroundAudio.resume} onChange={(event) => updateBackgroundAudio({ resume: event.target.value as BackgroundAudioDraft['resume'] })}>{BACKGROUND_AUDIO_RESUMES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                    </Field>
+                    <Field label="Item transition">
+                      {(field) => <Select {...field} value={draft.backgroundAudio.itemTransition} onChange={(event) => updateBackgroundAudio({ itemTransition: event.target.value as BackgroundAudioDraft['itemTransition'] })}>{BACKGROUND_AUDIO_TRANSITIONS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                    </Field>
+                    {draft.backgroundAudio.itemTransition === 'crossfade' && (
+                      <Field label="Crossfade (ms)" help="Required when item transition is crossfade.">
+                        {(field) => <Input {...field} type="number" step="1" value={draft.backgroundAudio.crossfadeMs} onChange={(event) => updateBackgroundAudio({ crossfadeMs: event.target.value })} />}
+                      </Field>
+                    )}
+                    <Field label="Max gain (dB)" help="Must be 0 dB or lower.">
+                      {(field) => <Input {...field} type="number" step="0.1" value={draft.backgroundAudio.maxGainDb} onChange={(event) => updateBackgroundAudio({ maxGainDb: event.target.value })} />}
+                    </Field>
+                    <Field label="Fade-out (ms)" help="Fades the bed to silence before a show. Fade-out and fade-in must be set together, or both left blank for an instant cut.">
+                      {(field) => <Input {...field} type="number" step="1" value={draft.backgroundAudio.fadeOutMs} onChange={(event) => updateBackgroundAudio({ fadeOutMs: event.target.value })} />}
+                    </Field>
+                    <Field label="Fade-in (ms)" help="Fades the bed back up to the max gain after resting returns.">
+                      {(field) => <Input {...field} type="number" step="1" value={draft.backgroundAudio.fadeInMs} onChange={(event) => updateBackgroundAudio({ fadeInMs: event.target.value })} />}
+                    </Field>
+                  </FieldGrid>
+                  {draft.backgroundAudio.items.map((item, index) => (
+                    <div className="sm-field-grid sm-stack-2" key={`bg-item-${index}`}>
+                      <Field label="Item id">{(field) => <Input {...field} value={item.itemId} onChange={(event) => updateBackgroundAudioItem(index, { itemId: event.target.value })} />}</Field>
+                      <Field label="Asset show">{(field) => <Input {...field} value={item.show} onChange={(event) => updateBackgroundAudioItem(index, { show: event.target.value })} />}</Field>
+                      <Field label="Asset sequence">{(field) => <Input {...field} value={item.sequence} onChange={(event) => updateBackgroundAudioItem(index, { sequence: event.target.value })} />}</Field>
+                      <Field label="Target audio node">
+                        {(field) =>
+                          audioNodes.kind === 'loading' ? (
+                            <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
+                          ) : audioNodes.kind === 'failed' ? (
+                            <RuledStrip absence="failed" label="Read failed" fact={audioNodes.reason} />
+                          ) : (
+                            <Select {...field} value={item.target} onChange={(event) => updateBackgroundAudioItem(index, { target: event.target.value })}>
+                              <option value="">Choose a node…</option>
+                              {audioNodes.nodes.map((node) => <option key={node.id} value={node.id}>{node.label} ({node.id})</option>)}
+                            </Select>
+                          )
+                        }
+                      </Field>
+                      <Button variant="quiet" onClick={() => removeBackgroundAudioItem(index)}>Remove item</Button>
+                    </div>
+                  ))}
+                  <Button variant="quiet" onClick={addBackgroundAudioItem}>Add background audio item</Button>
+                </>
+              )}
+            </section>
+          </section>
+
+          <section className="sm-subsection" aria-label="Site control">
+            <h3 className="sm-subsection__title">Site control</h3>
+            <FieldGrid>
+              <Field label="Request thermal profile" help="Names the show.action this deployment runs to request a thermal profile.">
+                {(field) => <Input {...field} value={draft.siteControl.requestThermalProfile} onChange={(event) => updateSiteControl({ requestThermalProfile: event.target.value })} />}
+              </Field>
+            </FieldGrid>
+            <section className="sm-subsection" aria-label="Presentation power on">
+              <h3 className="sm-subsection__title">Presentation power-on</h3>
+              <ChoiceRow><Choice type="checkbox" label="Configure a presentation power-on binding" checked={draft.siteControl.powerOnEnabled} onChange={(event) => updateSiteControl({ powerOnEnabled: event.target.checked })} /></ChoiceRow>
+              {draft.siteControl.powerOnEnabled && (
+                <FieldGrid>
+                  <Field label="Action">{(field) => <Input {...field} value={draft.siteControl.powerOnAction} onChange={(event) => updateSiteControl({ powerOnAction: event.target.value })} />}</Field>
+                  <Field label="Power domain">{(field) => <Select {...field} value={draft.siteControl.powerOnDomain} onChange={(event) => updateSiteControl({ powerOnDomain: event.target.value as SiteControlDraft['powerOnDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                  <Field label="Domain provenance" help="The coordinator refuses provider for this binding: no control provider can authoritatively identify a power binding's physical targets, so operator-declared is the only accepted value.">
+                    {(field) => <Select {...field} value={draft.siteControl.powerOnProvenance} onChange={(event) => updateSiteControl({ powerOnProvenance: event.target.value as SiteControlDraft['powerOnProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                  </Field>
+                </FieldGrid>
+              )}
+            </section>
+            <section className="sm-subsection" aria-label="Presentation power off">
+              <h3 className="sm-subsection__title">Presentation power-off</h3>
+              <ChoiceRow><Choice type="checkbox" label="Configure a presentation power-off binding" checked={draft.siteControl.powerOffEnabled} onChange={(event) => updateSiteControl({ powerOffEnabled: event.target.checked })} /></ChoiceRow>
+              {draft.siteControl.powerOffEnabled && (
+                <>
+                  <FieldGrid>
+                    <Field label="Action">{(field) => <Input {...field} value={draft.siteControl.powerOffAction} onChange={(event) => updateSiteControl({ powerOffAction: event.target.value })} />}</Field>
+                    <Field label="Power domain">{(field) => <Select {...field} value={draft.siteControl.powerOffDomain} onChange={(event) => updateSiteControl({ powerOffDomain: event.target.value as SiteControlDraft['powerOffDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                    <Field label="Domain provenance">{(field) => <Select {...field} value={draft.siteControl.powerOffProvenance} onChange={(event) => updateSiteControl({ powerOffProvenance: event.target.value as SiteControlDraft['powerOffProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                    <Field label="Removal policy" help="Immediate requires the safe-to-remove attestation and no prerequisites; after-actions requires at least one prerequisite and forbids the attestation.">
+                      {(field) => <Select {...field} value={draft.siteControl.removalPolicy} onChange={(event) => updateSiteControl({ removalPolicy: event.target.value as SiteControlDraft['removalPolicy'] })}>{REMOVAL_POLICIES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                    </Field>
+                  </FieldGrid>
+                  {draft.siteControl.removalPolicy === 'immediate' && (
+                    <ChoiceRow><Choice type="checkbox" label="Attest this power domain is safe to remove immediately" checked={draft.siteControl.immediateSafeAttestation} onChange={(event) => updateSiteControl({ immediateSafeAttestation: event.target.checked })} /></ChoiceRow>
+                  )}
+                  {draft.siteControl.removalPolicy === 'after-actions' && (
+                    <>
+                      {draft.siteControl.prerequisites.map((p, index) => (
+                        <div className="sm-field-grid sm-stack-2" key={`prereq-${index}`}>
+                          <Field label="Kind">{(field) => <Select {...field} value={p.kind} onChange={(event) => updatePrerequisite(index, { kind: event.target.value as PrerequisiteDraft['kind'] })}>{PREREQUISITE_KINDS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                          {p.kind === 'delay' ? (
+                            <Field label="Delay (ms)">{(field) => <Input {...field} type="number" step="1" value={p.delayMs} onChange={(event) => updatePrerequisite(index, { delayMs: event.target.value })} />}</Field>
+                          ) : (
+                            <>
+                              <Field label="Action">{(field) => <Input {...field} value={p.action} onChange={(event) => updatePrerequisite(index, { action: event.target.value })} />}</Field>
+                              {p.kind === 'action' && (
+                                <ChoiceRow><Choice type="checkbox" label="Require confirmation" checked={p.requireConfirmation} onChange={(event) => updatePrerequisite(index, { requireConfirmation: event.target.checked })} /></ChoiceRow>
+                              )}
+                            </>
+                          )}
+                          <Button variant="quiet" onClick={() => removePrerequisite(index)}>Remove prerequisite</Button>
+                        </div>
+                      ))}
+                      <Button variant="quiet" onClick={addPrerequisite}>Add prerequisite</Button>
+                    </>
+                  )}
+                </>
+              )}
+            </section>
+          </section>
+
+          <section className="sm-subsection" aria-label="Interlocks">
+            <h3 className="sm-subsection__title">Interlocks</h3>
+            {draft.interlocks.map((item, index) => (
+              <div className="sm-field-grid sm-stack-2" key={`interlock-${index}`}>
+                <Field label="Name">{(field) => <Input {...field} value={item.name} onChange={(event) => updateInterlock(index, { name: event.target.value })} />}</Field>
+                <Field label="Phase">{(field) => <Select {...field} value={item.phase} onChange={(event) => updateInterlock(index, { phase: event.target.value as InterlockDraft['phase'] })}>{INTERLOCK_PHASES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                <Field label="Posture" help="A disabled entry carries only name, phase, and posture. An observe entry must not set on-unavailable or override policy; a block entry requires both.">
+                  {(field) => <Select {...field} value={item.posture} onChange={(event) => updateInterlock(index, { posture: event.target.value as InterlockDraft['posture'] })}>{INTERLOCK_POSTURES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
+                </Field>
+                {item.posture !== 'disabled' && (
+                  <>
+                    <Field label="Signal action" help="Must name a show.action that declares an mqtt target with a response expectation.">
+                      {(field) => <Input {...field} value={item.signal} onChange={(event) => updateInterlock(index, { signal: event.target.value })} />}
+                    </Field>
+                    <Field label="Freshness (s)" help="Bounds how old the evidence this rule consults may be before it is treated as unavailable.">
+                      {(field) => <Input {...field} type="number" step="1" value={item.freshnessSeconds} onChange={(event) => updateInterlock(index, { freshnessSeconds: event.target.value })} />}
+                    </Field>
+                    <Field label="Failure text">{(field) => <Input {...field} value={item.failureText} onChange={(event) => updateInterlock(index, { failureText: event.target.value })} />}</Field>
+                    {item.posture === 'block' && (
+                      <>
+                        <Field label="On unavailable">{(field) => <Select {...field} value={item.onUnavailable} onChange={(event) => updateInterlock(index, { onUnavailable: event.target.value as InterlockDraft['onUnavailable'] })}>{ON_UNAVAILABLE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                        <Field label="Override policy">{(field) => <Select {...field} value={item.overridePolicy} onChange={(event) => updateInterlock(index, { overridePolicy: event.target.value as InterlockDraft['overridePolicy'] })}>{OVERRIDE_POLICIES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
+                      </>
+                    )}
+                  </>
+                )}
+                <Button variant="quiet" onClick={() => removeInterlock(index)}>Remove interlock</Button>
+              </div>
+            ))}
+            <Button variant="quiet" onClick={addInterlock}>Add interlock</Button>
+          </section>
+
+          <FieldGrid>
+            <Field label="Blackout hold (ms)" help="How long enter-show holds blackout before its cues fire.">
+              {(field) => <Input {...field} type="number" step="1" value={draft.blackoutHoldMs} onChange={(event) => setDraft((current) => ({ ...current, blackoutHoldMs: event.target.value }))} />}
+            </Field>
           </FieldGrid>
           <TransitionStepEditor title="Enter-show transition steps" steps={draft.enterShow} onChange={(index, patch) => updateCues('enterShow', index, patch)} onAdd={() => addCue('enterShow')} onRemove={(index) => setDraft((current) => ({ ...current, enterShow: current.enterShow.filter((_, itemIndex) => itemIndex !== index) }))} />
+          <FieldGrid>
+            <Field label="Blackout after show (ms)" help="How long enter-resting holds blackout after the show ends.">
+              {(field) => <Input {...field} type="number" step="1" value={draft.blackoutAfterShowMs} onChange={(event) => setDraft((current) => ({ ...current, blackoutAfterShowMs: event.target.value }))} />}
+            </Field>
+          </FieldGrid>
           <TransitionStepEditor title="Enter-resting transition steps" steps={draft.enterResting} onChange={(index, patch) => updateCues('enterResting', index, patch)} onAdd={() => addCue('enterResting')} onRemove={(index) => setDraft((current) => ({ ...current, enterResting: current.enterResting.filter((_, itemIndex) => itemIndex !== index) }))} />
           <ButtonRow><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></ButtonRow>
           {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
@@ -873,5 +1356,39 @@ function NightSessionDefinitions() {
 }
 
 function TransitionStepEditor({ title, steps, onChange, onAdd, onRemove }: { title: string; steps: CueDraft[]; onChange: (index: number, patch: Partial<CueDraft>) => void; onAdd: () => void; onRemove: (index: number) => void }) {
-  return <section className="sm-subsection" aria-label={title}><h3 className="sm-subsection__title">{title}</h3>{steps.map((step, index) => <div className="sm-field-grid sm-stack-2" key={`${index}:${step.name}`}><Field label="Name">{(field) => <Input {...field} value={step.name} onChange={(event) => onChange(index, { name: event.target.value })} />}</Field><Field label="Role">{(field) => <Select {...field} value={step.role} onChange={(event) => onChange(index, { role: event.target.value as CueDraft['role'] })}>{['lighting', 'projection', 'audio', 'announcement', 'other'].map((role) => <option key={role} value={role}>{role}</option>)}</Select>}</Field><Field label="Action">{(field) => <Input {...field} value={step.action} onChange={(event) => onChange(index, { action: event.target.value })} />}</Field><Field label="Offset (ms)">{(field) => <Input {...field} type="number" step="1" value={step.offsetMs} onChange={(event) => onChange(index, { offsetMs: event.target.value })} />}</Field><Button variant="quiet" onClick={() => onRemove(index)}>Remove step</Button></div>)}<Button variant="quiet" onClick={onAdd}>Add transition step</Button></section>
+  return (
+    <section className="sm-subsection" aria-label={title}>
+      <h3 className="sm-subsection__title">{title}</h3>
+      {steps.map((step, index) => (
+        <div className="sm-field-grid sm-stack-2" key={`${index}:${step.name}`}>
+          <Field label="Name">{(field) => <Input {...field} value={step.name} onChange={(event) => onChange(index, { name: event.target.value })} />}</Field>
+          <Field label="Role">
+            {(field) => <Select {...field} value={step.role} onChange={(event) => onChange(index, { role: event.target.value as CueDraft['role'] })}>{CUE_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</Select>}
+          </Field>
+          <Field label="Action">{(field) => <Input {...field} value={step.action} onChange={(event) => onChange(index, { action: event.target.value })} />}</Field>
+          <Field label="Offset (ms)">{(field) => <Input {...field} type="number" step="1" value={step.offsetMs} onChange={(event) => onChange(index, { offsetMs: event.target.value })} />}</Field>
+          <Field label="Fade duration (ms)">{(field) => <Input {...field} type="number" step="1" value={step.fadeDurationMs} onChange={(event) => onChange(index, { fadeDurationMs: event.target.value })} />}</Field>
+          <div className="sm-field">
+            <ChoiceRow><Choice type="checkbox" label="Barrier" checked={step.barrier} onChange={(event) => onChange(index, { barrier: event.target.checked })} /></ChoiceRow>
+            <span className="sm-field__help">A barrier step blocks later steps until it resolves.</span>
+          </div>
+          <Field label="On failure" help="Defaults to continue when absent.">
+            {(field) => <Select {...field} value={step.onFailure} onChange={(event) => onChange(index, { onFailure: event.target.value as CueDraft['onFailure'] })}><option value="continue">continue</option><option value="abort">abort</option></Select>}
+          </Field>
+          {step.role === 'announcement' && (
+            <Field label="Announcement policy" help="Absent means the session's own announcement default policy applies. interrupt uses background audio's resume policy on the way back.">
+              {(field) => (
+                <Select {...field} value={step.announcementPolicy} onChange={(event) => onChange(index, { announcementPolicy: event.target.value as CueDraft['announcementPolicy'] })}>
+                  <option value="">(use session default)</option>
+                  {ANNOUNCEMENT_POLICIES.map((policy) => <option key={policy} value={policy}>{policy}</option>)}
+                </Select>
+              )}
+            </Field>
+          )}
+          <Button variant="quiet" onClick={() => onRemove(index)}>Remove step</Button>
+        </div>
+      ))}
+      <Button variant="quiet" onClick={onAdd}>Add transition step</Button>
+    </section>
+  )
 }

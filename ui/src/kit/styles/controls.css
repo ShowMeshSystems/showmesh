@@ -213,6 +213,49 @@
   gap: var(--s-5);
 }
 
+/* A checkbox option list drawn as one joined card, hairline dividers between rows. */
+.sm-choice-list {
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+
+.sm-choice--card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  min-height: 0;
+  padding: 11px;
+  background: var(--surface);
+}
+
+.sm-choice--card input {
+  margin-top: 3px;
+}
+
+.sm-choice--card:has(input:checked) {
+  background: var(--accent-bg);
+}
+
+.sm-choice--card__body {
+  display: block;
+  min-width: 0;
+}
+
+.sm-choice--card__title {
+  display: block;
+  font-weight: 500;
+}
+
+.sm-choice--card__desc {
+  display: block;
+  color: var(--text-muted);
+  font: var(--t-small);
+}
+
 /* A radio option drawn as a card, its own consequence line beneath it: idle output, installation mode. */
 .sm-option {
   display: block;

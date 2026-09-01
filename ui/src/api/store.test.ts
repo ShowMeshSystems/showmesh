@@ -3655,6 +3655,135 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     })
   })
 
+  it('applies a resolumeRecovery.changed frame as a whole-object replace of model.resolumeRecovery (SM-462)', async () => {
+    const changed = {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      resolumeConfigured: true,
+      autoRestoreEnabled: true,
+      autoRestoreConfigured: true,
+      settleDelaySeconds: 5,
+      record: [{ layer: 'Base', layerNameGenerated: false, state: 'dark' as const }],
+      lastRestore: {
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        trigger: 'automatic' as const,
+        outcome: 'restored' as const,
+        principal: 'coordinator',
+        layers: [],
+        omittedLayerCount: 0,
+      },
+    }
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'resolumeRecovery.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+
+    // Model.resolumeRecovery is not part of Snapshot (unlike resolume/fpp)
+    // — this asserts the "before the first live frame" state a view
+    // relies on for its own REST fallback (screens/ResolumeConfig.tsx).
+    expect(store.getSnapshot().resolumeRecovery).toBeNull()
+
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().resolumeRecovery?.lastRestore?.outcome === 'restored', {
+      message: 'resolumeRecovery.changed was never applied to the model',
+    })
+
+    expect(store.getSnapshot().resolumeRecovery).toEqual({
+      serverTime: changed.serverTime,
+      resolumeConfigured: changed.resolumeConfigured,
+      autoRestoreEnabled: changed.autoRestoreEnabled,
+      autoRestoreConfigured: changed.autoRestoreConfigured,
+      settleDelaySeconds: changed.settleDelaySeconds,
+      record: changed.record,
+      lastRestore: changed.lastRestore,
+    })
+  })
+
+  it('a stream.reset clears model.resolumeRecovery back to null, matching model.nightSession (SM-462)', async () => {
+    const changed = {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      resolumeConfigured: true,
+      autoRestoreEnabled: true,
+      autoRestoreConfigured: true,
+      settleDelaySeconds: 5,
+      record: [] as unknown[],
+      lastRestore: null,
+    }
+    let streamRes = null as import('node:http').ServerResponse | null
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamRes = res
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'resolumeRecovery.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().resolumeRecovery !== null, {
+      message: 'resolumeRecovery.changed was never applied to the model',
+    })
+
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'stream.reset', {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      reason: 'subscriber_too_slow',
+      snapshotRequired: true,
+    })
+
+    await waitFor(() => store.getSnapshot().resolumeRecovery === null, {
+      message: 'stream.reset did not clear model.resolumeRecovery',
+    })
+  })
+
   it('applies an fppPlaylistEntry.changed frame as a whole-object replace of the named instance in model.fppPlaylistEntryObservations', async () => {
     const observation = makeFPPPlaylistEntryObservation({
       instanceUuid: 'fpp-uuid-1',

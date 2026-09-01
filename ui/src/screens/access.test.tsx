@@ -177,6 +177,68 @@ describe('Access', () => {
     expect(screen.queryByText('sk-live-secret-value-shown-once')).not.toBeInTheDocument()
   })
 
+  it('sends no expiresAt key when the expiry field is left blank', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [token()] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    let received: Record<string, unknown> | undefined
+    stubs.issuePrincipalToken = (...args: never[]) => {
+      received = args[1] as unknown as Record<string, unknown>
+      return Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        token: token({ id: 'cred-9002', hint: 'sk...9002' }),
+        value: 'sk-live-second-value',
+      })
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /Issue credential/ }))
+    await waitFor(() => expect(received).toBeDefined())
+    expect(received).not.toHaveProperty('expiresAt')
+  })
+
+  it('sends expiresAt as an ISO string when an expiry is set', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [token()] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    let received: Record<string, unknown> | undefined
+    stubs.issuePrincipalToken = (...args: never[]) => {
+      received = args[1] as unknown as Record<string, unknown>
+      return Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        token: token({ id: 'cred-9003', hint: 'sk...9003' }),
+        value: 'sk-live-third-value',
+      })
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
+
+    const expiryInput = screen.getByLabelText('Expires · optional')
+    fireEvent.change(expiryInput, { target: { value: '2026-09-15T10:30' } })
+    fireEvent.click(screen.getByRole('button', { name: /Issue credential/ }))
+    await waitFor(() => expect(received?.expiresAt).toBe(new Date('2026-09-15T10:30').toISOString()))
+  })
+
+  it('sends role recovery when creating a recovery principal', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    let received: Record<string, unknown> | undefined
+    stubs.createPrincipal = (...args: never[]) => {
+      received = args[0] as unknown as Record<string, unknown>
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principal: principal({ id: 'p9', name: 'auto-recovery', role: 'recovery' }) })
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add principal' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Add principal' }))
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'auto-recovery' } })
+    fireEvent.click(screen.getByRole('button', { name: 'recovery' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create principal' }))
+
+    await waitFor(() => expect(received?.role).toBe('recovery'))
+  })
+
   it('keeps Revoke disabled until the typed credential id matches exactly', async () => {
     stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
     stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [token()] })

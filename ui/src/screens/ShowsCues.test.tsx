@@ -392,6 +392,85 @@ describe('Shows · Cues tab', () => {
     expect(payload.outputs.announcement).not.toHaveProperty('duckGainDb')
   })
 
+  describe('activation summary', () => {
+    it('narrates the enabled outputs and updates as fields change', async () => {
+      stubs.getShowCue = () => Promise.reject(new ApiError('no such cue', 404, 'https://showmesh.dev/problems/resource-not-found'))
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => withContents(kind, [], [])
+      stubs.listAssets = () =>
+        Promise.resolve({
+          serverTime: '2026-08-30T21:00:00Z',
+          assets: [
+            {
+              id: 'a1',
+              show: 'winter-ridge-2026',
+              sequence: 'thank-you',
+              targetKind: 'show',
+              target: '',
+              mediaType: 'audio',
+              contentHash: 'sha256:' + 'a'.repeat(64),
+              runtimeFilename: 'thank-you.wav',
+              sizeBytes: 100,
+              createdAt: '2026-08-30T18:00:00Z',
+              createdByPrincipalId: 'p1',
+              createdByPrincipalName: 'erbartos',
+              supersededAt: null,
+              current: true,
+            },
+          ],
+        })
+      renderWorkspace({ session: signedIn(['config:write']) })
+      fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+      expect(screen.getByText('Pick at least one output to see what this cue will do.')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /Audience audio/ }))
+      fireEvent.change(await screen.findByRole('combobox', { name: 'Audio asset' }), { target: { value: 'thank-you' } })
+      fireEvent.click(screen.getByRole('checkbox', { name: /Announcement/ }))
+
+      expect(await screen.findByText(/On activation this cue will play thank-you, duck the background bed to -18 dB over 400 ms, and leave FPP untouched\./)).toBeInTheDocument()
+    })
+  })
+
+  describe('asset not uploaded', () => {
+    it('flags an announcement cue whose asset is missing from the show’s current assets, in the table and the editor', async () => {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => withContents(kind, [cueSummary({ id: 'cue-2', label: 'Weather Delay Notice' })], [])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowCue = () =>
+        Promise.resolve(
+          cueResponse(
+            cuePayload({
+              name: 'Weather Delay Notice',
+              outputs: { audio: { asset: 'weather-delay', startOffsetMillis: 0 }, announcement: { policy: 'duck', duckGainDb: -12, fadeMillis: 400 } },
+            }),
+            'cue-2',
+          ),
+        )
+      renderWorkspace({ session: signedIn(['config:write']) })
+      const region = await screen.findByRole('region', { name: 'Directly activatable, scrollable' })
+      expect(await within(region).findByText('Asset not uploaded')).toBeInTheDocument()
+
+      fireEvent.click(within(region).getByRole('button', { name: 'Weather Delay Notice' }))
+      expect(await screen.findByText("weather-delay is not among this show's current assets.")).toBeInTheDocument()
+    })
+  })
+
+  describe('output card list', () => {
+    it('renders the four outputs as a card list with the checked ones washed', async () => {
+      setup()
+      fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+      const audio = screen.getByRole('checkbox', { name: /Audience audio/ })
+      const render = screen.getByRole('checkbox', { name: /^Render/ })
+      expect(render.closest('.sm-choice--card')).not.toBeNull()
+      expect(audio.closest('.sm-choice-list')).not.toBeNull()
+      expect(audio).not.toBeChecked()
+
+      fireEvent.click(audio)
+      expect(audio).toBeChecked()
+      expect(screen.getByText('Play an audio asset on the program bus')).toBeInTheDocument()
+    })
+  })
+
   describe('ADR-045 output target nodes', () => {
     function audioNodeSummary(id: string, label: string): ConfigObjectSummary {
       return { id, label, show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' }
@@ -491,6 +570,54 @@ describe('Shows · Cues tab', () => {
       await waitFor(() => expect(sent).not.toBeNull())
       const payload = sent as ConfigShowCue
       expect(payload.outputs.audio?.target).toBe('node-x')
+    })
+
+    it('round-trips audio and LTC start offsets, and saves an edited value', async () => {
+      const cue = cueResponse(
+        cuePayload({
+          outputs: {
+            audio: { asset: 'house-preshow-loop', startOffsetMillis: 120 },
+            ltc: { startOffsetMillis: 50 },
+          },
+        }),
+      )
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      const offsets = await screen.findAllByLabelText('Start offset (ms)')
+      expect(offsets).toHaveLength(2)
+      const [audioOffset, ltcOffset] = offsets as [HTMLInputElement, HTMLInputElement]
+      expect(audioOffset).toHaveValue(120)
+      expect(ltcOffset).toHaveValue(50)
+
+      fireEvent.change(audioOffset, { target: { value: '300' } })
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      const payload = sent as ConfigShowCue
+      expect(payload.outputs.audio?.startOffsetMillis).toBe(300)
+      expect(payload.outputs.ltc?.startOffsetMillis).toBe(50)
+    })
+
+    it('defaults a new cue’s start offsets to 0', async () => {
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      const audioOffset = (await screen.findByLabelText('Start offset (ms)')) as HTMLInputElement
+      expect(audioOffset).toHaveValue(0)
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as ConfigShowCue).outputs.audio?.startOffsetMillis).toBe(0)
     })
 
     it('a stored announcement target round-trips unchanged', async () => {

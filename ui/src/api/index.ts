@@ -376,6 +376,7 @@ export {
   listAssets,
   uploadAsset,
   assetContentUrl,
+  getAssetContent,
   getAssetManifest,
   getNodeAssetManifest,
   listAudit,

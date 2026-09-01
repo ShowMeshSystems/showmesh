@@ -809,6 +809,10 @@ export function assetContentUrl(id: string): string {
   return store.assetContentUrl(id)
 }
 
+export function getAssetContent(id: string): Promise<Blob> {
+  return store.getAssetContent(id)
+}
+
 export function getAssetManifest(): Promise<SchemaAssetManifestResponse> {
   return store.getAssetManifest()
 }

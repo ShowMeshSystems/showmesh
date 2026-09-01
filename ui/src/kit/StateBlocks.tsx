@@ -59,6 +59,8 @@ type PlateProps = {
   /** Resource and state: "Audio routing · unobserved". */
   eyebrow: string
   title: ReactNode
+  /** `3` when the plate sits inside a `Section` that already owns the page's h2. Defaults to `2`. */
+  headingLevel?: 2 | 3
   detail?: ReactNode
   actions?: ReactNode
 }
@@ -74,8 +76,9 @@ const PLATE_TONE: Partial<Record<Absence, string>> = {
  * For a whole region that cannot render. The hatch runs in the gutter only;
  * copy always sits on clean surface.
  */
-export function BlankingPlate({ absence, stamp, eyebrow, title, detail, actions }: PlateProps) {
+export function BlankingPlate({ absence, stamp, eyebrow, title, headingLevel = 2, detail, actions }: PlateProps) {
   const classes = ['sm-plate', PLATE_TONE[absence]].filter(Boolean).join(' ')
+  const Heading = headingLevel === 3 ? 'h3' : 'h2'
   return (
     <div className={classes}>
       <div className="sm-plate__gutter">
@@ -83,7 +86,7 @@ export function BlankingPlate({ absence, stamp, eyebrow, title, detail, actions 
       </div>
       <div className="sm-plate__body">
         <p className="sm-plate__eyebrow">{eyebrow}</p>
-        <p className="sm-plate__title">{title}</p>
+        <Heading className="sm-plate__title">{title}</Heading>
         {detail !== undefined && <p className="sm-plate__detail">{detail}</p>}
         {actions !== undefined && <div className="sm-plate__actions">{actions}</div>}
       </div>

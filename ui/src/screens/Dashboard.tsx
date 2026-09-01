@@ -126,7 +126,7 @@ export function Dashboard() {
         }
       >
         {items.length === 0 ? (
-          <BlankingPlate
+          <BlankingPlate headingLevel={3}
             absence="empty"
             stamp="Clear"
             eyebrow="Attention · empty"

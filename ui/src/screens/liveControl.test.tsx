@@ -14,6 +14,7 @@ const stubs = vi.hoisted(() => ({
   getShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   startFPPPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  stopFPPPlaylistGracefully: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getResolumeComposition: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   blackoutResolume: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
@@ -26,6 +27,7 @@ vi.mock('../api', async () => {
     getShowCue: (...args: never[]) => stubs.getShowCue(...args),
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     startFPPPlaylist: (...args: never[]) => stubs.startFPPPlaylist(...args),
+    stopFPPPlaylistGracefully: (...args: never[]) => stubs.stopFPPPlaylistGracefully(...args),
     getResolumeComposition: (...args: never[]) => stubs.getResolumeComposition(...args),
     blackoutResolume: (...args: never[]) => stubs.blackoutResolume(...args),
   }
@@ -97,6 +99,7 @@ describe('Live Control', () => {
     stubs.getShowCue = () => new Promise(() => {})
     stubs.listAssets = () => new Promise(() => {})
     stubs.startFPPPlaylist = () => new Promise(() => {})
+    stubs.stopFPPPlaylistGracefully = () => new Promise(() => {})
     stubs.getResolumeComposition = () => new Promise(() => {})
     stubs.blackoutResolume = () => new Promise(() => {})
   })
@@ -319,5 +322,50 @@ describe('Live Control', () => {
 
     expect(await screen.findByText('Refused')).toBeInTheDocument()
     expect(screen.getByText(/no route to host/)).toBeInTheDocument()
+  })
+
+  it('sends afterLoop: false for "Stop after this item"', async () => {
+    let received: unknown[] = []
+    stubs.stopFPPPlaylistGracefully = (...args: unknown[]) => {
+      received = args
+      return Promise.resolve({
+        outcome: 'confirmed',
+        outcomeReason: 'Observed player state moved.',
+        dispatchedAt: '2026-08-28T21:05:42Z',
+        resolvedAt: '2026-08-28T21:05:44Z',
+      } as unknown as FPPCommandResult)
+    }
+    renderScreen({ fpp: [fppInstance('playing')], session: commandAllowedSession })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this item' }))
+
+    expect(received).toEqual(['main-player', false])
+    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+  })
+
+  it('sends afterLoop: true for "Stop after this loop"', async () => {
+    let received: unknown[] = []
+    stubs.stopFPPPlaylistGracefully = (...args: unknown[]) => {
+      received = args
+      return Promise.resolve({
+        outcome: 'confirmed',
+        outcomeReason: 'Observed player state moved.',
+        dispatchedAt: '2026-08-28T21:05:42Z',
+        resolvedAt: '2026-08-28T21:05:44Z',
+      } as unknown as FPPCommandResult)
+    }
+    renderScreen({ fpp: [fppInstance('playing')], session: commandAllowedSession })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop after this loop' }))
+
+    expect(received).toEqual(['main-player', true])
+    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+  })
+
+  it('states the consequence of each graceful stop button', () => {
+    renderScreen({ fpp: [fppInstance('playing')], session: commandAllowedSession })
+
+    expect(screen.getByText('FPP finishes the current item, then stops the playlist.')).toBeInTheDocument()
+    expect(screen.getByText('FPP finishes the current loop through the playlist, then stops.')).toBeInTheDocument()
   })
 })
