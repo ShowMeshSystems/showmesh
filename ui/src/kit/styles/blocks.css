@@ -517,6 +517,16 @@ a.sm-tile:hover {
   max-width: none;
 }
 
+/* Assets uses the full post-rail spine. Its inspector track exists only while
+   upload or asset detail content is actually present. */
+.sm-main:has(.sm-assets-surface) {
+  max-width: none;
+}
+
+.sm-assets-surface .sm-panes:not(:has(> aside > *)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sm-main:has(.sm-rc-breadcrumb) {
   max-width: 1220px;
 }
