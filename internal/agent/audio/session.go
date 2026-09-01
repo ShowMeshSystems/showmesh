@@ -504,6 +504,62 @@ type dispatchedResult struct {
 // result cached under invocation and persisted before returning. exec
 // runs with the session already locked and must not itself lock it.
 func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.Revision, exec func() pkgaudio.OutcomeResult) dispatchedResult {
+	return s.dispatchLocked(invocation, revision, false, exec)
+}
+
+// dispatchExemptFromStaleRevision is [Session.dispatch] for
+// [Manager.Clear] only: identical except that a refusal whose reason is
+// specifically [pkgaudio.ReasonStaleRevision] is treated as accepted
+// instead of being returned to the caller. invalid_invocation and
+// invocation_revision_mismatch still refuse exactly as dispatch's own
+// callers see them: both are caller integrity bugs (an empty id, or one
+// id reused for two different revisions), never an ordering symptom, and
+// waiving them would hide a real defect while buying no recovery.
+//
+// THE TRADE: a clear delayed past the coordinator's own await deadline
+// (audioCommandConfirmDeadline in internal/coordinator/api/audiodispatch.go)
+// can now land after a newer start already re-established this session,
+// tearing the newer session down. There is no bound at any layer on how
+// late that delayed clear can arrive: the command it carries has no
+// deadline of its own (mqttproto.CmdPayload never sets one for an audio
+// session command), so internal/agent/command.go's own
+// deadline-already-elapsed check never fires for it, and this agent
+// handles one goroutine per inbound PUBLISH with no ordering promise
+// across them. What orders the common case is a coordinator-side
+// property, not a wire one: the coordinator publishes and awaits one
+// command's result before publishing the next for that session, so the
+// only realistic window is a clear whose confirmation timed out while
+// the command itself was still live between the broker and this agent.
+//
+// The trade is bounded and self-healing regardless: a clear that lands
+// destroys this session's revState along with the session object (see
+// Manager.Clear), so the very next command for this id starts a fresh
+// RevisionState at zero and is accepted. The damage is one announcement
+// or bed stopped, recoverable by the next apply, never a session no
+// later command can reach again, which is what keeping the gate would
+// leave behind.
+//
+// WHY NOT CONDITIONAL ON SESSION STATE: the divergence that produces a
+// stale-but-still-wanted clear happens on the coordinator's side (a
+// swallowed persist failure after dispatch can leave the coordinator's
+// own notion of this session's floor behind the node's), never
+// something this session can observe about itself. A guard keyed on
+// local state has no signal that would ever tell a genuinely stale
+// clear apart from a legitimately wanted one, so refusing to gate at
+// all is the choice that never silently leaves a wedge standing.
+//
+// BREADTH: the exemption is on the command type audio.session.clear,
+// not on a caller or a session role. The night controller only ever
+// issues this clear for an announcement session, but the operator HTTP
+// route can clear any session, background audio included, and that path
+// is ungated too as a direct consequence. That is judged acceptable: an
+// operator clear is a deliberate, synchronous action, not a queued
+// controller step racing its own later commands.
+func (s *Session) dispatchExemptFromStaleRevision(invocation pkgaudio.InvocationID, revision pkgaudio.Revision, exec func() pkgaudio.OutcomeResult) dispatchedResult {
+	return s.dispatchLocked(invocation, revision, true, exec)
+}
+
+func (s *Session) dispatchLocked(invocation pkgaudio.InvocationID, revision pkgaudio.Revision, exemptFromStaleRevision bool, exec func() pkgaudio.OutcomeResult) dispatchedResult {
 	if invocation == "" {
 		return dispatchedResult{outcome: pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeRefused, Reason: "invocation id is required",
@@ -517,7 +573,9 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 	// Checking executedResults first would let the mismatch case slip
 	// through as a plain cache hit.
 	decision := s.revState.Apply(invocation, revision)
-	if !decision.Accepted {
+	staleButExempt := exemptFromStaleRevision && !decision.Accepted &&
+		decision.Result != nil && decision.Result.Reason == pkgaudio.ReasonStaleRevision
+	if !decision.Accepted && !staleButExempt {
 		return dispatchedResult{outcome: *decision.Result}
 	}
 	if cached, ok := s.executedResults[invocation]; ok {
