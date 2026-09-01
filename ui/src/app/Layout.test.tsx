@@ -32,6 +32,10 @@ const SHOW_MODE_RESPONSE = {
   createdByPrincipalName: 'admin-1',
   source: 'api',
   resolumeWebSocketEffect: 'show mode: the Resolume WebSocket wake-up channel is held CLOSED.',
+  cueActivationPin: {
+    pinned: false,
+    effect: 'show mode: no active show has been resolved yet, so there is nothing to pin.',
+  },
 }
 
 // Default coordinator descriptor every test not specifically about
