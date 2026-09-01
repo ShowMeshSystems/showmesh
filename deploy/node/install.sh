@@ -64,6 +64,37 @@ if ! "$SCRIPT_DIR/preflight.sh" --runtime-only; then
   exit 1
 fi
 
+# --- Runtime library version floor, via the actual binary ---
+# preflight.sh's version floors on GStreamer 1.26 and GLib 2.80 are only
+# ever checked with pkg-config against the -dev packages, which is the
+# build-time branch this installer never runs (it installs a prebuilt
+# binary; requiring a compiler toolchain to install one would be wrong).
+# On Debian this floor is covered transitively (the Debian 13 check above
+# implies trixie's GStreamer/GLib versions), but on any other platform
+# nothing here has ever checked that the runtime libraries the binary
+# actually links are new enough, only that libltc.so.11 is present.
+# Plain `ldd` only resolves sonames and reports a library it cannot find
+# at all; a library that is present but too old, same soname, missing a
+# symbol the binary needs, resolves cleanly under plain ldd and only fails
+# later at load. `ldd -r` asks the dynamic linker to also resolve data and
+# function relocations, so it reports "undefined symbol" for exactly that
+# case (verified: a stub library built with one needed symbol removed
+# resolves cleanly under plain ldd but ldd -r reports it). Optional, like
+# the rest of this installer's checks that depend on a tool that might not
+# be present: if ldd itself is missing, warn and proceed rather than refuse.
+if command -v ldd >/dev/null 2>&1; then
+  LDD_OUT="$(ldd -r "$BIN_SRC" 2>&1 || true)"
+  if echo "$LDD_OUT" | grep -qE 'not found|undefined symbol'; then
+    echo "install.sh: refusing to install: $BIN_SRC depends on shared libraries this host cannot resolve, or resolves against a library missing a symbol it needs (a too-old or missing runtime library fails loudly, at load, rather than misbehaving quietly):" >&2
+    echo "$LDD_OUT" | grep -E 'not found|undefined symbol' >&2
+    echo "install.sh: install the runtime packages named in deploy/node/README.md and re-run." >&2
+    exit 1
+  fi
+  echo "install.sh: OK: every shared library $BIN_SRC links resolves on this host, symbols included"
+else
+  echo "install.sh: WARNING: ldd not found; cannot verify the binary's runtime libraries resolve. Proceeding without this check." >&2
+fi
+
 # --- System user/group (idempotent) ---
 if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
   echo "install.sh: creating group $SERVICE_GROUP"

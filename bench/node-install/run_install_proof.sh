@@ -7,6 +7,19 @@
 # What this proves, stated plainly, and no more:
 #   - the native (cgo) agent builds cleanly on a fresh Debian 13 host with
 #     only the packages deploy/node/README.md names;
+#   - install.sh refuses to install a binary whose shared library
+#     dependencies this host cannot resolve, or that resolve to a library
+#     missing a symbol the binary needs (checked with `ldd -r` against the
+#     actual binary, not the -dev packages preflight.sh's build-time mode
+#     checks with pkg-config), and this refusal fires for a library
+#     preflight.sh --runtime-only never checks at all;
+#   - `ldd -r` itself, independent of this binary, actually distinguishes
+#     those two failure classes from a library that is merely present:
+#     proved against a synthetic library pair (a full one and one missing
+#     a needed symbol under the same soname), since patching one symbol
+#     out of the real, multi-hundred-symbol GStreamer library while
+#     leaving every other consumer of it on the same host working is not
+#     a safe mutation to perform in place;
 #   - install.sh runs to completion on that host: creates the user/group,
 #     the env file (once, never overwritten on a second run), the state
 #     directory, installs the binary and unit;
@@ -42,8 +55,113 @@ ls -l bin/showmesh-agent-native
 echo "OK: native agent built"
 echo
 
-echo "=== 2. First install (fresh host) ==="
+echo "=== 1b. ldd -r mechanism proof: a present-but-symbol-missing library ==="
+echo "Plain ldd only resolves sonames; it stays clean for a library that is"
+echo "present under the right name but missing a symbol the caller needs,"
+echo "the shape of a too-old runtime library. ldd -r additionally resolves"
+echo "relocations and must report 'undefined symbol' for exactly that case."
+echo "Proved against a small synthetic library pair (not the real"
+echo "GStreamer library: removing one symbol from it in place, on the same"
+echo "host every other check in this bench also runs against, is not a"
+echo "safe mutation to perform)."
+LDDR_WORK="$(mktemp -d)"
+cat > "$LDDR_WORK/libneed.c" <<'CEOF'
+void needed_symbol(void) {}
+void other_symbol(void) {}
+CEOF
+cat > "$LDDR_WORK/libneed_missing.c" <<'CEOF'
+void other_symbol(void) {}
+CEOF
+cat > "$LDDR_WORK/consumer.c" <<'CEOF'
+extern void needed_symbol(void);
+int main(void) { needed_symbol(); return 0; }
+CEOF
+gcc -shared -fPIC -Wl,-soname,libneed.so.1 -o "$LDDR_WORK/libneed.so.1.full" "$LDDR_WORK/libneed.c"
+gcc -shared -fPIC -Wl,-soname,libneed.so.1 -o "$LDDR_WORK/libneed.so.1.missing" "$LDDR_WORK/libneed_missing.c"
+cp "$LDDR_WORK/libneed.so.1.full" "$LDDR_WORK/libneed.so.1"
+ln -s libneed.so.1 "$LDDR_WORK/libneed.so"
+gcc -o "$LDDR_WORK/consumer" "$LDDR_WORK/consumer.c" -L"$LDDR_WORK" -lneed -Wl,-rpath,"$LDDR_WORK/runtime"
+mkdir -p "$LDDR_WORK/runtime"
+cp "$LDDR_WORK/libneed.so.1.full" "$LDDR_WORK/runtime/libneed.so.1"
+if ldd -r "$LDDR_WORK/consumer" | grep -qE 'not found|undefined symbol'; then
+  echo "FAIL: ldd -r reported a problem against the full synthetic library; this proof's baseline is not clean" >&2
+  ldd -r "$LDDR_WORK/consumer" >&2
+  exit 1
+fi
+echo "OK: ldd -r is clean against the full synthetic library"
+cp "$LDDR_WORK/libneed.so.1.missing" "$LDDR_WORK/runtime/libneed.so.1"
+if ldd "$LDDR_WORK/consumer" | grep -q 'not found'; then
+  echo "FAIL: plain ldd already flags the missing-symbol library; this mutation does not isolate ldd -r's added coverage" >&2
+  ldd "$LDDR_WORK/consumer" >&2
+  exit 1
+fi
+LDDR_OUT="$(ldd -r "$LDDR_WORK/consumer" 2>&1 || true)"
+if ! echo "$LDDR_OUT" | grep -q 'undefined symbol'; then
+  echo "FAIL: ldd -r did not report the missing symbol; it cannot distinguish this case and install.sh's check would not either" >&2
+  echo "$LDDR_OUT" >&2
+  exit 1
+fi
+echo "OK: plain ldd stays clean but ldd -r reports the missing symbol"
+rm -rf "$LDDR_WORK"
+echo
+
+echo "=== 1c. Runtime library version floor: ldd -r against the actual binary ==="
+echo "Mutation proof: hide libgstapp-1.0.so.0, a library the agent binary"
+echo "links directly (see its ldd output) but that neither gst-inspect-1.0"
+echo "nor gst-launch-1.0 (the tools preflight.sh itself invokes) need, so"
+echo "preflight passing does not depend on it. install.sh's ldd check on the"
+echo "binary must still catch it, proving this check adds coverage preflight"
+echo "does not already have."
 cd deploy/node
+if ldd "$REPO/bin/showmesh-agent-native" | grep -q 'libgstapp-1\.0\.so\.0'; then
+  :
+else
+  echo "FAIL: the built binary does not link libgstapp-1.0.so.0; cannot run this mutation proof" >&2
+  exit 1
+fi
+LIBGSTAPP_SYM="$(dpkg -L libgstreamer-plugins-base1.0-0 2>/dev/null | grep -E '/libgstapp-1\.0\.so\.0$')"
+if [ -z "$LIBGSTAPP_SYM" ] || [ ! -e "$LIBGSTAPP_SYM" ]; then
+  echo "FAIL: could not locate libgstapp-1.0.so.0 via dpkg -L; cannot run this mutation proof" >&2
+  exit 1
+fi
+LIBGSTAPP_REAL="$(readlink -f "$LIBGSTAPP_SYM")"
+LIBGSTAPP_HIDE_DIR="$(mktemp -d)"
+mv "$LIBGSTAPP_SYM" "$LIBGSTAPP_HIDE_DIR/"
+mv "$LIBGSTAPP_REAL" "$LIBGSTAPP_HIDE_DIR/"
+ldconfig
+if ! ./preflight.sh --runtime-only >/tmp/showmesh-preflight-still-green.log 2>&1; then
+  echo "FAIL: preflight.sh --runtime-only failed once libgstapp-1.0.so.0 was hidden; this mutation is not isolated to the new ldd check" >&2
+  cat /tmp/showmesh-preflight-still-green.log >&2
+  mv "$LIBGSTAPP_HIDE_DIR/$(basename "$LIBGSTAPP_REAL")" "$LIBGSTAPP_REAL"
+  mv "$LIBGSTAPP_HIDE_DIR/$(basename "$LIBGSTAPP_SYM")" "$LIBGSTAPP_SYM"
+  rmdir "$LIBGSTAPP_HIDE_DIR"
+  ldconfig
+  exit 1
+fi
+rm -f /tmp/showmesh-preflight-still-green.log
+echo "OK: preflight.sh --runtime-only still passes with libgstapp-1.0.so.0 hidden (it never checked this library)"
+set +e
+OUT="$(./install.sh "$REPO/bin/showmesh-agent-native" 2>&1)"
+RC=$?
+set -e
+mv "$LIBGSTAPP_HIDE_DIR/$(basename "$LIBGSTAPP_REAL")" "$LIBGSTAPP_REAL"
+mv "$LIBGSTAPP_HIDE_DIR/$(basename "$LIBGSTAPP_SYM")" "$LIBGSTAPP_SYM"
+rmdir "$LIBGSTAPP_HIDE_DIR"
+ldconfig
+if [ "$RC" -eq 0 ]; then
+  echo "FAIL: install.sh succeeded with a shared library the binary links genuinely unresolvable; the ldd check cannot fail and is not a real check" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+if ! echo "$OUT" | grep -q 'not found'; then
+  echo "FAIL: install.sh refused, but not by naming an unresolvable shared library" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+echo "OK: install.sh refuses when the binary depends on a shared library this host cannot resolve"
+echo
+
+echo "=== 2. First install (fresh host) ==="
 ./install.sh "$REPO/bin/showmesh-agent-native"
 echo
 
