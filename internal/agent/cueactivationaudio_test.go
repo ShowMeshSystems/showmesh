@@ -242,6 +242,77 @@ func TestActivateAudioRedeliveredActivationIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestActivateAudioClearsStaleStagedSessionWhenContentDoesNotMatch proves
+// the discard half of the prepare-ahead design: when a session staged
+// ahead of time under [cueactivation.PrepareStagingSessionID] (an ordinary
+// audio.session.apply + audio.session.prepare pair, exactly what a
+// coordinator-scheduled prepare-ahead dispatches) does not hold the
+// content the real activating Cue actually wants, activateAudio's Promote
+// attempt refuses on the identity mismatch, falls back to an ordinary
+// Prepare+Start on the show session exactly as it would if nothing had
+// ever been staged, and discards the now-useless stage via Manager.Clear
+// rather than leaving it holding a loaded branch indefinitely.
+func TestActivateAudioClearsStaleStagedSessionWhenContentDoesNotMatch(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+
+	stagedContent := []byte("staged content, never used")
+	stagedHash := writeAssetFixture(t, dir, "staged-song.wav", stagedContent)
+	stagedRef := pkgaudio.MediaRef{
+		AssetID: "staged-song-asset", ContentHash: stagedHash,
+		SizeBytes: int64(len(stagedContent)), RuntimeFilename: "staged-song.wav",
+	}
+	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
+	if r := mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(stagedRef)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging prepare refused: %+v", r)
+	}
+
+	// The real activating Cue wants DIFFERENT content than what was staged
+	// above — an operator jump past the staged Cue, or simply nothing
+	// staged for this one.
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-11", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-audio-stale-stage", "cue-11", 1, "halloween-2026", 3, "rev-a", 0)
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm: %+v", result)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	var sawShowPlaying, sawStaging bool
+	for _, s := range snaps {
+		if s.ID == cueActivationAudioSessionID && s.State == pkgaudio.StatePlaying {
+			sawShowPlaying = true
+		}
+		if s.ID == stagingID {
+			sawStaging = true
+		}
+	}
+	if !sawShowPlaying {
+		t.Fatalf("show session is not playing after activate: %+v", snaps)
+	}
+	if sawStaging {
+		t.Fatalf("stale staging session is still present after activate; it should have been cleared: %+v", snaps)
+	}
+}
+
 // TestBlackAndSilenceStopRevisionIsNotRefusedAsStale is defect 2's own
 // regression test: H0.2's blackAndSilence policy must actually be able to
 // silence a Cue's audio session. It activates audio exactly as
