@@ -528,7 +528,7 @@ function ActionTable({
                       <InvokeButton actionId={action.id} binding={binding} canInvoke={canInvoke} />
                     </td>
                   )}
-                  <td><BindingRecheck actionId={action.id} binding={binding} /></td>
+                  <td className="sm-table__wrap"><BindingRecheck actionId={action.id} binding={binding} /></td>
                 </SelectableRow>
               )
             })

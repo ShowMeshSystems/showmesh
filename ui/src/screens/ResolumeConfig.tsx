@@ -665,7 +665,7 @@ export function ResolumeConfig() {
                           <td>
                             <StatusPair tone={RECORD_TONE[entry.state]} label={RECORD_LABEL[entry.state]} />
                           </td>
-                          <td className="sm-small sm-muted">
+                          <td className="sm-small sm-muted sm-table__wrap">
                             {entry.state === 'clip' &&
                               `${entry.clip ?? 'an unnamed clip'}${entry.clipNameGenerated ? ' (generated name)' : ''}${
                                 entry.deck !== undefined ? ` on deck ${entry.deck}` : ''
@@ -734,7 +734,7 @@ function RestoreReportSection({ report }: { report: NonNullable<ResolumeRecovery
                   {layer.layerNameGenerated ? ' (generated name)' : ''}
                 </td>
                 <td className="sm-small sm-muted">{layer.clip ?? 'no clip'}</td>
-                <td>
+                <td className="sm-table__wrap">
                   <StatusPair tone={RESTORE_RESULT_TONE[layer.result]} label={RESTORE_RESULT_LABEL[layer.result]} />
                   {layer.reason !== undefined && (
                     <>

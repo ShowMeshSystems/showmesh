@@ -48,6 +48,12 @@
   padding: 10px;
   border-bottom: 1px solid var(--border);
   height: var(--row-h);
+  white-space: nowrap;
+}
+
+/* Keep dense evidence scannable. Long explanatory prose opts back into wrapping. */
+.sm-table td.sm-table__wrap {
+  white-space: normal;
 }
 
 .sm-table tbody tr:last-child td {
