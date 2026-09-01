@@ -105,14 +105,15 @@ function ShellMode() {
 
   if (response === null) return null
   const mode = response.payload.mode
-  const pin = response.cueActivationPin
+  // A coordinator older than the pin field reports no pin; say nothing rather than invent one.
+  const pin: typeof response.cueActivationPin | undefined = response.cueActivationPin
   const firstSentence = response.resolumeWebSocketEffect.replace(/\.\s*$/, '')
-  const title = `${firstSentence}. ${pin.effect}`
+  const title = pin === undefined ? response.resolumeWebSocketEffect : `${firstSentence}. ${pin.effect}`
   return (
     <Link className={`sm-mode-badge sm-mode-badge--${mode}`} to="/settings#show-mode" title={title}>
       {mode}
-      {pin.pinned && ' (edit staged)'}
-      {pin.pinned && (
+      {pin?.pinned === true && ' (edit staged)'}
+      {pin?.pinned === true && (
         <span role="status" className="sm-sr-only">
           Show mode: {mode}. A show.cue edit is staged and will not reach any node until the show is stopped and restarted.
         </span>

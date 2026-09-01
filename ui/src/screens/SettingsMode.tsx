@@ -180,18 +180,19 @@ export function SettingsMode() {
             )}
           </ButtonRow>
           <p className="sm-small sm-muted sm-stack-3">{state.response.resolumeWebSocketEffect}</p>
-          <p className="sm-small sm-muted sm-stack-3">
-            {state.response.cueActivationPin.effect}
-            {state.response.cueActivationPin.pinned && (
-              <>
-                {' '}Pinned to show <span className="sm-data">{state.response.cueActivationPin.show}</span>, generation{' '}
-                <span className="sm-data">{state.response.cueActivationPin.generation}</span>
-                {state.response.cueActivationPin.pinnedAt !== undefined &&
-                  `, since ${formatDateClock(state.response.cueActivationPin.pinnedAt) ?? 'an unrecorded time'}`}
-                .
-              </>
-            )}
-          </p>
+          {state.response.cueActivationPin !== undefined && (
+            <p className="sm-small sm-muted sm-stack-3">
+              {state.response.cueActivationPin.effect}
+              {state.response.cueActivationPin.pinned && (
+                <>
+                  {' '}Pinned to show <span className="sm-data">{state.response.cueActivationPin.show}</span>, generation{' '}
+                  <span className="sm-data">{state.response.cueActivationPin.generation}</span>
+                  {state.response.cueActivationPin.pinnedAt !== undefined && `, since ${formatDateClock(state.response.cueActivationPin.pinnedAt) ?? 'an unrecorded time'}`}
+                  .
+                </>
+              )}
+            </p>
+          )}
           <p className="sm-small sm-muted sm-stack-3">
             Playlist mismatch handling is expected to follow this setting rather than being configured per playlist.
             That wiring does not exist yet. Today the per-playlist control on Shows is what takes effect.

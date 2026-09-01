@@ -96,6 +96,16 @@ describe('app shell', () => {
     expect(badge.title).toBe('closed in show mode. A show.cue edit saved now applies immediately.')
   })
 
+  it('renders the mode badge when an older coordinator reports no cue activation pin', async () => {
+    const withoutPin: Record<string, unknown> = { ...showModeConfig({ pinned: false }) }
+    delete withoutPin['cueActivationPin']
+    getShowModeConfigMock.mockResolvedValue(withoutPin as unknown as ReturnType<typeof showModeConfig>)
+    renderShell({})
+    const badge = await screen.findByRole('link', { name: /^show$/i })
+    expect(badge.textContent).not.toContain('edit staged')
+    expect(badge.title).toBe('closed in show mode')
+  })
+
   it('marks the mode badge staged and names the pin when the cue activation pin is pinned', async () => {
     getShowModeConfigMock.mockResolvedValue(
       showModeConfig({
