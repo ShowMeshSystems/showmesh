@@ -473,6 +473,159 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	return res.outcome
 }
 
+// Promote moves the already-loaded engine handle from fromID onto toID
+// and starts it there, skipping the load Start would otherwise do. It
+// exists for exactly one case: a session prepared ahead of time under a
+// temporary staging id, once the cue it was staged for is confirmed to
+// be the one actually activating, needs to become the well-known show
+// session (cueActivationAudioSessionID) without repeating the media
+// load that staging already paid for.
+//
+// toID must already exist — the caller's own Apply against toID (which
+// creates it if needed, see getOrCreate's own doc comment) must run
+// before Promote, exactly as it already must before Prepare or Start.
+// Promote itself calls m.get, never m.getOrCreate, for both fromID and
+// toID: it moves a handle between two sessions that already exist, and
+// creates neither. getOrCreate's single caller remains Apply.
+//
+// fromID must be Ready with a loaded handle whose identity matches
+// toID's own current desired item (itemIdentity, the same comparison
+// Start already makes against its own prior handle). A mismatch —
+// wrong guess, or a fresher Apply landed on toID after fromID was
+// staged — refuses without touching either session's engine state; the
+// caller falls back to Prepare+Start on toID exactly as it would if
+// nothing had been staged, and Clear on fromID to discard the stale
+// stage (see internal/agent/cueactivationops.go's own bookkeeping).
+//
+// Never acquires fromID's and toID's session locks at the same time.
+// Every other cross-session operation in this file (duckLowerPriority,
+// interruptLowerPriority, submitToActivePolicies) holds that same
+// invariant, releasing s.mu before locking another session — see
+// Manager.duckLowerPriority's own doc comment. Promote's two sessions
+// are both fixed, well-known ids, never chosen at runtime, so a
+// consistent lock order between them is trivial to state and hold: to
+// first (read-only), then from, then to again (the mutating dispatch).
+// This is documented here because it is the one place in this file
+// that locks two sessions in the same call, and it must never be
+// extended to lock them concurrently without re-deriving this
+// argument.
+//
+// Promote reads and writes neither session's owner field. That field
+// is coordinator-stamped desired state, not agent mechanics, and an
+// absent owner is what lets a session retire on its own — clearing
+// fromID's own owner here would make the emptied staging session
+// permanently unretirable instead.
+func (m *Manager) Promote(ctx context.Context, fromID, toID pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
+	to, ok := m.get(toID)
+	if !ok {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
+	}
+	from, ok := m.get(fromID)
+	if !ok {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no session staged for promotion"}
+	}
+
+	to.mu.Lock()
+	item, ok := to.currentItemLocked()
+	if !ok {
+		to.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media to promote onto"}
+	}
+	wantIdentity := itemIdentity(item)
+	to.mu.Unlock()
+
+	from.mu.Lock()
+	switch {
+	case from.state != pkgaudio.StateReady:
+		from.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session is not ready"}
+	case !from.handleLoaded:
+		from.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session holds no loaded handle"}
+	case from.loadedIdentity != wantIdentity:
+		from.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session's content no longer matches what toID now desires"}
+	}
+	handle := from.handle
+	capturedIdentity := from.loadedIdentity
+	from.handle = ""
+	from.handleLoaded = false
+	from.loadedIdentity = ""
+	from.state = pkgaudio.StateStopped
+	from.timingKnown = false
+	from.persistBestEffortLocked("promoted to show session")
+	from.mu.Unlock()
+
+	to.mu.Lock()
+	res := to.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+		item, ok := to.currentItemLocked()
+		if !ok || itemIdentity(item) != wantIdentity {
+			relCtx, relCancel := boundedObserveContext(ctx)
+			if err := m.engine.Release(relCtx, handle); err != nil {
+				m.logf("audio session %s: engine release of an orphaned promoted handle failed: %v", toID, err)
+			}
+			relCancel()
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "toID's desired content changed while promoting; the staged session was already released — retry with an ordinary Prepare and Start"}
+		}
+		to.handle = handle
+		to.handleLoaded = true
+		to.loadedIdentity = capturedIdentity
+		position, err := to.resolveBookmarkPositionLocked(item)
+		if err != nil {
+			to.bookmark = nil
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+		}
+		dispatchedAt := m.now()
+		obs, err := to.mgr.engine.Start(ctx, to.handle, position)
+		if err != nil {
+			to.state = pkgaudio.StateFailed
+			to.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			to.releaseEngineLocked(ctx)
+			m.stopLTCLocked(ctx, to)
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+		}
+		to.state = pkgaudio.StatePlaying
+		to.timingKnown = true
+		to.bookmark = nil
+		to.lastObservedAt = obs.ObservedAt
+		m.startLTCLocked(ctx, to, position)
+		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
+	})
+
+	// duck/interrupt resolution needs to lock OTHER sessions, so it must
+	// run after to.mu is released — see [Manager.duckLowerPriority]'s doc
+	// comment on why this can never hold two sessions' locks at once. The
+	// same shape Start's own tail uses: read to's own state/desired here,
+	// while to.mu is still held, never after Unlock.
+	started := res.executed && to.state == pkgaudio.StatePlaying
+	duck := res.executed && to.state == pkgaudio.StatePlaying && to.desired.MixPolicy != nil && *to.desired.MixPolicy == pkgaudio.MixPolicyDuck
+	interrupt := res.executed && to.state == pkgaudio.StatePlaying && to.desired.MixPolicy != nil && *to.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
+	var role pkgaudio.SourceRole
+	if to.desired.SourceRole != nil {
+		role = *to.desired.SourceRole
+	}
+	to.mu.Unlock()
+
+	if !res.executed {
+		relCtx, relCancel := boundedObserveContext(ctx)
+		if err := m.engine.Release(relCtx, handle); err != nil {
+			m.logf("audio session %s: engine release of an unpromoted staged handle failed: %v", toID, err)
+		}
+		relCancel()
+	}
+
+	if duck {
+		m.duckLowerPriority(ctx, toID, role)
+	}
+	if interrupt {
+		m.interruptLowerPriority(ctx, toID, role)
+	}
+	if started {
+		m.submitToActivePolicies(ctx, toID, role)
+	}
+	return res.outcome
+}
+
 // Pause suspends the current item, marking timing unresolved until the
 // next fresh observation.
 func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
