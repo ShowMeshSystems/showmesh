@@ -146,8 +146,8 @@ const NIGHT = () => ({
       state: 'recorded',
       reason: 'Ducked to -18 dB at 21:02:20, restore armed for the boundary.',
       steps: [
-        { sequence: 'background', phase: 'enter_show', cueName: 'Duck background bed', kind: 'gain', actionRevision: 4, state: 'resolved', outcome: 'confirmed', dispatchedAt: ago(2_696_000), resolvedAt: ago(2_694_000) },
-        { sequence: 'background', phase: 'enter_show', cueName: 'Start background bed', kind: 'start', actionRevision: 4, state: 'resolved', outcome: 'confirmed', dispatchedAt: ago(2_694_000), resolvedAt: ago(2_692_000) },
+        { sequence: 'background', phase: 'enter_show', nodeId: 'barn-controller', cueName: 'Duck background bed', kind: 'gain', actionRevision: 4, state: 'resolved', outcome: 'confirmed', dispatchedAt: ago(2_696_000), resolvedAt: ago(2_694_000) },
+        { sequence: 'background', phase: 'enter_show', nodeId: 'barn-controller', cueName: 'Start background bed', kind: 'start', actionRevision: 4, state: 'resolved', outcome: 'confirmed', dispatchedAt: ago(2_694_000), resolvedAt: ago(2_692_000) },
       ],
     },
     degraded: false, attributionDegraded: true,
@@ -371,6 +371,7 @@ createServer((req, res) => {
     serverTime: NOW(), kind: 'show.mode', revision: 6, payload: { mode: 'show' },
     updatedAt: ago(10_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
     resolumeWebSocketEffect: 'The Resolume WebSocket stays connected in show mode.',
+    cueActivationPin: { pinned: true, show: 'winter-ridge-2026', generation: 7, pinnedAt: ago(2_700_000), effect: 'Show mode pins cue activation to Winter Ridge 2026 generation 7; a show.cue edit saved now is staged until the show stops.' },
   })
   if (p.startsWith('/config/audio.node/') && !p.endsWith('/revisions')) {
     const id = p.split('/').pop()
