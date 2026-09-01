@@ -272,6 +272,41 @@ describe('Show Night', () => {
     expect(screen.getByText(/attributionDegraded/)).toBeInTheDocument()
   })
 
+  it('sends skipEnterShowLead: true for start-night only when the late-start box is checked', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByLabelText(/Late start/))
+    fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    expect(calls[0]?.[3]).toBe(true)
+  })
+
+  it('sends no skipEnterShowLead field for start-night when the box is left unchecked', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    expect(calls[0]?.[3]).toBe(false)
+  })
+
+  it('never sends skipEnterShowLead for a command other than start-night, even with the box checked', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByLabelText(/Late start/))
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(calls[0]?.[3]).toBeUndefined()
+  })
+
   it('reuses the same idempotencyKey across a double press of prepare-site', () => {
     const calls: unknown[][] = []
     stubs.dispatchNightCommand = (...args: unknown[]) => {
@@ -536,6 +571,73 @@ describe('Show Night', () => {
     expect(screen.getByText('welcome-back')).toBeInTheDocument()
     expect(screen.getByText('announcementStart')).toBeInTheDocument()
     expect(screen.getByText('No announcement asset configured.')).toBeInTheDocument()
+    expect(screen.getAllByText('audio-01')).toHaveLength(2)
+  })
+
+  it('renders the node id per background audio step, including one addressed to a second node', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          state: 'recorded',
+          reason: '',
+          pinnedMaxGainDb: -18,
+          steps: [
+            {
+              sequence: 'background',
+              phase: 'enterShow',
+              cueName: 'duck-bed',
+              nodeId: 'audio-01',
+              kind: 'gain',
+              actionRevision: 4,
+              state: 'resolved',
+              outcome: 'confirmed',
+              dispatchedAt: '2026-08-28T21:02:20Z',
+              resolvedAt: '2026-08-28T21:02:21Z',
+            },
+            {
+              sequence: 'background',
+              phase: 'enterShow',
+              cueName: 'duck-bed',
+              nodeId: 'audio-zone-2',
+              kind: 'gain',
+              actionRevision: 4,
+              state: 'resolved',
+              outcome: 'confirmed',
+              dispatchedAt: '2026-08-28T21:02:20Z',
+              resolvedAt: '2026-08-28T21:02:21Z',
+            },
+          ],
+        },
+      }),
+    })
+    expect(screen.getByText('audio-01')).toBeInTheDocument()
+    expect(screen.getByText('audio-zone-2')).toBeInTheDocument()
+  })
+
+  it('renders a step of kind announcementApply', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          state: 'recorded',
+          reason: '',
+          pinnedMaxGainDb: -18,
+          steps: [
+            {
+              sequence: 'announcement',
+              phase: 'enterShow',
+              cueName: 'welcome',
+              nodeId: 'audio-01',
+              kind: 'announcementApply',
+              actionRevision: 2,
+              state: 'dispatched',
+              dispatchedAt: '2026-08-28T21:02:20Z',
+              resolvedAt: null,
+            },
+          ],
+        },
+      }),
+    })
+    expect(screen.getByText('announcementApply')).toBeInTheDocument()
   })
 
   it('renders the pinned background-audio ceiling distinctly from the audio.settings config value', () => {
@@ -707,6 +809,11 @@ describe('Show Night', () => {
         resting: {
           fppInstanceId: 'fpp-1', playlist: 'resting', endOfNightPlaylist: 'resting', endOfNightRepeat: true,
           timelineAsset: { show: 'winter-ridge', sequence: 'seq', target: 'target' },
+          backgroundAudio: {
+            items: [{ asset: 'bed-1', target: 'audio-01' }],
+            repeat: 'all', resume: 'restart', itemTransition: 'crossfade', crossfadeMs: 500, maxGainDb: -12,
+            fadeOutMs: 2000, fadeInMs: 1500,
+          },
         },
         enterShow: {
           blackoutHoldMs: 0,
@@ -720,7 +827,9 @@ describe('Show Night', () => {
       createdByPrincipalName: 'erbartos',
       source: 'api',
     })
-    const captured: { body: { enterShow?: { cues?: unknown[] } } | null } = { body: null }
+    const captured: {
+      body: { enterShow?: { cues?: unknown[] }; resting?: { backgroundAudio?: { fadeOutMs?: number; fadeInMs?: number; items?: { target?: string }[] } } } | null
+    } = { body: null }
     stubs.listConfigObjects = () =>
       Promise.resolve({
         serverTime: '',
@@ -729,7 +838,7 @@ describe('Show Night', () => {
       })
     stubs.getNightSessionConfig = () => Promise.resolve(definitionResponse('Winter Ridge'))
     stubs.putNightSessionConfig = (...args: unknown[]) => {
-      captured.body = args[1] as { enterShow?: { cues?: unknown[] } }
+      captured.body = args[1] as typeof captured.body
       return Promise.resolve(definitionResponse('Winter Ridge Updated'))
     }
     renderScreen({ nightSession: session(), session: configWriteSession })
@@ -742,6 +851,12 @@ describe('Show Night', () => {
     expect(captured.body?.enterShow?.cues).toEqual([
       { name: 'Announce', role: 'announcement', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500, announcementPolicy: 'duck' },
     ])
+    // definitionPayload spreads base.resting, so fields it never surfaces
+    // in the form (backgroundAudio's fade pair and per-item target) still
+    // survive a save that only touched the label.
+    expect(captured.body?.resting?.backgroundAudio?.fadeOutMs).toBe(2000)
+    expect(captured.body?.resting?.backgroundAudio?.fadeInMs).toBe(1500)
+    expect(captured.body?.resting?.backgroundAudio?.items?.[0]?.target).toBe('audio-01')
 
     // Changing the role off announcement must drop the policy, which the coordinator refuses on any other role.
     fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'lighting' } })

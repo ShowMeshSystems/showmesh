@@ -2405,8 +2405,9 @@ export class ApiStore {
    * non-empty one; each override is consulted only against a rule that
    * declares `overridePolicy: authorized-operator` and only when the
    * caller separately holds `night:override` — `night:command` alone
-   * never authorizes a bypass. Throws a typed `ApiError` on the three
-   * distinguishable `409`s (`night-not-ready`, `night-state-rejected`,
+   * never authorizes a bypass. `skipEnterShowLead` is honored only by
+   * `start-night`; sent only when true. Throws a typed `ApiError` on the
+   * three distinguishable `409`s (`night-not-ready`, `night-state-rejected`,
    * `night-ambiguous`) and the `503`
    * (`night-command-refused-audit-unavailable`, `prepare-site`/
    * `run-readiness`/`start-preshow`/`start-night` only) — see
@@ -2417,6 +2418,7 @@ export class ApiStore {
     command: NightCommandName,
     idempotencyKey?: string,
     interlockOverrides?: readonly SchemaNightInterlockOverride[],
+    skipEnterShowLead?: boolean,
   ): Promise<SchemaNightCommandResponse> {
     const controller = this.beginSideCall()
     try {
@@ -2425,6 +2427,7 @@ export class ApiStore {
       if (interlockOverrides !== undefined && interlockOverrides.length > 0) {
         body.interlockOverrides = [...interlockOverrides]
       }
+      if (command === 'start-night' && skipEnterShowLead === true) body.skipEnterShowLead = true
       return await this.client.postJson<SchemaNightCommandResponse>(
         `/night/commands/${encodeURIComponent(command)}`,
         body,

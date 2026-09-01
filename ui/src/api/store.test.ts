@@ -3189,6 +3189,76 @@ describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first
   })
 })
 
+describe('ApiStore: dispatchNightCommand skipEnterShowLead (RESTING-MODE.md §7.1)', () => {
+  function nightCommandResponse(command: string) {
+    return {
+      serverTime: '2026-08-12T22:00:00Z',
+      command: { command, outcome: 'applied', attributionDegraded: false },
+      session: {},
+    }
+  }
+
+  it('sends skipEnterShowLead: true on start-night when requested', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/start-night' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('start-night'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('start-night', undefined, undefined, true)
+    expect(gotBody.skipEnterShowLead).toBe(true)
+  })
+
+  it('sends no skipEnterShowLead field on start-night when not requested', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/start-night' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('start-night'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('start-night', undefined, undefined, false)
+    expect('skipEnterShowLead' in gotBody).toBe(false)
+  })
+
+  it('never sends skipEnterShowLead for a command other than start-night, even when true', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/end-session' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('end-session'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('end-session', undefined, undefined, true)
+    expect('skipEnterShowLead' in gotBody).toBe(false)
+  })
+})
+
 // Step 8, ADR-015: FPPCommandRequest.params used to be generated as
 // Record<string, never> (api/openapi.yaml declared it as a bare object
 // with no JSON Schema `properties`), a type no non-empty object

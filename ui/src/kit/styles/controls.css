@@ -201,6 +201,11 @@
   accent-color: var(--accent);
 }
 
+/* Gloved: show-time controls a wired glove still has to hit. */
+.sm-choice--gloved {
+  min-height: var(--ctrl-h-gloved);
+}
+
 .sm-choice-row {
   display: flex;
   flex-wrap: wrap;

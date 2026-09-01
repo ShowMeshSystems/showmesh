@@ -357,6 +357,7 @@ export type BackgroundAudioStepRow = {
   when: string
   sequence: string
   cueName: string
+  nodeId: string
   kind: string
   detail: string
   tone: Tone
@@ -369,10 +370,11 @@ export function backgroundAudioSteps(audio: NightBackgroundAudio): BackgroundAud
   return audio.steps.map((step, index) => {
     const outcome = step.outcome
     return {
-      key: `${step.cueName}:${step.kind}:${index}`,
+      key: `${step.cueName}:${step.kind}:${step.nodeId}:${index}`,
       when: step.dispatchedAt === null ? 'Armed' : (formatClock(step.dispatchedAt) ?? 'dispatched'),
       sequence: step.sequence,
       cueName: step.cueName,
+      nodeId: step.nodeId,
       kind: step.kind,
       detail: `rev ${step.actionRevision}`,
       tone: outcome === undefined ? (step.state === 'pending' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),

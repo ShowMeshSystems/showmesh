@@ -120,17 +120,19 @@ export function ShowNight() {
   // named actually opens so a LATER, genuinely new prepare-site is not
   // silently folded into the epoch this key already named.
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
+  const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
 
   const send = useCallback(
     (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
       const idempotencyKey = command === 'prepare-site' ? prepareSiteKey : undefined
-      dispatchNightCommand(command, idempotencyKey, interlockOverrides)
+      dispatchNightCommand(command, idempotencyKey, interlockOverrides, command === 'start-night' ? skipEnterShowLead : undefined)
         .then((response) => {
           setWithheld(null)
           setOverrideRule('')
           setOverrideReason('')
           setOverrideInvalid(false)
           if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
+          if (command === 'start-night') setSkipEnterShowLead(false)
           const applied = response.command.outcome === 'applied'
           const parts = [
             applied
@@ -177,7 +179,7 @@ export function ShowNight() {
           setOutcome({ tone: 'bad', label: 'Refused', detail: `${command} was refused: ${describeApiError(err)}` })
         })
     },
-    [prepareSiteKey],
+    [prepareSiteKey, skipEnterShowLead],
   )
 
   const submitOverride = useCallback(() => {
@@ -327,6 +329,17 @@ export function ShowNight() {
                 {label}
               </Button>
               <p className="sm-small sm-muted">{gate.allowed ? detail : gate.reason}</p>
+              {command === 'start-night' && (
+                <label className="sm-choice sm-choice--gloved">
+                  <input
+                    type="checkbox"
+                    checked={skipEnterShowLead}
+                    disabled={!gate.allowed}
+                    onChange={(e) => setSkipEnterShowLead(e.target.checked)}
+                  />
+                  <span>Late start: skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
+                </label>
+              )}
             </div>
           ))}
         </div>
@@ -476,6 +489,7 @@ export function ShowNight() {
                             <th scope="col">When</th>
                             <th scope="col">Sequence</th>
                             <th scope="col">Cue</th>
+                            <th scope="col">Node</th>
                             <th scope="col">Kind</th>
                             <th scope="col">State</th>
                           </tr>
@@ -490,6 +504,7 @@ export function ShowNight() {
                                 <br />
                                 <span className="sm-small sm-faint">{step.detail}</span>
                               </td>
+                              <td className="sm-data">{step.nodeId}</td>
                               <td>{step.kind}</td>
                               <td>
                                 <StatusPair tone={step.tone} label={step.state} />

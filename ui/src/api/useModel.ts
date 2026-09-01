@@ -857,8 +857,9 @@ export function dispatchNightCommand(
   command: NightCommandName,
   idempotencyKey?: string,
   interlockOverrides?: readonly NightInterlockOverride[],
+  skipEnterShowLead?: boolean,
 ): Promise<NightCommandResponse> {
-  return store.dispatchNightCommand(command, idempotencyKey, interlockOverrides)
+  return store.dispatchNightCommand(command, idempotencyKey, interlockOverrides, skipEnterShowLead)
 }
 
 export function getNightSessionConfig(id: string): Promise<NightSessionConfigResponse> {
