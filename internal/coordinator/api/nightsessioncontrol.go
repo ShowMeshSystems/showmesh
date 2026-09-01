@@ -705,7 +705,8 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 	return out, problem, err
 }
 
-// nightAnnouncementResetAtPrepareSiteBudget bounds the TOTAL real
+// nightAnnouncementResetAtPrepareSiteBudget bounds, to at most itself
+// plus one in-flight audioCommandConfirmDeadline, the TOTAL real
 // wall-clock time nightResetAnnouncementSessionsAtPrepareSite's own pass
 // may add to prepare-site, regardless of how many distinct announcement
 // sessions the active night.session configures. Checked BEFORE each
@@ -741,16 +742,18 @@ var nightAnnouncementResetAtPrepareSiteBudget = 2 * audioCommandConfirmDeadline
 //
 // WARN AND PROCEED, BOUNDED: the night must never block on an unreachable
 // node, and proceeding here is not free. This pass adds at most
-// nightAnnouncementResetAtPrepareSiteBudget to prepare-site's own
-// latency, never more, regardless of how many announcement sessions are
-// configured: once the budget is spent, every remaining distinct
-// (node, session) pair is SKIPPED rather than dispatched. A skipped
-// session keeps whatever a previous night session left on its node until
-// a later prepare-site, or until the night loop's own per-cycle clear
-// reaches it once that cue actually runs. Every failure here - skipped,
-// unacknowledged, or refused - only logs a warning and continues; none is
-// ever returned to the caller, and none is ever a reason to fail
-// prepare-site itself.
+// nightAnnouncementResetAtPrepareSiteBudget plus one in-flight
+// audioCommandConfirmDeadline to prepare-site's own latency - never more,
+// because the budget is checked before each dispatch and a dispatch
+// already under way is never interrupted - regardless of how many
+// announcement sessions are configured: once the budget is spent, every
+// remaining distinct (node, session) pair is SKIPPED rather than
+// dispatched. A skipped session keeps whatever a previous night session
+// left on its node until a later prepare-site, or until the night loop's
+// own per-cycle clear reaches it once that cue actually runs. Every
+// failure here - skipped, unacknowledged, or refused - only logs a
+// warning and continues; none is ever returned to the caller, and none
+// is ever a reason to fail prepare-site itself.
 //
 // No node-reported revision is read or trusted here (RULED: deriving the
 // floor from what the node currently reports computes desired state from
