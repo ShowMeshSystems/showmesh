@@ -30,36 +30,34 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
-> **`main` was at `ff56233`** (2026-08-28) when Lane 21 folded Track E phase 2
-> onto it as pull request #178. The lanes recorded in the dated entries below
-> are Lane 16's ten Track H defect fixes (`85ed4bc`..`629754e`), Lane 19's three
-> node-agent and audio-node fixes (`f2d13e6`, `7c7129a`, `1528203`), Lane 15's
-> five defect fixes (`85ed4bc`..`d297c05`), Lane 20's identifier reservation
-> (`ccd83b7`), Track I's research and reservations (`9157e26`, `ff56233`), and
-> Lane 21's FPP Connect fold. **`dev/fpp-connect` is now on `main`**; one
-> integration branch is still deliberately off it, `dev/multi-audio` (Lane 20's
-> ADR-045 and its `audio_sessions` re-key, which renumbers from v20 to v21 when
-> that branch takes `main`).
+> **`main` is at `3058678`** (2026-09-01), 62 commits past the `ff56233` that
+> Lane 21's Track E phase 2 fold left it at on 2026-08-28. The dated entries
+> below record the lanes through 2026-08-30; the 2026-08-31 and 2026-09-01
+> overnight lanes that produced most of those 62 commits are recorded in Linear
+> rather than here.
 >
-> **CI on `main` at `629754e` is red, on two known pre-existing failures, neither
-> caused by these merges.** `test (1.26.6)` failed on the audio engine's
-> `TestCloseTearsDownThreeConcurrentPlayingBranches` with the deferred-teardown
-> warnings that SM-252 describes; nothing in `6da29d6..629754e` touches
-> `internal/agent/audio`. `integration` was killed by its own timeout at 9m0s
-> while still running tests, with **zero assertion failures**, which is the same
-> gate-under-its-own-ceiling failure recorded against unmodified `main` the day
-> before. The same instability shows on other branches with different tests on
-> different legs: pull request #169's run passed `test (1.26.6)` and failed
-> `test (1.25.0)` on `TestLTCResumeRealignsAudioToNewPosition`, on a diff that
-> changes one test file, a shell comment and a Makefile comment. Both need
-> owner decisions rather than a fix chosen here: the audio-engine teardown flake
-> is filed and carries a `Needs decision` label, and the integration timeout was
-> deliberately closed as not worth fixing when it was believed to be a build-VM
-> problem, before it started failing on GitHub's own runners. One half of that
-> integration failure now has a fix open as pull request #171 and **not yet on
-> `main`**: the suite built its three binaries inside its own 8m timeout, and
-> that build has moved into the scripts ahead of the clock. See the 2026-08-27
-> entry below.
+> **Three branches are deliberately off `main`, and two of them are stalled.**
+> `dev/multi-audio` (Lane 20's ADR-045 and its `audio_sessions` re-key) is 11
+> ahead and 39 behind; its fold, pull request #234, is a draft with nine content
+> conflicts and a migration that must renumber to v27, and it is held pending an
+> owner decision on sequencing. `dev/clock-sync` (Track I) holds one commit,
+> Lane 22's seam I1 from pull request #179, and is 76 behind with nothing added
+> since 2026-08-28. `feature/operator-ui-overhaul-2` is 127 ahead and 20 behind,
+> with no fold pull request open; its own stacked pull requests #197 through
+> #220 were closed unmerged on 2026-08-30 and the work continued directly on the
+> branch. **`dev/fpp-connect` is on `main`.**
+>
+> **CI on `main` is green.** The `CI` workflow passed at `e16483b`, `55ad5fa`
+> and `3058678` on 2026-09-01, and `FPP Integration (bench fppd)` passed at
+> `3058678`. The two failures this block previously recorded are both addressed:
+> the audio-engine deferred-teardown flake was SM-252, fixed as `7862228`, and
+> the integration suite now builds its three binaries before its own timeout
+> starts (pull request #171, `01651ba`). `scripts/test-integration.sh` still
+> hardcodes `-timeout=8m`, so the loaded-build-host case SM-327 measured is
+> untested rather than fixed; the green runs above are GitHub's runners, not
+> showmesh-dev-01 under concurrent lane load. Three timing-sensitive test
+> failures in three packages were seen on one box in one night and are filed as
+> SM-441, SM-424 and SM-442.
 >
 > **Track H has H1 through H6 merged, and H7's defect list is now closed
 > except for three follow-ups.** The chain was assembled and run end to end for
@@ -70,11 +68,13 @@ The **Current state** block at the top of this file is overwritten each session:
 > SM-292 (`cc2f9f8`), the per-cue asset gate (`f6923ed`), render assignment
 > readiness (`533bbf2`), catalog-deploy establishment (`fa6cec9`), the superseded
 > render verdict (`5e178a9`), and four readiness conditions (`795c48e`,
-> `629754e`). Three follow-ups the lane filed rather than fixed remain open:
-> `assets-missing` readiness (now unblocked), the coordinator/node disagreement
-> about a never-uploaded sequence, and the intermittent supervisor-test race that
-> reddens the Go 1.25 leg on unrelated branches. **No hardware, NDI,
-> audio-hardware or wall evidence exists for any of it.** The bench and its
+> `629754e`). Of the three follow-ups the lane filed rather than fixed, the
+> supervisor-test race is fixed on `main` (`3aa6e14`, SM-321). The other two,
+> `assets-missing` readiness and the coordinator/node disagreement about a
+> never-uploaded sequence, were both built on 2026-08-30 (pull requests #230 and
+> #232) but into `dev/multi-audio`, so **neither is on `main`** and both wait on
+> that fold. **No hardware, NDI, audio-hardware or wall evidence exists for any
+> of it.** The bench and its
 > case-by-case record are at `f404ebd`: `bench/track-h-chain/` and
 > [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md).
 >
@@ -92,16 +92,17 @@ The **Current state** block at the top of this file is overwritten each session:
 > hardware evidence in the node-install path. The Pi needs reinstalling from
 > `main` to pick up all three.
 >
-> **Schema versions on `main` run to v20, and v20 is not the version the
-> register reserved it for.** #185 minted v20 for the `audio.settings` backfill
-> while the register held v20 for the `dev/multi-audio` `audio_sessions` re-key,
-> which had already shipped under that number on its own branch. The register now
-> records #185's migration as v20 and reserves v21 for the re-key; the branch
-> renumbers when it takes `main`.
+> **Schema versions on `main` run to v26.**
+> `internal/coordinator/store/migrations.go` ships through
+> `migrateV26RenameRequestedRevisionToCallerIntent`. v21, v22 and
+> v23 are released as dead numbers: each sat at or below the shipped maximum, so
+> a migration entered at any of them could never run. v27 is reserved for the
+> `dev/multi-audio` `audio_sessions` re-key and is applied when that branch takes
+> `main`. Nothing at or below the shipped maximum is reserved again.
 > [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is the register. **Builders
 > never edit it**, a rule three builders broke in one lane, and **nothing
-> enforces the reservation either**: this collision reached `main` with both
-> sides green.
+> enforces the reservation either**: the earlier v20 collision reached `main`
+> with both sides green.
 >
 > **The repository hygiene sweep covers private references in shipped source.**
 > `TestNoLinearIssueReferencesInShippedSource` matches the tracker key, a tracker
@@ -138,6 +139,41 @@ The **Current state** block at the top of this file is overwritten each session:
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
 
 ---
+
+## 2026-09-01 (reconciliation: Linear, the current-state block and the register catch up with `main`)
+
+**Goal:** compare everything on GitHub, merged and open, against Linear's issue
+state, and correct the records that had fallen behind.
+
+**Completed:** no code changed. `main` was read at `3058678` and every merged
+pull request was mapped to its issue by branch name. The Current state block
+above was rewritten: it described `main` at `629754e` on 2026-08-28 with red CI,
+62 commits and four days stale. `IDENTIFIER-REGISTER.md` had v26 as `reserved`
+while `internal/coordinator/store/migrations.go` ships
+`migrateV26RenameRequestedRevisionToCallerIntent`; the row now reads `shipped`.
+
+**Findings that changed the record:** seven issues were built into
+`dev/multi-audio` rather than `main` (pull requests #160, #161, #209, #210,
+#230, #231, #232), so their code is not in the product; four of them were marked
+complete on the strength of those merges. The whole Operator UI rebuild lives
+only on `feature/operator-ui-overhaul-2`, 127 commits ahead of `main` with no
+fold pull request open. Track I has not moved since 2026-08-28. Pull request
+#171 fixed half of the integration-suite timeout and the 8m ceiling is still in
+`scripts/test-integration.sh`.
+
+**Decisions made:** none. Two sequencing decisions are outstanding and recorded
+in Linear rather than here: the `dev/multi-audio` renumber-then-rebase order,
+and the remaining choice on the integration suite (raise, split, or serialize).
+
+**Questions raised with the owner:** whether the audio-command params cast in
+`ui/src/api/store.ts` is worth fixing on the UI the rebuild replaces.
+
+**Deferred:** the `feature/operator-ui-overhaul-2` fold and its issue tracking
+are the owner's to sequence.
+
+**Verification gates:** documentation-only change. No code, tests, generated
+output, API contract or build metadata touched, so no `make check` was run.
+
 
 ## 2026-08-30 (the schema-version register catches up with `main`: v20 was minted twice)
 
