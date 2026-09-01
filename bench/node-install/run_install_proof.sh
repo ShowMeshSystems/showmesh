@@ -42,8 +42,55 @@ ls -l bin/showmesh-agent-native
 echo "OK: native agent built"
 echo
 
-echo "=== 2. First install (fresh host) ==="
+echo "=== 1b. Service-account collision guard: one mutation per clause ==="
+echo "Before install.sh has ever run (no showmesh account exists yet), pre-create"
+echo "a colliding 'showmesh' account in three shapes, changing exactly one of the"
+echo "three guard clauses (uid range / shell / home dir) at a time, and confirm"
+echo "install.sh refuses each one instead of adopting it. Clean up between cases"
+echo "so each case starts from no pre-existing account, like a real first install."
 cd deploy/node
+
+assert_refused() {
+  local label="$1"
+  set +e
+  OUT="$(./install.sh "$REPO/bin/showmesh-agent-native" 2>&1)"
+  RC=$?
+  set -e
+  if [ "$RC" -eq 0 ]; then
+    echo "FAIL: $label: install.sh accepted a colliding account it should have refused" >&2
+    echo "$OUT" >&2
+    exit 1
+  fi
+  if ! echo "$OUT" | grep -q 'does not look like the locked-down system account'; then
+    echo "FAIL: $label: install.sh refused, but not with the expected collision message" >&2
+    echo "$OUT" >&2
+    exit 1
+  fi
+  echo "OK: $label: install.sh refused the colliding account"
+}
+
+echo "--- 1b.i: uid clause (uid over the system range; shell and home otherwise correct) ---"
+useradd --uid 60000 --gid root --home-dir /var/lib/showmesh --no-create-home --shell /usr/sbin/nologin showmesh
+assert_refused "uid clause"
+userdel showmesh
+
+echo "--- 1b.ii: shell clause (system uid and correct home, but a real login shell) ---"
+useradd --system --gid root --home-dir /var/lib/showmesh --no-create-home --shell /bin/bash showmesh
+assert_refused "shell clause"
+userdel showmesh
+
+echo "--- 1b.iii: home clause (system uid and nologin shell, but a real home directory) ---"
+useradd --system --gid root --home-dir /home/showmesh --no-create-home --shell /usr/sbin/nologin showmesh
+assert_refused "home clause"
+userdel showmesh
+
+echo "OK: each of the three guard clauses independently refuses a colliding account"
+echo "NOTE: the shell clause accepts both a */nologin and a */false shell; only"
+echo "the /bin/bash mutation above is exercised, so the */false acceptance path"
+echo "itself has no bench assertion catching a regression of it."
+echo
+
+echo "=== 2. First install (fresh host) ==="
 ./install.sh "$REPO/bin/showmesh-agent-native"
 echo
 

@@ -83,7 +83,31 @@ if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
   usermod -aG audio "$SERVICE_USER" 2>/dev/null || \
     echo "install.sh: WARNING: could not add $SERVICE_USER to the 'audio' group (group may not exist on this host); ALSA device access may need manual attention."
 else
-  echo "install.sh: user $SERVICE_USER already exists"
+  # A pre-existing "showmesh" account is only safe to adopt as the agent's
+  # service account if it has the exact shape this installer creates: a
+  # system uid, a nologin-equivalent shell, and its home field pointing at
+  # STATE_DIR. Anything else (a human login account that happens to share
+  # this name) must be refused, not silently run as: it would hand the
+  # agent that human's uid, supplementary groups, and home directory.
+  existing_uid="$(id -u "$SERVICE_USER")"
+  existing_shell="$(getent passwd "$SERVICE_USER" | cut -d: -f7)"
+  existing_home="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+  sys_uid_max=999
+  if [ -r /etc/login.defs ]; then
+    configured_max="$(awk '$1 == "SYS_UID_MAX" { print $2 }' /etc/login.defs)"
+    if [ -n "$configured_max" ]; then
+      sys_uid_max="$configured_max"
+    fi
+  fi
+  shell_ok=0
+  case "$existing_shell" in
+    */nologin|*/false) shell_ok=1 ;;
+  esac
+  if [ "$existing_uid" -gt "$sys_uid_max" ] || [ "$shell_ok" -ne 1 ] || [ "$existing_home" != "$STATE_DIR" ]; then
+    echo "install.sh: refusing to adopt existing account '$SERVICE_USER' (uid=$existing_uid, shell=$existing_shell, home=$existing_home) as the agent's service account: it does not look like the locked-down system account this installer creates (expected uid<=$sys_uid_max, a nologin shell, and home=$STATE_DIR). This looks like a pre-existing human login account, and running the agent as it would grant the agent that account's login shell, home directory, and supplementary group membership. Either rename/remove the colliding account, or edit SERVICE_USER/SERVICE_GROUP in $SCRIPT_DIR/install.sh to use a different service account name, then re-run." >&2
+    exit 1
+  fi
+  echo "install.sh: user $SERVICE_USER already exists (system account, matches the shape this installer creates)"
 fi
 
 # --- /etc/showmesh and the env file (never overwrite an existing one) ---
