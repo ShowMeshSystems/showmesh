@@ -6382,6 +6382,16 @@ paths:
         the field.
 
 
+        `skipEnterShowLead` (optional request body field) is honored only
+        by `start-night`, for the operator starting a night later than
+        planned: the first show of the night otherwise leads its own
+        launch by the largest negative `offsetMs` among its `enterShow`
+        cues (RESTING-MODE.md §7.1), the same lead every later cycle
+        already holds for. Setting it true launches immediately instead,
+        skipping that wait; an `enterShow` announcement cue still
+        dispatches. Every other command ignores the field.
+
+
         `interlockOverrides` (optional request body field, Track F seam
         F6) names configured "block" interlock rules to override for THIS
         command. `night:command` alone never authorizes an override: a
@@ -15172,7 +15182,11 @@ components:
         phase, described in full on `POST /night/commands/{command}`
         itself. `request-final-show` and `end-session` consult no
         interlock at all and REFUSE a non-empty `interlockOverrides`
-        rather than silently ignoring it.
+        rather than silently ignoring it. `skipEnterShowLead` is honored
+        only by `start-night`: the operator's own request to start a late
+        night without waiting out the enterShow lead (RESTING-MODE.md
+        section 7.1) before the show itself launches; an enterShow
+        announcement still dispatches. Every other command ignores it.
       properties:
         idempotencyKey:
           type: string
@@ -15180,6 +15194,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NightInterlockOverride"
+        skipEnterShowLead:
+          type: boolean
     NightCommandResult:
       type: object
       description: >-
