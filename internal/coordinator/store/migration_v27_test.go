@@ -9,14 +9,14 @@ import (
 
 // openDatabaseAtV19 builds a database carrying every migration up to and
 // including v19 and stamped at that version, so a test can seed
-// audio_sessions rows the way a pre-v21 coordinator would have written
+// audio_sessions rows the way a pre-v27 coordinator would have written
 // them (under the bare `id TEXT PRIMARY KEY` schemaV9 shape) and then
-// watch v21 re-key the table underneath them. v20 rewrites audio.settings
+// watch v27 re-key the table underneath them. v20 rewrites audio.settings
 // payloads and leaves audio_sessions alone, so stopping at v19 seeds the
 // same table shape a v20 database has.
 func openDatabaseAtV19(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "pre-v21.db"))
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "pre-v27.db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -50,7 +50,7 @@ func openDatabaseAtV19(t *testing.T) *sql.DB {
 	return db
 }
 
-func seedPreV21AudioSession(t *testing.T, db *sql.DB, id, nodeID, desiredJSON string, revision int64, createdAt, updatedAt string) {
+func seedPreV27AudioSession(t *testing.T, db *sql.DB, id, nodeID, desiredJSON string, revision int64, createdAt, updatedAt string) {
 	t.Helper()
 	_, err := db.ExecContext(context.Background(),
 		`INSERT INTO audio_sessions (id, node_id, desired_json, revision, created_at, updated_at)
@@ -61,19 +61,19 @@ func seedPreV21AudioSession(t *testing.T, db *sql.DB, id, nodeID, desiredJSON st
 	}
 }
 
-// TestMigrateV21ReKeysAudioSessionsByNode is schemaV21's core migration
-// property: every pre-v21 row survives with its desired_json, revision,
+// TestMigrateV27ReKeysAudioSessionsByNode is schemaV27's core migration
+// property: every pre-v27 row survives with its desired_json, revision,
 // and timestamps intact, AND the composite (node_id, id) key is actually
 // in force afterward - proven by inserting a second row that reuses an
-// id already present under a DIFFERENT node_id (impossible before v21,
+// id already present under a DIFFERENT node_id (impossible before v27,
 // since id alone was the primary key) and confirming both rows coexist.
-func TestMigrateV21ReKeysAudioSessionsByNode(t *testing.T) {
+func TestMigrateV27ReKeysAudioSessionsByNode(t *testing.T) {
 	db := openDatabaseAtV19(t)
-	seedPreV21AudioSession(t, db, "cue", "node-a", `{"sourceRole":"show","node":"a"}`, 5,
+	seedPreV27AudioSession(t, db, "cue", "node-a", `{"sourceRole":"show","node":"a"}`, 5,
 		"2026-08-01T00:00:00Z", "2026-08-01T00:05:00Z")
-	seedPreV21AudioSession(t, db, "blackAndSilence", "node-a", `{"sourceRole":"blackAndSilence"}`, 2,
+	seedPreV27AudioSession(t, db, "blackAndSilence", "node-a", `{"sourceRole":"blackAndSilence"}`, 2,
 		"2026-08-02T00:00:00Z", "2026-08-02T00:00:00Z")
-	seedPreV21AudioSession(t, db, "cue-b", "node-b", `{"sourceRole":"show","node":"b-only"}`, 9,
+	seedPreV27AudioSession(t, db, "cue-b", "node-b", `{"sourceRole":"show","node":"b-only"}`, 9,
 		"2026-08-03T00:00:00Z", "2026-08-03T01:00:00Z")
 
 	if err := migrate(context.Background(), db); err != nil {
@@ -128,7 +128,7 @@ func TestMigrateV21ReKeysAudioSessionsByNode(t *testing.T) {
 
 	// The composite key is actually in force: a second row reusing an id
 	// already present under a DIFFERENT node_id must now be insertable
-	// and coexist as its own row - under the pre-v21 `id`-only primary
+	// and coexist as its own row - under the pre-v27 `id`-only primary
 	// key this INSERT would fail as a UNIQUE constraint violation.
 	if _, err := db.ExecContext(context.Background(),
 		`INSERT INTO audio_sessions (node_id, id, desired_json, revision, created_at, updated_at)
@@ -152,9 +152,99 @@ func TestMigrateV21ReKeysAudioSessionsByNode(t *testing.T) {
 	}
 }
 
-// migrate stamps the maximum migration version; v21 must advance
+// TestMigrateV27AppliesToAStoreStampedAtMainsShippedMaximum proves the
+// actual reason this migration is numbered 27: a store a released binary
+// already stamped at main's shipped maximum (26, at origin/main
+// 7348b20b48d9dc18e24f3bddce50e8b0d78384cc) still gets the re-key, because
+// 27 is above that stamp. This branch cannot carry main's real v22 through
+// v26 entries without rebasing onto main, which is out of scope here, so
+// the stamp is set directly with PRAGMA rather than by running those
+// migrations; the pre-migration audio_sessions shape is identical either
+// way, since nothing between v20 and v26 touches that table.
+//
+// On this un-rebased branch, reverting this migration's own entry back to
+// version 21 fails this test loudly (current(26) > target(21) trips
+// ErrSchemaTooNew), whereas once this branch is rebuilt onto main the same
+// wrong number would instead be skipped in silence by the current == target
+// and version <= current checks; same root cause, different symptom.
+func TestMigrateV27AppliesToAStoreStampedAtMainsShippedMaximum(t *testing.T) {
+	db := openDatabaseAtV19(t)
+	seedPreV27AudioSession(t, db, "cue", "node-p", `{"sourceRole":"show","node":"p"}`, 4,
+		"2026-08-20T00:00:00Z", "2026-08-20T00:03:00Z")
+	seedPreV27AudioSession(t, db, "blackAndSilence", "node-q", `{"sourceRole":"blackAndSilence"}`, 8,
+		"2026-08-21T00:00:00Z", "2026-08-21T00:01:00Z")
+
+	if _, err := db.ExecContext(context.Background(), `PRAGMA user_version = 26`); err != nil {
+		t.Fatalf("stamp user_version at main's shipped maximum: %v", err)
+	}
+
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate a store stamped at 26: %v", err)
+	}
+
+	var version int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != 27 {
+		t.Fatalf("user_version after migrating a store stamped at 26 = %d, want 27", version)
+	}
+
+	type row struct {
+		desiredJSON, createdAt, updatedAt string
+		revision                          int64
+	}
+	readRow := func(nodeID, id string) row {
+		t.Helper()
+		var r row
+		err := db.QueryRowContext(context.Background(),
+			`SELECT desired_json, revision, created_at, updated_at FROM audio_sessions WHERE node_id = ? AND id = ?`,
+			nodeID, id).Scan(&r.desiredJSON, &r.revision, &r.createdAt, &r.updatedAt)
+		if err != nil {
+			t.Fatalf("read migrated row (%q, %q): %v", nodeID, id, err)
+		}
+		return r
+	}
+
+	got := readRow("node-p", "cue")
+	want := row{desiredJSON: `{"sourceRole":"show","node":"p"}`, revision: 4,
+		createdAt: "2026-08-20T00:00:00Z", updatedAt: "2026-08-20T00:03:00Z"}
+	if got != want {
+		t.Errorf("node-p/cue = %+v, want %+v", got, want)
+	}
+
+	got = readRow("node-q", "blackAndSilence")
+	want = row{desiredJSON: `{"sourceRole":"blackAndSilence"}`, revision: 8,
+		createdAt: "2026-08-21T00:00:00Z", updatedAt: "2026-08-21T00:01:00Z"}
+	if got != want {
+		t.Errorf("node-q/blackAndSilence = %+v, want %+v", got, want)
+	}
+
+	// The composite key is genuinely in force: node-q reusing the "cue" id
+	// already held by node-p must coexist as its own row rather than
+	// colliding, which the pre-migration bare `id` primary key forbade.
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO audio_sessions (node_id, id, desired_json, revision, created_at, updated_at)
+		 VALUES ('node-q', 'cue', '{"sourceRole":"show","node":"q"}', 1, '2026-08-22T00:00:00Z', '2026-08-22T00:00:00Z')`); err != nil {
+		t.Fatalf("insert row reusing id %q under a second node_id: %v", "cue", err)
+	}
+	got = readRow("node-q", "cue")
+	if got.desiredJSON != `{"sourceRole":"show","node":"q"}` || got.revision != 1 {
+		t.Errorf("node-q/cue = %+v, want the freshly inserted row", got)
+	}
+
+	// node-p's original "cue" row must still be exactly as migrated.
+	got = readRow("node-p", "cue")
+	want = row{desiredJSON: `{"sourceRole":"show","node":"p"}`, revision: 4,
+		createdAt: "2026-08-20T00:00:00Z", updatedAt: "2026-08-20T00:03:00Z"}
+	if got != want {
+		t.Errorf("node-p/cue mutated by node-q's insert of the same id: got %+v, want %+v", got, want)
+	}
+}
+
+// migrate stamps the maximum migration version; v27 must advance
 // PRAGMA user_version past 19 or every restart would re-run it.
-func TestMigrateV21AdvancesTheSchemaVersion(t *testing.T) {
+func TestMigrateV27AdvancesTheSchemaVersion(t *testing.T) {
 	db := openDatabaseAtV19(t)
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -163,20 +253,20 @@ func TestMigrateV21AdvancesTheSchemaVersion(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != maxMigrationVersion() || version < 21 {
-		t.Errorf("user_version = %d, want %d and at least 21", version, maxMigrationVersion())
+	if version != maxMigrationVersion() || version < 27 {
+		t.Errorf("user_version = %d, want %d and at least 27", version, maxMigrationVersion())
 	}
 }
 
-// TestMigrateV21ThenStoreLayerSeesCompositeKeyBehavior proves the migrated
+// TestMigrateV27ThenStoreLayerSeesCompositeKeyBehavior proves the migrated
 // database is not just structurally correct but immediately usable
 // through this package's own repository methods: the store layer's own
 // (node_id, id) scoping (audiosessions.go) must see a migrated
 // row exactly as GetAudioSession/PutAudioSession expect it, and a second
 // node writing the SAME session id afterward must not disturb it -
 // exercised through [Store.Open]/[migrate], the exact path a real
-// coordinator restart takes against an on-disk pre-v21 database.
-func TestMigrateV21ThenStoreLayerSeesCompositeKeyBehavior(t *testing.T) {
+// coordinator restart takes against an on-disk pre-v27 database.
+func TestMigrateV27ThenStoreLayerSeesCompositeKeyBehavior(t *testing.T) {
 	dataDir := t.TempDir()
 	rawDB, err := sql.Open("sqlite", filepath.Join(dataDir, dbFileName))
 	if err != nil {
@@ -207,7 +297,7 @@ func TestMigrateV21ThenStoreLayerSeesCompositeKeyBehavior(t *testing.T) {
 	if _, err := rawDB.ExecContext(ctx, `PRAGMA user_version = 19`); err != nil {
 		t.Fatalf("stamp user_version: %v", err)
 	}
-	seedPreV21AudioSession(t, rawDB, "cue", "node-a", `{"sourceRole":"show"}`, 5,
+	seedPreV27AudioSession(t, rawDB, "cue", "node-a", `{"sourceRole":"show"}`, 5,
 		"2026-08-01T00:00:00Z", "2026-08-01T00:05:00Z")
 	if err := rawDB.Close(); err != nil {
 		t.Fatalf("close raw db: %v", err)
@@ -215,7 +305,7 @@ func TestMigrateV21ThenStoreLayerSeesCompositeKeyBehavior(t *testing.T) {
 
 	st, err := Open(ctx, dataDir, nil)
 	if err != nil {
-		t.Fatalf("Open (runs migrate, including v21): %v", err)
+		t.Fatalf("Open (runs migrate, including v27): %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
