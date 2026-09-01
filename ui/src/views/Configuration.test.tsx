@@ -130,6 +130,10 @@ const defaultShowModeConfig = {
   createdByPrincipalName: null,
   source: 'default',
   resolumeWebSocketEffect: 'program mode: the Resolume WebSocket wake-up channel is held OPEN.',
+  cueActivationPin: {
+    pinned: false,
+    effect: 'program mode: cue activation re-resolves the current show.cue configuration on its own next tick.',
+  },
 }
 const emptyShowModeRevisions = { serverTime: '2026-08-23T21:00:00Z', kind: 'show.mode', revisions: [] }
 

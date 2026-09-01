@@ -45,6 +45,10 @@ const programDefault = {
   createdByPrincipalName: null,
   source: 'default',
   resolumeWebSocketEffect: 'program mode: the Resolume WebSocket wake-up channel is held OPEN.',
+  cueActivationPin: {
+    pinned: false,
+    effect: 'program mode: cue activation re-resolves the current show.cue configuration on its own next tick.',
+  },
 }
 
 const showConfigured = {
@@ -55,6 +59,13 @@ const showConfigured = {
   createdByPrincipalName: 'admin-1',
   source: 'api',
   resolumeWebSocketEffect: 'show mode: the Resolume WebSocket wake-up channel is held CLOSED.',
+  cueActivationPin: {
+    pinned: true,
+    show: 'show-1',
+    generation: 4,
+    pinnedAt: '2026-08-23T21:00:00Z',
+    effect: 'show mode: this coordinator is holding the cue authorization identity it captured for the show and generation named above.',
+  },
 }
 
 const emptyRevisions = { serverTime: '2026-08-23T21:00:00Z', kind: 'show.mode', revisions: [] }
@@ -114,6 +125,18 @@ describe('ShowModePanel', () => {
     renderPanel(makeModel({ session: adminSession }))
 
     await waitFor(() => screen.getByText(showConfigured.resolumeWebSocketEffect))
+  })
+
+  // A mid-show show.cue edit stages silently unless this panel says so:
+  // the panel is where ADR-033 decision 3 already puts the mode, so a
+  // staged edit surfaces here rather than on new API surface elsewhere.
+  it('states when a show-mode pin is holding a show.cue edit staged', async () => {
+    getShowModeConfig.mockResolvedValue(showConfigured)
+    getShowModeConfigRevisions.mockResolvedValue(oneRevision)
+    renderPanel(makeModel({ session: adminSession }))
+
+    await waitFor(() => screen.getByText(new RegExp(showConfigured.cueActivationPin.effect)))
+    expect(screen.getByText(/show-1/)).toBeInTheDocument()
   })
 
   it('submits a full-replacement payload on save', async () => {

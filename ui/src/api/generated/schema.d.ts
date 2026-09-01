@@ -4079,6 +4079,22 @@ export interface components {
             source: string;
             /** @description What the CURRENT mode does to the only behaviour that reads the mode in this build: the Resolume WebSocket footprint switch (ADR-033 decision 2), held open in `program` and closed in `show`. Names the mode as the reason, which is ADR-033 decision 3's requirement that a behaviour caused by the mode says so where the operator can see it. Always non-empty. */
             resolumeWebSocketEffect: string;
+            cueActivationPin: components["schemas"]["CueActivationPin"];
+        };
+        /** @description Whether ADR-033 show mode currently holds a frozen cue-activation authorization identity: while `pinned` is `true`, a `show.cue` edit saved now is STAGED and does not reach any node until the show is stopped and a new show generation begins authorizing activations. Always `pinned: false` in `program` mode. */
+        CueActivationPin: {
+            pinned: boolean;
+            /** @description The pinned Show id. Present only while pinned is true. */
+            show?: string;
+            /** @description The pinned show.active config revision number. Present only while pinned is true. */
+            generation?: number;
+            /**
+             * Format: date-time
+             * @description When this pin was captured. Present only while pinned is true.
+             */
+            pinnedAt?: string;
+            /** @description What the current mode and pin state do to a `show.cue` edit saved right now. Names the mode and the pin state as the reason. Always non-empty. */
+            effect: string;
         };
         /** @description One emergency-stop level's own optional, ordered follow-up action list - show.action ids, invoked best-effort, in this order, after that level's own immediate stop. */
         ConfigEmergencyStopLevelPayload: {

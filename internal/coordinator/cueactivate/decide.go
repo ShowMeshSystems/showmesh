@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
@@ -45,6 +46,69 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
+
+// ShowPin freezes the authorization identity ADR-033 show mode requires:
+// once a Show/Generation is pinned, every node's Cue catalog is resolved
+// AT MOST ONCE for the life of the pin, and [Decide] and [Authorize] both
+// mint and check every activation against that one frozen resolution --
+// never a fresh one -- regardless of any show.cue edit saved while the
+// show plays. A nil *ShowPin means "resolve live", the original per-tick
+// behavior this package has always had, which is what still applies in
+// ADR-033 program mode.
+//
+// The caller (internal/coordinator/api's CueActivationLoop) owns deciding
+// WHEN a pin starts and ends: it holds one *ShowPin for as long as show
+// mode and the active Show/Generation are unchanged, and drops it the
+// moment either changes, so the next Decide/Authorize call starts a fresh
+// pin from whatever is live then. This package only freezes what it is
+// handed; it has no opinion on show mode or on how long a pin should live.
+type ShowPin struct {
+	// Active is this pin's own frozen Show/Generation -- captured once, at
+	// construction, never re-read from the store for the life of the pin.
+	Active assetsync.ActiveShow
+
+	mu       sync.Mutex
+	catalogs map[string]assetsync.Catalog
+}
+
+// NewShowPin starts a pin for active. Catalogs are captured lazily, one
+// node at a time, on that node's own first call through [pinnedCatalog]:
+// there is no advance list of every node a show will ever touch, and a
+// node's first touch under this pin IS "at show start" for that node's own
+// catalog, exactly like every other node's.
+func NewShowPin(active assetsync.ActiveShow) *ShowPin {
+	return &ShowPin{Active: active, catalogs: make(map[string]assetsync.Catalog)}
+}
+
+// pinnedCatalog returns nodeID's catalog under pin, resolving it via
+// resolve and caching it on the first call for nodeID, then returning that
+// SAME cached value on every later call for nodeID -- even one made after
+// resolve would now return something different, which is exactly the
+// mid-show show.cue edit this type exists to freeze out. Concurrent first
+// touches for the same nodeID both resolve, but only the first to acquire
+// pin.mu after resolving is kept, so every caller of this pin still agrees
+// on one catalog per node.
+func pinnedCatalog(ctx context.Context, pin *ShowPin, nodeID string, resolve func(context.Context) (assetsync.Catalog, error)) (assetsync.Catalog, error) {
+	pin.mu.Lock()
+	if c, ok := pin.catalogs[nodeID]; ok {
+		pin.mu.Unlock()
+		return c, nil
+	}
+	pin.mu.Unlock()
+
+	c, err := resolve(ctx)
+	if err != nil {
+		return assetsync.Catalog{}, err
+	}
+
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	if existing, ok := pin.catalogs[nodeID]; ok {
+		return existing, nil
+	}
+	pin.catalogs[nodeID] = c
+	return c, nil
+}
 
 // State is the closed vocabulary a [Decision] reaches. It is deliberately
 // smaller than [fppreconcile.Outcome]: H0.2's own text collapses every
@@ -123,7 +187,7 @@ type Decision struct {
 // threaded explicitly rather than read off obs a second time so a future
 // non-FPP caller of the same decision shape is not forced through an
 // FPP-shaped observation.
-func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (Decision, error) {
+func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
 	switch result.Outcome {
 	case fppreconcile.OutcomeIdentityUnavailable:
 		return Decision{State: StateIdentityUnavailable, Reason: result.Reason}, nil
@@ -155,10 +219,10 @@ func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, ob
 	}
 
 	if result.Outcome != fppreconcile.OutcomeResolved {
-		return decideMismatch(ctx, st, active, binding, result, obs, runnerInstance)
+		return decideMismatch(ctx, st, active, binding, result, obs, runnerInstance, pin)
 	}
 
-	return decideResolved(ctx, st, active, result, obs, runnerInstance)
+	return decideResolved(ctx, st, active, result, obs, runnerInstance, pin)
 }
 
 // activeShowBinding is the ACTIVE show's own fpp-runner show.playlist bound
@@ -238,7 +302,7 @@ func activeShowFPPBinding(ctx context.Context, st *store.Store, active assetsync
 // decideMismatch applies H0.2's policy for every non-resolved,
 // active-show-bound outcome. The state is StateMismatched under every one
 // of the three policies — only the effect differs.
-func decideMismatch(ctx context.Context, st *store.Store, active assetsync.ActiveShow, binding activeShowBinding, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (Decision, error) {
+func decideMismatch(ctx context.Context, st *store.Store, active assetsync.ActiveShow, binding activeShowBinding, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
 	d := Decision{State: StateMismatched, Reason: result.Reason, MismatchPolicy: binding.mismatchPolicy}
 	switch binding.mismatchPolicy {
 	case config.ShowPlaylistMismatchPolicyHold:
@@ -264,7 +328,7 @@ func decideMismatch(ctx context.Context, st *store.Store, active assetsync.Activ
 			d.Reason = result.Reason + "; mismatchPolicy is safeCue but the bound Playlist carries no safeCueRef, so nothing is activated"
 			return d, nil
 		}
-		activations, err := resolveActivationsForCue(ctx, st, active, binding.playlistID, binding.playlistRevision, "", binding.safeCueRef, obs, runnerInstance)
+		activations, err := resolveActivationsForCue(ctx, st, active, binding.playlistID, binding.playlistRevision, "", binding.safeCueRef, obs, runnerInstance, pin)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -280,8 +344,8 @@ func decideMismatch(ctx context.Context, st *store.Store, active assetsync.Activ
 // build one [cueactivation.Activation] per participating node from
 // result's pinned identities. It does not itself authorize anything — see
 // [Authorize].
-func decideResolved(ctx context.Context, st *store.Store, active assetsync.ActiveShow, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (Decision, error) {
-	activations, err := resolveActivationsForCue(ctx, st, active, result.PlaylistID, result.PlaylistRevision, result.EntryID, result.CueID, obs, runnerInstance)
+func decideResolved(ctx context.Context, st *store.Store, active assetsync.ActiveShow, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
+	activations, err := resolveActivationsForCue(ctx, st, active, result.PlaylistID, result.PlaylistRevision, result.EntryID, result.CueID, obs, runnerInstance, pin)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -297,10 +361,28 @@ func decideResolved(ctx context.Context, st *store.Store, active assetsync.Activ
 // it, per [assetsync.ResolveCueCatalog]'s own node-scoping rule. It pins
 // Show/Generation/CatalogRevision from active and each node's own
 // freshly-resolved catalog; it performs no authorization check of its own.
-func resolveActivationsForCue(ctx context.Context, st *store.Store, active assetsync.ActiveShow, playlistID string, playlistRevision int64, entryID, cueID string, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (map[string]cueactivation.Activation, error) {
+func resolveActivationsForCue(ctx context.Context, st *store.Store, active assetsync.ActiveShow, playlistID string, playlistRevision int64, entryID, cueID string, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (map[string]cueactivation.Activation, error) {
+	// pin.Active, not the live active passed in, is this call's authority
+	// on Show/Generation once a pin exists (ADR-033 show mode): the caller
+	// (Decide) still resolves active live to detect a show change and
+	// route H0.2 policy, but the identity actually minted into every
+	// Activation below must come from the SAME frozen source Authorize
+	// will independently re-check against, or the two would drift exactly
+	// the way a live re-resolve on one side already did in the incident
+	// this type exists to close.
+	if pin != nil {
+		active = pin.Active
+	}
 	if !active.Configured {
 		return map[string]cueactivation.Activation{}, nil
 	}
+	// liveCueRevision is used only when pin == nil (ADR-033 program mode,
+	// and every call before this type existed): fetched independently of
+	// any node's own catalog resolution, exactly as before pinning was
+	// added, so unpinned behavior is unchanged byte for byte. A pinned
+	// call instead takes each node's own CueRevision from that node's own
+	// frozen catalog entry, below -- never this live read, which is
+	// precisely the store hit a mid-show show.cue edit changes.
 	cueObj, err := st.GetConfigObject(ctx, config.ShowCueConfigKind, cueID)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigObjectNotFound) {
@@ -308,7 +390,7 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 		}
 		return nil, fmt.Errorf("get show.cue %q: %w", cueID, err)
 	}
-	cueRevision := cueObj.CurrentRevision
+	liveCueRevision := cueObj.CurrentRevision
 
 	nodes, err := st.ListNodes(ctx)
 	if err != nil {
@@ -317,13 +399,26 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 
 	activations := make(map[string]cueactivation.Activation, len(nodes))
 	for _, n := range nodes {
-		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		var catalog assetsync.Catalog
+		var err error
+		if pin != nil {
+			catalog, err = pinnedCatalog(ctx, pin, n.NodeID, func(ctx context.Context) (assetsync.Catalog, error) {
+				return assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+			})
+		} else {
+			catalog, err = assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
 		entry, participates := catalogEntry(catalog, cueID)
 		if !participates || !hasAnyOutput(entry) {
 			continue
+		}
+
+		cueRevision := liveCueRevision
+		if pin != nil {
+			cueRevision = entry.CueRevision
 		}
 
 		tuple := cueauth.AuthorizationTuple{
@@ -376,15 +471,37 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 // (outputs.Render nil) must never clear a render surface, and a
 // render-only refusal must never stop the background or announcement
 // audio session, neither of which this Cue's own outputs touch.
-func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
-	active, err := assetsync.ResolveActiveShow(ctx, st)
-	if err != nil {
-		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
+//
+// pin, when non-nil (ADR-033 show mode), is the SAME *ShowPin the caller's
+// own Decide call for this tick already used: Authorize still resolves and
+// checks independently of anything Decide computed (this function's own
+// doc comment above), but "independently" means "against the identical
+// frozen source", never "against a second, freshly re-resolved catalog
+// that has since drifted from the one the caller minted act against" --
+// which is exactly the stale-catalog refusal this type exists to close.
+// pin == nil (ADR-033 program mode) resolves live, unchanged from before
+// pinning existed.
+func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation, pin *ShowPin) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
+	var active assetsync.ActiveShow
+	if pin != nil {
+		active = pin.Active
+	} else {
+		active, err = assetsync.ResolveActiveShow(ctx, st)
+		if err != nil {
+			return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
+		}
 	}
 	if !active.Configured {
 		return cueauth.OutcomeCrossShow, "", cuecatalog.Outputs{}, false, nil
 	}
-	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
+	var catalog assetsync.Catalog
+	if pin != nil {
+		catalog, err = pinnedCatalog(ctx, pin, nodeID, func(ctx context.Context) (assetsync.Catalog, error) {
+			return assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
+		})
+	} else {
+		catalog, err = assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
+	}
 	if err != nil {
 		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve cue catalog for node %q: %w", nodeID, err)
 	}

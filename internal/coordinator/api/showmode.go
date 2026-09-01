@@ -105,13 +105,14 @@ func (h *handlers) handleGetShowModeConfig(w http.ResponseWriter, r *http.Reques
 			Revision: 0, Payload: v1.ConfigShowModePayload{Mode: payload.Mode},
 			UpdatedAt: formatTime(now), Source: "default",
 			ResolumeWebSocketEffect: showModeResolumeEffect(payload.Mode),
+			CueActivationPin:        h.cueActivationPinStatus(payload.Mode),
 		})
 		return
 	}
 
 	// obj and rev are resolveShowMode's own records; see its doc comment
 	// for why this must not re-read the store.
-	jsonWrite(w, mapShowModeConfigResponse(now, rev, obj, payload))
+	jsonWrite(w, mapShowModeConfigResponse(now, rev, obj, payload, h.cueActivationPinStatus(payload.Mode)))
 }
 
 // handleGetShowModeConfigRevisions serves
@@ -230,7 +231,36 @@ func (h *handlers) handlePutShowModeConfig(w http.ResponseWriter, r *http.Reques
 	jsonWrite(w, mapShowModeConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowModeConfigKind, ID: config.ShowModeConfigObjectID,
 		CurrentRevision: nextRevisionNo, UpdatedAt: now,
-	}, payload))
+	}, payload, h.cueActivationPinStatus(payload.Mode)))
+}
+
+// cueActivationPinStatus reads [Dependencies.CueActivationPinStatus]
+// and maps it into the wire shape GET/PUT /config/show.mode both report,
+// this handler's own contribution to ADR-033 decision 3's "the operator
+// always knows" rule, applied to a mid-show show.cue edit's own staged
+// state rather than to the mode value itself.
+func (h *handlers) cueActivationPinStatus(mode string) v1.CueActivationPin {
+	pinned, show, generation, pinnedAt := h.deps.CueActivationPinStatus.PinStatus()
+	out := v1.CueActivationPin{Pinned: pinned, Effect: cueActivationPinEffect(mode, pinned)}
+	if pinned {
+		out.Show = show
+		out.Generation = generation
+		out.PinnedAt = formatTime(pinnedAt)
+	}
+	return out
+}
+
+// cueActivationPinEffect is [v1.CueActivationPin.Effect]'s text for one
+// (mode, pinned) pair. It names the mode AND the pin as the reason,
+// per ADR-033 decision 3.
+func cueActivationPinEffect(mode string, pinned bool) string {
+	if mode != config.ShowModeShow {
+		return "program mode: cue activation re-resolves the current show.cue configuration on its own next tick, so a saved edit reaches every node within one tick, with no restart needed."
+	}
+	if !pinned {
+		return "show mode: no active show has been resolved yet, so there is nothing to pin. Cue authorization will freeze at whatever show.cue configuration is in effect the moment a show becomes active."
+	}
+	return "show mode: this coordinator is holding the cue authorization identity it captured for the show and generation named above. A show.cue edit saved now is STAGED: it will not reach any node until the show is stopped and a new show generation begins authorizing activations."
 }
 
 // showModeResolumeEffect is [v1.ShowModeConfigResponse.
@@ -247,7 +277,7 @@ func showModeResolumeEffect(mode string) string {
 		"coordinator restart."
 }
 
-func mapShowModeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, payload config.ShowModePayload) v1.ShowModeConfigResponse {
+func mapShowModeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, payload config.ShowModePayload, pin v1.CueActivationPin) v1.ShowModeConfigResponse {
 	return v1.ShowModeConfigResponse{
 		ServerTime: formatTime(now), Kind: config.ShowModeConfigKind, Revision: rev.Revision,
 		Payload:                 v1.ConfigShowModePayload{Mode: payload.Mode},
@@ -256,5 +286,6 @@ func mapShowModeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, ob
 		CreatedByPrincipalName:  nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                  rev.Source,
 		ResolumeWebSocketEffect: showModeResolumeEffect(payload.Mode),
+		CueActivationPin:        pin,
 	}
 }

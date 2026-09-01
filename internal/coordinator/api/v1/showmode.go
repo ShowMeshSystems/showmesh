@@ -35,4 +35,29 @@ type ShowModeConfigResponse struct {
 	// requirement that a degraded behaviour caused by the mode says so
 	// where the operator can see it. Always non-empty.
 	ResolumeWebSocketEffect string `json:"resolumeWebSocketEffect"`
+
+	// CueActivationPin is the operator visibility for ADR-033
+	// show mode's frozen cue-activation authorization identity: whether a
+	// show.cue edit saved right now is staged (nothing reaches any node
+	// until the show stops and restarts) or applies live. Surfaced on the
+	// SAME persistent mode panel ADR-033 decision 3 already requires,
+	// rather than new API surface elsewhere.
+	CueActivationPin CueActivationPin `json:"cueActivationPin"`
+}
+
+// CueActivationPin is [ShowModeConfigResponse.CueActivationPin]'s shape.
+// Pinned is always false in program mode. Show/Generation/PinnedAt are
+// populated only while Pinned is true.
+type CueActivationPin struct {
+	Pinned     bool   `json:"pinned"`
+	Show       string `json:"show,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	PinnedAt   string `json:"pinnedAt,omitempty"`
+
+	// Effect states, in every response, what the current mode and pin
+	// state do to a show.cue edit saved right now. ADR-033 decision 3's
+	// "a degraded behaviour caused by the mode states the mode as its
+	// reason" applied to staging rather than to a refusal. Always
+	// non-empty.
+	Effect string `json:"effect"`
 }

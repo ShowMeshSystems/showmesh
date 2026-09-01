@@ -11405,7 +11405,7 @@ components:
       required:
         [serverTime, kind, revision, payload, updatedAt,
          createdByPrincipalId, createdByPrincipalName, source,
-         resolumeWebSocketEffect]
+         resolumeWebSocketEffect, cueActivationPin]
       properties:
         serverTime:
           type: string
@@ -11434,6 +11434,39 @@ components:
             `show`. Names the mode as the reason, which is ADR-033 decision
             3's requirement that a behaviour caused by the mode says so
             where the operator can see it. Always non-empty.
+        cueActivationPin:
+          $ref: "#/components/schemas/CueActivationPin"
+    CueActivationPin:
+      type: object
+      description: >-
+        Whether ADR-033 show mode currently holds a frozen cue-activation
+        authorization identity: while `pinned` is `true`, a `show.cue` edit
+        saved now is STAGED and does not reach any node until the show is
+        stopped and a new show generation begins authorizing activations.
+        Always `pinned: false` in `program` mode.
+      required: [pinned, effect]
+      properties:
+        pinned:
+          type: boolean
+        show:
+          type: string
+          description: The pinned Show id. Present only while pinned is true.
+        generation:
+          type: integer
+          description: >-
+            The pinned show.active config revision number. Present only
+            while pinned is true.
+        pinnedAt:
+          type: string
+          format: date-time
+          description: >-
+            When this pin was captured. Present only while pinned is true.
+        effect:
+          type: string
+          description: >-
+            What the current mode and pin state do to a `show.cue` edit
+            saved right now. Names the mode and the pin state as the reason.
+            Always non-empty.
     ConfigEmergencyStopLevelPayload:
       type: object
       description: >-
