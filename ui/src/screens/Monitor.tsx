@@ -17,12 +17,25 @@ import {
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { effectiveServerTimeIso } from '../domain/time'
-import { acknowledgeFPPInstanceUUIDChange, deleteFPPPlaylistEntryObservation, getFPPPlaylistEntryReconciliation, type FPPInstance, type Model } from '../api'
+import {
+  acknowledgeFPPInstanceUUIDChange,
+  ApiError,
+  deleteFPPPlaylistEntryObservation,
+  getFallbackProgram,
+  getFPPPlaylistEntryReconciliation,
+  listFallbackPrograms,
+  type FallbackProgramListEntry,
+  type FallbackProgramResponse,
+  type FPPInstance,
+  type Model,
+} from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
 import {
   activityRows,
   facetCounts,
+  fallbackProgramAcknowledgement,
+  fallbackProgramMetadataRows,
   fleetRows,
   fleetSummary,
   fppInspector,
@@ -370,6 +383,7 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
           )}
         </section>
       ))}
+      <FallbackProgramGroup instance={instance} />
       <div className="sm-inspector__actions">
         <Link to="/control">Open Live Control</Link>
         <Link to="/monitor/signals">All signals</Link>
@@ -387,6 +401,145 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
       {reconciliation !== null && <div className="sm-outcome"><StatusPair tone={reconciliation.outcome === 'resolved' ? 'good' : 'warn'} label={reconciliation.outcome.replaceAll('-', ' ')} /><p className="sm-outcome__detail">{reconciliation.reason}</p></div>}
       {reconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={reconciliationError} />}
     </div>
+  )
+}
+
+type FallbackProgramListState =
+  | { kind: 'loading' }
+  | { kind: 'unavailable' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'ready'; entry: FallbackProgramListEntry | null }
+
+type FallbackProgramDetailState =
+  | { kind: 'loading' }
+  | { kind: 'noPermission' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'ready'; detail: FallbackProgramResponse }
+
+/**
+ * SM-460: read-only fallback-program readiness evidence for one FPP host.
+ * No acknowledge control — the installed FPP plugin reports that itself
+ * (ADR-048), and a human typing what only the plugin can honestly know
+ * would let a wrong acknowledgement read as show-ready before a show.
+ */
+function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
+  const [list, setList] = useState<FallbackProgramListState>({ kind: 'loading' })
+  const [detail, setDetail] = useState<FallbackProgramDetailState>({ kind: 'loading' })
+
+  useEffect(() => {
+    if (instance.instanceUuid === null) return
+    let cancelled = false
+    setList({ kind: 'loading' })
+    listFallbackPrograms()
+      .then((response) => {
+        if (cancelled) return
+        const entry = response.programs.find((program) => program.fppInstanceUuid === instance.instanceUuid) ?? null
+        setList({ kind: 'ready', entry })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setList({ kind: 'unavailable' })
+          return
+        }
+        setList({ kind: 'failed', message: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [instance.instanceUuid])
+
+  useEffect(() => {
+    if (instance.instanceUuid === null) return
+    let cancelled = false
+    setDetail({ kind: 'loading' })
+    getFallbackProgram(instance.instanceUuid)
+      .then((response) => {
+        if (!cancelled) setDetail({ kind: 'ready', detail: response })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 403) {
+          setDetail({ kind: 'noPermission' })
+          return
+        }
+        setDetail({ kind: 'failed', message: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [instance.instanceUuid])
+
+  return (
+    <section aria-labelledby="inspect-fpp-fallback" className="sm-inspector__group">
+      <h3 id="inspect-fpp-fallback" className="sm-subsection__title">
+        Fallback program
+      </h3>
+      {instance.instanceUuid === null ? (
+        <RuledStrip
+          absence="empty"
+          label="None"
+          fact="No instance UUID"
+          detail="This endpoint has not reported an instance UUID, so no fallback program can be addressed to it."
+        />
+      ) : list.kind === 'loading' ? (
+        <RuledStrip absence="loading" label="Reading" fact="Reading this host's fallback program." />
+      ) : list.kind === 'unavailable' ? (
+        <RuledStrip
+          absence="unavailable"
+          label="Unavailable"
+          fact="This coordinator does not support fallback programs."
+          detail="Update the coordinator to see this host's program."
+        />
+      ) : list.kind === 'failed' ? (
+        <RuledStrip absence="failed" label="Read failed" fact={list.message} />
+      ) : list.entry === null ? (
+        <RuledStrip absence="empty" label="Empty" fact="No fallback program exists for this host." />
+      ) : (
+        <>
+          {fallbackProgramMetadataRows(list.entry).map((row) => (
+            <div key={row.key} className="sm-inspector__row">
+              <span className="sm-inspector__label sm-data">{row.label}</span>
+              <p className="sm-inspector__value sm-data">{row.value}</p>
+            </div>
+          ))}
+          {detail.kind === 'loading' ? (
+            <RuledStrip absence="loading" label="Reading" fact="Reading this host's acknowledgement." />
+          ) : detail.kind === 'noPermission' ? (
+            <RuledStrip
+              absence="noPermission"
+              label="No permission"
+              fact="This device may not read fallback programs."
+              detail="Reading a host's acknowledgement needs fpp:fallback, held by admin and scheduler roles."
+            />
+          ) : detail.kind === 'failed' ? (
+            <RuledStrip absence="failed" label="Read failed" fact={detail.message} />
+          ) : (
+            (() => {
+              const ack = fallbackProgramAcknowledgement(detail.detail)
+              return (
+                <>
+                  <div className="sm-inspector__row">
+                    <span className="sm-inspector__label sm-data">Host holds</span>
+                    <div>
+                      <p className="sm-inspector__state">
+                        <StatusPair tone={ack.tone} label={ack.label} />
+                      </p>
+                      {ack.acknowledgedPackage !== null && <p className="sm-inspector__detail">Package {ack.acknowledgedPackage}</p>}
+                      {ack.acknowledgedAt !== null && <p className="sm-inspector__detail">Acknowledged {ack.acknowledgedAt}</p>}
+                    </div>
+                  </div>
+                  <div className="sm-inspector__row">
+                    <span className="sm-inspector__label sm-data">Signature</span>
+                    <p className="sm-inspector__value sm-data">{ack.signaturePresent ? 'Present' : 'Absent'}</p>
+                  </div>
+                </>
+              )
+            })()
+          )}
+        </>
+      )}
+    </section>
   )
 }
 

@@ -8,11 +8,9 @@ Format: each entry states what is unresolved, why it matters now, the options,
 my recommendation, and what the answer unblocks. Answered entries move to
 "Settled" at the bottom with the ruling and the date.
 
-**One entry is open as of 2026-08-30: D-019**, self-ruled A so Access could
-ship, and marked for your review. Every entry D-001 to D-018 is ruled.
-D-018 was raised during the build, self-ruled so the screen could ship, and
-Eric ruled the same option the same day. The index below is the working list;
-the entries keep their full reasoning.
+Every entry D-001 to D-019 is ruled. D-018 and D-019 were both raised during
+a build, self-ruled so the screen could ship, and Eric later ruled on each.
+The index below is the working list; the entries keep their full reasoning.
 
 ## Ruling index
 
@@ -36,7 +34,7 @@ the entries keep their full reasoning.
 | D-016 | **B.** Add the missing facts to the API | Leaves UI-only scope. Last track, see the plan |
 | D-017 | **B.** Build action creation, action editing and macro creation | `Object Creation.dc.html` sections 3, 4 and 5 |
 | D-018 | **B.** A playlist draft asks for the first entry the contract requires | `Object Creation.dc.html` section 2, amended by `api/openapi.yaml` |
-| D-019 | **A**, self-ruled, for review | Access ships as drawn; four principal endpoints stay CLI-only |
+| D-019 | **B.** Add an Administration group to the selected principal's section, with typed confirmation | `Access.tsx` Administration group |
 
 `Object Creation.dc.html` (added 2026-08-30) is the drawn answer to D-011 and
 D-017 and is normative for every creation surface, Settings and Access included.
@@ -75,6 +73,19 @@ right order if the capability is wanted.
 Taken so the screen ships. Say if the gap matters more than the drawing does.
 
 **Unblocks.** Nothing. Access ships either way.
+
+**Ruling:**
+
+**Option B**, re-ruled by Eric on 2026-09-01, superseding the 2026-08-30
+self-ruling of A. Built from the drawing in `E-block-designs.md` section 5:
+an "Administration" group in the selected principal's section, with role
+change (Segmented over the five roles, Apply, typed confirmation), Enable
+and Disable (Disable is the sharp control, typed confirmation, and the
+signed-in principal cannot disable its own row), and Reset password (typed
+confirmation, and the documented session/token-invalidation consequence).
+`hasPassword` and `createdAt` render as detail rows in that group, not as
+table columns, and "Read only" is now derived from `role === 'viewer'`
+rather than left unbuilt for want of per-principal scope evidence.
 
 ---
 
@@ -769,3 +780,43 @@ recording the reading I am building to. Say so if it is wrong.)
 
 **Ruling: sequential, one PR per screen, in this worktree.** No parallel screen
 worktrees; every screen touches the route table and the shared kit.
+---
+
+## Ruled by Eric 2026-09-01
+
+### D-020 The show pill and the mode badge open a popover, not a modal or a Link
+
+**What.** The rebuild guide's "nothing is a modal" rule, and the handoff's
+original reading of the Mode control as a plain link to Settings, both applied
+to the chrome bar's show pill (`ShowPicker`) and mode badge (`sm-mode-badge`
+in `Layout.tsx`). Eric overrode both for these two controls specifically:
+clicking either one opens a popover anchored to the control, listing its
+options with the current one marked; the operator picks a different option and
+presses Apply; a browser `window.confirm` then asks a final "yes I want to do
+this" naming the exact change; on OK the write is sent.
+
+**The three-step gesture, exactly.**
+
+1. Click the show pill or the mode badge. A popover opens under it
+   (`role="dialog"`, `aria-labelledby`), listing the options (shows from
+   `listConfigObjects('show')`; program and show from the show.mode schema),
+   the current one marked.
+2. Pick a different option, then press Apply (a primary `Button`, disabled
+   until the pick differs from current).
+3. A `window.confirm` states the exact change in plain language (old and new
+   show id; the mode change, plus SettingsMode's own leaving-show-mode-during-
+   a-live-cycle warning sentence when that applies). Only OK sends the write:
+   `putShowActive` / `putShowModeConfig`, through the same `guardedSave`
+   stale-write guard every other config editor uses.
+
+The browser `confirm` is the second safety layer, independent of the popover's
+own Apply gate: even an operator who fat-fingers Apply gets one more plain-
+language checkpoint naming the change before anything is written.
+
+**Ruling:** as stated above, ruled directly, no options weighed. This overrides
+the guide's "nothing is a modal" for these two controls only, and restores the
+handoff's original design intent for the mode control (a picker, not a link)
+over the interim reading that shipped it as a `Link` to Settings.
+
+**Unblocks.** `Popover` (new kit element, `ui/src/kit/Popover.tsx`) and the
+rebuilt `ShowPicker` / `ShellMode` in `ui/src/app/Layout.tsx`.

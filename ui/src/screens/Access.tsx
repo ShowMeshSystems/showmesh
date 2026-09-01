@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   createPrincipal,
+  disablePrincipal,
+  enablePrincipal,
   getCurrentNightSession,
   issuePrincipalToken,
   listPrincipals,
   listPrincipalTokens,
+  resetPrincipalPassword,
   revokePrincipalToken,
+  setPrincipalRole,
   type CreatePrincipalRequest,
   type IssueTokenRequest,
   type IssueTokenResponse,
@@ -265,17 +269,25 @@ export function Access() {
           {selectedPrincipal === undefined ? (
             <RuledStrip absence="empty" label="Nothing selected" fact="Select a principal above for its credentials." />
           ) : (
-            <CredentialsPanel
-              principal={selectedPrincipal}
-              tokens={selectedTokens}
-              session={model.session}
-              writeGate={writeGate}
-              readDenied={data.kind === 'denied'}
-              readFailed={data.kind === 'failed' ? data.reason : null}
-              issuedValue={issuedValue}
-              onIssued={setIssuedValue}
-              onChanged={reload}
-            />
+            <>
+              <AdministrationPanel
+                principal={selectedPrincipal}
+                session={model.session}
+                writeGate={writeGate}
+                onChanged={reload}
+              />
+              <CredentialsPanel
+                principal={selectedPrincipal}
+                tokens={selectedTokens}
+                session={model.session}
+                writeGate={writeGate}
+                readDenied={data.kind === 'denied'}
+                readFailed={data.kind === 'failed' ? data.reason : null}
+                issuedValue={issuedValue}
+                onIssued={setIssuedValue}
+                onChanged={reload}
+              />
+            </>
           )}
         </Section>
       )}
@@ -386,6 +398,290 @@ function PrincipalRow({
         <StatusPair tone={state.tone} label={state.label} />
       </td>
     </SelectableRow>
+  )
+}
+
+/**
+ * D-019 option B, ruled by Eric on 2026-09-01. The four write endpoints
+ * `identity/types.go` gates on `principal:write`: role change, disable,
+ * enable, and password reset. Every one re-renders from the response
+ * body it receives (never optimistic local state) and hands the parent
+ * a reload so the table's row and this group agree.
+ */
+function AdministrationPanel({
+  principal,
+  session,
+  writeGate,
+  onChanged,
+}: {
+  principal: PrincipalObject
+  session: Model['session']
+  writeGate: ScopeGate
+  onChanged: () => void
+}) {
+  const isSelf = isSignedInPrincipal(session, principal)
+  const reservedReason = principal.reserved
+    ? 'The Resolume recovery principal cannot be re-roled, disabled or re-credentialed here.'
+    : null
+  const gateReason = !writeGate.allowed ? writeGate.reason : reservedReason
+  const controlsDisabled = !writeGate.allowed || principal.reserved
+
+  const [role, setRole] = useState<PrincipalObject['role']>(principal.role)
+  const [roleConfirming, setRoleConfirming] = useState(false)
+  const [roleConfirmText, setRoleConfirmText] = useState('')
+  const [roleSaving, setRoleSaving] = useState(false)
+  const [roleError, setRoleError] = useState<string | null>(null)
+  const [roleOutcome, setRoleOutcome] = useState<string | null>(null)
+
+  const [disableConfirming, setDisableConfirming] = useState(false)
+  const [disableConfirmText, setDisableConfirmText] = useState('')
+  const [disabling, setDisabling] = useState(false)
+  const [disableError, setDisableError] = useState<string | null>(null)
+
+  const [enabling, setEnabling] = useState(false)
+  const [enableError, setEnableError] = useState<string | null>(null)
+
+  const [newPassword, setNewPassword] = useState('')
+  const [passwordConfirming, setPasswordConfirming] = useState(false)
+  const [passwordConfirmText, setPasswordConfirmText] = useState('')
+  const [resetting, setResetting] = useState(false)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [passwordOutcome, setPasswordOutcome] = useState<string | null>(null)
+
+  useEffect(() => {
+    setRole(principal.role)
+    setRoleConfirming(false)
+    setRoleConfirmText('')
+    setRoleError(null)
+    setRoleOutcome(null)
+    setDisableConfirming(false)
+    setDisableConfirmText('')
+    setDisableError(null)
+    setEnableError(null)
+    setNewPassword('')
+    setPasswordConfirming(false)
+    setPasswordConfirmText('')
+    setPasswordError(null)
+    setPasswordOutcome(null)
+    // Deliberately keyed on id alone: a reload after a successful write
+    // brings a new principal.role for the same id, and the draft above
+    // must not be clobbered by it while the outcome line is still on screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [principal.id])
+
+  const applyRole = () => {
+    if (roleConfirmText !== principal.name) return
+    setRoleSaving(true)
+    setRoleError(null)
+    setPasswordOutcome(null)
+    setPrincipalRole(principal.id, { role })
+      .then((response) => {
+        setRoleOutcome(`Role is now \`${response.principal.role}\`, as the coordinator reports it.`)
+        setRoleConfirming(false)
+        setRoleConfirmText('')
+        onChanged()
+      })
+      .catch((err: unknown) => setRoleError(describeApiError(err)))
+      .finally(() => setRoleSaving(false))
+  }
+
+  const confirmDisable = () => {
+    if (disableConfirmText !== principal.name) return
+    setDisabling(true)
+    setDisableError(null)
+    disablePrincipal(principal.id)
+      .then(() => {
+        setDisableConfirming(false)
+        setDisableConfirmText('')
+        onChanged()
+      })
+      .catch((err: unknown) => setDisableError(describeApiError(err)))
+      .finally(() => setDisabling(false))
+  }
+
+  const enable = () => {
+    setEnabling(true)
+    setEnableError(null)
+    enablePrincipal(principal.id)
+      .then(() => onChanged())
+      .catch((err: unknown) => setEnableError(describeApiError(err)))
+      .finally(() => setEnabling(false))
+  }
+
+  const confirmResetPassword = () => {
+    if (newPassword === '' || passwordConfirmText !== principal.name) return
+    setResetting(true)
+    setPasswordError(null)
+    setRoleOutcome(null)
+    resetPrincipalPassword(principal.id, { password: newPassword })
+      .then(() => {
+        setPasswordOutcome('Every session and token this principal held is now invalid.')
+        setNewPassword('')
+        setPasswordConfirming(false)
+        setPasswordConfirmText('')
+        onChanged()
+      })
+      .catch((err: unknown) => setPasswordError(describeApiError(err)))
+      .finally(() => setResetting(false))
+  }
+
+  return (
+    <div className="sm-inspector__group">
+      <h3 className="sm-subsection__title">Administration</h3>
+      <div className="sm-inspector__row">
+        <span className="sm-inspector__label sm-data">Created</span>
+        <p className="sm-inspector__value sm-data">{formatDateClock(principal.createdAt) ?? 'unrecorded'}</p>
+      </div>
+      <div className="sm-inspector__row">
+        <span className="sm-inspector__label sm-data">Password</span>
+        <p className="sm-inspector__value sm-data">{principal.hasPassword ? 'Set' : 'Token only'}</p>
+      </div>
+
+      <Segmented<PrincipalObject['role']>
+        label="Role"
+        value={role}
+        options={CREATABLE_ROLES.map((option) => ({ value: option, label: option }))}
+        onChange={(value) => {
+          setRole(value)
+          setRoleOutcome(null)
+        }}
+        disabled={controlsDisabled}
+      />
+      <ButtonRow>
+        <Button
+          onClick={() => {
+            setRoleConfirming(true)
+            setRoleConfirmText('')
+            setRoleError(null)
+          }}
+          disabled={controlsDisabled || role === principal.role}
+          title={gateReason ?? (role === principal.role ? 'Pick a different role first.' : undefined)}
+        >
+          Apply
+        </Button>
+      </ButtonRow>
+      {roleConfirming && (
+        <div className="sm-panel">
+          <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
+            {(props) => <Input {...props} value={roleConfirmText} onChange={(e) => setRoleConfirmText(e.target.value)} />}
+          </Field>
+          {roleError !== null && <RuledStrip absence="failed" label="Refused" fact={roleError} />}
+          <ButtonRow>
+            <Button
+              variant="primary"
+              disabled={controlsDisabled || roleConfirmText !== principal.name || roleSaving}
+              title={gateReason ?? (roleConfirmText !== principal.name ? "Type the principal's name exactly to enable this." : undefined)}
+              onClick={applyRole}
+            >
+              {roleSaving ? 'Changing role…' : 'Change role'}
+            </Button>
+            <Button variant="quiet" onClick={() => setRoleConfirming(false)} disabled={roleSaving}>
+              Cancel
+            </Button>
+          </ButtonRow>
+        </div>
+      )}
+      {roleOutcome !== null && (
+        <p className="sm-small sm-data" role="status">
+          {roleOutcome}
+        </p>
+      )}
+
+      <ButtonRow>
+        {principal.disabled ? (
+          <Button
+            onClick={enable}
+            disabled={controlsDisabled || enabling}
+            title={gateReason ?? undefined}
+          >
+            {enabling ? 'Enabling…' : 'Enable'}
+          </Button>
+        ) : (
+          <Button
+            variant="danger"
+            onClick={() => {
+              setDisableConfirming(true)
+              setDisableConfirmText('')
+              setDisableError(null)
+            }}
+            disabled={controlsDisabled || isSelf}
+            title={isSelf ? 'You cannot disable your own signed-in principal.' : (gateReason ?? undefined)}
+          >
+            Disable
+          </Button>
+        )}
+      </ButtonRow>
+      {enableError !== null && <RuledStrip absence="failed" label="Refused" fact={enableError} />}
+      {disableConfirming && !principal.disabled && (
+        <div className="sm-panel">
+          <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
+            {(props) => <Input {...props} value={disableConfirmText} onChange={(e) => setDisableConfirmText(e.target.value)} />}
+          </Field>
+          {disableError !== null && <RuledStrip absence="failed" label="Refused" fact={disableError} />}
+          <ButtonRow>
+            <Button
+              variant="danger"
+              disabled={controlsDisabled || isSelf || disableConfirmText !== principal.name || disabling}
+              title={
+                isSelf
+                  ? 'You cannot disable your own signed-in principal.'
+                  : (gateReason ?? (disableConfirmText !== principal.name ? "Type the principal's name exactly to enable this." : undefined))
+              }
+              onClick={confirmDisable}
+            >
+              {disabling ? 'Disabling…' : 'Disable principal'}
+            </Button>
+            <Button variant="quiet" onClick={() => setDisableConfirming(false)} disabled={disabling}>
+              Cancel
+            </Button>
+          </ButtonRow>
+        </div>
+      )}
+
+      <Field label="New password">
+        {(props) => <Input {...props} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />}
+      </Field>
+      <ButtonRow>
+        <Button
+          onClick={() => {
+            setPasswordConfirming(true)
+            setPasswordConfirmText('')
+            setPasswordError(null)
+          }}
+          disabled={controlsDisabled || newPassword === ''}
+          title={gateReason ?? (newPassword === '' ? 'Enter a new password first.' : undefined)}
+        >
+          Set password
+        </Button>
+      </ButtonRow>
+      {passwordConfirming && (
+        <div className="sm-panel">
+          <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
+            {(props) => <Input {...props} value={passwordConfirmText} onChange={(e) => setPasswordConfirmText(e.target.value)} />}
+          </Field>
+          {passwordError !== null && <RuledStrip absence="failed" label="Refused" fact={passwordError} />}
+          <ButtonRow>
+            <Button
+              variant="primary"
+              disabled={controlsDisabled || newPassword === '' || passwordConfirmText !== principal.name || resetting}
+              title={gateReason ?? (passwordConfirmText !== principal.name ? "Type the principal's name exactly to enable this." : undefined)}
+              onClick={confirmResetPassword}
+            >
+              {resetting ? 'Resetting…' : 'Reset password'}
+            </Button>
+            <Button variant="quiet" onClick={() => setPasswordConfirming(false)} disabled={resetting}>
+              Cancel
+            </Button>
+          </ButtonRow>
+        </div>
+      )}
+      <p className="sm-small sm-faint">Resetting signs this principal out of every session and invalidates every token it holds.</p>
+      {passwordOutcome !== null && (
+        <p className="sm-small sm-data" role="status">
+          {passwordOutcome}
+        </p>
+      )}
+    </div>
   )
 }
 

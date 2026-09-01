@@ -1,4 +1,4 @@
-import type { AuditEntry, Evidence, Event, FPPInstance, Model, Node } from '../api'
+import type { AuditEntry, Evidence, Event, FallbackProgramListEntry, FallbackProgramResponse, FPPInstance, Model, Node } from '../api'
 import type { Connection, Tone } from '../kit'
 import { countSignals, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
@@ -314,6 +314,81 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
             : null,
       },
     ],
+  }
+}
+
+// ---------------------------------------------------------------------
+// FPP inspector: the fallback-program readiness group (ADR-048, Track
+// J's J1 / SM-460). Read-only: acknowledgement is the installed FPP
+// plugin's own evidence, never a value an operator credential may type.
+// ---------------------------------------------------------------------
+
+export type FallbackProgramRow = { key: string; label: string; value: string }
+
+const FALLBACK_ACKNOWLEDGED_LABEL: Record<FallbackProgramResponse['acknowledgedStatus'], string> = {
+  'fallback-program-current': 'Current',
+  'fallback-program-stale': 'Stale',
+  'fallback-program-rejected': 'Rejected',
+  'fallback-program-unacknowledged': 'Not acknowledged',
+}
+
+const FALLBACK_ACKNOWLEDGED_TONE: Record<FallbackProgramResponse['acknowledgedStatus'], Tone> = {
+  'fallback-program-current': 'good',
+  'fallback-program-stale': 'warn',
+  'fallback-program-rejected': 'bad',
+  'fallback-program-unacknowledged': 'unknown',
+}
+
+export function fallbackAcknowledgedLabel(status: FallbackProgramResponse['acknowledgedStatus']): string {
+  return FALLBACK_ACKNOWLEDGED_LABEL[status]
+}
+
+export function fallbackAcknowledgedTone(status: FallbackProgramResponse['acknowledgedStatus']): Tone {
+  return FALLBACK_ACKNOWLEDGED_TONE[status]
+}
+
+/**
+ * The package/revision/show/generation/timestamp metadata `GET
+ * /fallback-programs` reports for one host — everything the operator
+ * reads before a show that does not require the admin/scheduler-only
+ * `fpp:fallback` scope. Never the signed program body itself.
+ */
+export function fallbackProgramMetadataRows(entry: FallbackProgramListEntry): FallbackProgramRow[] {
+  return [
+    { key: 'package', label: 'Package', value: entry.packageId },
+    { key: 'revision', label: 'Revision', value: entry.revision },
+    { key: 'show', label: 'Show', value: entry.show },
+    { key: 'generation', label: 'Generation', value: String(entry.generation) },
+    { key: 'compiled', label: 'Compiled', value: formatClock(entry.compiledAt) ?? 'unrecorded' },
+    { key: 'expires', label: 'Expires', value: formatClock(entry.expiresAt) ?? 'unrecorded' },
+  ]
+}
+
+export type FallbackProgramAcknowledgement = {
+  tone: Tone
+  label: string
+  /** `null` when `acknowledgedPackageId` is absent (unacknowledged). */
+  acknowledgedPackage: string | null
+  /** `null` when `acknowledgedAt` is absent (unacknowledged). */
+  acknowledgedAt: string | null
+  signaturePresent: boolean
+}
+
+/**
+ * The `GET /fallback-programs/{fppInstanceId}` acknowledgement fields —
+ * behind `fpp:fallback`, so a caller only reaches this once that read
+ * has actually succeeded. Signature *presence* only, never the
+ * signature itself (the guide's "never invent" rule cuts both ways:
+ * rendering a truncated signature would invent legibility the value
+ * never had).
+ */
+export function fallbackProgramAcknowledgement(detail: FallbackProgramResponse): FallbackProgramAcknowledgement {
+  return {
+    tone: fallbackAcknowledgedTone(detail.acknowledgedStatus),
+    label: fallbackAcknowledgedLabel(detail.acknowledgedStatus),
+    acknowledgedPackage: detail.acknowledgedPackageId ?? null,
+    acknowledgedAt: detail.acknowledgedAt !== undefined ? (formatClock(detail.acknowledgedAt) ?? 'unrecorded') : null,
+    signaturePresent: detail.signatureBase64 !== undefined,
   }
 }
 

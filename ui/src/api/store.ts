@@ -153,6 +153,11 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+// ADR-048, Track J's J1: the fallback-program metadata list and one
+// host's full signed-program read, an operator's pre-show readiness
+// evidence for FPP's coordinator-loss fallback.
+type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
@@ -813,6 +818,48 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaFPPPlaylistDefinitionEntriesResponse>(
         `/integrations/fpp/playlist-definitions/${encodeURIComponent(instanceUuid)}/${encodeURIComponent(playlistHash)}/entries`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/fallback-programs` (ADR-048, Track J's J1): metadata for
+   * every FPP host's last published fallback program — package id,
+   * revision, show, generation, and timestamps, never the signed payload
+   * itself. Open under `observation:read`, same posture as
+   * [listFPPPlaylistDefinitions] above.
+   */
+  async listFallbackPrograms(): Promise<SchemaFallbackProgramListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFallbackProgramListResponse>(
+        '/fallback-programs',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/fallback-programs/{fppInstanceId}` (ADR-048, Track J's
+   * J1): one FPP host's current fallback program, including publication
+   * and acknowledgement state. Behind `fpp:fallback`, the same
+   * admin/scheduler-only scope the installed FPP plugin itself uses to
+   * fetch and verify this program — an operator credential is commonly
+   * refused this read (403), distinct from `listFallbackPrograms`'s open
+   * `observation:read` posture above. `published: false` (with `program`
+   * and `signatureBase64` both absent) is a real, non-404 answer: this
+   * coordinator has never compiled a program for this host.
+   */
+  async getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFallbackProgramResponse>(
+        `/fallback-programs/${encodeURIComponent(fppInstanceId)}`,
         controller.signal,
       )
     } finally {

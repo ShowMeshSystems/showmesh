@@ -1,20 +1,41 @@
-import { useEffect, useState } from 'react'
-import { Link, Outlet } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Outlet } from 'react-router-dom'
 import {
+  Button,
   ChromeBar,
   ChromeProgress,
   ClockSkewStrip,
   ConnectionPill,
   Notice,
+  Popover,
   Rail,
   RailGroup,
   RailLink,
+  RuledStrip,
   ShellBody,
   type Connection,
 } from '../kit'
-import { getShowModeConfig, type ConnectionState, type Model, type ShowModeConfigResponse } from '../api'
+import {
+  ApiError,
+  getCurrentNightSession,
+  getShowActive,
+  getShowModeConfig,
+  listConfigObjects,
+  putShowActive,
+  putShowModeConfig,
+  type ConfigObjectSummary,
+  type ConfigShowModePayload,
+  type ConnectionState,
+  type Model,
+  type NightSessionState,
+  type ShowActiveConfigResponse,
+  type ShowModeConfigResponse,
+} from '../api'
 import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
-import { describeSignInState, type SignInState } from '../domain/session'
+import { describeApiError, describeSignInState, evaluateScope, type SignInState } from '../domain/session'
+import { guardedSave, type SaveOutcome } from '../domain/save'
+import { StaleWriteStrip } from '../screens/StaleWrite'
+import { liveCycle } from '../screens/settingsModel'
 import { useModelContext } from './ModelContext'
 import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
@@ -86,7 +107,323 @@ function NowPlaying({ model, signInKind }: { model: Model; signInKind: SignInSta
   )
 }
 
-function ShellMode() {
+/**
+ * D-020 (Eric, 2026-09-01): a night session, seeded once and kept live by
+ * `nightSession.changed`, exactly as SettingsMode's identically named hook
+ * does. Needed here only to word the mode-badge confirm's leaving-show-mode
+ * warning the same way SettingsMode does.
+ */
+function useNightSessionSeed(model: Model): NightSessionState | null {
+  const [seeded, setSeeded] = useState<NightSessionState | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getCurrentNightSession()
+      .then((response) => {
+        if (!cancelled) setSeeded(response.session)
+      })
+      .catch(() => {
+        // An unread session stays unread; it never claims a cycle either way.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return model.nightSession ?? seeded
+}
+
+/** No `show.active` object has ever existed: the 404 the store documents, translated so `guardedSave` never special-cases it. Mirrors Shows.tsx's identical helper. */
+function emptyShowActive(): ShowActiveConfigResponse {
+  return {
+    serverTime: '',
+    kind: 'show.active',
+    id: 'show.active',
+    revision: 0,
+    payload: { show: '' },
+    updatedAt: '',
+    createdByPrincipalId: null,
+    createdByPrincipalName: null,
+    source: 'api',
+  }
+}
+
+function readShowActiveOrEmpty(): Promise<ShowActiveConfigResponse> {
+  return getShowActive().catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return emptyShowActive()
+    throw err
+  })
+}
+
+type ShowStale = Extract<SaveOutcome<ShowActiveConfigResponse>, { kind: 'stale' }>
+type ModeStale = Extract<SaveOutcome<ShowModeConfigResponse>, { kind: 'stale' }>
+
+/**
+ * The show-pill popover's body: the show list, the current selection, and
+ * the audited `show.active` write, gated by the anchor already being
+ * disabled when `config:write` is refused (nothing here re-checks the gate).
+ */
+function ShowActivePicker({
+  current,
+  gate,
+  onClose,
+}: {
+  current: string
+  gate: ReturnType<typeof evaluateScope>
+  onClose: () => void
+}) {
+  const [objects, setObjects] = useState<ConfigObjectSummary[] | null>(null)
+  const [objectsError, setObjectsError] = useState<string | null>(null)
+  const [baseline, setBaseline] = useState<ShowActiveConfigResponse | null>(null)
+  const [baselineError, setBaselineError] = useState<string | null>(null)
+  const [selected, setSelected] = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<ShowStale | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    listConfigObjects('show')
+      .then((response) => {
+        if (!cancelled) setObjects(response.objects)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setObjectsError(describeApiError(err))
+      })
+    readShowActiveOrEmpty()
+      .then((response) => {
+        if (!cancelled) setBaseline(response)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setBaselineError(describeApiError(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const apply = () => {
+    if (baseline === null || selected === '' || selected === current) return
+    const was = current !== '' ? `"${current}"` : 'none'
+    if (!window.confirm(`Activate show "${selected}"? This replaces the active show (currently ${was}).`)) return
+    setSaving(true)
+    setSaveError(null)
+    setStale(null)
+    guardedSave({
+      loaded: baseline,
+      read: readShowActiveOrEmpty,
+      write: () => putShowActive({ show: selected }),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onClose()
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <>
+      {objectsError !== null ? (
+        <RuledStrip absence="failed" label="Read failed" fact={objectsError} />
+      ) : objects === null ? (
+        <p className="sm-small sm-faint">Reading shows.</p>
+      ) : objects.length === 0 ? (
+        <p className="sm-small sm-faint">No show is configured.</p>
+      ) : (
+        <div className="sm-popover__options">
+          {objects.map((object) => (
+            <button
+              key={object.id}
+              type="button"
+              className={`sm-popover__option${selected === object.id ? ' sm-popover__option--selected' : ''}`}
+              onClick={() => setSelected(object.id)}
+            >
+              <span>{object.label}</span>
+              {current === object.id && <span className="sm-popover__option-current">Current</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {baselineError !== null && <RuledStrip absence="failed" label="Read failed" fact={baselineError} />}
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            setBaseline(null)
+            readShowActiveOrEmpty()
+              .then(setBaseline)
+              .catch((err: unknown) => setBaselineError(describeApiError(err)))
+          }}
+        />
+      )}
+      {!gate.allowed && <p className="sm-small sm-faint">{gate.reason}</p>}
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <div className="sm-popover__actions">
+        <Button
+          variant="primary"
+          size="compact"
+          onClick={apply}
+          disabled={!gate.allowed || saving || baseline === null || selected === '' || selected === current}
+          title={gate.allowed ? undefined : gate.reason}
+        >
+          {saving ? 'Applying…' : 'Apply'}
+        </Button>
+        <Button variant="quiet" size="compact" onClick={onClose} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+    </>
+  )
+}
+
+/** `Show not reported`: no `currentRuns` read has ever succeeded, so there is nothing to pick from and nothing to open. */
+function ShowPicker({ model }: { model: Model }) {
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+
+  if (model.currentRuns === null) {
+    return (
+      <span className="sm-showpicker sm-showpicker--unavailable">
+        <span className="sm-showpicker__eyebrow">Show</span>
+        <span className="sm-small sm-faint">Show not reported</span>
+      </span>
+    )
+  }
+
+  const current = model.currentRuns.activeShow.show ?? ''
+
+  return (
+    <span className="sm-chrome__picker">
+      <button
+        ref={anchorRef}
+        type="button"
+        className="sm-showpicker"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="sm-showpicker__eyebrow">Show</span>
+        <span className="sm-showpicker__value">{current !== '' ? current : 'None'}</span>
+        <span className="sm-showpicker__chevron" aria-hidden="true">▾</span>
+      </button>
+      <Popover open={open} title="Choose show" anchorRef={anchorRef} onClose={() => setOpen(false)}>
+        <ShowActivePicker current={current} gate={gate} onClose={() => setOpen(false)} />
+      </Popover>
+    </span>
+  )
+}
+
+const MODE_CHOICES: readonly { value: ConfigShowModePayload['mode']; label: string }[] = [
+  { value: 'show', label: 'Show mode' },
+  { value: 'program', label: 'Program mode' },
+]
+
+/** The mode-badge popover's body: the show.mode schema's two values, the audited `show.mode` write. */
+function ModePicker({
+  response,
+  nightSession,
+  gate,
+  onClose,
+}: {
+  response: ShowModeConfigResponse
+  nightSession: NightSessionState | null
+  gate: ReturnType<typeof evaluateScope>
+  onClose: () => void
+}) {
+  const current = response.payload.mode
+  const [selected, setSelected] = useState<ConfigShowModePayload['mode']>(current)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<ModeStale | null>(null)
+
+  const apply = () => {
+    if (selected === current) return
+    const chosen = MODE_CHOICES.find((option) => option.value === selected)?.label ?? selected
+    const leavingShowLive = current === 'show' && selected === 'program' && liveCycle(nightSession) !== null
+    const warning = leavingShowLive ? ' Switching to Program mode now is allowed, but it stops treating the audience as present.' : ''
+    if (!window.confirm(`Switch mode to ${chosen}?${warning}`)) return
+    setSaving(true)
+    setSaveError(null)
+    setStale(null)
+    guardedSave({
+      loaded: response,
+      read: getShowModeConfig,
+      write: () => putShowModeConfig({ mode: selected }),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onClose()
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <>
+      <div className="sm-popover__options">
+        {MODE_CHOICES.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`sm-popover__option${selected === option.value ? ' sm-popover__option--selected' : ''}`}
+            onClick={() => setSelected(option.value)}
+          >
+            <span>{option.label}</span>
+            {current === option.value && <span className="sm-popover__option-current">Current</span>}
+          </button>
+        ))}
+      </div>
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            onClose()
+          }}
+        />
+      )}
+      {!gate.allowed && <p className="sm-small sm-faint">{gate.reason}</p>}
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <div className="sm-popover__actions">
+        <Button
+          variant="primary"
+          size="compact"
+          onClick={apply}
+          disabled={!gate.allowed || saving || selected === current}
+          title={gate.allowed ? undefined : gate.reason}
+        >
+          {saving ? 'Applying…' : 'Apply'}
+        </Button>
+        <Button variant="quiet" size="compact" onClick={onClose} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+    </>
+  )
+}
+
+function ShellMode({ model }: { model: Model }) {
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const nightSession = useNightSessionSeed(model)
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
   const [response, setResponse] = useState<ShowModeConfigResponse | null>(null)
 
   useEffect(() => {
@@ -110,27 +447,28 @@ function ShellMode() {
   const firstSentence = response.resolumeWebSocketEffect.replace(/\.\s*$/, '')
   const title = pin === undefined ? response.resolumeWebSocketEffect : `${firstSentence}. ${pin.effect}`
   return (
-    <Link className={`sm-mode-badge sm-mode-badge--${mode}`} to="/settings#show-mode" title={title}>
-      {mode}
-      {pin?.pinned === true && ' (edit staged)'}
-      {pin?.pinned === true && (
-        <span role="status" className="sm-sr-only">
-          Show mode: {mode}. A show.cue edit is staged and will not reach any node until the show is stopped and restarted.
-        </span>
-      )}
-    </Link>
-  )
-}
-
-function ShowPicker({ model }: { model: Model }) {
-  const active = model.currentRuns?.activeShow
-  if (active?.configured !== true || active.show === null) return null
-  return (
-    <Link className="sm-showpicker" to={`/shows/${encodeURIComponent(active.show)}`}>
-      <span className="sm-showpicker__eyebrow">Show</span>
-      <span className="sm-showpicker__value">{active.show}</span>
-      <span className="sm-showpicker__chevron" aria-hidden="true">▾</span>
-    </Link>
+    <span className="sm-chrome__picker">
+      <button
+        ref={anchorRef}
+        type="button"
+        className={`sm-mode-badge sm-mode-badge--${mode}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={title}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {mode}
+        {pin?.pinned === true && ' (edit staged)'}
+        {pin?.pinned === true && (
+          <span role="status" className="sm-sr-only">
+            Show mode: {mode}. A show.cue edit is staged and will not reach any node until the show is stopped and restarted.
+          </span>
+        )}
+      </button>
+      <Popover open={open} title="Choose mode" anchorRef={anchorRef} onClose={() => setOpen(false)}>
+        <ModePicker response={response} nightSession={nightSession} gate={gate} onClose={() => setOpen(false)} />
+      </Popover>
+    </span>
   )
 }
 
@@ -147,7 +485,7 @@ export function Layout() {
     <div className="sm-shell">
       <ChromeBar
         showPicker={<ShowPicker model={model} />}
-        mode={<ShellMode />}
+        mode={<ShellMode model={model} />}
         nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
         connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
         principal={

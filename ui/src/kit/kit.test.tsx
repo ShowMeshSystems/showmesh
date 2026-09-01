@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Field, Input, NotWired, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { useRef, useState } from 'react'
+import { BlankingPlate, Button, ClockSkewStrip, Field, Input, NotWired, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 
 afterEach(cleanup)
 
@@ -189,5 +189,54 @@ describe('Segmented', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Light' }))
     expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('button', { name: 'Dark' }).getAttribute('aria-pressed')).toBe('false')
+  })
+})
+
+describe('Popover', () => {
+  function Harness() {
+    const anchorRef = useRef<HTMLButtonElement>(null)
+    const [open, setOpen] = useState(false)
+    return (
+      <div>
+        <button ref={anchorRef} type="button" onClick={() => setOpen(true)}>
+          Anchor
+        </button>
+        <Popover open={open} title="Choose one" anchorRef={anchorRef} onClose={() => setOpen(false)}>
+          <button type="button">First option</button>
+          <button type="button">Second option</button>
+        </Popover>
+      </div>
+    )
+  }
+
+  it('renders nothing until open', () => {
+    render(<Harness />)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('is a labelled dialog, moves focus in on open and returns it to the anchor on close', () => {
+    render(<Harness />)
+    const anchor = screen.getByRole('button', { name: 'Anchor' })
+    fireEvent.click(anchor)
+
+    const dialog = screen.getByRole('dialog', { name: 'Choose one' })
+    expect(dialog).toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'First option' }))
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(anchor)
+  })
+
+  it('closes on an outside click but not on a click inside the panel', () => {
+    render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Anchor' }))
+    screen.getByRole('dialog', { name: 'Choose one' })
+
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Second option' }))
+    expect(screen.getByRole('dialog', { name: 'Choose one' })).toBeInTheDocument()
+
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })

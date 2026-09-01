@@ -2693,6 +2693,106 @@ describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
   })
 })
 
+// ADR-048, Track J's J1 (SM-460): the fallback-program readiness reads.
+// Both are plain ApiClient.getJson pass-throughs, same as
+// getFPPEndpointsConfig above, so they are proven the same way. Neither
+// touches store.connect() / the SSE read loop.
+describe('ApiStore: fallback programs (ADR-048, Track J’s J1)', () => {
+  it('listFallbackPrograms() GETs /fallback-programs and returns the decoded list', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        programs: [
+          {
+            fppInstanceUuid: 'uuid-1',
+            packageId: 'pkg-1',
+            revision: 'rev-1',
+            show: 'demo',
+            generation: 3,
+            expiresAt: '2026-09-02T00:00:00Z',
+            compiledAt: '2026-09-01T00:00:00Z',
+          },
+        ],
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.listFallbackPrograms()
+
+    expect(gotPath).toBe('/fallback-programs')
+    expect(resp.programs).toHaveLength(1)
+    expect(resp.programs[0]?.fppInstanceUuid).toBe('uuid-1')
+    expect(resp.programs[0]?.packageId).toBe('pkg-1')
+  })
+
+  it('listFallbackPrograms() rejects with a typed error on 404 (older coordinator, route unknown)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 404, makeProblem({
+        type: 'https://showmesh.dev/problems/resource-not-found', status: 404,
+        detail: 'no such route',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.listFallbackPrograms()).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('getFallbackProgram() GETs /fallback-programs/{fppInstanceId} and returns the decoded response', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        fppInstanceUuid: 'uuid-1',
+        published: true,
+        signatureBase64: 'c2ln',
+        acknowledgedStatus: 'fallback-program-current',
+        acknowledgedPackageId: 'pkg-1',
+        acknowledgedAt: '2026-09-01T00:05:00Z',
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getFallbackProgram('uuid-1')
+
+    expect(gotPath).toBe('/fallback-programs/uuid-1')
+    expect(resp.published).toBe(true)
+    expect(resp.acknowledgedStatus).toBe('fallback-program-current')
+  })
+
+  it('getFallbackProgram() encodes the instance id in the path', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        fppInstanceUuid: 'uuid with space',
+        published: false,
+        acknowledgedStatus: 'fallback-program-unacknowledged',
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.getFallbackProgram('uuid with space')
+
+    expect(gotPath).toBe('/fallback-programs/uuid%20with%20space')
+  })
+
+  it('getFallbackProgram() rejects with a typed error on 403 (fpp:fallback is admin/scheduler only)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 403, makeProblem({
+        type: 'https://showmesh.dev/problems/forbidden', status: 403,
+        detail: 'missing scope fpp:fallback',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.getFallbackProgram('uuid-1')).rejects.toMatchObject({ status: 403 })
+  })
+})
+
 // Track D seam D-2a (ADR-032): getResolumeComposition is a plain
 // ApiClient.getJson pass-through, same as getFPPEndpointsConfig above, so
 // it is proven the same way. uploadResolumeComposition is NOT — it

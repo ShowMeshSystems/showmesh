@@ -98,6 +98,10 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+// ADR-048, Track J's J1: the fallback-program metadata list and one
+// host's full signed-program read.
+type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
@@ -227,6 +231,16 @@ export function getFPPPlaylistDefinitionEntries(
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPEndpointsConfigRevisions()
+}
+
+// ADR-048, Track J's J1: the fallback-program readiness evidence. Same
+// thin pass-through pattern as every method above.
+export function listFallbackPrograms(): Promise<SchemaFallbackProgramListResponse> {
+  return store.listFallbackPrograms()
+}
+
+export function getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {
+  return store.getFallbackProgram(fppInstanceId)
 }
 
 // Track G seam G-2 (ADR-039): the same thin pass-through pattern, for the

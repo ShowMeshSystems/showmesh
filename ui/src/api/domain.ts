@@ -400,6 +400,15 @@ export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPla
 export type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 export type FPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
 
+// ADR-048, Track J's J1: fallback-program metadata (the list) and one
+// host's full signed-program read, an operator's pre-show readiness
+// evidence for FPP's coordinator-loss fallback. Same "aliased, not
+// re-declared" and "plain on-demand side call, not part of Model"
+// posture as the FPP playlist types above.
+export type FallbackProgramListEntry = components['schemas']['FallbackProgramListEntry']
+export type FallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+export type FallbackProgramResponse = components['schemas']['FallbackProgramResponse']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

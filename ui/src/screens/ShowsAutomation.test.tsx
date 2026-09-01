@@ -278,7 +278,11 @@ describe('Shows · Automation tab', () => {
     }
     stubs.getShowAction = (id: string) => Promise.resolve(actionResponse(id))
     stubs.listActionBindings = () => Promise.resolve([binding()])
-    const putSpy = vi.fn(() => Promise.resolve(macroResponse('preshow-lights-up', 4)))
+    const putSpy = vi.fn((id: string, payload: ConfigShowMacro) => {
+      void id
+      void payload
+      return Promise.resolve(macroResponse('preshow-lights-up', 4))
+    })
     stubs.putShowMacro = putSpy
     renderWorkspace({ session: signedIn(['config:write', 'show:macro:run', 'show:action:invoke']) })
 
@@ -289,6 +293,222 @@ describe('Shows · Automation tab', () => {
     fireEvent.click(save)
     expect(await screen.findByText(/Stale write/)).toBeInTheDocument()
     expect(putSpy).not.toHaveBeenCalled()
+  })
+
+  describe('editing a macro from the card and the aside', () => {
+    function twoStepPayload(): ConfigShowMacro {
+      return macroPayload({
+        steps: [
+          { id: 'step-a', action: 'start-preshow', onFailure: 'continue', onUnconfirmed: 'continue', localFallback: { class: 'none', reason: 'FPP keeps running on its own.' } },
+          { id: 'step-b', action: 'second-action', onFailure: 'continue', onUnconfirmed: 'continue', localFallback: { class: 'none', reason: 'Lights stay as last set.' } },
+        ],
+      })
+    }
+
+    function setupTwoStepMacro() {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) =>
+        withContents(kind, [macroSummary()], [actionSummary(), actionSummary({ id: 'second-action', label: 'Second Step Action' })])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowMacro = (id: string) => Promise.resolve(macroResponse(id, 3, twoStepPayload()))
+      stubs.getShowAction = (id: string) =>
+        Promise.resolve(id === 'second-action' ? actionResponse(id, 1, actionPayload({ label: 'Second Step Action' })) : actionResponse(id))
+      stubs.listActionBindings = () => Promise.resolve([binding(), binding({ actionId: 'second-action', label: 'Second Step Action' })])
+      return renderWorkspace({ session: signedIn(['config:write', 'show:macro:run', 'show:action:invoke']) })
+    }
+
+    it('adds a step from the card and saves it with a fresh id', async () => {
+      const putSpy = vi.fn((id: string, payload: ConfigShowMacro) => {
+      void id
+      void payload
+      return Promise.resolve(macroResponse('preshow-lights-up', 4))
+    })
+      setup()
+      stubs.putShowMacro = putSpy
+
+      const addStep = await screen.findByRole('button', { name: 'Add step' })
+      fireEvent.click(addStep)
+
+      const reasonInput = await screen.findByLabelText('Reason')
+      fireEvent.change(reasonInput, { target: { value: 'Runs again for the encore.' } })
+      const actionSelect = screen.getByLabelText('Action')
+      fireEvent.change(actionSelect, { target: { value: 'start-preshow' } })
+
+      const save = screen.getByRole('button', { name: 'Save macro' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+
+      await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1))
+      const [, payload] = putSpy.mock.calls[0]! as [string, ConfigShowMacro]
+      expect(payload.steps).toHaveLength(2)
+      expect(payload.steps[1]?.id).toBeTruthy()
+      expect(payload.steps[1]?.id).not.toBe('start-preshow')
+      expect(new Set(payload.steps.map((s) => s.id)).size).toBe(2)
+    })
+
+    it('removes a step from the card and saves the shorter list', async () => {
+      const putSpy = vi.fn((id: string, payload: ConfigShowMacro) => {
+      void id
+      void payload
+      return Promise.resolve(macroResponse('preshow-lights-up', 4))
+    })
+      setupTwoStepMacro()
+      stubs.putShowMacro = putSpy
+
+      await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      expect(screen.getAllByRole('listitem')).toHaveLength(2)
+      const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
+      fireEvent.click(removeButtons[0]!)
+      expect(screen.getAllByRole('listitem')).toHaveLength(1)
+
+      const remaining = screen.getByRole('button', { name: /^1\. Second Step Action/ })
+      fireEvent.click(remaining)
+      const save = await screen.findByRole('button', { name: 'Save macro' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+
+      await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1))
+      const [, payload] = putSpy.mock.calls[0]! as [string, ConfigShowMacro]
+      expect(payload.steps).toHaveLength(1)
+      expect(payload.steps[0]?.id).toBe('step-b')
+    })
+
+    it('moves a step down then back up and saves the reordered list', async () => {
+      const putSpy = vi.fn((id: string, payload: ConfigShowMacro) => {
+      void id
+      void payload
+      return Promise.resolve(macroResponse('preshow-lights-up', 4))
+    })
+      setupTwoStepMacro()
+      stubs.putShowMacro = putSpy
+
+      await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      const moveDown = screen.getAllByRole('button', { name: 'Move down' })[0]!
+      fireEvent.click(moveDown)
+      expect(await screen.findByRole('button', { name: /^1\. Second Step Action/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^2\. Start Preshow Playlist/ })).toBeInTheDocument()
+
+      const moveUp = screen.getAllByRole('button', { name: 'Move up' })[1]!
+      fireEvent.click(moveUp)
+      expect(await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^2\. Second Step Action/ })).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /^1\. Start Preshow Playlist/ }))
+      const save = await screen.findByRole('button', { name: 'Save macro' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+
+      await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1))
+      const [, payload] = putSpy.mock.calls[0]! as [string, ConfigShowMacro]
+      expect(payload.steps.map((s) => s.id)).toEqual(['step-a', 'step-b'])
+    })
+
+    it('disables Move up on the first row and Move down on the last, each with its own reason', async () => {
+      setupTwoStepMacro()
+      await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      const moveUps = screen.getAllByRole('button', { name: 'Move up' })
+      const moveDowns = screen.getAllByRole('button', { name: 'Move down' })
+      expect(moveUps[0]).toBeDisabled()
+      expect(moveUps[0]).toHaveAttribute('title', 'Already first.')
+      expect(moveDowns[1]).toBeDisabled()
+      expect(moveDowns[1]).toHaveAttribute('title', 'Already last.')
+    })
+
+    it('blocks Remove on a macro left with only one step', async () => {
+      setup()
+      await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      const remove = screen.getByRole('button', { name: 'Remove' })
+      expect(remove).toBeDisabled()
+      expect(remove).toHaveAttribute('title', 'A macro needs at least one step.')
+    })
+
+    it('blocks Add step at the 32-step ceiling with a stated reason', async () => {
+      const steps = Array.from({ length: 32 }, (_, i) => ({
+        id: `step-${i + 1}`,
+        action: 'start-preshow',
+        onFailure: 'continue' as const,
+        onUnconfirmed: 'continue' as const,
+        localFallback: { class: 'none' as const, reason: `Reason ${i + 1}` },
+      }))
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => withContents(kind, [macroSummary()], [actionSummary()])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowMacro = (id: string) => Promise.resolve(macroResponse(id, 3, macroPayload({ steps })))
+      stubs.getShowAction = (id: string) => Promise.resolve(actionResponse(id))
+      stubs.listActionBindings = () => Promise.resolve([binding()])
+      renderWorkspace({ session: signedIn(['config:write', 'show:macro:run', 'show:action:invoke']) })
+
+      const addStep = await screen.findByRole('button', { name: 'Add step' })
+      expect(addStep).toBeDisabled()
+      expect(addStep).toHaveAttribute('title', 'A macro holds at most 32 steps.')
+    })
+
+    it('edits the macro label and description and saves them with the step', async () => {
+      const putSpy = vi.fn((id: string, payload: ConfigShowMacro) => {
+      void id
+      void payload
+      return Promise.resolve(macroResponse('preshow-lights-up', 4))
+    })
+      setup()
+      stubs.putShowMacro = putSpy
+
+      const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      fireEvent.click(stepButton)
+      const labelInput = await screen.findByLabelText('Label')
+      fireEvent.change(labelInput, { target: { value: 'Preshow Lights Up, Revised' } })
+      const descriptionInput = screen.getByLabelText('Description')
+      fireEvent.change(descriptionInput, { target: { value: 'Now also dims the porch light.' } })
+
+      const save = screen.getByRole('button', { name: 'Save macro' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+
+      await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1))
+      const [, payload] = putSpy.mock.calls[0]! as [string, ConfigShowMacro]
+      expect(payload.label).toBe('Preshow Lights Up, Revised')
+      expect(payload.description).toBe('Now also dims the porch light.')
+    })
+
+    it('blocks save on an empty local-fallback reason, naming the coordinator-unreachable rule', async () => {
+      setup()
+      const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      fireEvent.click(stepButton)
+      const reasonInput = await screen.findByLabelText('Reason')
+      fireEvent.change(reasonInput, { target: { value: '' } })
+      const save = screen.getByRole('button', { name: 'Save macro' })
+      expect(save).toBeDisabled()
+      expect(save).toHaveAttribute('title', 'State what happens locally while the coordinator is unreachable, in your own words.')
+    })
+
+    it('blocks save when a step other than the one open has no fallback reason', async () => {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) =>
+        withContents(kind, [macroSummary()], [actionSummary(), actionSummary({ id: 'second-action', label: 'Second Step Action' })])
+      stubs.listAssets = assetsEmpty
+      stubs.getShowMacro = (id: string) =>
+        Promise.resolve(
+          macroResponse(
+            id,
+            3,
+            macroPayload({
+              steps: [
+                { id: 'step-a', action: 'start-preshow', onFailure: 'continue', onUnconfirmed: 'continue', localFallback: { class: 'none', reason: 'FPP keeps running on its own.' } },
+                { id: 'step-b', action: 'second-action', onFailure: 'continue', onUnconfirmed: 'continue', localFallback: { class: 'none', reason: '' } },
+              ],
+            }),
+          ),
+        )
+      stubs.getShowAction = (id: string) =>
+        Promise.resolve(id === 'second-action' ? actionResponse(id, 1, actionPayload({ label: 'Second Step Action' })) : actionResponse(id))
+      stubs.listActionBindings = () => Promise.resolve([binding(), binding({ actionId: 'second-action', label: 'Second Step Action' })])
+      renderWorkspace({ session: signedIn(['config:write', 'show:macro:run', 'show:action:invoke']) })
+
+      const stepA = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+      fireEvent.click(stepA)
+      const save = await screen.findByRole('button', { name: 'Save macro' })
+      expect(save).toBeDisabled()
+      expect(save).toHaveAttribute('title', 'Step 2 has no fallback reason.')
+    })
   })
 
   function resolumeActionsFixture() {

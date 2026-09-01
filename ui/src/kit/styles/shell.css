@@ -93,6 +93,11 @@
   white-space: nowrap;
 }
 
+.sm-chrome__picker {
+  position: relative;
+  display: inline-flex;
+}
+
 .sm-showpicker {
   display: flex;
   align-items: center;

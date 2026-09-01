@@ -1,11 +1,28 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api'
 import type { Event, FPPInstance, Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { Monitor } from './Monitor'
 import { activityRows, facetCounts, fleetRows, fleetSummary, nodeInspector } from './monitorModel'
+
+const PENDING = () => new Promise<never>(() => {})
+
+const fallbackStubs = vi.hoisted(() => ({
+  listFallbackPrograms: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getFallbackProgram: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+}))
+
+vi.mock('../api', async () => {
+  const actual = await vi.importActual<typeof import('../api')>('../api')
+  return {
+    ...actual,
+    listFallbackPrograms: (...args: never[]) => fallbackStubs.listFallbackPrograms(...args),
+    getFallbackProgram: (...args: never[]) => fallbackStubs.getFallbackProgram(...args),
+  }
+})
 
 const observation = (signal: string, state = 'current', kind = 'surface', id = 'front') =>
   ({
@@ -58,6 +75,10 @@ function renderScreen(model: Partial<Model>) {
 }
 
 describe('Monitor · Fleet', () => {
+  beforeEach(() => {
+    fallbackStubs.listFallbackPrograms = () => PENDING()
+    fallbackStubs.getFallbackProgram = () => PENDING()
+  })
   afterEach(cleanup)
 
   it('renders the mock’s blocks in order', () => {
@@ -162,5 +183,98 @@ describe('Monitor · Fleet', () => {
     ] as unknown as Event[]
     renderScreen({ events, eventsGap: true, snapshotReceivedAt: Date.now() })
     expect(screen.getByText(/permanently lost to retention/)).toBeInTheDocument()
+  })
+})
+
+// SM-460: the read-only "Fallback program" group in the FPP inspector.
+describe('Monitor · Fleet · FPP inspector · Fallback program', () => {
+  beforeEach(() => {
+    fallbackStubs.listFallbackPrograms = () => PENDING()
+    fallbackStubs.getFallbackProgram = () => PENDING()
+  })
+  afterEach(cleanup)
+
+  const withFallbackUuid = { ...fpp('barn-player', 'healthy'), instanceUuid: 'barn-uuid' } as FPPInstance
+
+  function openInspector() {
+    renderScreen({ fpp: [withFallbackUuid] })
+    fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
+    return within(screen.getByRole('complementary'))
+  }
+
+  it('reads as loading before either fetch resolves', () => {
+    const inspector = openInspector()
+    expect(inspector.getByText("Reading this host's fallback program.")).toBeInTheDocument()
+  })
+
+  it('says the coordinator does not support fallback programs on a 404 for the list', async () => {
+    fallbackStubs.listFallbackPrograms = () => Promise.reject(new ApiError('not found', 404))
+    const inspector = openInspector()
+    await waitFor(() => expect(inspector.getByText(/does not support fallback programs/)).toBeInTheDocument())
+  })
+
+  it('says no fallback program exists for a host absent from the list', async () => {
+    fallbackStubs.listFallbackPrograms = () => Promise.resolve({ serverTime: '2026-09-01T00:00:00Z', programs: [] })
+    const inspector = openInspector()
+    await waitFor(() => expect(inspector.getByText('No fallback program exists for this host.')).toBeInTheDocument())
+  })
+
+  it('says this device may not read fallback programs on a 403 for the host read, keeping the list metadata visible', async () => {
+    fallbackStubs.listFallbackPrograms = () =>
+      Promise.resolve({
+        serverTime: '2026-09-01T00:00:00Z',
+        programs: [
+          {
+            fppInstanceUuid: 'barn-uuid',
+            packageId: 'pkg-barn',
+            revision: 'rev-9',
+            show: 'holiday-2026',
+            generation: 4,
+            expiresAt: '2026-09-02T00:00:00Z',
+            compiledAt: '2026-09-01T00:00:00Z',
+          },
+        ],
+      })
+    fallbackStubs.getFallbackProgram = () => Promise.reject(new ApiError('forbidden', 403))
+    const inspector = openInspector()
+    await waitFor(() => expect(inspector.getByText('This device may not read fallback programs.')).toBeInTheDocument())
+    expect(inspector.getByText('pkg-barn')).toBeInTheDocument()
+    expect(inspector.getByText('rev-9')).toBeInTheDocument()
+  })
+
+  it('renders every loaded field: identity, show and generation, timestamps, acknowledgement and signature presence', async () => {
+    fallbackStubs.listFallbackPrograms = () =>
+      Promise.resolve({
+        serverTime: '2026-09-01T00:00:00Z',
+        programs: [
+          {
+            fppInstanceUuid: 'barn-uuid',
+            packageId: 'pkg-barn',
+            revision: 'rev-9',
+            show: 'holiday-2026',
+            generation: 4,
+            expiresAt: '2026-09-02T00:00:00Z',
+            compiledAt: '2026-09-01T00:00:00Z',
+          },
+        ],
+      })
+    fallbackStubs.getFallbackProgram = () =>
+      Promise.resolve({
+        serverTime: '2026-09-01T00:00:00Z',
+        fppInstanceUuid: 'barn-uuid',
+        published: true,
+        signatureBase64: 'c2ln',
+        acknowledgedStatus: 'fallback-program-current',
+        acknowledgedPackageId: 'pkg-barn',
+        acknowledgedAt: '2026-09-01T00:05:00Z',
+      })
+    const inspector = openInspector()
+
+    await waitFor(() => expect(inspector.getByText('pkg-barn')).toBeInTheDocument())
+    expect(inspector.getByText('rev-9')).toBeInTheDocument()
+    expect(inspector.getByText('holiday-2026')).toBeInTheDocument()
+    expect(inspector.getByText('4')).toBeInTheDocument()
+    await waitFor(() => expect(inspector.getByText('Current')).toBeInTheDocument())
+    expect(inspector.getByText('Present')).toBeInTheDocument()
   })
 })

@@ -42,12 +42,19 @@ export function daysUnused(lastUsedIso: string | null, nowIso: string | null): n
   return age === null ? null : Math.floor(age / DAY_MS)
 }
 
-export type PrincipalStateLabel = { label: string; tone: 'good' | 'warn' | 'bad' }
+export type PrincipalStateLabel = { label: string; tone: 'good' | 'warn' | 'bad' | 'unknown' }
 
-/** Disabled and unused-warning are the only per-row states this file will assert; both are reported or derived from a reported field. */
+/**
+ * Precedence, most specific first: Disabled, then Consider revoking, then
+ * Read only, then Active. Read only is derived from `role === 'viewer'`
+ * now that role is a first-class, readable field (D-019 option B) rather
+ * than the scope evidence the mock originally drew this state from, which
+ * only ever exists for the signed-in principal's own row.
+ */
 export function principalStateLabel(principal: PrincipalObject, unused: boolean): PrincipalStateLabel {
   if (principal.disabled) return { label: 'Disabled', tone: 'bad' }
   if (unused) return { label: 'Consider revoking', tone: 'warn' }
+  if (principal.role === 'viewer') return { label: 'Read only', tone: 'unknown' }
   return { label: 'Active', tone: 'good' }
 }
 

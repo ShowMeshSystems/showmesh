@@ -359,6 +359,18 @@ a.sm-tile:hover {
   border-bottom: 1px solid var(--border);
 }
 
+/* Reorderable list handle (guide §6): U+283F, grab cursor, dragged by the row. */
+.sm-handle {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--text-faint);
+  cursor: grab;
+}
+
+.sm-plain-list > li .sm-btn-row {
+  margin-top: 6px;
+}
+
 /* What a command actually did, next to the control that sent it. */
 .sm-outcome {
   margin-top: var(--s-4);

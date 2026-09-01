@@ -12,6 +12,10 @@ const stubs = vi.hoisted(() => ({
   issuePrincipalToken: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   revokePrincipalToken: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getCurrentNightSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  setPrincipalRole: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  enablePrincipal: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  disablePrincipal: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  resetPrincipalPassword: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -24,6 +28,10 @@ vi.mock('../api', async () => {
     issuePrincipalToken: (...args: never[]) => stubs.issuePrincipalToken(...args),
     revokePrincipalToken: (...args: never[]) => stubs.revokePrincipalToken(...args),
     getCurrentNightSession: (...args: never[]) => stubs.getCurrentNightSession(...args),
+    setPrincipalRole: (...args: never[]) => stubs.setPrincipalRole(...args),
+    enablePrincipal: (...args: never[]) => stubs.enablePrincipal(...args),
+    disablePrincipal: (...args: never[]) => stubs.disablePrincipal(...args),
+    resetPrincipalPassword: (...args: never[]) => stubs.resetPrincipalPassword(...args),
   }
 })
 
@@ -128,6 +136,10 @@ describe('Access', () => {
     stubs.issuePrincipalToken = () => new Promise(() => {})
     stubs.revokePrincipalToken = () => new Promise(() => {})
     stubs.getCurrentNightSession = () => new Promise(() => {})
+    stubs.setPrincipalRole = () => new Promise(() => {})
+    stubs.enablePrincipal = () => new Promise(() => {})
+    stubs.disablePrincipal = () => new Promise(() => {})
+    stubs.resetPrincipalPassword = () => new Promise(() => {})
   })
 
   it('renders the mock’s section labels', async () => {
@@ -151,7 +163,7 @@ describe('Access', () => {
     renderScreen()
     await waitFor(() => expect(screen.getByText('scheduler-host')).toBeInTheDocument())
     expect(screen.getByText('principal:read')).toBeInTheDocument()
-    expect(screen.getByText('scheduler')).toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: 'View credentials for scheduler-host' })).getByText('scheduler')).toBeInTheDocument()
     expect(screen.getByText(/no per-principal scope bundle to read/)).toBeInTheDocument()
   })
 
@@ -396,6 +408,139 @@ describe('Access', () => {
     renderScreen({ session: session({ scopes: ['principal:read', 'principal:write'] }) })
     await waitFor(() => expect(screen.getByText('Audit store')).toBeInTheDocument())
     expect(within(screen.getByText('Audit store').closest('.sm-strip') as HTMLElement).getByText('audit:read')).toBeInTheDocument()
+  })
+
+  it('renders hasPassword and createdAt as detail rows, not table columns', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('Administration')).toBeInTheDocument())
+    expect(screen.queryByRole('columnheader', { name: /Password|Created/ })).not.toBeInTheDocument()
+    expect(screen.getByText('Set')).toBeInTheDocument()
+    expect(screen.getByText('Created')).toBeInTheDocument()
+    expect(screen.queryByText('unrecorded')).not.toBeInTheDocument()
+  })
+
+  it('shows Read only for a viewer, derived from role rather than scopes', async () => {
+    stubs.listPrincipals = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal({ id: 'p2', name: 'read-only-guest', role: 'viewer' })] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('read-only-guest')).toBeInTheDocument())
+    expect(screen.getByText('Read only')).toBeInTheDocument()
+  })
+
+  it('changes role only once the typed confirmation matches the principal name', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    let received: Record<string, unknown> | undefined
+    stubs.setPrincipalRole = (...args: never[]) => {
+      received = args[1] as unknown as Record<string, unknown>
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principal: principal({ role: 'operator' }) })
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('Administration')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'operator' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+
+    const confirmInput = screen.getByLabelText('Type erbartos to confirm')
+    fireEvent.change(confirmInput, { target: { value: 'wrong-name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Change role' }))
+    expect(received).toBeUndefined()
+
+    fireEvent.change(confirmInput, { target: { value: 'erbartos' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Change role' }))
+    await waitFor(() => expect(received).toEqual({ role: 'operator' }))
+  })
+
+  it('disables a principal only once the typed confirmation matches, and blocks self-disable with the stated reason', async () => {
+    stubs.listPrincipals = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        principals: [principal(), principal({ id: 'p2', name: 'old-laptop', role: 'operator' })],
+      })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    let received: string | undefined
+    stubs.disablePrincipal = (...args: never[]) => {
+      received = args[0] as unknown as string
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principal: principal({ id: 'p2', name: 'old-laptop', role: 'operator', disabled: true }) })
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('old-laptop')).toBeInTheDocument())
+
+    // The signed-in principal's own row (erbartos) cannot be disabled.
+    expect(screen.getByRole('button', { name: 'Disable' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Disable' })).toHaveAttribute('title', 'You cannot disable your own signed-in principal.')
+
+    fireEvent.click(screen.getByRole('row', { name: 'View credentials for old-laptop' }))
+    await waitFor(() => expect(screen.getByText('Credentials for old-laptop')).toBeInTheDocument())
+
+    const disableButton = screen.getByRole('button', { name: 'Disable' })
+    expect(disableButton).toBeEnabled()
+    fireEvent.click(disableButton)
+
+    const confirmInput = screen.getByLabelText('Type old-laptop to confirm')
+    fireEvent.change(confirmInput, { target: { value: 'wrong-name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Disable principal' }))
+    expect(received).toBeUndefined()
+
+    fireEvent.change(confirmInput, { target: { value: 'old-laptop' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Disable principal' }))
+    await waitFor(() => expect(received).toBe('p2'))
+  })
+
+  it('enables a disabled principal with a single click, sending its id', async () => {
+    stubs.listPrincipals = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        principals: [principal(), principal({ id: 'p2', name: 'old-laptop', role: 'operator', disabled: true })],
+      })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    let received: string | undefined
+    stubs.enablePrincipal = (...args: never[]) => {
+      received = args[0] as unknown as string
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principal: principal({ id: 'p2', name: 'old-laptop', role: 'operator', disabled: false }) })
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('old-laptop')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('row', { name: 'View credentials for old-laptop' }))
+    await waitFor(() => expect(screen.getByText('Credentials for old-laptop')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    await waitFor(() => expect(received).toBe('p2'))
+  })
+
+  it('resets a password only once the typed confirmation matches, sending the required non-empty body', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    let received: Record<string, unknown> | undefined
+    stubs.resetPrincipalPassword = (...args: never[]) => {
+      received = args[1] as unknown as Record<string, unknown>
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principal: principal() })
+    }
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('Administration')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'a-new-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Set password' }))
+
+    const confirmInput = screen.getByLabelText('Type erbartos to confirm')
+    fireEvent.change(confirmInput, { target: { value: 'wrong-name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password' }))
+    expect(received).toBeUndefined()
+
+    fireEvent.change(confirmInput, { target: { value: 'erbartos' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Reset password' }))
+    await waitFor(() => expect(received).toEqual({ password: 'a-new-password' }))
+    await waitFor(() => expect(screen.getByText(/Every session and token this principal held is now invalid/)).toBeInTheDocument())
   })
 })
 

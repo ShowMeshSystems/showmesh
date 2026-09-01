@@ -22,18 +22,20 @@ import {
   type ConfigShowActionTarget,
   type ConfigShowMacro,
   type ConfigShowMacroLocalFallback,
+  type ConfigShowMacroStep,
   type MacroRun,
   type MacroRunSummary,
   type ResolumeAction,
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
 } from '../api'
-import { AttentionRow, BlankingPlate, Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
+import { AttentionRow, BlankingPlate, Button, ButtonRow, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
 import type { Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { formatClock } from '../domain/time'
+import { randomUUIDv4 } from '../api/uuid'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchActionBindings, fetchShowActions, fetchShowContents, fetchShowMacros } from './showsData'
 import {
@@ -107,6 +109,16 @@ type Aside =
   | { kind: 'action-edit'; actionId: string }
   | { kind: 'macro-draft' }
 
+/** A macro's steps as locally edited, not yet saved. Add, remove and reorder mutate this; the aside's own step fields and Save read it. */
+type MacroDraft = {
+  macroId: string
+  steps: ConfigShowMacroStep[]
+}
+
+function freshMacroStep(): ConfigShowMacroStep {
+  return { id: randomUUIDv4(), action: '', onFailure: 'continue', onUnconfirmed: 'continue', localFallback: { class: 'none', reason: '' } }
+}
+
 const KIND_FILTERS: readonly { value: 'all' | ConfigShowActionTarget['integration']; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'fpp', label: 'FPP' },
@@ -122,6 +134,63 @@ export function ShowsAutomation() {
   const [aside, setAside] = useState<Aside>({ kind: 'none' })
   const [filterText, setFilterText] = useState('')
   const [filterKind, setFilterKind] = useState<'all' | ConfigShowActionTarget['integration']>('all')
+  const [macroDrafts, setMacroDrafts] = useState<Record<string, MacroDraft>>({})
+
+  const draftFor = (macro: ShowMacroConfigResponse): MacroDraft => macroDrafts[macro.id] ?? { macroId: macro.id, steps: macro.payload.steps.slice() }
+
+  const withDraftSteps = (macro: ShowMacroConfigResponse, steps: ConfigShowMacroStep[]) => {
+    setMacroDrafts((prev) => ({ ...prev, [macro.id]: { macroId: macro.id, steps } }))
+  }
+
+  const addStep = (macro: ShowMacroConfigResponse) => {
+    const base = draftFor(macro)
+    if (base.steps.length >= 32) return
+    const steps = [...base.steps, freshMacroStep()]
+    withDraftSteps(macro, steps)
+    setAside({ kind: 'step', macroId: macro.id, stepIndex: steps.length - 1 })
+  }
+
+  const removeStep = (macro: ShowMacroConfigResponse, index: number) => {
+    const base = draftFor(macro)
+    if (base.steps.length <= 1) return
+    const steps = base.steps.filter((_, i) => i !== index)
+    withDraftSteps(macro, steps)
+    setAside((prev) => {
+      if (prev.kind !== 'step' || prev.macroId !== macro.id) return prev
+      if (prev.stepIndex === index) return { kind: 'none' }
+      if (prev.stepIndex > index) return { ...prev, stepIndex: prev.stepIndex - 1 }
+      return prev
+    })
+  }
+
+  const moveStepTo = (macro: ShowMacroConfigResponse, from: number, to: number) => {
+    const base = draftFor(macro)
+    if (to < 0 || to >= base.steps.length || to === from) return
+    const steps = base.steps.slice()
+    const moved = steps[from]
+    if (moved === undefined) return
+    steps.splice(from, 1)
+    steps.splice(to, 0, moved)
+    withDraftSteps(macro, steps)
+    setAside((prev) => {
+      if (prev.kind !== 'step' || prev.macroId !== macro.id) return prev
+      if (prev.stepIndex === from) return { ...prev, stepIndex: to }
+      if (from < to && prev.stepIndex > from && prev.stepIndex <= to) return { ...prev, stepIndex: prev.stepIndex - 1 }
+      if (from > to && prev.stepIndex >= to && prev.stepIndex < from) return { ...prev, stepIndex: prev.stepIndex + 1 }
+      return prev
+    })
+  }
+
+  const moveStep = (macro: ShowMacroConfigResponse, index: number, direction: -1 | 1) => moveStepTo(macro, index, index + direction)
+
+  const clearMacroDraft = (macroId: string) => {
+    setMacroDrafts((prev) => {
+      if (!(macroId in prev)) return prev
+      const next = { ...prev }
+      delete next[macroId]
+      return next
+    })
+  }
 
   if (state.kind === 'loading') {
     return (
@@ -257,22 +326,31 @@ export function ShowsAutomation() {
             <RuledStrip absence="empty" label="None" fact="No macro matches here." />
           ) : (
             visibleMacros.map((macro) => {
-              const summary = macroBindingSummary(macro.payload.steps, bindingMap)
+              const draft = macroDrafts[macro.id]
+              const steps = draft?.steps ?? macro.payload.steps
+              const summary = macroBindingSummary(steps, bindingMap)
               const lastRun = lastRunForMacro(model.macroRuns, macro.id)
               const cardTone: Tone = summary.broken > 0 ? 'bad' : summary.unknown > 0 ? 'unknown' : 'good'
               return (
                 <MacroCard
                   key={macro.id}
                   macro={macro}
+                  steps={steps}
+                  unsaved={draft !== undefined}
                   actions={actions}
                   bindings={bindingMap}
                   summary={summary}
                   cardTone={cardTone}
                   lastRun={lastRun}
                   canRun={canRun}
+                  canAuthor={canAuthor}
                   selectedStep={aside.kind === 'step' && aside.macroId === macro.id ? aside.stepIndex : null}
                   onSelectStep={(stepIndex) => setAside({ kind: 'step', macroId: macro.id, stepIndex })}
                   onOpenRun={() => (lastRun !== null ? setAside({ kind: 'run', runId: lastRun.id }) : undefined)}
+                  onAddStep={() => addStep(macro)}
+                  onRemoveStep={(index) => removeStep(macro, index)}
+                  onMoveStep={(index, direction) => moveStep(macro, index, direction)}
+                  onReorderStep={(from, to) => moveStepTo(macro, from, to)}
                 />
               )
             })
@@ -300,15 +378,20 @@ export function ShowsAutomation() {
           <StepEditor
             key={`${stepAside.id}:${aside.stepIndex}:${stepAside.revision}`}
             macro={stepAside}
+            steps={draftFor(stepAside).steps}
             stepIndex={aside.stepIndex}
             actions={actions}
             bindings={bindingMap}
             canAuthor={canAuthor}
             onSaved={(response) => {
               upsertMacro(response)
+              clearMacroDraft(stepAside.id)
               setAside({ kind: 'none' })
             }}
-            onCancel={() => setAside({ kind: 'none' })}
+            onCancel={() => {
+              clearMacroDraft(stepAside.id)
+              setAside({ kind: 'none' })
+            }}
           />
         )}
         {aside.kind === 'run' && <RunViewer runId={aside.runId} onClose={() => setAside({ kind: 'none' })} />}
@@ -374,29 +457,44 @@ function MacroHistory({ showId, onOpenRun }: { showId: string; onOpenRun: (runId
 
 function MacroCard({
   macro,
+  steps,
+  unsaved,
   actions,
   bindings,
   summary,
   cardTone,
   lastRun,
   canRun,
+  canAuthor,
   selectedStep,
   onSelectStep,
   onOpenRun,
+  onAddStep,
+  onRemoveStep,
+  onMoveStep,
+  onReorderStep,
 }: {
   macro: ShowMacroConfigResponse
+  steps: readonly ConfigShowMacroStep[]
+  unsaved: boolean
   actions: readonly ShowActionConfigResponse[]
   bindings: ReadonlyMap<string, ActionBinding>
   summary: { ok: number; broken: number; unknown: number; total: number }
   cardTone: Tone
   lastRun: ReturnType<typeof lastRunForMacro>
   canRun: { allowed: boolean; reason?: string }
+  canAuthor: { allowed: boolean; reason?: string }
   selectedStep: number | null
   onSelectStep: (index: number) => void
   onOpenRun: () => void
+  onAddStep: () => void
+  onRemoveStep: (index: number) => void
+  onMoveStep: (index: number, direction: -1 | 1) => void
+  onReorderStep: (from: number, to: number) => void
 }) {
   const [runOutcome, setRunOutcome] = useState<{ tone: Tone; detail: string } | null>(null)
   const [running, setRunning] = useState(false)
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
 
   const run = () => {
     setRunning(true)
@@ -413,7 +511,7 @@ function MacroCard({
         <div>
           <h3 className="sm-subsection__title">{macro.payload.label}</h3>
           <p className="sm-data sm-small sm-faint">
-            {macro.id} · revision {macro.revision} · {macro.payload.steps.length} {macro.payload.steps.length === 1 ? 'step' : 'steps'}
+            {macro.id} · revision {macro.revision} · {steps.length} {steps.length === 1 ? 'step' : 'steps'}
           </p>
         </div>
         <div className="sm-inline-row">
@@ -429,23 +527,78 @@ function MacroCard({
       {macro.payload.description !== '' && <p className="sm-small sm-muted">{macro.payload.description}</p>}
 
       <ol className="sm-plain-list sm-data">
-        {macro.payload.steps.map((step, index) => {
+        {steps.map((step, index) => {
           const action = actions.find((a) => a.id === step.action)
           const binding = bindings.get(step.action)
+          const moveUpReason = index === 0 ? 'Already first.' : undefined
+          const moveDownReason = index === steps.length - 1 ? 'Already last.' : undefined
+          const removeReason = steps.length <= 1 ? 'A macro needs at least one step.' : undefined
           return (
-            <li key={step.id} aria-current={selectedStep === index ? 'true' : undefined} className={selectedStep === index ? 'sm-table__row--current' : undefined}>
+            <li
+              key={step.id}
+              aria-current={selectedStep === index ? 'true' : undefined}
+              className={selectedStep === index ? 'sm-table__row--current' : undefined}
+              draggable
+              onDragStart={() => setDragIndex(index)}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => {
+                if (dragIndex !== null) onReorderStep(dragIndex, index)
+                setDragIndex(null)
+              }}
+              onDragEnd={() => setDragIndex(null)}
+            >
+              <span className="sm-handle" aria-hidden="true">
+                ⠿
+              </span>
               <button type="button" className="sm-linkbutton" onClick={() => onSelectStep(index)} aria-pressed={selectedStep === index}>
-                {index + 1}. {action?.payload.label ?? step.action}
+                {index + 1}. {step.action === '' ? 'New step' : (action?.payload.label ?? step.action)}
               </button>{' '}
               <span className="sm-small sm-faint">{step.id}</span>
               {selectedStep === index && <span className="sm-viewing">Editing</span>}
               {action !== undefined && <span className="sm-chip">{actionIntegrationLabel(action.payload.target.integration)}</span>}
               <StatusPair tone={bindingTone(binding?.state)} label={bindingLabel(binding?.state)} />
               {step.onFailure === 'abort' && <span className="sm-small sm-muted"> Aborts the rest if it fails.</span>}
+              <ButtonRow>
+                <Button
+                  size="compact"
+                  onClick={() => onMoveStep(index, -1)}
+                  disabled={!canAuthor.allowed || moveUpReason !== undefined}
+                  title={!canAuthor.allowed ? canAuthor.reason : moveUpReason}
+                >
+                  Move up
+                </Button>
+                <Button
+                  size="compact"
+                  onClick={() => onMoveStep(index, 1)}
+                  disabled={!canAuthor.allowed || moveDownReason !== undefined}
+                  title={!canAuthor.allowed ? canAuthor.reason : moveDownReason}
+                >
+                  Move down
+                </Button>
+                <Button
+                  size="compact"
+                  onClick={() => onRemoveStep(index)}
+                  disabled={!canAuthor.allowed || removeReason !== undefined}
+                  title={!canAuthor.allowed ? canAuthor.reason : removeReason}
+                >
+                  Remove
+                </Button>
+              </ButtonRow>
             </li>
           )
         })}
       </ol>
+      <p className="sm-section__footnote">Drag to reorder.</p>
+      <ButtonRow>
+        <Button
+          onClick={onAddStep}
+          disabled={!canAuthor.allowed || steps.length >= 32}
+          title={!canAuthor.allowed ? canAuthor.reason : steps.length >= 32 ? 'A macro holds at most 32 steps.' : undefined}
+        >
+          Add step
+        </Button>
+      </ButtonRow>
+      {unsaved && <p className="sm-small sm-muted">Unsaved changes. Nothing is written until you save the macro.</p>}
 
       <p className="sm-section__footnote">
         {lastRun === null ? (
@@ -600,8 +753,38 @@ const FALLBACK_OPTIONS: readonly { value: ConfigShowMacroLocalFallback['class'];
   { value: 'silence', label: 'Silence' },
 ]
 
+/**
+ * Validates the whole draft step set, not only the one being edited: a step
+ * added or reordered elsewhere in the list must not be silently sent
+ * incomplete. The currently edited step keeps its own specific messages so
+ * an operator working on it sees exactly what is missing there; any other
+ * step reports its 1-based position.
+ */
+function macroSaveBlockReason(
+  steps: readonly ConfigShowMacroStep[],
+  stepIndex: number,
+  current: { actionId: string; stepId: string; fallbackReason: string },
+): string | null {
+  for (let i = 0; i < steps.length; i += 1) {
+    if (i === stepIndex) {
+      if (current.actionId.trim() === '') return 'A step needs an action.'
+      if (current.stepId.trim() === '') return 'A step needs an id.'
+      if (steps.some((s, j) => j !== stepIndex && s.id === current.stepId.trim())) return `The id "${current.stepId}" already names another step in this macro.`
+      if (current.fallbackReason.trim() === '') return 'State what happens locally while the coordinator is unreachable, in your own words.'
+      continue
+    }
+    const s = steps[i]
+    if (s === undefined) continue
+    if (s.action.trim() === '') return `Step ${i + 1} has no action.`
+    if (s.id.trim() === '') return `Step ${i + 1} has no id.`
+    if (s.localFallback.reason.trim() === '') return `Step ${i + 1} has no fallback reason.`
+  }
+  return null
+}
+
 function StepEditor({
   macro,
+  steps,
   stepIndex,
   actions,
   bindings,
@@ -610,6 +793,7 @@ function StepEditor({
   onCancel,
 }: {
   macro: ShowMacroConfigResponse
+  steps: readonly ConfigShowMacroStep[]
   stepIndex: number
   actions: readonly ShowActionConfigResponse[]
   bindings: ReadonlyMap<string, ActionBinding>
@@ -617,7 +801,9 @@ function StepEditor({
   onSaved: (response: ShowMacroConfigResponse) => void
   onCancel: () => void
 }) {
-  const step = macro.payload.steps[stepIndex]
+  const step = steps[stepIndex]
+  const [label, setLabel] = useState(macro.payload.label)
+  const [description, setDescription] = useState(macro.payload.description)
   const [actionId, setActionId] = useState(step?.action ?? '')
   const [stepId, setStepId] = useState(step?.id ?? '')
   const [onFailure, setOnFailure] = useState<'abort' | 'continue'>(step?.onFailure ?? 'continue')
@@ -633,20 +819,17 @@ function StepEditor({
   const binding = bindings.get(step.action)
   const action = actions.find((a) => a.id === actionId)
 
-  let blockReason: string | null = null
-  if (actionId.trim() === '') blockReason = 'A step needs an action.'
-  else if (stepId.trim() === '') blockReason = 'A step needs an id.'
-  else if (macro.payload.steps.some((s, i) => i !== stepIndex && s.id === stepId.trim())) blockReason = `The id "${stepId}" already names another step in this macro.`
-  else if (fallbackReason.trim() === '') blockReason = 'State what happens locally while the coordinator is unreachable, in your own words.'
+  let blockReason: string | null = label.trim() === '' ? 'A macro needs a label.' : null
+  blockReason ??= macroSaveBlockReason(steps, stepIndex, { actionId, stepId, fallbackReason })
 
   const save = () => {
     if (blockReason !== null) return
-    const steps = macro.payload.steps.map((s, i) =>
+    const nextSteps = steps.map((s, i) =>
       i === stepIndex
         ? { id: stepId.trim(), action: actionId, onFailure, onUnconfirmed, localFallback: { class: fallbackClass, reason: fallbackReason.trim() } }
         : s,
     )
-    const payload: ConfigShowMacro = { show: macro.payload.show, label: macro.payload.label, description: macro.payload.description, steps }
+    const payload: ConfigShowMacro = { show: macro.payload.show, label: label.trim(), description, steps: nextSteps }
     setSaving(true)
     setSaveError(null)
     setStale(null)
@@ -673,7 +856,7 @@ function StepEditor({
   return (
     <div className="sm-inspector">
       <p className="sm-eyebrow sm-eyebrow--accent">
-        Editing · {macro.payload.label} step {stepIndex + 1} of {macro.payload.steps.length}
+        Editing · {macro.payload.label} step {stepIndex + 1} of {steps.length}
       </p>
 
       {binding !== undefined && binding.state !== 'ok' && (
@@ -686,9 +869,18 @@ function StepEditor({
       )}
 
       <div className="sm-inspector__group">
+        <h3 className="sm-subsection__title">Macro</h3>
+        <Field label="Label">{(props) => <Input {...props} value={label} onChange={(e) => setLabel(e.target.value)} />}</Field>
+        <Field label="Description" help="One line, read above the step list. An empty description is a real stored value.">
+          {(props) => <Textarea {...props} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />}
+        </Field>
+      </div>
+
+      <div className="sm-inspector__group">
         <Field label="Action" help="This show's own actions only. A step cannot reference another show's action.">
           {(props) => (
             <Select {...props} value={actionId} onChange={(e) => setActionId(e.target.value)}>
+              {actionId === '' && <option value="">Select an action</option>}
               {actions.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.payload.label} · {a.payload.target.integration}

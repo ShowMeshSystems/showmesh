@@ -1,0 +1,77 @@
+/*
+ * D-020: the two chrome-bar controls that open a popover instead of
+ * navigating. The parent supplies `position: relative`; this panel is
+ * `position: absolute; top: 100%` inside it, anchored under the control.
+ */
+
+.sm-popover {
+  position: absolute;
+  top: calc(100% + var(--s-2));
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  width: max-content;
+  min-width: 220px;
+  max-width: 320px;
+  padding: var(--s-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.4);
+}
+
+.sm-popover__title {
+  margin: 0;
+  color: var(--text-muted);
+  font: var(--t-meta);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.sm-popover__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+/* 44px: a show-time control, per D-020. */
+.sm-popover__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  height: 44px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sm-popover__option:hover {
+  border-color: var(--accent);
+}
+
+.sm-popover__option--selected {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--text);
+}
+
+.sm-popover__option-current {
+  color: var(--text-faint);
+  font: var(--t-meta);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sm-popover__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}

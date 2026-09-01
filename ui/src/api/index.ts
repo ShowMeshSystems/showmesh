@@ -244,6 +244,10 @@ export type {
   // operator reviews before clearing it.
   FPPPlaylistEntryObservation,
   FPPPlaylistEntryObservationsResponse,
+  // ADR-048, Track J's J1: the fallback-program readiness evidence.
+  FallbackProgramListEntry,
+  FallbackProgramListResponse,
+  FallbackProgramResponse,
 } from './domain'
 export {
   useModel,
@@ -264,6 +268,8 @@ export {
   listFPPPlaylistDefinitions,
   getFPPPlaylistDefinition,
   getFPPPlaylistDefinitionEntries,
+  listFallbackPrograms,
+  getFallbackProgram,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
