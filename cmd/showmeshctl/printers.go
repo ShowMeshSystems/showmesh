@@ -120,6 +120,18 @@ func printNodeDetail(w io.Writer, n node, serverTime time.Time) {
 	printEvidenceRow(w, "hello", n.Evidence.Hello, serverTime)
 	printEvidenceRow(w, "heartbeat", n.Evidence.Heartbeat, serverTime)
 	printEvidenceRow(w, "lastWill", n.Evidence.LastWill, serverTime)
+
+	_, _ = fmt.Fprintln(w, "\nAudio:")
+	if len(n.Audio) == 0 {
+		_, _ = fmt.Fprintln(w, "  (no audio discovery report published)")
+	}
+	for _, e := range n.Audio {
+		reason := ""
+		if e.Reason != nil {
+			reason = " - " + *e.Reason
+		}
+		_, _ = fmt.Fprintf(w, "  %-32s %v (%s, via %s)%s\n", e.Signal, valueDisplay(e.Value), e.State, e.Source, reason)
+	}
 }
 
 func printEvidenceRow(w io.Writer, label string, e evidence, serverTime time.Time) {
@@ -598,6 +610,23 @@ func printSnapshotDetail(w io.Writer, s snapshot) {
 		_, _ = fmt.Fprintf(w, "  %s: %s", c.ID, c.State)
 		if c.Reason != nil && *c.Reason != "" {
 			_, _ = fmt.Fprintf(w, " (%s)", *c.Reason)
+		}
+		_, _ = fmt.Fprintln(w)
+	}
+
+	_, _ = fmt.Fprintln(w, "\nMacro runs:")
+	if len(s.MacroRuns) == 0 {
+		_, _ = fmt.Fprintln(w, "  (none in flight or recently finished)")
+	} else {
+		printMacroRunsTable(w, macroRunsListResponse{ServerTime: s.ServerTime, Runs: s.MacroRuns})
+	}
+
+	if s.AuditStore == nil {
+		_, _ = fmt.Fprintln(w, "\nAudit store: not reported by this coordinator (predates this field)")
+	} else {
+		_, _ = fmt.Fprintf(w, "\nAudit store: %s", s.AuditStore.State)
+		if r := s.AuditStore.Reason; r != nil && *r != "" {
+			_, _ = fmt.Fprintf(w, " (%s)", *r)
 		}
 		_, _ = fmt.Fprintln(w)
 	}

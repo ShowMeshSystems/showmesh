@@ -21,7 +21,7 @@ func TestCmdResolumeRecoveryStatusPrintsToggleAndRecord(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
-		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T00:00:00Z","autoRestoreEnabled":true,"autoRestoreConfigured":false,
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T00:00:00Z","resolumeConfigured":true,"autoRestoreEnabled":true,"autoRestoreConfigured":false,
 			"settleDelaySeconds":8,"record":[
 				{"layer":"Whole House 1","layerNameGenerated":false,"state":"clip","clip":"Green screen snowstorm",
 				 "clipNameGenerated":false,"deck":"Main","establishedAt":"2026-08-16T00:00:00Z","source":"action"},

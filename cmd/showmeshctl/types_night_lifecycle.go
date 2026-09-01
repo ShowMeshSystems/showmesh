@@ -68,6 +68,19 @@ type nightBackgroundAudioWire struct {
 	PinnedMaxGainDb *float64                       `json:"pinnedMaxGainDb,omitempty"`
 }
 
+// nightAuthorizationWire is NightSessionState.authorization: who
+// authorized this session, recorded for provenance across a coordinator
+// restart. RecordedAt is null when State is "unknown" (nothing has been
+// attributed yet).
+type nightAuthorizationWire struct {
+	State         string  `json:"state"`
+	Reason        string  `json:"reason,omitempty"`
+	PrincipalID   string  `json:"principalId,omitempty"`
+	PrincipalName string  `json:"principalName,omitempty"`
+	Command       string  `json:"command,omitempty"`
+	RecordedAt    *string `json:"recordedAt"`
+}
+
 type nightSessionStateWire struct {
 	ID             string `json:"id"`
 	ConfigObjectID string `json:"configObjectId"`
@@ -98,6 +111,8 @@ type nightSessionStateWire struct {
 	Degraded            bool   `json:"degraded"`
 	DegradedReason      string `json:"degradedReason,omitempty"`
 	AttributionDegraded bool   `json:"attributionDegraded"`
+
+	Authorization nightAuthorizationWire `json:"authorization"`
 
 	UpdatedAt string `json:"updatedAt"`
 }

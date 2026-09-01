@@ -21,7 +21,8 @@ func TestSnapshotAudioConfigPushAbsentAgainstPreSM357Coordinator(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","latestEventSeq":0,"nodes":[],
-			"fpp":{"instances":[]},"collectors":[],"macroRuns":[],"resolume":[]}`)
+			"fpp":{"instances":[]},"collectors":[],"macroRuns":[],"resolume":[],
+			"auditStore":{"state":"usable","reason":null}}`)
 	})
 
 	var snap snapshot
