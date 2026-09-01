@@ -69,6 +69,7 @@ func ResolveActiveShow(ctx context.Context, st *store.Store) (ActiveShow, error)
 type ExpectedAsset struct {
 	AssetID     string
 	SequenceID  string
+	MediaType   string // "fseq" | "audio" | "media", per store.AssetRecord.MediaType
 	ContentHash string
 	Filename    string
 	SizeBytes   int64
@@ -108,7 +109,7 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 	coveredSequences := make(map[string]bool, len(nodeAssets)+len(showAssets))
 	for _, rec := range append(append([]store.AssetRecord{}, nodeAssets...), showAssets...) {
 		assets = append(assets, ExpectedAsset{
-			AssetID: rec.ID, SequenceID: rec.SequenceID, ContentHash: rec.ContentHash,
+			AssetID: rec.ID, SequenceID: rec.SequenceID, MediaType: rec.MediaType, ContentHash: rec.ContentHash,
 			Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes,
 		})
 		coveredSequences[rec.SequenceID] = true
