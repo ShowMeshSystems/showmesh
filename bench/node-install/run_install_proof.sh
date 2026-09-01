@@ -12,8 +12,12 @@
 #     directory, installs the binary and unit;
 #   - a second install.sh run is idempotent and does not touch the env
 #     file or state directory contents;
-#   - preflight.sh reports every check it claims to, including the
-#     informational ndisink line;
+#   - preflight.sh reports every check it claims to in its build-host mode,
+#     including the informational ndisink line;
+#   - preflight.sh --runtime-only, the mode install.sh actually runs on
+#     every install, passes for an unprivileged user with a normal login
+#     PATH (no /usr/sbin) when the runtime packages are present, and fails
+#     naming the missing library when one genuinely is not;
 #   - the installed unit file is syntactically valid systemd, including
 #     that every directive name in it is one systemd recognises (proved by
 #     re-running the same check against a deliberately typo'd copy and
@@ -81,8 +85,82 @@ fi
 echo "OK: second install left agent.env and render state untouched"
 echo
 
-echo "=== 6. preflight.sh ==="
+echo "=== 6. preflight.sh, build-host mode (no arguments) ==="
 ./preflight.sh
+echo
+
+echo "=== 6b. preflight.sh --runtime-only, the mode a real node install actually takes ==="
+echo "install.sh always calls preflight.sh --runtime-only, never the build-host mode"
+echo "check 6 just ran. That mode's own guard against a PATH that omits /usr/sbin"
+echo "(the 2026-08-26 Pi defect: ldconfig lives at /usr/sbin/ldconfig, which is not"
+echo "on an unprivileged user's PATH) is only real evidence if this bench actually"
+echo "runs it unprivileged, with a normal login PATH. Root's PATH already includes"
+echo "/usr/sbin, so running this as root would prove nothing about that defect."
+NORMAL_PATH=/usr/local/bin:/usr/bin:/bin
+
+echo "--- 6b.i: positive case, runtime packages present, asserted to pass ---"
+set +e
+OUT="$(su -s /bin/bash nobody -c "PATH=$NORMAL_PATH $REPO/deploy/node/preflight.sh --runtime-only" 2>&1)"
+RC=$?
+set -e
+if [ "$RC" -ne 0 ]; then
+  echo "FAIL: preflight.sh --runtime-only failed as an unprivileged user with a normal PATH, but the runtime packages are installed" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+if ! echo "$OUT" | grep -q 'OK: libltc.so.11 (runtime library present)'; then
+  echo "FAIL: preflight.sh --runtime-only passed, but not by way of the libltc.so.11 check; this bench case is not testing what it claims to" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+echo "OK: unprivileged run with a normal PATH passes with the runtime library resolved"
+
+echo "--- 6b.ii: negative case, runtime library genuinely absent, asserted to fail ---"
+# ldconfig does not key off a file's name: it opens every regular file under
+# each ld.so.conf directory as ELF, reads its embedded SONAME, and (re)builds
+# the libltc.so.11 symlink pointing at wherever that content currently sits.
+# Renaming the real object within the same directory (e.g. to a
+# ".bench-hidden" suffix) does not hide it: ldconfig just finds it under its
+# new name and recreates the symlink pointing there, so the check silently
+# passes for the wrong reason. The real object and its symlink must move
+# out of every scanned directory entirely.
+LIBLTC_SYM="$(dpkg -L libltc11 | grep -E '/libltc\.so\.11$')"
+if [ -z "$LIBLTC_SYM" ] || [ ! -e "$LIBLTC_SYM" ]; then
+  echo "FAIL: could not locate libltc11's libltc.so.11 file via dpkg -L; cannot run the negative case" >&2
+  exit 1
+fi
+LIBLTC_REAL="$(readlink -f "$LIBLTC_SYM")"
+LIBLTC_HIDE_DIR="$(mktemp -d)"
+mv "$LIBLTC_SYM" "$LIBLTC_HIDE_DIR/"
+mv "$LIBLTC_REAL" "$LIBLTC_HIDE_DIR/"
+ldconfig
+if ldconfig -p | grep -q 'libltc\.so\.11'; then
+  echo "FAIL: libltc.so.11 still resolves via ldconfig after moving both the symlink and its target out of every scanned directory; the negative case setup is not actually removing it" >&2
+  mv "$LIBLTC_HIDE_DIR/$(basename "$LIBLTC_REAL")" "$LIBLTC_REAL"
+  mv "$LIBLTC_HIDE_DIR/$(basename "$LIBLTC_SYM")" "$LIBLTC_SYM"
+  rmdir "$LIBLTC_HIDE_DIR"
+  ldconfig
+  exit 1
+fi
+set +e
+OUT="$(su -s /bin/bash nobody -c "PATH=$NORMAL_PATH $REPO/deploy/node/preflight.sh --runtime-only" 2>&1)"
+RC=$?
+set -e
+mv "$LIBLTC_HIDE_DIR/$(basename "$LIBLTC_REAL")" "$LIBLTC_REAL"
+mv "$LIBLTC_HIDE_DIR/$(basename "$LIBLTC_SYM")" "$LIBLTC_SYM"
+rmdir "$LIBLTC_HIDE_DIR"
+ldconfig
+if [ "$RC" -eq 0 ]; then
+  echo "FAIL: preflight.sh --runtime-only passed with libltc.so.11 genuinely absent from the linker cache; this check cannot fail and is not a real check" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+if ! echo "$OUT" | grep -q 'MISSING: libltc.so.11'; then
+  echo "FAIL: preflight.sh --runtime-only failed, but not by naming the missing runtime library" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+echo "OK: unprivileged run with a normal PATH fails when the runtime library is actually absent"
 echo
 
 echo "=== 7. systemd unit syntax ==="

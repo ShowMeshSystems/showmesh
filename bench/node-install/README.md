@@ -13,8 +13,13 @@ runs to completion and creates the expected user, files, and permissions;
 running `install.sh` a second time is idempotent and does not touch
 `/etc/showmesh/agent.env` or anything already written under
 `/var/lib/showmesh` (proved by writing a sentinel into both before the
-second run and diffing checksums after); `preflight.sh` runs every check it
-claims to and reports the informational NDI line; and the installed
+second run and diffing checksums after); `preflight.sh`'s build-host mode
+(no arguments) runs every check it claims to and reports the informational
+NDI line; `preflight.sh --runtime-only`, the mode `install.sh` actually
+takes on every real install, is separately exercised as an unprivileged
+user with a normal login PATH (`/usr/local/bin:/usr/bin:/bin`, no
+`/usr/sbin`) and asserted to pass when the runtime library is present and
+to fail, naming it, when it genuinely is not; and the installed
 systemd unit is syntactically valid, every directive name in it included
 (`systemd-analyze verify --recursive-errors=one`, which unlike a bare
 `systemd-analyze verify` exits non-zero on an unknown directive rather
@@ -56,13 +61,15 @@ bench/node-install/
                            pinned Go 1.25.0 (matched to TARGETARCH) +
                            systemd-analyze
   run_install_proof.sh     Builds the agent, runs install.sh twice
-                           (idempotency + sentinel check), preflight.sh,
-                           systemd-analyze verify, and a negative check
-                           proving that verification can fail.
+                           (idempotency + sentinel check), preflight.sh in
+                           both modes, systemd-analyze verify, and negative
+                           checks proving that verification can fail.
                            Step 6 invokes ./preflight.sh with NO
-                           arguments, which is the BUILD-host branch.
-                           install.sh itself always takes the
-                           --runtime-only branch, so that branch is
-                           exercised here only as install.sh's own
-                           precondition, and never unprivileged.
+                           arguments, the BUILD-host branch. Step 6b
+                           invokes ./preflight.sh --runtime-only, the
+                           branch install.sh itself always takes on a real
+                           node, as an unprivileged user with a normal
+                           login PATH, once with the runtime library
+                           present (must pass) and once with it genuinely
+                           absent (must fail, naming it).
 ```
