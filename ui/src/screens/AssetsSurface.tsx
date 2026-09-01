@@ -10,7 +10,7 @@ import {
   type ConfigObjectSummary,
   type UploadProgress,
 } from '../api'
-import { Button, ButtonRow, Callout, Field, Input, NotWired, Notice, Panes, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, Field, Input, NotWired, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
@@ -117,7 +117,7 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
     scope.kind === 'show'
       ? "This show's current assets, grouped by sequence, scrollable"
       : "Every show's current assets, grouped by sequence, scrollable"
-  const columnCount = scope.kind === 'all' ? 4 : 3
+  const columnCount = 3
 
   if (state.kind === 'loading') {
     return (
@@ -158,121 +158,121 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
   const knownShows = Array.from(new Set(state.assets.map((a) => a.show))).sort()
 
   return (
-    <Panes>
-      <div>
-        <Section
-          id="asset-list"
-          title={sectionTitle}
-          aside={
-            <Button
-              variant="primary"
-              onClick={() => {
-                setUploading(true)
-                setSelectedIdentity(null)
+    <div className="sm-assets-surface">
+      <Panes>
+        <div>
+          <Section
+            id="asset-list"
+            title={sectionTitle}
+            aside={
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setUploading(true)
+                  setSelectedIdentity(null)
+                }}
+              >
+                Upload
+              </Button>
+            }
+          >
+            <Callout>
+              Sync runs on upload and on a timer, never because a show started. Nodes always play from their own disk, so a node missing an asset is a
+              readiness fault found before a show, not during one. Node-by-node sync state is Monitor &rsaquo; Manifest's own facet, not this tab; see{' '}
+              <Link to="/monitor/manifest">Monitor &rsaquo; Manifest</Link> and docs/ui-rebuild/OPEN-DECISIONS.md D-016.
+            </Callout>
+
+            <p className="sm-small sm-muted sm-stack-4">
+              Grouped by logical sequence, because one sequence produces a different file per target and xLights gives them all the same name. The
+              filename belongs to the group; identity belongs to the row.
+            </p>
+
+            <div className="sm-assets-filters sm-stack-3">
+              <Input aria-label="Filter assets" placeholder="Filter assets…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
+              {scope.kind === 'all' && (
+                <div className="sm-assets-filters__show">
+                  <Field label="Filter by show">
+                    {(props) => (
+                      <Select {...props} value={filterShow} onChange={(e) => setFilterShow(e.target.value)}>
+                        <option value="all">All shows</option>
+                        {knownShows.map((show) => (
+                          <option key={show} value={show}>
+                            {show}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                </div>
+              )}
+              <Segmented label="Filter by media type" value={filterMedia} options={MEDIA_FILTERS} onChange={setFilterMedia} />
+            </div>
+
+            <div className="sm-assets-table sm-stack-3">
+              <TableWrap label={tableLabel}>
+                <Table minWidth={scope.kind === 'all' ? 560 : 520}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Target</th>
+                      <th scope="col">Hash</th>
+                      <th scope="col" className="sm-table__num">Size</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groups.length === 0 ? (
+                      <tr>
+                        <td colSpan={columnCount}>
+                          <RuledStrip absence="empty" label="None" fact="No asset matches here." />
+                        </td>
+                      </tr>
+                    ) : (
+                      groups.map((group) => (
+                        <AssetGroupRows
+                          key={`${group.show} ${group.sequence} ${group.mediaType}`}
+                          group={group}
+                          showColumn={scope.kind === 'all'}
+                          selectedIdentity={selectedIdentity}
+                          onSelect={(identity) => {
+                            setSelectedIdentity(identity)
+                            setUploading(false)
+                          }}
+                        />
+                      ))
+                    )}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            </div>
+          </Section>
+        </div>
+
+        <aside>
+          {uploading && (
+            <AssetUploadForm
+              scope={scope}
+              showOptions={showOptions}
+              nodes={model.nodes}
+              knownSequences={knownSequences}
+              assets={state.assets}
+              model={model}
+              onUploaded={() => {
+                reload()
               }}
-            >
-              Upload
-            </Button>
-          }
-        >
-          <Callout>
-            Sync runs on upload and on a timer, never because a show started. Nodes always play from their own disk, so a node missing an asset is a
-            readiness fault found before a show, not during one. Node-by-node sync state is Monitor &rsaquo; Manifest's own facet, not this tab; see{' '}
-            <Link to="/monitor/manifest">Monitor &rsaquo; Manifest</Link> and docs/ui-rebuild/OPEN-DECISIONS.md D-016.
-          </Callout>
-
-          <p className="sm-small sm-muted sm-stack-4">
-            Grouped by logical sequence, because one sequence produces a different file per target and xLights gives them all the same name. The
-            filename belongs to the group; identity belongs to the row.
-          </p>
-
-          <div className="sm-inline-row sm-stack-3">
-            <Input aria-label="Filter assets" placeholder="Filter assets…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
-            <Segmented label="Filter by media type" value={filterMedia} options={MEDIA_FILTERS} onChange={setFilterMedia} />
-            <NotWired label="Not wired">
-              <button type="button" className="sm-segmented__item">
-                Needs sync
-              </button>
-            </NotWired>
-            {scope.kind === 'all' && (
-              <Field label="Filter by show">
-                {(props) => (
-                  <Select {...props} value={filterShow} onChange={(e) => setFilterShow(e.target.value)}>
-                    <option value="all">All shows</option>
-                    {knownShows.map((show) => (
-                      <option key={show} value={show}>
-                        {show}
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
-            )}
-          </div>
-
-          <TableWrap label={tableLabel}>
-            <Table>
-              <thead>
-                <tr>
-                  {scope.kind === 'all' && <th scope="col">Show</th>}
-                  <th scope="col">Target</th>
-                  <th scope="col">Hash</th>
-                  <th scope="col">Size</th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.length === 0 ? (
-                  <tr>
-                    <td colSpan={columnCount}>
-                      <RuledStrip absence="empty" label="None" fact="No asset matches here." />
-                    </td>
-                  </tr>
-                ) : (
-                  groups.map((group) => (
-                    <AssetGroupRows
-                      key={`${group.show} ${group.sequence} ${group.mediaType}`}
-                      group={group}
-                      showColumn={scope.kind === 'all'}
-                      selectedIdentity={selectedIdentity}
-                      onSelect={(identity) => {
-                        setSelectedIdentity(identity)
-                        setUploading(false)
-                      }}
-                    />
-                  ))
-                )}
-              </tbody>
-            </Table>
-          </TableWrap>
-        </Section>
-      </div>
-
-      <aside>
-        {uploading && (
-          <AssetUploadForm
-            scope={scope}
-            showOptions={showOptions}
-            nodes={model.nodes}
-            knownSequences={knownSequences}
-            assets={state.assets}
-            model={model}
-            onUploaded={() => {
-              reload()
-            }}
-            onCancel={() => setUploading(false)}
-          />
-        )}
-        {!uploading && selectedIdentityAsset !== null && (
-          <AssetDetail
-            key={selectedIdentity}
-            asset={selectedIdentityAsset}
-            history={assetHistory(state.assets, selectedIdentity ?? '')}
-            model={model}
-            onRolledBack={() => reload()}
-          />
-        )}
-      </aside>
-    </Panes>
+              onCancel={() => setUploading(false)}
+            />
+          )}
+          {!uploading && selectedIdentityAsset !== null && (
+            <AssetDetail
+              key={selectedIdentity}
+              asset={selectedIdentityAsset}
+              history={assetHistory(state.assets, selectedIdentity ?? '')}
+              model={model}
+              onRolledBack={() => reload()}
+            />
+          )}
+        </aside>
+      </Panes>
+    </div>
   )
 }
 
@@ -287,32 +287,37 @@ function AssetGroupRows({
   selectedIdentity: string | null
   onSelect: (identity: string) => void
 }) {
-  const columnCount = showColumn ? 4 : 3
+  const columnCount = 3
   return (
     <>
       <tr className="sm-table__group">
         <td colSpan={columnCount}>
-          <span className="sm-subhead">{group.sequence}</span>{' '}
-          <span className="sm-chip">{MEDIA_CHIP[group.mediaType]}</span>{' '}
-          <span className="sm-data sm-small sm-faint">
-            {group.runtimeFilename} · {group.current.length} {group.current.length === 1 ? 'target shares' : 'targets share'} this filename
-          </span>
+          <div className="sm-assets-table__group-heading">
+            {showColumn && (
+              <>
+                <span className="sm-assets-table__show">{group.show}</span>
+                <span className="sm-assets-table__separator" aria-hidden="true">/</span>
+              </>
+            )}
+            <span className="sm-subhead">{group.sequence}</span>
+            <span className="sm-chip">{MEDIA_CHIP[group.mediaType]}</span>
+            <span className="sm-data sm-small sm-faint">
+              {group.runtimeFilename} · {group.current.length} {group.current.length === 1 ? 'target shares' : 'targets share'} this filename
+            </span>
+          </div>
         </td>
       </tr>
       {group.current.map((asset) => {
         const identity = assetIdentityKey(asset)
         return (
-          <tr key={identity} aria-current={selectedIdentity === identity ? 'true' : undefined} className={selectedIdentity === identity ? 'sm-table__row--current' : undefined}>
-            {showColumn && <td className="sm-data sm-small sm-muted">{asset.show}</td>}
+          <SelectableRow key={identity} selected={selectedIdentity === identity} onActivate={() => onSelect(identity)} ariaLabel={`View ${group.sequence} for ${targetLabel(asset)}`}>
             <td>
-              <button type="button" className="sm-linkbutton" onClick={() => onSelect(identity)} aria-pressed={selectedIdentity === identity}>
-                {targetLabel(asset)}
-              </button>
+              <strong>{targetLabel(asset)}</strong>
               {selectedIdentity === identity && <span className="sm-viewing">Viewing</span>}
             </td>
             <td className="sm-data sm-small sm-muted">{hashLabel(asset.contentHash)}</td>
-            <td className="sm-data sm-small sm-muted" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
-          </tr>
+            <td className="sm-table__num" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
+          </SelectableRow>
         )
       })}
     </>

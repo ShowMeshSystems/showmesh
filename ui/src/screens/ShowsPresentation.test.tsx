@@ -154,6 +154,16 @@ describe('Shows · Presentation tab', () => {
     await waitFor(() => expect(within(region).getByText('Garage door')).toBeInTheDocument())
   })
 
+  it('opens the surface named by a deep link directly in the editor', async () => {
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (kind: string) => withContents(kind, [surfaceSummary()])
+    stubs.listAssets = assetsEmpty
+    stubs.getShowSurface = (id: string) => Promise.resolve(surfaceResponse(id))
+    renderWorkspace({ session: signedIn(['config:write']), nodes: [node()] }, '/shows/winter-ridge-2026/presentation?surface=garage')
+
+    expect(await screen.findByText('Editing Garage door')).toBeInTheDocument()
+  })
+
   it('a show with no surface is a settled empty, distinct from loading and from a read failure', async () => {
     setup(['config:write'], [])
     expect(await screen.findByText('This show has no surface configured.')).toBeInTheDocument()
@@ -256,7 +266,7 @@ describe('Shows · Presentation tab', () => {
         ],
       })
     setup()
-    const row = await screen.findByRole('button', { name: 'Garage door' })
+    const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
     expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
@@ -266,7 +276,7 @@ describe('Shows · Presentation tab', () => {
   it('does not claim a read failure while the surface’s revisions fetch is still pending', async () => {
     stubs.getShowSurfaceRevisions = () => new Promise(() => {})
     setup()
-    const row = await screen.findByRole('button', { name: 'Garage door' })
+    const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
     await screen.findByRole('button', { name: 'Save surface' })
     expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
@@ -275,14 +285,14 @@ describe('Shows · Presentation tab', () => {
   it('reports the read failure honestly when the surface’s revisions fetch is rejected', async () => {
     stubs.getShowSurfaceRevisions = () => Promise.reject(new Error('network down'))
     setup()
-    const row = await screen.findByRole('button', { name: 'Garage door' })
+    const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
     expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
 
   it('save is disabled without config:write and is actually inert', async () => {
     setup([])
-    const row = await screen.findByRole('button', { name: 'Garage door' })
+    const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
     const save = await screen.findByRole('button', { name: 'Save surface' })
     expect(save).toBeDisabled()
@@ -305,7 +315,7 @@ describe('Shows · Presentation tab', () => {
     stubs.putShowSurface = putSpy
     renderWorkspace({ session: signedIn(['config:write']), nodes: [node()] })
 
-    const row = await screen.findByRole('button', { name: 'Garage door' })
+    const row = await screen.findByRole('row', { name: 'Edit Garage door' })
     fireEvent.click(row)
     const save = await screen.findByRole('button', { name: 'Save surface' })
     fireEvent.click(save)

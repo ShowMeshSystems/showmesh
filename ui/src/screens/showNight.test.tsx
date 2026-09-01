@@ -1,10 +1,11 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, PROBLEM_TYPE, type FPPInstance, type Model, type NightSessionState } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { ShowNight } from './ShowNight'
+import { ShowsNightSession } from './ShowsNightSession'
 import { cycleRail, evidenceReadouts, nextTransition, nightRail, runOfShow } from './showNightModel'
 
 const stubs = vi.hoisted(() => ({
@@ -17,6 +18,9 @@ const stubs = vi.hoisted(() => ({
   ) => Promise<unknown>,
   getNightSessionConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putNightSessionConfig: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
+  listAssets: (() => Promise.resolve({ serverTime: '', assets: [] })) as (...args: never[]) => Promise<unknown>,
+  listFPPPlaylistDefinitions: (() => Promise.resolve({ serverTime: '', definitions: [] })) as (...args: never[]) => Promise<unknown>,
+  getShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 function commandResponse(command: string, outcome: 'applied' | 'idempotent_no_op' = 'applied', attributionDegraded = false) {
@@ -50,6 +54,9 @@ vi.mock('../api', async () => {
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getNightSessionConfig: (...args: never[]) => stubs.getNightSessionConfig(...args),
     putNightSessionConfig: (...args: never[]) => stubs.putNightSessionConfig(...args),
+    listAssets: (...args: never[]) => stubs.listAssets(...args),
+    listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
+    getShowAction: (...args: never[]) => stubs.getShowAction(...args),
   }
 })
 
@@ -94,6 +101,19 @@ function renderScreen(model: Partial<Model>) {
   )
 }
 
+/** The definition-authoring inspector: Codex moved it into the Shows workspace's Night session tab. */
+function renderDefinitions(model: Partial<Model>, showId = 'winter-ridge') {
+  return render(
+    <ModelContext.Provider value={{ ...initialModel(), ...model }}>
+      <MemoryRouter initialEntries={[`/shows/${showId}/night-session`]}>
+        <Routes>
+          <Route path="/shows/:id/night-session" element={<ShowsNightSession />} />
+        </Routes>
+      </MemoryRouter>
+    </ModelContext.Provider>,
+  )
+}
+
 describe('Show Night', () => {
   afterEach(() => {
     cleanup()
@@ -110,15 +130,15 @@ describe('Show Night', () => {
     expect(screen.queryByText(/Cycle \d of the night/)).not.toBeInTheDocument()
   })
 
-  it('keeps definition authoring after the mock’s lifecycle and evidence blocks', () => {
+  it('keeps activation on Show Night but moves definition authoring to the Show workspace', () => {
     renderScreen({ nightSession: session() })
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Lifecycle commands',
       'Run of Show',
       'Evidence',
       'Night session activation',
-      'Night session definitions',
     ])
+    expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
   })
 
   it('titles the page with the cycle the session reports', () => {
@@ -206,9 +226,10 @@ describe('Show Night', () => {
     }
   })
 
-  it('renders the not-wired banner and placeholder steps on the page when earlier cycles exist', () => {
+  it('renders the complete timeline without adding a banner that is absent from the approved layout', () => {
     renderScreen({ nightSession: session({ cycle: 3, state: 'live' }) })
-    expect(screen.getByText('The night timeline does nothing yet.')).toBeInTheDocument()
+    expect(screen.queryByText('The night timeline does nothing yet.')).not.toBeInTheDocument()
+    expect(screen.getByText('Preshow')).toBeInTheDocument()
     expect(screen.getByText('Cycle 1')).toBeInTheDocument()
     expect(screen.getAllByText('not reported').length).toBeGreaterThan(0)
   })
@@ -400,42 +421,47 @@ describe('Show Night', () => {
     expect(calls).toBe(2)
   })
 
-  it('renders a single off-cycle row, not a four-row dead rail, for a state outside the repeating cycle', () => {
+  it('keeps the full cycle skeleton visible before the repeating cycle begins', () => {
     const rail = cycleRail(session({ state: 'preshow' }), '2026-08-28T21:07:00Z')
-    expect(rail).toHaveLength(1)
-    expect(rail[0]?.label).toBe('Preshow')
-    expect(rail[0]?.detail).toContain('Not in the repeating cycle')
-    expect(rail[0]?.status).toBe('now')
+    expect(rail).toHaveLength(5)
+    expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting', 'Back to resting'])
+    expect(rail.every((step) => step.status === 'ahead')).toBe(true)
   })
 
-  it('names another off-cycle state honestly instead of four rows of "not reported"', () => {
+  it('does not invent cycle progress for another off-cycle state', () => {
     const rail = cycleRail(session({ state: 'fading-out' }), '2026-08-28T21:07:00Z')
-    expect(rail).toHaveLength(1)
-    expect(rail[0]?.label).toBe('Fading out')
-    expect(rail.every((step) => step.detail !== 'not reported')).toBe(true)
+    expect(rail).toHaveLength(5)
+    expect(rail.slice(0, 4).every((step) => step.detail === 'not started')).toBe(true)
   })
 
-  it('still renders the full four-step cycle rail for a state inside the cycle', () => {
+  it('renders the four cycle phases and the return boundary for a state inside the cycle', () => {
     const rail = cycleRail(session({ state: 'live' }), '2026-08-28T21:07:00Z')
-    expect(rail).toHaveLength(4)
-    expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting'])
+    expect(rail).toHaveLength(5)
+    expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting', 'Back to resting'])
   })
 
-  it('links Edit definition to the in-page definition editor', () => {
-    renderScreen({ nightSession: session({ cycle: 1 }) })
-    expect(screen.getByRole('link', { name: 'Edit definition' })).toHaveAttribute('href', '#sn-definitions')
+  it('links Edit definition to the armed Show’s Night session tab', () => {
+    renderScreen({ nightSession: session({ cycle: 1, armedShowId: 'halloween-2026' }) })
+    expect(screen.getByRole('link', { name: 'Edit definition' })).toHaveAttribute('href', '/shows/halloween-2026/night-session')
   })
 
-  it('has no earlier cycles and no not-wired banner when the session is on cycle 1', () => {
+  it('keeps three structural cycle slots when the session is on cycle 1', () => {
     const rail = nightRail(session({ cycle: 1, state: 'live' }))
     const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
-    expect(cycleSteps).toHaveLength(1)
+    expect(cycleSteps).toHaveLength(3)
     expect(cycleSteps[0]?.status).toBe('now')
     expect(rail.some((step) => step.status === 'notWired')).toBe(false)
 
     renderScreen({ nightSession: session({ cycle: 1, state: 'live' }) })
     expect(screen.queryByText('The night timeline does nothing yet.')).not.toBeInTheDocument()
-    expect(screen.queryByText('not reported')).not.toBeInTheDocument()
+    expect(screen.getByText('Cycle 3')).toBeInTheDocument()
+    expect(screen.getAllByText('not started').length).toBeGreaterThan(0)
+  })
+
+  it('renders preshow and three cycle slots even when the coordinator reports cycle zero', () => {
+    const rail = nightRail(session({ cycle: 0, state: 'inactive' }))
+    expect(rail.slice(0, 4).map((step) => step.label)).toEqual(['Preshow', 'Cycle 1', 'Cycle 2', 'Cycle 3'])
+    expect(rail.slice(0, 4).every((step) => step.detail === 'not started')).toBe(true)
   })
 
   it('renders every readiness check with its state and reason, including not_verifiable and not_configured', () => {
@@ -840,13 +866,18 @@ describe('Show Night', () => {
 
   function mockListConfigObjects() {
     stubs.listConfigObjects = ((kind: string) =>
-      kind === 'audio.node'
-        ? Promise.resolve({ serverTime: '', kind, objects: [{ id: 'audio-01', label: 'Audio 01', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }] })
+      kind === 'show.action'
+        ? Promise.resolve({ serverTime: '', kind, objects: [] })
         : Promise.resolve({
             serverTime: '',
             kind: 'night.session',
             objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
           })) as typeof stubs.listConfigObjects
+  }
+
+  async function openWinterRidgeDefinition() {
+    fireEvent.click(await screen.findByRole('row', { name: 'Edit Winter Ridge' }))
+    return screen.findByLabelText('Label')
   }
 
   it('round-trips every definition field through a label-only save', async () => {
@@ -857,9 +888,8 @@ describe('Show Night', () => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge Updated'))
     }
-    renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
-    const labelInput = await screen.findByLabelText('Label')
+    renderDefinitions({ session: configWriteSession })
+    const labelInput = await openWinterRidgeDefinition()
     expect(labelInput).toHaveValue('Winter Ridge')
     fireEvent.change(labelInput, { target: { value: 'Winter Ridge Updated' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
@@ -886,10 +916,14 @@ describe('Show Night', () => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     }
-    renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
-    await screen.findByLabelText('Label')
-    fireEvent.change(screen.getByLabelText('Announcement default policy'), { target: { value: 'interrupt' } })
+    stubs.listFPPPlaylistDefinitions = () =>
+      Promise.resolve({
+        serverTime: '',
+        definitions: [{ instanceUuid: 'uuid-1', playlistName: 'holiday-cooldown', playlistHash: 'a'.repeat(64), capturedAt: '', receivedAt: '', entryCount: 1, referenced: false }],
+      })
+    renderDefinitions({ session: configWriteSession, fpp: [{ instanceId: 'fpp-1', instanceUuid: 'uuid-1' } as never] })
+    await openWinterRidgeDefinition()
+    fireEvent.change(screen.getByLabelText('Default announcement policy'), { target: { value: 'interrupt' } })
     fireEvent.change(screen.getByLabelText('End-of-night playlist'), { target: { value: 'holiday-cooldown' } })
     fireEvent.click(screen.getByLabelText('Repeat the end-of-night playlist'))
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
@@ -907,11 +941,10 @@ describe('Show Night', () => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     }
-    renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
-    await screen.findByLabelText('Label')
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
     fireEvent.change(screen.getByLabelText('Item id'), { target: { value: 'bed-2' } })
-    fireEvent.change(screen.getByLabelText('Max gain (dB)'), { target: { value: '-6' } })
+    fireEvent.change(screen.getByLabelText('Maximum gain (dB)'), { target: { value: '-6' } })
     fireEvent.change(screen.getByLabelText('Repeat'), { target: { value: 'item' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
@@ -929,9 +962,8 @@ describe('Show Night', () => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     }
-    renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
-    await screen.findByLabelText('Label')
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
     fireEvent.change(screen.getByLabelText('Request thermal profile'), { target: { value: 'summer-thermal' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
@@ -949,9 +981,8 @@ describe('Show Night', () => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     }
-    renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
-    await screen.findByLabelText('Label')
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
     fireEvent.change(screen.getByLabelText('Failure text'), { target: { value: 'Door sensor unreachable.' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     await screen.findByDisplayValue('Winter Ridge')
@@ -965,9 +996,8 @@ describe('Show Night', () => {
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     const putSpy = vi.fn(() => Promise.resolve(fullDefinitionResponse('Winter Ridge')))
     stubs.putNightSessionConfig = putSpy
-    renderScreen({ nightSession: session(), session: configWriteSession })
-    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
-    await screen.findByLabelText('Label')
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
     fireEvent.change(screen.getByLabelText('Fade-in (ms)'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     expect(await screen.findByText('Background audio fade-out and fade-in must be configured together, or both left empty for an instant cut.')).toBeInTheDocument()

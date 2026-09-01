@@ -24,6 +24,7 @@ import {
   RuledStrip,
   Section,
   Segmented,
+  SelectableRow,
   StatusPair,
   Table,
   TableWrap,
@@ -208,7 +209,7 @@ export function Access() {
         {data.kind === 'loaded' && (
           <>
             <TableWrap label="Principals, scrollable">
-              <Table>
+              <Table minWidth={660}>
                 <thead>
                   <tr>
                     <th scope="col">Principal</th>
@@ -337,11 +338,9 @@ function PrincipalRow({
   const days = daysUnused(lastUsed, nowIso)
 
   return (
-    <tr aria-current={selected ? 'true' : undefined} className={selected ? 'sm-table__row--current' : undefined}>
+    <SelectableRow selected={selected} onActivate={onSelect} ariaLabel={`View credentials for ${principal.name}`}>
       <td>
-        <button type="button" className="sm-linkbutton" onClick={onSelect} aria-pressed={selected}>
-          {principal.name}
-        </button>{' '}
+        <strong>{principal.name}</strong>{' '}
         {isYou && <span className="sm-chip">You</span>}
         <br />
         <span className="sm-small sm-faint">
@@ -381,7 +380,7 @@ function PrincipalRow({
       <td>
         <StatusPair tone={state.tone} label={state.label} />
       </td>
-    </tr>
+    </SelectableRow>
   )
 }
 
@@ -593,7 +592,7 @@ function CredentialsPanel({
 
       {tokens !== null && (
         <TableWrap label="Credentials for this principal, scrollable">
-          <Table>
+          <Table minWidth={560}>
             <thead>
               <tr>
                 <th scope="col">Credential</th>

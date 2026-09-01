@@ -32,6 +32,7 @@ import {
   PageTitle,
   RuledStrip,
   Section,
+  SelectableRow,
   StatusPair,
   Table,
   TableWrap,
@@ -436,7 +437,7 @@ export function NodeDetail() {
           <RuledStrip absence="empty" label="None" fact="This node advertises no capability." />
         ) : (
           <TableWrap label="Capabilities, scrollable">
-            <Table>
+            <Table minWidth={520}>
               <thead>
                 <tr>
                   <th scope="col">Capability</th>
@@ -503,7 +504,7 @@ export function NodeDetail() {
               <RuledStrip absence="empty" label="None" fact="No surface is assigned to this node." />
             ) : (
               <TableWrap label="Surfaces on this node, scrollable">
-                <Table>
+                <Table minWidth={540}>
                   <thead>
                     <tr>
                       <th scope="col">Surface</th>
@@ -517,9 +518,9 @@ export function NodeDetail() {
                       const display = surfaceDisplay(surface)
                       const end = surface.payload.channelRange.startChannel + surface.payload.channelRange.channelCount - 1
                       return (
-                        <tr key={surface.id}>
+                        <SelectableRow key={surface.id} onActivate={() => navigate(`/shows/${encodeURIComponent(surface.payload.show)}/presentation?surface=${encodeURIComponent(surface.id)}`)} ariaLabel={`Edit ${surface.payload.name}`}>
                           <td>
-                            <Link to={`/shows/${surface.payload.show}/presentation`}>{surface.payload.name}</Link>
+                            <strong>{surface.payload.name}</strong>
                             <br />
                             <span className="sm-data sm-small sm-faint">
                               {surface.payload.geometry.width}×{surface.payload.geometry.height} {surface.payload.geometry.pixelFormat} ·{' '}
@@ -532,7 +533,7 @@ export function NodeDetail() {
                             <StatusPair tone={status.tone} label={status.label} />
                             <RenderSurfaceControls nodeId={node.nodeId} surfaceId={surface.id} gate={renderGate} />
                           </td>
-                        </tr>
+                        </SelectableRow>
                       )
                     })}
                   </tbody>
@@ -594,7 +595,7 @@ export function NodeDetail() {
               <ManifestEmptyRow manifest={manifestData} fact="Nothing this node should hold is missing." />
             ) : (
               <TableWrap label="Missing assets, scrollable">
-                <Table>
+                <Table minWidth={540}>
                   <thead>
                     <tr>
                       <th scope="col">Sequence</th>
@@ -626,7 +627,7 @@ export function NodeDetail() {
               <ManifestEmptyRow manifest={manifestData} fact="No sequence the active show holds an asset for is uncovered." />
             ) : (
               <TableWrap label="Uncovered sequences, scrollable">
-                <Table>
+                <Table minWidth={520}>
                   <thead>
                     <tr>
                       <th scope="col">Sequence</th>
@@ -650,7 +651,7 @@ export function NodeDetail() {
               <ManifestEmptyRow manifest={manifestData} fact="This node holds nothing it was not expected to." />
             ) : (
               <TableWrap label="Extra assets, scrollable">
-                <Table>
+                <Table minWidth={540}>
                   <thead>
                     <tr>
                       <th scope="col">Filename</th>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   getShowSurface,
   getShowSurfaceRevisions,
@@ -7,7 +7,7 @@ import {
   type ConfigShowSurface,
   type ShowSurfaceConfigResponse,
 } from '../api'
-import { Button, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
@@ -56,7 +56,9 @@ export function ShowsPresentation() {
   const { id: showId = '' } = useParams<{ id: string }>()
   const model = useModelContext()
   const { state, reload, upsertSurface } = useSurfaces(showId)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedId = searchParams.get('surface')
+  const setSelectedId = (surfaceId: string | null) => setSearchParams(surfaceId === null ? {} : { surface: surfaceId })
   const [creating, setCreating] = useState(false)
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
 
@@ -130,7 +132,7 @@ export function ShowsPresentation() {
             <RuledStrip absence="empty" label="None" fact="This show has no surface configured." />
           ) : (
             <TableWrap label="Surfaces, scrollable">
-              <Table>
+              <Table minWidth={540}>
                 <thead>
                   <tr>
                     <th scope="col">Surface</th>
@@ -144,23 +146,14 @@ export function ShowsPresentation() {
                     const status = surfaceRenderStatus(model.nodes, surface.payload.node, surface.id, nowIso)
                     const overlapped = overlapping.has(surface.id)
                     return (
-                      <tr
+                      <SelectableRow
                         key={surface.id}
-                        aria-current={selectedId === surface.id ? 'true' : undefined}
-                        className={selectedId === surface.id ? 'sm-table__row--current' : undefined}
+                        selected={selectedId === surface.id}
+                        onActivate={() => { setSelectedId(surface.id); setCreating(false) }}
+                        ariaLabel={`Edit ${surface.payload.name}`}
                       >
                         <td>
-                          <button
-                            type="button"
-                            className="sm-linkbutton"
-                            onClick={() => {
-                              setSelectedId(surface.id)
-                              setCreating(false)
-                            }}
-                            aria-pressed={selectedId === surface.id}
-                          >
-                            {surface.payload.name}
-                          </button>
+                          <strong>{surface.payload.name}</strong>
                           {selectedId === surface.id && <span className="sm-viewing">Editing</span>}
                           <br />
                           <span className="sm-data sm-small sm-faint">
@@ -183,7 +176,7 @@ export function ShowsPresentation() {
                         <td>
                           <StatusPair tone={status.tone} label={status.label} />
                         </td>
-                      </tr>
+                      </SelectableRow>
                     )
                   })}
                 </tbody>

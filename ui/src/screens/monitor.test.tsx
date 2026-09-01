@@ -111,7 +111,7 @@ describe('Monitor · Fleet', () => {
       ],
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'barn-player' }))
+    fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
     const inspector = screen.getByRole('complementary')
     expect(within(inspector).getByRole('heading', { name: 'barn-player', level: 2 })).toBeInTheDocument()
     expect(within(inspector).getByText('FPP player · healthy as FPP reports')).toBeInTheDocument()

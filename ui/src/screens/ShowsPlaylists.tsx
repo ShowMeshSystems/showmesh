@@ -433,7 +433,7 @@ function FPPPlaylistEditor({
       {evidence.state === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={evidence.reason ?? 'Could not read the imported definition.'} />}
       {evidence.state === 'loaded' && (
         <TableWrap label="Imported FPP entries, scrollable">
-          <Table>
+          <Table minWidth={520}>
             <thead>
               <tr>
                 <th scope="col">FPP entry</th>
@@ -708,7 +708,7 @@ function AudioPlaylistEditor({
       </div>
 
       <TableWrap label="Playlist entries, scrollable">
-        <Table>
+        <Table minWidth={480}>
           <thead>
             <tr>
               <th scope="col">Ord</th>

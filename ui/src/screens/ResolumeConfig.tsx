@@ -512,7 +512,7 @@ export function ResolumeConfig() {
                   <>
                     <StatusPair tone="warn" label={`${ambiguous.length} of ${total}`} />
                     <TableWrap label="Clips that cannot be named, scrollable">
-                      <Table>
+                      <Table minWidth={680}>
                         <thead>
                           <tr>
                             <th scope="col">Clip</th>
@@ -656,7 +656,7 @@ export function ResolumeConfig() {
                   layers recorded.
                 </p>
                 <TableWrap label="Recovery record, scrollable">
-                  <Table>
+                  <Table minWidth={520}>
                     <thead>
                       <tr>
                         <th scope="col">Layer</th>
@@ -674,7 +674,7 @@ export function ResolumeConfig() {
                           <td>
                             <StatusPair tone={RECORD_TONE[entry.state]} label={RECORD_LABEL[entry.state]} />
                           </td>
-                          <td className="sm-small sm-muted">
+                          <td className="sm-small sm-muted sm-table__wrap">
                             {entry.state === 'clip' &&
                               `${entry.clip ?? 'an unnamed clip'}${entry.clipNameGenerated ? ' (generated name)' : ''}${
                                 entry.deck !== undefined ? ` on deck ${entry.deck}` : ''
@@ -727,7 +727,7 @@ function RestoreReportSection({ report }: { report: NonNullable<ResolumeRecovery
         {report.trigger === 'manual' ? ` by ${report.principal}` : ''}.
       </p>
       <TableWrap label="Last restore, scrollable">
-        <Table>
+        <Table minWidth={520}>
           <thead>
             <tr>
               <th scope="col">Layer</th>
@@ -743,7 +743,7 @@ function RestoreReportSection({ report }: { report: NonNullable<ResolumeRecovery
                   {layer.layerNameGenerated ? ' (generated name)' : ''}
                 </td>
                 <td className="sm-small sm-muted">{layer.clip ?? 'no clip'}</td>
-                <td>
+                <td className="sm-table__wrap">
                   <StatusPair tone={RESTORE_RESULT_TONE[layer.result]} label={RESTORE_RESULT_LABEL[layer.result]} />
                   {layer.reason !== undefined && (
                     <>

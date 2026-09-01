@@ -202,7 +202,7 @@ describe('Shows · Cues tab', () => {
 
   it('save is disabled without config:write and is actually inert', async () => {
     setup([])
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     const save = await screen.findByRole('button', { name: 'Save cue' })
     expect(save).toBeDisabled()
@@ -222,7 +222,7 @@ describe('Shows · Cues tab', () => {
         ],
       })
     setup()
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
@@ -232,7 +232,7 @@ describe('Shows · Cues tab', () => {
   it('does not claim a read failure while the cue’s revisions fetch is still pending', async () => {
     stubs.getShowCueRevisions = () => new Promise(() => {})
     setup()
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     await screen.findByRole('button', { name: 'Save cue' })
     expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
@@ -241,7 +241,7 @@ describe('Shows · Cues tab', () => {
   it('reports the read failure honestly when the cue’s revisions fetch is rejected', async () => {
     stubs.getShowCueRevisions = () => Promise.reject(new Error('network down'))
     setup()
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
@@ -260,7 +260,7 @@ describe('Shows · Cues tab', () => {
     stubs.putShowCue = putSpy
     renderWorkspace({ session: signedIn(['config:write']) })
 
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     const save = await screen.findByRole('button', { name: 'Save cue' })
     fireEvent.click(save)
@@ -450,7 +450,7 @@ describe('Shows · Cues tab', () => {
       const region = await screen.findByRole('region', { name: 'Directly activatable, scrollable' })
       expect(await within(region).findByText('Asset not uploaded')).toBeInTheDocument()
 
-      fireEvent.click(within(region).getByRole('button', { name: 'Weather Delay Notice' }))
+      fireEvent.click(within(region).getByRole('row', { name: 'Edit Weather Delay Notice' }))
       expect(await screen.findByText("weather-delay is not among this show's current assets.")).toBeInTheDocument()
     })
   })
@@ -497,7 +497,7 @@ describe('Shows · Cues tab', () => {
         }),
       )
       setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioTarget = await screen.findByRole('combobox', { name: 'Audio target node' })
       const ltcTarget = await screen.findByRole('combobox', { name: 'LTC target node' })
       expect(audioTarget).toHaveValue('node-a')
@@ -518,7 +518,7 @@ describe('Shows · Cues tab', () => {
     it('picking a target node sends it', async () => {
       const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
       setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioTarget = await screen.findByRole('combobox', { name: 'Audio target node' })
       fireEvent.change(audioTarget, { target: { value: 'node-b' } })
 
@@ -536,7 +536,7 @@ describe('Shows · Cues tab', () => {
     it('clearing a stored target sends no target key', async () => {
       const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, target: 'node-a' } } }))
       setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioTarget = await screen.findByRole('combobox', { name: 'Audio target node' })
       expect(audioTarget).toHaveValue('node-a')
       fireEvent.change(audioTarget, { target: { value: '' } })
@@ -555,7 +555,7 @@ describe('Shows · Cues tab', () => {
     it('a stored target naming an undeclared node renders it as an extra option and keeps saving it', async () => {
       const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, target: 'node-x' } } }))
       setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioTarget = (await screen.findByRole('combobox', { name: 'Audio target node' })) as HTMLSelectElement
       expect(audioTarget).toHaveValue('node-x')
       expect(within(audioTarget).getByRole('option', { name: 'node-x (not declared)' })).toBeInTheDocument()
@@ -582,7 +582,7 @@ describe('Shows · Cues tab', () => {
         }),
       )
       setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const offsets = await screen.findAllByLabelText('Start offset (ms)')
       expect(offsets).toHaveLength(2)
       const [audioOffset, ltcOffset] = offsets as [HTMLInputElement, HTMLInputElement]
@@ -606,7 +606,7 @@ describe('Shows · Cues tab', () => {
     it('defaults a new cue’s start offsets to 0', async () => {
       const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
       setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioOffset = (await screen.findByLabelText('Start offset (ms)')) as HTMLInputElement
       expect(audioOffset).toHaveValue(0)
 
@@ -630,7 +630,7 @@ describe('Shows · Cues tab', () => {
         }),
       )
       setupWithTargets(cue)
-      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const announcementTarget = await screen.findByRole('combobox', { name: 'Announcement target node' })
       expect(announcementTarget).toHaveValue('node-b')
 

@@ -426,7 +426,7 @@ describe('Shows · Automation tab', () => {
   describe('editing an action', () => {
     it('locks id and integration and states what macro and step number use it', async () => {
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
-      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('complementary')
       expect(await within(aside).findByText('Editing · Start Preshow Playlist')).toBeInTheDocument()
@@ -450,7 +450,7 @@ describe('Shows · Automation tab', () => {
           ],
         })
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
-      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('complementary')
       expect(await within(aside).findByText(/Active revision/)).toBeInTheDocument()
@@ -461,7 +461,7 @@ describe('Shows · Automation tab', () => {
     it('does not claim a read failure while the action’s revisions fetch is still pending', async () => {
       stubs.getShowActionRevisions = () => new Promise(() => {})
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
-      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('complementary')
       await within(aside).findByText('Editing · Start Preshow Playlist')
@@ -471,7 +471,7 @@ describe('Shows · Automation tab', () => {
     it('reports the read failure honestly when the action’s revisions fetch is rejected', async () => {
       stubs.getShowActionRevisions = () => Promise.reject(new Error('network down'))
       setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
-      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('complementary')
       expect(await within(aside).findByText('Revision history could not be read just now.')).toBeInTheDocument()
@@ -492,7 +492,7 @@ describe('Shows · Automation tab', () => {
       stubs.putShowAction = putSpy
       renderWorkspace({ session: signedIn(['config:write']) })
 
-      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      const editButton = await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' })
       fireEvent.click(editButton)
       const save = await screen.findByRole('button', { name: 'Save action' })
       await waitFor(() => expect(save).not.toBeDisabled())
@@ -533,7 +533,7 @@ describe('Shows · Automation tab', () => {
         sent = payload.target
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
-      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('complementary')
       const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
       const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
@@ -554,7 +554,7 @@ describe('Shows · Automation tab', () => {
         sent = payload.target
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
-      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('complementary')
       const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
       const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
@@ -575,7 +575,7 @@ describe('Shows · Automation tab', () => {
         sent = payload.target
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
-      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('complementary')
       const boxB = await within(aside).findByRole('checkbox', { name: 'Node B' })
       fireEvent.click(boxB)
@@ -594,7 +594,7 @@ describe('Shows · Automation tab', () => {
         sent = payload.target
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
-      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('complementary')
       const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
       expect(boxA).toBeChecked()
@@ -613,7 +613,7 @@ describe('Shows · Automation tab', () => {
         sent = payload.target
         return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
       }
-      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit Start Preshow Playlist' }))
       const aside = screen.getByRole('complementary')
       const ghostBox = await within(aside).findByRole('checkbox', { name: 'ghost-node (not declared)' })
       expect(ghostBox).toBeChecked()

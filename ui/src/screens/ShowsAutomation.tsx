@@ -28,7 +28,7 @@ import {
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
 } from '../api'
-import { AttentionRow, BlankingPlate, Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap, Textarea } from '../kit'
+import { AttentionRow, BlankingPlate, Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
 import type { Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../domain/session'
@@ -369,7 +369,7 @@ export function ShowsAutomation() {
 function MacroHistory({ showId, onOpenRun }: { showId: string; onOpenRun: (runId: string) => void }) {
   const [state, setState] = useState<{ kind: 'loading' } | { kind: 'loaded'; runs: MacroRunSummary[] } | { kind: 'failed'; reason: string }>({ kind: 'loading' })
   useEffect(() => { let cancelled = false; listMacroRuns({ limit: 20 }).then((response) => { if (!cancelled) setState({ kind: 'loaded', runs: response.runs.filter((run) => run.show === showId) }) }).catch((err: unknown) => { if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) }) }); return () => { cancelled = true } }, [showId])
-  return <Section id="au-history" title="Recent macro runs" aside={<span className="sm-small sm-muted">Coordinator history</span>}>{state.kind === 'loading' ? <RuledStrip absence="loading" label="Reading" fact="Reading recent macro runs." /> : state.kind === 'failed' ? <RuledStrip absence="failed" label="Read failed" fact={state.reason} /> : state.runs.length === 0 ? <RuledStrip absence="empty" label="None" fact="No macro runs are retained for this show." /> : <TableWrap label="Recent macro runs, scrollable"><Table><thead><tr><th>Macro</th><th>Started</th><th>State</th><th /></tr></thead><tbody>{state.runs.map((run) => <tr key={run.id}><td className="sm-data">{run.macroObjectId}</td><td>{formatClock(run.createdAt) ?? 'unrecorded'}</td><td><StatusPair tone={run.state === 'running' ? 'pending' : run.completed === true ? 'good' : 'unknown'} label={run.state === 'running' ? 'Running' : run.completed === true ? 'Completed' : 'Not completed'} /></td><td><button type="button" className="sm-linkbutton" onClick={() => onOpenRun(run.id)}>Run detail</button></td></tr>)}</tbody></Table></TableWrap>}</Section>
+  return <Section id="au-history" title="Recent macro runs" aside={<span className="sm-small sm-muted">Coordinator history</span>}>{state.kind === 'loading' ? <RuledStrip absence="loading" label="Reading" fact="Reading recent macro runs." /> : state.kind === 'failed' ? <RuledStrip absence="failed" label="Read failed" fact={state.reason} /> : state.runs.length === 0 ? <RuledStrip absence="empty" label="None" fact="No macro runs are retained for this show." /> : <TableWrap label="Recent macro runs, scrollable"><Table minWidth={596}><thead><tr><th>Macro</th><th>Started</th><th>State</th></tr></thead><tbody>{state.runs.map((run) => <SelectableRow key={run.id} onActivate={() => onOpenRun(run.id)} ariaLabel={`View run for ${run.macroObjectId}`}><td className="sm-data"><strong>{run.macroObjectId}</strong></td><td>{formatClock(run.createdAt) ?? 'unrecorded'}</td><td><StatusPair tone={run.state === 'running' ? 'pending' : run.completed === true ? 'good' : 'unknown'} label={run.state === 'running' ? 'Running' : run.completed === true ? 'Completed' : 'Not completed'} /></td></SelectableRow>)}</tbody></Table></TableWrap>}</Section>
 }
 
 function MacroCard({
@@ -490,7 +490,7 @@ function ActionTable({
 }) {
   return (
     <TableWrap label={usedByColumn ? 'Actions used by a macro, scrollable' : 'Actions not used by any macro, scrollable'}>
-      <Table>
+      <Table minWidth={596}>
         <thead>
           <tr>
             <th scope="col">Action</th>
@@ -510,11 +510,9 @@ function ActionTable({
             actions.map((action) => {
               const binding = bindings.get(action.id)
               return (
-                <tr key={action.id}>
+                <SelectableRow key={action.id} onActivate={() => onOpenAction(action.id)} ariaLabel={`Edit ${action.payload.label}`}>
                   <td>
-                    <button type="button" className="sm-linkbutton" onClick={() => onOpenAction(action.id)}>
-                      <strong>{action.payload.label}</strong>
-                    </button>
+                    <strong>{action.payload.label}</strong>
                     <br />
                     <span className="sm-data sm-small sm-faint">
                       {actionTargetSummary(action.payload.target)} · {action.id}
@@ -530,8 +528,8 @@ function ActionTable({
                       <InvokeButton actionId={action.id} binding={binding} canInvoke={canInvoke} />
                     </td>
                   )}
-                  <td><BindingRecheck actionId={action.id} binding={binding} /></td>
-                </tr>
+                  <td className="sm-table__wrap"><BindingRecheck actionId={action.id} binding={binding} /></td>
+                </SelectableRow>
               )
             })
           )}

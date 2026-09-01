@@ -145,7 +145,7 @@ describe('Shows · Assets tab', () => {
     const current = asset({ id: 'a-current', contentHash: 'sha256:' + '55'.repeat(32), createdAt: '2026-08-26T14:02:00Z' })
     const superseded = asset({ id: 'a-old', contentHash: 'sha256:' + 'aa'.repeat(32), current: false, supersededAt: '2026-08-26T14:02:00Z', createdAt: '2026-08-24T09:18:00Z' })
     setup(['asset:write'], [current, superseded])
-    fireEvent.click(await screen.findByRole('button', { name: 'media-front' }))
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
     expect(screen.getByText('Current')).toBeInTheDocument()
     expect(screen.getByText('Superseded')).toBeInTheDocument()
@@ -202,7 +202,7 @@ describe('Shows · Assets tab', () => {
       createdAt: '2026-08-24T09:18:00Z',
     })
     setup(['asset:write'], [current, superseded])
-    fireEvent.click(await screen.findByRole('button', { name: 'media-front' }))
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'Make current' }))
@@ -254,7 +254,7 @@ describe('Shows · Assets tab', () => {
       supersededAt: '2026-08-24T09:18:00Z',
     })
     setup(['asset:write'], [current, mid, original])
-    fireEvent.click(await screen.findByRole('button', { name: 'media-front' }))
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
 
     expect(screen.getByText(/Rollback, these exact bytes were current before/)).toBeInTheDocument()

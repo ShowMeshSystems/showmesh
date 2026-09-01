@@ -105,7 +105,7 @@ export function MonitorActivity() {
         ) : (
           <>
             <TableWrap label="Activity, scrollable">
-              <Table>
+              <Table minWidth={520}>
                 <thead>
                   <tr>
                     <th scope="col">Time</th>

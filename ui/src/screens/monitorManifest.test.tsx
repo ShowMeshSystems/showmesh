@@ -68,7 +68,7 @@ describe('Monitor · Manifest', () => {
     })
     renderScreen()
     await waitFor(() => expect(screen.getByText('media-front')).toBeInTheDocument())
-    screen.getByRole('button', { name: 'media-front' }).click()
+    screen.getByRole('row', { name: 'View manifest for media-front' }).click()
     await waitFor(() => expect(screen.getByText('stray.fseq')).toBeInTheDocument())
     expect(screen.getAllByText(/never a basis for deletion/).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
@@ -105,7 +105,7 @@ describe('Monitor · Manifest', () => {
     })
     renderScreen()
     await waitFor(() => expect(screen.getByText('media-front')).toBeInTheDocument())
-    screen.getByRole('button', { name: 'media-front' }).click()
+    screen.getByRole('row', { name: 'View manifest for media-front' }).click()
     // missing and gaps are populated only when state is not_ready, so an empty
     // list under unknown means no verdict, never "nothing is missing".
     await waitFor(() => expect(screen.getAllByText('No verdict').length).toBeGreaterThan(0))
@@ -117,7 +117,7 @@ describe('Monitor · Manifest', () => {
     getAssetManifest.mockResolvedValueOnce({ serverTime: '2026-08-28T21:07:00Z', nodes: [manifest()] })
     renderScreen()
     await waitFor(() => expect(screen.getByText('media-front')).toBeInTheDocument())
-    screen.getByRole('button', { name: 'media-front' }).click()
+    screen.getByRole('row', { name: 'View manifest for media-front' }).click()
     await waitFor(() => expect(screen.getByText('Nothing this node should hold is missing.')).toBeInTheDocument())
     expect(screen.queryByText('No verdict')).not.toBeInTheDocument()
   })
