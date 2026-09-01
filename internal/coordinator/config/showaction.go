@@ -430,6 +430,26 @@ var showActionAudioActionSet = func() map[string]bool {
 	return m
 }()
 
+// IsSupportedAudioAction reports whether action is one of
+// showActionAudioActions — exported so a caller outside this package (the
+// action-binding re-check, internal/coordinator/api/actionbinding.go) can
+// re-validate a STORED audioAction against the current supported set
+// without a second, hand-copied list of the same vocabulary, mirroring
+// api.FPPPrimitiveRegistry.WireActions()'s identical role for FPP's own
+// binding check.
+func IsSupportedAudioAction(action string) bool {
+	return showActionAudioActionSet[action]
+}
+
+// ShowActionAudioActions returns showActionAudioActions' own values, for a
+// caller that needs to name the full supported set (e.g. in a refusal
+// message) rather than test one action against it.
+func ShowActionAudioActions() []string {
+	out := make([]string, len(showActionAudioActions))
+	copy(out, showActionAudioActions)
+	return out
+}
+
 // The seven Resolume action names (internal/coordinator/collector/resolume.ActionName),
 // duplicated here by value rather than by import: this package must not
 // import that package or internal/coordinator/api.
