@@ -791,7 +791,7 @@ func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Conte
 // that check happens here, in real wall-clock time, rather than through
 // ctx.
 func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, seen map[string]bool, budgetDeadline time.Time) (skipped int) {
-	target, applyRevision, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
 	if !ok {
 		return 0
 	}
@@ -806,7 +806,7 @@ func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now
 	}
 
 	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
-	clearRevision, _ := nightAnnouncementRevisions(persisted, applyRevision)
+	clearRevision, _, _ := nightAnnouncementRevisions(persisted)
 	idemKey := fmt.Sprintf("night-prepare-site-reset:%s:%s", rec.ID, target.AudioSessionID)
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: "audio.session.clear", NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
