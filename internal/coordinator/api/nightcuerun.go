@@ -113,7 +113,7 @@ func (h *handlers) nightCommitCueRow(ctx context.Context, now time.Time, rec sto
 // identity) and persists the outcome into the row, which must already
 // exist. It is the ONE code path both the ordinary advance and crash
 // recovery use — see [nightCueDispatchHooks] for its two crash windows.
-func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer, actionRevision int64) (store.NightCueOutboxRecord, error) {
+func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer, dispatchRevision int64) (store.NightCueOutboxRecord, error) {
 	if h.hookAfterCommit(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
 	}
@@ -135,7 +135,7 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 		}
 	}
 
-	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, actionRevision)
+	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, dispatchRevision)
 
 	if h.hookAfterDispatch(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
