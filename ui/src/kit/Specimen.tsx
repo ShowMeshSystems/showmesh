@@ -12,6 +12,7 @@ import {
   ClockSkewStrip,
   ConnectionPill,
   DefinitionStrip,
+  Drawer,
   Field,
   FieldGrid,
   Freshness,
@@ -120,6 +121,7 @@ function SpecSection({ number, title, detail, id, children }: { number: string; 
 export function Specimen() {
   const [theme, setTheme] = useState<Theme>('dark')
   const [density, setDensity] = useState<Density>('default')
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   return (
     <div className="sm sm-spec" data-theme={theme} data-density={density}>
@@ -431,6 +433,33 @@ export function Specimen() {
             <li>Never explain the architecture in a form. <span className="sm-muted">ADR reasoning belongs in docs, not beside an input.</span></li>
             <li>State the reason literally, then the action. <span className="sm-muted">“Agent did not answer in 5 s. Run discovery again.”</span></li>
           </ul>
+        </SpecSection>
+
+        <SpecSection number="10 · Drawer" id="specimen-drawer" title="The inspector floats, it does not crowd a column" detail="D-021: a right-side drawer over the page, under the chrome bar, sized to its content. The scrim is a click target, not a focus trap; the page behind it stays readable.">
+          <ButtonRow>
+            <Button onClick={() => setDrawerOpen(true)}>Inspect node</Button>
+          </ButtonRow>
+          <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} labelledBy="specimen-drawer-heading">
+            <h2 className="sm-heading" id="specimen-drawer-heading">Barn roof</h2>
+            <p className="sm-small sm-muted">node.controlplane.state · surface.pipeline.state</p>
+            <FieldGrid>
+              <Field label="Idle output" help="Reachable from the coordinator.">
+                {(props) => <Input defaultValue="black" {...props} />}
+              </Field>
+              <Field label="Program output group">
+                {(props) => (
+                  <Select defaultValue="left" {...props}>
+                    <option value="left">House left · 2 ch free</option>
+                    <option value="right">House right · 2 ch free</option>
+                  </Select>
+                )}
+              </Field>
+            </FieldGrid>
+            <ButtonRow>
+              <Button variant="primary">Save changes</Button>
+              <Button variant="quiet" onClick={() => setDrawerOpen(false)}>Cancel</Button>
+            </ButtonRow>
+          </Drawer>
         </SpecSection>
       </div>
     </div>

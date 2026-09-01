@@ -1,14 +1,18 @@
 /*
  * D-020: the two chrome-bar controls that open a popover instead of
- * navigating. The parent supplies `position: relative`; this panel is
- * `position: absolute; top: 100%` inside it, anchored under the control.
+ * navigating. The panel portals into `document.body` (the chrome bar is a
+ * sticky container with its own stacking context, which clipped it) and is
+ * positioned with `fixed` top/left set inline from the anchor's
+ * `getBoundingClientRect`; this stylesheet only adds the gap below the anchor.
+ *
+ * z scale: chrome bar sits at 30 (shell.css); this panel must clear both the
+ * chrome and any `Drawer`-class overlay, so it sits at 80.
  */
 
 .sm-popover {
-  position: absolute;
-  top: calc(100% + var(--s-2));
-  left: 0;
-  z-index: 40;
+  position: fixed;
+  margin-top: var(--s-2);
+  z-index: 80;
   display: flex;
   flex-direction: column;
   gap: var(--s-3);

@@ -2,24 +2,41 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ApiError,
+  advanceAudioSession,
   blackoutResolume,
+  clearAudioSession,
   dispatchNightCommand,
-  invokeAction,
+  fadeAudioSessionGain,
+  getAudioSettingsConfig,
+  getShowAction,
   getShowCue,
+  invokeAction,
   listAssets,
   listConfigObjects,
+  listObservations,
+  muteAudioSessionOutput,
   nextFPPPlaylistItem,
+  pauseAudioSession,
   pauseFPPPlaylist,
+  prepareAudioSession,
   prevFPPPlaylistItem,
+  resumeAudioSession,
   resumeFPPPlaylist,
+  seekAudioSession,
+  setAudioSessionGain,
   setFPPVolume,
+  startAudioSession,
   startFPPPlaylist,
+  stopAudioSession,
   stopFPPPlaylist,
   stopFPPPlaylistGracefully,
   submitMacroRun,
+  unmuteAudioSessionOutput,
+  type AudioSessionCommandResult,
   type ConfigObjectSummary,
   type FPPCommandResult,
   type NightCommandName,
+  type ObservationEntry,
   type ResolumeActionResult,
 } from '../api'
 import {
@@ -35,17 +52,21 @@ import {
   RuledStrip,
   Section,
   Segmented,
+  Select,
   StatusPair,
   Table,
   TableWrap,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { effectiveServerTimeIso } from '../domain/time'
+import { effectiveServerTimeIso, millisToTimecode, timecodeToMillis } from '../domain/time'
 import {
   audioRows,
+  audioSessionOptions,
   classifyStartPlaylistConflict,
   currentRunsAbsence,
+  deriveAudioSessionRevision,
+  describeAudioSessionOutcome,
   describeFPPOutcome,
   formatPosition,
   outputRows,
@@ -108,6 +129,7 @@ export function LiveControl() {
   const nightGate = evaluateScope(model.session, model.sessionFetchFailed, 'night:command')
   const configGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const resolumeGate = evaluateScope(model.session, model.sessionFetchFailed, 'resolume:action')
+  const audioGate = evaluateScope(model.session, model.sessionFetchFailed, 'audio:command')
 
   const [selected, setSelected] = useState<string | null>(null)
   const instance = model.fpp.find((entry) => entry.instanceId === selected) ?? model.fpp[0]
@@ -429,6 +451,8 @@ export function LiveControl() {
         <Outcome outcome={nightOutcome} />
       </Section>
 
+      <AudioSessionsBlock gate={audioGate} show={show} />
+
       <RunList
         id="lc-macros"
         title="Macros"
@@ -587,6 +611,416 @@ function Announcements({ show }: { show: string | null }) {
               </li>
             ))}
           </ul>
+        </>
+      )}
+    </Section>
+  )
+}
+
+type AudioNodesState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; nodes: ConfigObjectSummary[] }
+  | { kind: 'failed'; reason: string }
+
+function useAudioNodes(): AudioNodesState {
+  const [state, setState] = useState<AudioNodesState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    listConfigObjects('audio.node')
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', nodes: response.objects })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+/** A show.action target the coordinator can use to run this session: audio-integration, with a session id named on it. */
+type AudioActionSessionRef = { id: string; label: string; audioSessionId: string }
+
+type AudioActionSessionsState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; actions: AudioActionSessionRef[] }
+  | { kind: 'failed'; reason: string }
+
+function useAudioActionSessions(show: string | null): AudioActionSessionsState {
+  const [state, setState] = useState<AudioActionSessionsState>({ kind: 'loading' })
+  useEffect(() => {
+    if (show === null) {
+      setState({ kind: 'loaded', actions: [] })
+      return
+    }
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listConfigObjects('show.action', show)
+      .then(async (response) => {
+        const loaded = await Promise.all(response.objects.map((object) => getShowAction(object.id)))
+        if (cancelled) return
+        const actions = loaded
+          .filter((action) => action.payload.target.integration === 'audio' && action.payload.target.audioSessionId !== undefined)
+          .map((action) => ({
+            id: action.id,
+            label: action.payload.label,
+            audioSessionId: action.payload.target.audioSessionId as string,
+          }))
+        setState({ kind: 'loaded', actions })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [show])
+  return state
+}
+
+type ObservationsState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; observations: ObservationEntry[] }
+  | { kind: 'failed'; reason: string }
+
+/** `reloadKey` forces a re-read after a dispatched command, per the design's "re-read the session's observations" rule. */
+function useAudioSessionObservations(reloadKey: number): ObservationsState {
+  const [state, setState] = useState<ObservationsState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listObservations('audio_session')
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', observations: response.observations })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reloadKey])
+  return state
+}
+
+type LtcFrameRateState = { kind: 'loading' } | { kind: 'loaded'; fps: number } | { kind: 'failed' }
+
+function useLtcFrameRate(): LtcFrameRateState {
+  const [state, setState] = useState<LtcFrameRateState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    getAudioSettingsConfig()
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', fps: Number(response.payload.ltcFrameRate) })
+      })
+      .catch(() => {
+        if (!cancelled) setState({ kind: 'failed' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+function audioSessionSignal(observations: ObservationEntry[], sessionId: string, signal: string): ObservationEntry | undefined {
+  return observations.find(
+    (entry) => entry.resource.kind === 'audio_session' && entry.resource.id === sessionId && entry.signal === signal,
+  )
+}
+
+/**
+ * SM-269 design section 3: target picker (node, then a real session id),
+ * a gloved transport row, seek, gain set/fade, mute/unmute, and a typed
+ * clear confirmation. `apply` is deliberately excluded — loading media
+ * into a session is authoring, not live control.
+ */
+function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null }) {
+  const nodesState = useAudioNodes()
+  const actionsState = useAudioActionSessions(show)
+  const [reloadKey, setReloadKey] = useState(0)
+  const observationsState = useAudioSessionObservations(reloadKey)
+  const frameRateState = useLtcFrameRate()
+
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState('')
+  const [revisionOverride, setRevisionOverride] = useState<string | null>(null)
+  const [position, setPosition] = useState('')
+  const [gainDb, setGainDb] = useState('')
+  const [fadeTargetDb, setFadeTargetDb] = useState('')
+  const [fadeDurationMs, setFadeDurationMs] = useState('')
+  const [clearConfirm, setClearConfirm] = useState('')
+  const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
+
+  useEffect(() => {
+    if (selectedNodeId === null && nodesState.kind === 'loaded' && nodesState.nodes[0] !== undefined) {
+      setSelectedNodeId(nodesState.nodes[0].id)
+    }
+  }, [nodesState, selectedNodeId])
+
+  const observations = observationsState.kind === 'loaded' ? observationsState.observations : []
+  const actions = actionsState.kind === 'loaded' ? actionsState.actions : []
+  const options = audioSessionOptions(observations, actions)
+  const trimmedSessionId = sessionId.trim()
+  const revisionInfo = trimmedSessionId === '' ? null : deriveAudioSessionRevision(observations, trimmedSessionId)
+  const overrideValue =
+    revisionOverride !== null && revisionOverride.trim() !== '' && !Number.isNaN(Number(revisionOverride))
+      ? Number(revisionOverride)
+      : null
+  const effectiveRevision = overrideValue ?? revisionInfo?.next ?? 1
+  const nodeId = selectedNodeId ?? ''
+  const canDispatch = gate.allowed && nodeId !== '' && trimmedSessionId !== ''
+  const dispatchTitle = !gate.allowed ? gate.reason : nodeId === '' || trimmedSessionId === '' ? 'Choose a node and a session id first.' : undefined
+
+  const positionMs =
+    position.trim() === '' ? null : timecodeToMillis(position, frameRateState.kind === 'loaded' ? frameRateState.fps : null)
+
+  const run = useCallback((action: string, call: () => Promise<AudioSessionCommandResult>) => {
+    call()
+      .then((result) => {
+        setOutcome(describeAudioSessionOutcome(result, action))
+        setReloadKey((n) => n + 1)
+      })
+      .catch((err: unknown) => setOutcome({ tone: 'bad', label: 'Refused', detail: `${action}: ${describeApiError(err)}` }))
+  }, [])
+
+  const stateEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.state')
+  const positionEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.position_ms')
+  const gainEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.gain.effective')
+
+  return (
+    <Section id="lc-audio" title="Audio sessions" aside={<span className="sm-small sm-muted">Dispatched to one node's session</span>}>
+      {nodesState.kind === 'loading' ? (
+        <RuledStrip absence="loading" label="Reading" fact="Reading this deployment's declared audio nodes." />
+      ) : nodesState.kind === 'failed' ? (
+        <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
+      ) : nodesState.nodes.length === 0 ? (
+        <RuledStrip
+          absence="empty"
+          label="No audio nodes"
+          fact="No node advertises an audio engine."
+          detail="Settings › Node routing is where an audio.node object is declared."
+        />
+      ) : (
+        <>
+          <div className="sm-panel">
+            <h3 className="sm-subsection__title">Target</h3>
+            <Field label="Node">
+              {(props) => (
+                <Select {...props} value={nodeId} onChange={(event) => setSelectedNodeId(event.target.value)}>
+                  {nodesState.nodes.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.label}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            {options.length > 0 && (
+              <Field label="Known sessions" help="Fills the session id below. A session neither source knows can still be typed there.">
+                {(props) => (
+                  <Select
+                    {...props}
+                    value=""
+                    onChange={(event) => {
+                      if (event.target.value !== '') setSessionId(event.target.value)
+                    }}
+                  >
+                    <option value="">Choose a known session</option>
+                    {options.map((option) => (
+                      <option key={option.sessionId} value={option.sessionId}>
+                        {option.sessionId} ({option.origin})
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            )}
+            {options.length === 0 && (
+              <RuledStrip
+                absence="unobserved"
+                label="No sessions observed"
+                fact="No audio session has ever reported to this coordinator. Type the session id the show action or night session uses."
+              />
+            )}
+            <Field label="Session id">
+              {(props) => (
+                <Input {...props} value={sessionId} onChange={(event) => setSessionId(event.target.value)} placeholder="e.g. bg-holiday-01" />
+              )}
+            </Field>
+            {trimmedSessionId !== '' && (
+              <p className="sm-small sm-data">
+                {revisionInfo === null || revisionInfo.observed === null
+                  ? 'Never observed. Sending revision 1.'
+                  : `Revision ${revisionInfo.observed} → ${revisionInfo.next}`}
+              </p>
+            )}
+            {revisionOverride === null ? (
+              <ButtonRow>
+                <Button size="compact" variant="quiet" onClick={() => setRevisionOverride(String(effectiveRevision))}>
+                  Set revision
+                </Button>
+              </ButtonRow>
+            ) : (
+              <Field label="Revision override" help="For a wedged ledger. Overrides the value above.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    value={revisionOverride}
+                    onChange={(event) => setRevisionOverride(event.target.value)}
+                  />
+                )}
+              </Field>
+            )}
+            {trimmedSessionId !== '' && (stateEntry !== undefined || positionEntry !== undefined || gainEntry !== undefined) && (
+              <p className="sm-small sm-muted">
+                {stateEntry !== undefined && (
+                  <>
+                    State: <span className="sm-data">{String(stateEntry.value)}</span>{' '}
+                  </>
+                )}
+                {positionEntry !== undefined && typeof positionEntry.value === 'number' && (
+                  <>
+                    Position:{' '}
+                    <span className="sm-data">
+                      {millisToTimecode(positionEntry.value, frameRateState.kind === 'loaded' ? frameRateState.fps : null)}
+                    </span>{' '}
+                  </>
+                )}
+                {gainEntry !== undefined && typeof gainEntry.value === 'number' && (
+                  <>
+                    Gain: <span className="sm-data">{gainEntry.value} dB</span>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+
+          <div className="sm-panel">
+            <h3 className="sm-subsection__title">Transport</h3>
+            <ButtonRow>
+              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Prepare', () => prepareAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                Prepare
+              </Button>
+              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Start', () => startAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                Start
+              </Button>
+              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Pause', () => pauseAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                Pause
+              </Button>
+              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Resume', () => resumeAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                Resume
+              </Button>
+              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Advance', () => advanceAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                Advance
+              </Button>
+              <Button variant="danger" size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Stop', () => stopAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                Stop
+              </Button>
+            </ButtonRow>
+            <div className="sm-volume">
+              <Field
+                label="Position"
+                help={
+                  frameRateState.kind === 'loaded'
+                    ? `hh:mm:ss.ff at ${frameRateState.fps} fps, or a bare millisecond count.`
+                    : 'hh:mm:ss, or a bare millisecond count. Frame rate unavailable.'
+                }
+              >
+                {(props) => <Input {...props} value={position} onChange={(event) => setPosition(event.target.value)} placeholder="00:01:30" />}
+              </Field>
+              <Button
+                disabled={!canDispatch || positionMs === null}
+                title={!canDispatch ? dispatchTitle : positionMs === null ? 'Not a recognized timecode.' : undefined}
+                onClick={() => positionMs !== null && run('Seek', () => seekAudioSession(nodeId, trimmedSessionId, effectiveRevision, positionMs))}
+              >
+                Seek
+              </Button>
+            </div>
+          </div>
+
+          <div className="sm-panel">
+            <h3 className="sm-subsection__title">Gain</h3>
+            <div className="sm-volume">
+              <Field label="Gain" help="Decibels. 0 dB is unity; +12 dB is the refused ceiling.">
+                {(props) => <Input {...props} type="number" max={12} value={gainDb} onChange={(event) => setGainDb(event.target.value)} />}
+              </Field>
+              <Button
+                disabled={!canDispatch || gainDb.trim() === ''}
+                title={dispatchTitle}
+                onClick={() => run('Set gain', () => setAudioSessionGain(nodeId, trimmedSessionId, effectiveRevision, Number(gainDb)))}
+              >
+                Set
+              </Button>
+            </div>
+            <div className="sm-volume">
+              <Field label="Fade to" help="Decibels.">
+                {(props) => (
+                  <Input {...props} type="number" max={12} value={fadeTargetDb} onChange={(event) => setFadeTargetDb(event.target.value)} />
+                )}
+              </Field>
+              <Field label="Over" help="Milliseconds. Leave empty for this node's own fade duration.">
+                {(props) => (
+                  <Input {...props} type="number" min={1} value={fadeDurationMs} onChange={(event) => setFadeDurationMs(event.target.value)} />
+                )}
+              </Field>
+              <Button
+                disabled={!canDispatch || fadeTargetDb.trim() === ''}
+                title={dispatchTitle}
+                onClick={() =>
+                  run('Fade gain', () =>
+                    fadeAudioSessionGain(
+                      nodeId,
+                      trimmedSessionId,
+                      effectiveRevision,
+                      Number(fadeTargetDb),
+                      fadeDurationMs.trim() === '' ? undefined : Number(fadeDurationMs),
+                    ),
+                  )
+                }
+              >
+                Fade
+              </Button>
+            </div>
+            <p className="sm-small sm-faint">Curve: linear. The only curve this build ships.</p>
+            <ButtonRow>
+              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Mute', () => muteAudioSessionOutput(nodeId, trimmedSessionId, effectiveRevision))}>
+                Mute
+              </Button>
+              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Unmute', () => unmuteAudioSessionOutput(nodeId, trimmedSessionId, effectiveRevision))}>
+                Unmute
+              </Button>
+            </ButtonRow>
+          </div>
+
+          <div className="sm-panel">
+            <h3 className="sm-subsection__title">Clear this session</h3>
+            <p className="sm-small sm-muted">Releases the session entirely on the node. Discards a loaded session mid-show.</p>
+            <Field label={trimmedSessionId === '' ? 'Type the session id to confirm' : `Type ${trimmedSessionId} to confirm`}>
+              {(props) => <Input {...props} value={clearConfirm} onChange={(event) => setClearConfirm(event.target.value)} />}
+            </Field>
+            <ButtonRow>
+              <Button
+                variant="danger"
+                disabled={!canDispatch || clearConfirm !== trimmedSessionId}
+                title={!canDispatch ? dispatchTitle : clearConfirm !== trimmedSessionId ? 'Type the session id exactly to enable this.' : undefined}
+                onClick={() => run('Clear', () => clearAudioSession(nodeId, trimmedSessionId, effectiveRevision))}
+              >
+                Clear
+              </Button>
+            </ButtonRow>
+          </div>
+
+          <p className="sm-section__footnote">
+            Loading media into a session is authoring, not live control. A session gets its content from its cue, its playlist, or an audio
+            action.
+          </p>
+
+          <Outcome outcome={outcome} />
         </>
       )}
     </Section>

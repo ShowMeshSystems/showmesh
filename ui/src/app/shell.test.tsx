@@ -88,7 +88,7 @@ describe('app shell', () => {
     putShowModeConfigMock.mockReset()
     getCurrentNightSessionMock.mockReset().mockResolvedValue({ serverTime: '2026-09-01T00:00:00Z', session: null })
     listConfigObjectsMock.mockReset()
-    getShowActiveMock.mockReset()
+    getShowActiveMock.mockReset().mockReturnValue(new Promise(() => {}))
     putShowActiveMock.mockReset()
     clearStoredToken()
   })
@@ -439,9 +439,24 @@ describe('app shell', () => {
   })
 
   describe('D-020 the show pill popover', () => {
-    it('renders the unavailable label and opens nothing when currentRuns is null', () => {
+    it('opens even when current-runs is absent, using getShowActive as the source of truth', async () => {
+      listConfigObjectsMock.mockResolvedValue({ objects: [] })
+      getShowActiveMock.mockResolvedValue(showActiveConfig('winter-2026'))
+
       renderShell({ session: authenticatedSession(), currentRuns: null })
-      expect(screen.getByText('Show not reported')).toBeInTheDocument()
+
+      const pill = await screen.findByRole('button', { name: /winter-2026/i })
+      fireEvent.click(pill)
+      expect(await screen.findByRole('dialog', { name: 'Choose show' })).toBeInTheDocument()
+    })
+
+    it('renders the unavailable label and opens nothing, stating the failure reason, only when getShowActive fails', async () => {
+      getShowActiveMock.mockRejectedValue(new Error('coordinator unreachable'))
+
+      renderShell({ session: authenticatedSession(), currentRuns: currentRuns('winter-2026') })
+
+      expect(await screen.findByText('Show not reported')).toBeInTheDocument()
+      expect(screen.getByText('coordinator unreachable')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /show/i })).not.toBeInTheDocument()
     })
 
@@ -457,7 +472,7 @@ describe('app shell', () => {
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
 
       renderShell({ session: authenticatedSession(), currentRuns: currentRuns('winter-2026') })
-      fireEvent.click(screen.getByRole('button', { name: /winter-2026/i }))
+      fireEvent.click(await screen.findByRole('button', { name: /winter-2026/i }))
 
       const dialog = await screen.findByRole('dialog', { name: 'Choose show' })
       const current = await screen.findByText('Winter 2026')
@@ -485,7 +500,7 @@ describe('app shell', () => {
       vi.spyOn(window, 'confirm').mockReturnValue(false)
 
       renderShell({ session: authenticatedSession(), currentRuns: currentRuns('winter-2026') })
-      fireEvent.click(screen.getByRole('button', { name: /winter-2026/i }))
+      fireEvent.click(await screen.findByRole('button', { name: /winter-2026/i }))
       await screen.findByText('Halloween 2026')
       fireEvent.click(screen.getByText('Halloween 2026'))
       fireEvent.click(screen.getByRole('button', { name: /^apply$/i }))
@@ -501,7 +516,7 @@ describe('app shell', () => {
       getShowActiveMock.mockResolvedValue(showActiveConfig('winter-2026'))
 
       renderShell({ session: authenticatedSession(), currentRuns: currentRuns('winter-2026') })
-      fireEvent.click(screen.getByRole('button', { name: /winter-2026/i }))
+      fireEvent.click(await screen.findByRole('button', { name: /winter-2026/i }))
       const dialog = await screen.findByRole('dialog', { name: 'Choose show' })
       fireEvent.keyDown(dialog, { key: 'Escape' })
       expect(screen.queryByRole('dialog', { name: 'Choose show' })).not.toBeInTheDocument()
@@ -517,7 +532,7 @@ describe('app shell', () => {
       getShowActiveMock.mockResolvedValue(showActiveConfig('winter-2026'))
 
       renderShell({ session: authenticatedSession({ scopes: [] }), currentRuns: currentRuns('winter-2026') })
-      fireEvent.click(screen.getByRole('button', { name: /winter-2026/i }))
+      fireEvent.click(await screen.findByRole('button', { name: /winter-2026/i }))
       await screen.findByText('Halloween 2026')
       fireEvent.click(screen.getByText('Halloween 2026'))
 

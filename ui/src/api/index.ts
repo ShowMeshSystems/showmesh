@@ -90,6 +90,8 @@ export type {
   // Track B seam B2b-front: the three render.* dispatch endpoints.
   ObservationEntry,
   RenderCommandResult,
+  // SM-269: GET /observations, the flat evidence list.
+  ObservationsResponse,
   // The first audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
   AudioSessionCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
@@ -312,6 +314,7 @@ export {
   setAudioSessionGain,
   fadeAudioSessionGain,
   applyAudioSession,
+  listObservations,
   probeRenderTransport,
   runDiscovery,
   declareNode,

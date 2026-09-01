@@ -9,6 +9,7 @@ export { StatusPair } from './Status'
 export { BlankingPlate, RuledStrip, type Absence } from './StateBlocks'
 export { NotWired, NotWiredBanner } from './NotWired'
 export { Popover } from './Popover'
+export { Drawer } from './Drawer'
 export { RevisionHistory } from './RevisionHistory'
 export {
   ChromeBar,

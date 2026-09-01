@@ -178,6 +178,10 @@ type SchemaAudioSessionParams =
   | components['schemas']['AudioSessionGainParams']
   | components['schemas']['AudioSessionGainFadeParams']
   | components['schemas']['AudioSessionNoParamsRequest']['params']
+// SM-269: GET /observations, the flat evidence list an operator uses to
+// discover a real audio session id (resourceKind=audio_session) and its
+// desired_revision, since the API lists no sessions any other way.
+type SchemaObservationsResponse = components['schemas']['ObservationsResponse']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -1553,12 +1557,12 @@ export class ApiStore {
     sessionId: string,
     revision: number,
     targetGainDb: number,
-    durationMs: number,
+    durationMs?: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain/fade', revision, {
       targetGainDb,
-      durationMs,
       curve: 'linear',
+      ...(durationMs === undefined ? {} : { durationMs }),
     })
   }
 
@@ -1967,6 +1971,32 @@ export class ApiStore {
       const query = kind !== 'show' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
       return await this.client.getJson<SchemaConfigObjectsListResponse>(
         `/config/${kind}${query}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/observations`. A filter that matches nothing is a real
+   * 200 with an empty array, never a 404 — see the endpoint's own
+   * description. Requires observation:read.
+   */
+  async listObservations(
+    resourceKind?: 'node' | 'fpp' | 'coordinator' | 'resolume' | 'surface' | 'audio_session',
+    resourceId?: string,
+    signal?: string,
+  ): Promise<SchemaObservationsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (resourceKind !== undefined) params.set('resourceKind', resourceKind)
+      if (resourceId !== undefined) params.set('resourceId', resourceId)
+      if (signal !== undefined) params.set('signal', signal)
+      const query = params.toString()
+      return await this.client.getJson<SchemaObservationsResponse>(
+        `/observations${query === '' ? '' : `?${query}`}`,
         controller.signal,
       )
     } finally {

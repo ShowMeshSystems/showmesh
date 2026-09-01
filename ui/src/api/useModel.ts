@@ -57,6 +57,7 @@ import type {
   NightSessionActiveConfigResponse,
   NightSessionConfigResponse,
   NightSessionResponse,
+  ObservationsResponse,
   PrincipalResponse,
   PrincipalsResponse,
   AudioSessionCommandResult,
@@ -529,13 +530,24 @@ export function fadeAudioSessionGain(
   sessionId: string,
   revision: number,
   targetGainDb: number,
-  durationMs: number,
+  durationMs?: number,
 ): Promise<AudioSessionCommandResult> {
   return store.fadeAudioSessionGain(nodeId, sessionId, revision, targetGainDb, durationMs)
 }
 
 export function probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
   return store.probeRenderTransport(nodeId, surfaceId)
+}
+
+// SM-269: GET /observations, the flat evidence list used to discover a
+// real audio session id and its desired_revision. Same thin
+// pass-through pattern as every method above.
+export function listObservations(
+  resourceKind?: 'node' | 'fpp' | 'coordinator' | 'resolume' | 'surface' | 'audio_session',
+  resourceId?: string,
+  signal?: string,
+): Promise<ObservationsResponse> {
+  return store.listObservations(resourceKind, resourceId, signal)
 }
 
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same

@@ -6,6 +6,7 @@ import { ModelContext } from '../app/ModelContext'
 
 let listCalls = 0
 let cueCalls = 0
+let actionCalls = 0
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -33,13 +34,31 @@ vi.mock('../api', async () => {
         source: 'api',
       })
     },
+    getShowAction: (id: string) => {
+      actionCalls += 1
+      return Promise.resolve({
+        serverTime: '2026-08-28T21:07:00Z',
+        kind: 'show.action',
+        id,
+        revision: 1,
+        payload: { show: 'S', label: 'A', description: '', safetyClass: 'none', target: { integration: 'mqtt' }, idempotent: null },
+        updatedAt: '2026-08-28T12:00:00Z',
+        createdByPrincipalId: null,
+        createdByPrincipalName: null,
+        source: 'api',
+      })
+    },
+    listObservations: () => Promise.resolve({ serverTime: '2026-08-28T21:07:00Z', observations: [] }),
+    getAudioSettingsConfig: () => Promise.reject(new Error('not stubbed')),
   }
 })
 
 const { LiveControl } = await import('./LiveControl')
 
-/* Three lists and one cue read per mount. A screen that re-reads on every
- * render is unusable against a real coordinator. */
+/* Five lists (macros, actions, cues, audio.node, and the audio block's
+ * own show.action read), one cue read, and one action read per mount. A
+ * screen that re-reads on every render is unusable against a real
+ * coordinator. */
 describe('LiveControl reads', () => {
   it('reads each list once per mount, not once per render', async () => {
     render(
@@ -60,6 +79,6 @@ describe('LiveControl reads', () => {
     )
     await screen.findAllByText('A')
     await new Promise((resolve) => setTimeout(resolve, 200))
-    expect({ listCalls, cueCalls }).toEqual({ listCalls: 3, cueCalls: 1 })
+    expect({ listCalls, cueCalls, actionCalls }).toEqual({ listCalls: 5, cueCalls: 1, actionCalls: 1 })
   })
 })

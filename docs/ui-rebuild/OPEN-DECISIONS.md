@@ -820,3 +820,32 @@ over the interim reading that shipped it as a `Link` to Settings.
 
 **Unblocks.** `Popover` (new kit element, `ui/src/kit/Popover.tsx`) and the
 rebuilt `ShowPicker` / `ShellMode` in `ui/src/app/Layout.tsx`.
+
+### D-021 The two-pane inspector becomes a floating right-side drawer, not a `Panes` column
+
+**What.** The `Panes` two-pane layout (`ui/src/kit/Shell.tsx`, `.sm-panes` in
+`shell.css`) is used across `AssetsSurface`, `Monitor`, `MonitorManifest`,
+`ShowsAutomation`, `ShowsCues`, and `ShowsPresentation` to put a list on the
+left and an inspector in a sticky right column, capped at 320-420px, collapsing
+to one column below 1100px. Eric ruled this is too narrow: the inspector
+should instead float over the page as a right-side drawer, the way UniFi's
+device panels do, sized to its content rather than cramming it into a column.
+
+**Ruling:** build a `Drawer` kit element now (`ui/src/kit/Drawer.tsx`,
+`ui/src/kit/styles/drawer.css`). It renders through a portal into
+`document.body`, `role="dialog"`, `aria-modal="false"` (the page stays
+readable and scrollable behind it), slides in from the right under the chrome
+bar, full remaining height, with internal scroll and a light scrim that closes
+on click without blocking reading. Width is `'content'` (min-content, capped
+at 720px), `'wide'` (960px), or an exact pixel value, clamped to
+`100vw - rail width` at narrow viewports and full width below 720px. Escape
+closes it; focus moves to the first focusable element on open and returns to
+the opener on close.
+
+`Panes` itself does not change in this task. Screens adopt `Drawer` for their
+inspector in a following pass, one at a time; `Panes` is retired only once
+nothing still uses it.
+
+**Unblocks.** `Drawer` (new kit element). Follow-up: migrate
+`AssetsSurface`, `Monitor`, `MonitorManifest`, `ShowsAutomation`, `ShowsCues`,
+and `ShowsPresentation` off `Panes` onto `Drawer`, one screen at a time.

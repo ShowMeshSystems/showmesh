@@ -1,5 +1,5 @@
 import { PROBLEM_TYPE } from '../api'
-import type { CurrentRun, Evidence, FPPCommandResult, FPPInstance, Model, Node } from '../api'
+import type { AudioSessionCommandResult, CurrentRun, Evidence, FPPCommandResult, FPPInstance, Model, Node, ObservationEntry } from '../api'
 import type { Tone } from '../kit'
 import { EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
@@ -209,4 +209,85 @@ export function audioRows(model: Model, nowIso: string | null): OutputRow[] {
 export function currentRunsAbsence(model: Model): 'loading' | 'unavailable' | null {
   if (model.currentRuns !== null) return null
   return model.currentRunsFetchFailed ? 'unavailable' : 'loading'
+}
+
+/**
+ * A real source of a session id, either an observed `audio_session`
+ * resource this coordinator has seen, or an authored show.action's own
+ * `audioSessionId` target. Never a fake picker (SM-269 design section 3).
+ */
+export type AudioSessionOption = { sessionId: string; origin: string }
+
+export function audioSessionOptions(
+  observations: readonly ObservationEntry[],
+  actions: readonly { id: string; label: string; audioSessionId: string }[],
+): AudioSessionOption[] {
+  const origins = new Map<string, string>()
+  for (const entry of observations) {
+    if (entry.resource.kind !== 'audio_session') continue
+    if (!origins.has(entry.resource.id)) origins.set(entry.resource.id, 'observed')
+  }
+  for (const action of actions) {
+    if (!origins.has(action.audioSessionId)) {
+      origins.set(action.audioSessionId, `from action ${action.label !== '' ? action.label : action.id}`)
+    }
+  }
+  return [...origins.entries()].map(([sessionId, origin]) => ({ sessionId, origin }))
+}
+
+const AUDIO_SESSION_DESIRED_REVISION_SIGNAL = 'audio_session.desired_revision'
+
+/** Derive, don't ask (guide §7): observed desired revision plus one, or 1 for a session never observed. */
+export function deriveAudioSessionRevision(
+  observations: readonly ObservationEntry[],
+  sessionId: string,
+): { next: number; observed: number | null } {
+  const entry = observations.find(
+    (candidate) =>
+      candidate.resource.kind === 'audio_session' &&
+      candidate.resource.id === sessionId &&
+      candidate.signal === AUDIO_SESSION_DESIRED_REVISION_SIGNAL,
+  )
+  const observed = typeof entry?.value === 'number' ? entry.value : null
+  return { next: observed === null ? 1 : observed + 1, observed }
+}
+
+const AUDIO_SESSION_GOOD_OUTCOMES = new Set(['started', 'position', 'stopped', 'completed'])
+
+/**
+ * `outcome: "unconfirmable"` is a real, expected outcome while the
+ * shipped agent's session engine has no working pipeline backend — warn,
+ * never bad, per the API's own AudioSessionCommandResult description.
+ */
+export function describeAudioSessionOutcome(result: AudioSessionCommandResult, action: string): CommandOutcome {
+  const replaySuffix = result.replay ? ' This response reuses the original dispatch; nothing was re-sent.' : ''
+  const attributionSuffix = result.attributionDegraded
+    ? ' Attribution is degraded because the audit record could not be written.'
+    : ''
+  if (result.outcome === '') {
+    return {
+      tone: 'pending',
+      label: 'Pending',
+      detail: `${action}: replayed before the original request resolved.${attributionSuffix}`,
+    }
+  }
+  if (AUDIO_SESSION_GOOD_OUTCOMES.has(result.outcome)) {
+    return {
+      tone: 'good',
+      label: result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1),
+      detail: `${action} dispatched.${replaySuffix}${attributionSuffix}`,
+    }
+  }
+  if (result.outcome === 'unconfirmable') {
+    return {
+      tone: 'warn',
+      label: 'Dispatched',
+      detail: `${action}: dispatched. The node's session engine cannot corroborate it. That is expected on this build, not a transport failure. ${result.reason}`.trim() + replaySuffix + attributionSuffix,
+    }
+  }
+  return {
+    tone: 'bad',
+    label: 'Refused',
+    detail: `${action}: ${result.reason}`.trim() + replaySuffix + attributionSuffix,
+  }
 }

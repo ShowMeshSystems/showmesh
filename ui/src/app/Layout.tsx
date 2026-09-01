@@ -285,22 +285,51 @@ function ShowActivePicker({
   )
 }
 
-/** `Show not reported`: no `currentRuns` read has ever succeeded, so there is nothing to pick from and nothing to open. */
+/**
+ * The active show is a config object (`config/show.active`), which every
+ * coordinator has; that read is this pill's source of truth for the current
+ * show and its revision. `model.currentRuns.activeShow` is used only as
+ * extra evidence (its generation) when a `current-runs` read has succeeded,
+ * never as the primary source — a coordinator without `GET /current-runs`
+ * must still open the picker. `Show not reported` is reserved for the one
+ * case that actually is unreported: the `show.active` read itself failed.
+ */
 function ShowPicker({ model }: { model: Model }) {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const anchorRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
+  const [active, setActive] = useState<ShowActiveConfigResponse | null>(null)
+  const [readError, setReadError] = useState<string | null>(null)
 
-  if (model.currentRuns === null) {
+  useEffect(() => {
+    let cancelled = false
+    readShowActiveOrEmpty()
+      .then((response) => {
+        if (!cancelled) setActive(response)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setReadError(describeApiError(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (readError !== null) {
     return (
       <span className="sm-showpicker sm-showpicker--unavailable">
         <span className="sm-showpicker__eyebrow">Show</span>
         <span className="sm-small sm-faint">Show not reported</span>
+        <span className="sm-small sm-faint sm-truncate">{readError}</span>
       </span>
     )
   }
 
-  const current = model.currentRuns.activeShow.show ?? ''
+  // Not yet resolved: say nothing rather than invent a value.
+  if (active === null) return null
+
+  const current = active.payload.show
+  const generation = model.currentRuns?.activeShow.generation ?? null
 
   return (
     <span className="sm-chrome__picker">
@@ -310,6 +339,7 @@ function ShowPicker({ model }: { model: Model }) {
         className="sm-showpicker"
         aria-haspopup="dialog"
         aria-expanded={open}
+        title={generation !== null ? `Generation ${generation}` : undefined}
         onClick={() => setOpen((v) => !v)}
       >
         <span className="sm-showpicker__eyebrow">Show</span>

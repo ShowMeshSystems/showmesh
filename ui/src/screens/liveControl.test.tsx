@@ -1,9 +1,9 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import { PROBLEM_TYPE } from '../api/problem'
-import type { FPPCommandResult, Model, Node, ResolumeActionResult } from '../api'
+import type { AudioSessionCommandResult, FPPCommandResult, Model, Node, ResolumeActionResult } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { LiveControl } from './LiveControl'
@@ -12,11 +12,26 @@ import { describeFPPOutcome, formatPosition, outputRows, transportState } from '
 const stubs = vi.hoisted(() => ({
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  listObservations: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   startFPPPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   stopFPPPlaylistGracefully: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getResolumeComposition: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   blackoutResolume: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  prepareAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  startAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  pauseAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  resumeAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  advanceAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  stopAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  clearAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  seekAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  setAudioSessionGain: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  fadeAudioSessionGain: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  muteAudioSessionOutput: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  unmuteAudioSessionOutput: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -25,11 +40,26 @@ vi.mock('../api', async () => {
     ...actual,
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getShowCue: (...args: never[]) => stubs.getShowCue(...args),
+    getShowAction: (...args: never[]) => stubs.getShowAction(...args),
     listAssets: (...args: never[]) => stubs.listAssets(...args),
+    listObservations: (...args: never[]) => stubs.listObservations(...args),
+    getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
     startFPPPlaylist: (...args: never[]) => stubs.startFPPPlaylist(...args),
     stopFPPPlaylistGracefully: (...args: never[]) => stubs.stopFPPPlaylistGracefully(...args),
     getResolumeComposition: (...args: never[]) => stubs.getResolumeComposition(...args),
     blackoutResolume: (...args: never[]) => stubs.blackoutResolume(...args),
+    prepareAudioSession: (...args: never[]) => stubs.prepareAudioSession(...args),
+    startAudioSession: (...args: never[]) => stubs.startAudioSession(...args),
+    pauseAudioSession: (...args: never[]) => stubs.pauseAudioSession(...args),
+    resumeAudioSession: (...args: never[]) => stubs.resumeAudioSession(...args),
+    advanceAudioSession: (...args: never[]) => stubs.advanceAudioSession(...args),
+    stopAudioSession: (...args: never[]) => stubs.stopAudioSession(...args),
+    clearAudioSession: (...args: never[]) => stubs.clearAudioSession(...args),
+    seekAudioSession: (...args: never[]) => stubs.seekAudioSession(...args),
+    setAudioSessionGain: (...args: never[]) => stubs.setAudioSessionGain(...args),
+    fadeAudioSessionGain: (...args: never[]) => stubs.fadeAudioSessionGain(...args),
+    muteAudioSessionOutput: (...args: never[]) => stubs.muteAudioSessionOutput(...args),
+    unmuteAudioSessionOutput: (...args: never[]) => stubs.unmuteAudioSessionOutput(...args),
   }
 })
 
@@ -97,11 +127,26 @@ describe('Live Control', () => {
     cleanup()
     stubs.listConfigObjects = () => new Promise(() => {})
     stubs.getShowCue = () => new Promise(() => {})
+    stubs.getShowAction = () => new Promise(() => {})
     stubs.listAssets = () => new Promise(() => {})
+    stubs.listObservations = () => new Promise(() => {})
+    stubs.getAudioSettingsConfig = () => new Promise(() => {})
     stubs.startFPPPlaylist = () => new Promise(() => {})
     stubs.stopFPPPlaylistGracefully = () => new Promise(() => {})
     stubs.getResolumeComposition = () => new Promise(() => {})
     stubs.blackoutResolume = () => new Promise(() => {})
+    stubs.prepareAudioSession = () => new Promise(() => {})
+    stubs.startAudioSession = () => new Promise(() => {})
+    stubs.pauseAudioSession = () => new Promise(() => {})
+    stubs.resumeAudioSession = () => new Promise(() => {})
+    stubs.advanceAudioSession = () => new Promise(() => {})
+    stubs.stopAudioSession = () => new Promise(() => {})
+    stubs.clearAudioSession = () => new Promise(() => {})
+    stubs.seekAudioSession = () => new Promise(() => {})
+    stubs.setAudioSessionGain = () => new Promise(() => {})
+    stubs.fadeAudioSessionGain = () => new Promise(() => {})
+    stubs.muteAudioSessionOutput = () => new Promise(() => {})
+    stubs.unmuteAudioSessionOutput = () => new Promise(() => {})
   })
 
   const fppInstance = (playerState = 'stopped') =>
@@ -123,6 +168,51 @@ describe('Live Control', () => {
     bootstrapRequired: false,
   } as never
 
+  const audioAllowedSession = {
+    serverTime: '2026-08-28T21:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['audio:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
+
+  function audioCommandResult(overrides: Partial<AudioSessionCommandResult> = {}): AudioSessionCommandResult {
+    return {
+      commandId: 'cmd-1',
+      idempotencyKey: 'key-1',
+      action: 'audio.session.start',
+      nodeId: 'audio-node-01',
+      sessionId: 'bg-holiday-01',
+      replay: false,
+      outcome: 'started',
+      reason: '',
+      dispatchedAt: '2026-08-28T21:05:42Z',
+      resolvedAt: '2026-08-28T21:05:44Z',
+      attributionDegraded: false,
+      ...overrides,
+    } as AudioSessionCommandResult
+  }
+
+  /** One declared audio.node, no observed sessions, and a typed session id: the minimal ready state every dispatch test builds on. */
+  async function renderAudioSessionsReady(opts: { fps?: number } = {}) {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () => Promise.resolve({ observations: [] })
+    stubs.getAudioSettingsConfig =
+      opts.fps === undefined
+        ? () => Promise.reject(new Error('unavailable'))
+        : () => Promise.resolve({ payload: { ltcFrameRate: opts.fps } } as never)
+    renderScreen({ session: audioAllowedSession })
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    fireEvent.change(within(region).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
+    return region
+  }
+
   it('keeps the Resolume emergency path between output evidence and night lifecycle', () => {
     renderScreen({})
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
@@ -130,6 +220,7 @@ describe('Live Control', () => {
       'What each output is doing',
       'Resolume',
       'Night lifecycle',
+      'Audio sessions',
       'Macros',
       'Announcements',
       'Actions',
@@ -378,8 +469,8 @@ describe('Live Control', () => {
 
   it('shows that current-run state has not loaded yet, before the first response', () => {
     renderScreen({ fpp: [fppInstance('playing')], session: commandAllowedSession })
-    expect(screen.getByText('Reading')).toBeInTheDocument()
-    expect(screen.getByText('Reading current-run state for program audio.')).toBeInTheDocument()
+    const fact = screen.getByText('Reading current-run state for program audio.')
+    expect(fact.closest('.sm-strip')?.querySelector('.sm-strip__label')).toHaveTextContent('Reading')
   })
 
   it('shows current-run state as unavailable, not silently dropped, when the coordinator does not serve it', () => {
@@ -403,5 +494,131 @@ describe('Live Control', () => {
     })
     expect(screen.queryByText('Now playing not reported')).not.toBeInTheDocument()
     expect(screen.queryByText('Reading current-run state for program audio.')).not.toBeInTheDocument()
+  })
+
+  it('dispatches each audio session transport and mute verb with the node, session id, and derived revision', async () => {
+    stubs.prepareAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.prepare' })))
+    stubs.startAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.start' })))
+    stubs.pauseAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.pause' })))
+    stubs.resumeAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.resume' })))
+    stubs.advanceAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.advance' })))
+    stubs.stopAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.stop', outcome: 'stopped' })))
+    stubs.muteAudioSessionOutput = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.output.mute' })))
+    stubs.unmuteAudioSessionOutput = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.output.unmute' })))
+
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.click(within(region).getByRole('button', { name: 'Prepare' }))
+    fireEvent.click(within(region).getByRole('button', { name: 'Start' }))
+    fireEvent.click(within(region).getByRole('button', { name: 'Pause' }))
+    fireEvent.click(within(region).getByRole('button', { name: 'Resume' }))
+    fireEvent.click(within(region).getByRole('button', { name: 'Advance' }))
+    fireEvent.click(within(region).getByRole('button', { name: 'Stop' }))
+    fireEvent.click(within(region).getByRole('button', { name: 'Mute' }))
+    fireEvent.click(within(region).getByRole('button', { name: 'Unmute' }))
+
+    expect(stubs.prepareAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.startAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.pauseAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.resumeAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.advanceAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.stopAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.muteAudioSessionOutput).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.unmuteAudioSessionOutput).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(await within(region).findByText('Started')).toBeInTheDocument()
+  })
+
+  it('sends seek in milliseconds parsed from the typed timecode at the read LTC frame rate', async () => {
+    stubs.seekAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.seek', outcome: 'position' })))
+    const region = await renderAudioSessionsReady({ fps: 30 })
+    await within(region).findByText(/hh:mm:ss\.ff at 30 fps/)
+
+    fireEvent.change(within(region).getByLabelText('Position'), { target: { value: '00:01:30' } })
+    fireEvent.click(within(region).getByRole('button', { name: 'Seek' }))
+
+    expect(stubs.seekAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, 90000)
+  })
+
+  it('sends gain set in decibels', async () => {
+    stubs.setAudioSessionGain = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.gain.set' })))
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.change(within(region).getByLabelText('Gain'), { target: { value: '-6' } })
+    fireEvent.click(within(region).getByRole('button', { name: 'Set' }))
+
+    expect(stubs.setAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, -6)
+  })
+
+  it('sends gain fade with the target dB and an optional duration in milliseconds', async () => {
+    stubs.fadeAudioSessionGain = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.gain.fade' })))
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.change(within(region).getByLabelText('Fade to'), { target: { value: '-12' } })
+    fireEvent.change(within(region).getByLabelText('Over'), { target: { value: '2000' } })
+    fireEvent.click(within(region).getByRole('button', { name: 'Fade' }))
+
+    expect(stubs.fadeAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, -12, 2000)
+  })
+
+  it('leaves the fade duration off the call when the operator leaves it empty', async () => {
+    stubs.fadeAudioSessionGain = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.gain.fade' })))
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.change(within(region).getByLabelText('Fade to'), { target: { value: '-12' } })
+    fireEvent.click(within(region).getByRole('button', { name: 'Fade' }))
+
+    expect(stubs.fadeAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, -12, undefined)
+  })
+
+  it('keeps Clear disabled until the session id is typed to confirm, then sends it', async () => {
+    stubs.clearAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.clear', outcome: 'stopped' })))
+    const region = await renderAudioSessionsReady()
+
+    const clearButton = within(region).getByRole('button', { name: 'Clear' })
+    expect(clearButton).toBeDisabled()
+
+    fireEvent.change(within(region).getByLabelText('Type bg-holiday-01 to confirm'), { target: { value: 'bg-holiday-01' } })
+    expect(clearButton).not.toBeDisabled()
+
+    fireEvent.click(clearButton)
+    expect(stubs.clearAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+  })
+
+  it('disables every audio session control with the audio:command reason when the scope is missing', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () => Promise.resolve({ observations: [] })
+    renderScreen({
+      session: {
+        serverTime: '2026-08-28T21:07:00Z',
+        authenticated: true,
+        principal: { id: 'p', name: 'op', role: 'viewer', disabled: false },
+        session: null,
+        credentialForm: 'session',
+        scopes: [],
+        scopesState: 'current',
+        bootstrapRequired: false,
+      } as never,
+    })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    fireEvent.change(within(region).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
+    const prepare = within(region).getByRole('button', { name: 'Prepare' })
+    expect(prepare).toBeDisabled()
+    expect(prepare).toHaveAttribute('title', expect.stringContaining('audio:command'))
+  })
+
+  it('renders the empty state when no audio node is declared', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    renderScreen({ session: audioAllowedSession })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    expect(within(region).getByText('No audio nodes')).toBeInTheDocument()
+    expect(within(region).getByText('No node advertises an audio engine.')).toBeInTheDocument()
   })
 })

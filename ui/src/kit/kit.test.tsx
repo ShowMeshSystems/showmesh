@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Field, Input, NotWired, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, NotWired, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 
 afterEach(cleanup)
 
@@ -228,7 +228,20 @@ describe('Popover', () => {
     expect(document.activeElement).toBe(anchor)
   })
 
-  it('closes on an outside click but not on a click inside the panel', () => {
+  it('portals the panel onto document.body, clear of the anchor’s stacking context', () => {
+    const { container } = render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Anchor' }))
+
+    // Queried on document.body, not the render container: the chrome bar
+    // this anchors under is a sticky container with its own stacking
+    // context, so the panel must render as a direct child of body.
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.parentElement).toBe(document.body)
+    expect(container.contains(dialog)).toBe(false)
+  })
+
+  it('closes on an outside click but not on a click inside the portaled panel', () => {
     render(<Harness />)
     fireEvent.click(screen.getByRole('button', { name: 'Anchor' }))
     screen.getByRole('dialog', { name: 'Choose one' })
@@ -238,5 +251,88 @@ describe('Popover', () => {
 
     fireEvent.mouseDown(document.body)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('Drawer', () => {
+  function Harness({ width = 'content' }: { width?: 'content' | 'wide' | number }) {
+    const openerRef = useRef<HTMLButtonElement>(null)
+    const [open, setOpen] = useState(false)
+    return (
+      <div>
+        <button ref={openerRef} type="button" onClick={() => setOpen(true)}>
+          Inspect
+        </button>
+        <Drawer open={open} onClose={() => setOpen(false)} labelledBy="drawer-heading" width={width}>
+          <h2 id="drawer-heading">Node detail</h2>
+          <button type="button">Inner action</button>
+        </Drawer>
+      </div>
+    )
+  }
+
+  it('renders nothing until open, then portals into the body', () => {
+    render(<Harness />)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
+    const dialog = screen.getByRole('dialog', { name: 'Node detail' })
+    expect(dialog).toBeInTheDocument()
+    expect(dialog.closest('body')).toBe(document.body)
+    expect(dialog.parentElement).toBe(document.body)
+  })
+
+  it('is labelled by the heading inside it and stays non-modal', () => {
+    render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
+    const dialog = screen.getByRole('dialog', { name: 'Node detail' })
+    expect(dialog).toHaveAttribute('aria-modal', 'false')
+  })
+
+  it('moves focus in on open and returns it to the opener on close', async () => {
+    render(<Harness />)
+    const opener = screen.getByRole('button', { name: 'Inspect' })
+    // userEvent, not fireEvent: only userEvent's click also moves focus, the
+    // way a real pointer click does, so the drawer has a real opener to
+    // capture and return to.
+    await userEvent.click(opener)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('closes on Escape', () => {
+    render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
+    const dialog = screen.getByRole('dialog', { name: 'Node detail' })
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('closes on a scrim click but not on a click inside the panel', () => {
+    const { container } = render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
+    screen.getByRole('dialog', { name: 'Node detail' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inner action' }))
+    expect(screen.getByRole('dialog', { name: 'Node detail' })).toBeInTheDocument()
+
+    const scrim = container.ownerDocument.querySelector('.sm-drawer-scrim')
+    expect(scrim).not.toBeNull()
+    fireEvent.click(scrim as Element)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('applies a width class for wide and an inline width for a pixel value', () => {
+    render(<Harness width="wide" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
+    expect(document.querySelector('.sm-drawer--wide')).not.toBeNull()
+
+    cleanup()
+    render(<Harness width={500} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
+    const dialog = screen.getByRole('dialog', { name: 'Node detail' })
+    expect(dialog).toHaveStyle({ width: '500px' })
   })
 })
