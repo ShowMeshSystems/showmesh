@@ -393,10 +393,9 @@ func nightBackgroundAudioInitialGainDb(ba *config.NightSessionBackgroundAudio) f
 // audionode.go's own audioOutputLocalCapabilityID precedent one file
 // over) - copied literals here, like audioEngineStateSignalID one file
 // over (nightaudioreadiness.go), for the same reason.
-const (
-	audioSessionFadeStateSignalID   observation.SignalID = "audio_session.fade.state"
-	audioSessionFadeStateInProgress                      = "in_progress"
-)
+const audioSessionFadeStateSignalID observation.SignalID = "audio_session.fade.state"
+
+const audioSessionFadeStateInProgress string = "in_progress"
 
 // nightBackgroundAudioFadeSettled reports whether sessionID's own fade on
 // nodeID has genuinely finished ramping, per the node's own reported
