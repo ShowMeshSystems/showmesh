@@ -452,6 +452,35 @@ func cueCatalogDeployReplayUndecodableProblem(existingID, nodeID string) v1.Prob
 	}
 }
 
+// cueCatalogDeployReplayAllZeroIdentityProblem is
+// cueCatalogDeployReplayUndecodableProblem's positive-evidence sibling:
+// existing.ID's row decoded WITHOUT a json.Unmarshal error, but its
+// caller-intent payload was non-empty and decoded to no show, generation,
+// or revision at all. A genuine cue-catalog-deploy identity always carries
+// all three (this route's own dispatch path only ever writes one after
+// assetsync.ResolveCueCatalog resolves a real active catalog), so a
+// non-empty payload that decodes to none of them is positive evidence this
+// row's caller_intent belongs to a different, untagged command family
+// that happens to share this shape's "node" field, not a genuine identity
+// that is legitimately blank. See commands.caller_intent's own documented
+// overlap (store/caller_intent.go) and resolveCueCatalogDeployReplay's own
+// comment on the payload it decodes here. Reported the same way as an
+// undecodable row, because from the caller's side the remedy is identical:
+// mint a fresh idempotencyKey.
+func cueCatalogDeployReplayAllZeroIdentityProblem(existingID, nodeID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Idempotency key already used for a record this route cannot replay",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"idempotencyKey was already used for command %s (node %q), but its stored identity carries none "+
+				"of the fields a cue-catalog-deploy identity always has (show, generation, revision); it is "+
+				"likely a different command family or a pre-identity row, and cannot be answered as a replay. "+
+				"Mint a fresh idempotencyKey for a genuinely new request.",
+			existingID, nodeID),
+	}
+}
+
 // resolveCueCatalogDeployReplay answers a replayed idempotency key against
 // existing's own stored row — mirrors resolveRenderCommandReplay's
 // identical shape, narrowed to this action's own single-action, single-
@@ -492,6 +521,17 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 	payload, _ := store.CallerIntentPayload(store.CallerIntentCueCatalogDeploy, existing.CallerIntent)
 	if err := json.Unmarshal([]byte(payload), &reqID); err != nil {
 		p := cueCatalogDeployReplayUndecodableProblem(existing.ID, nodeID)
+		return v1.CueCatalogDeployResult{}, &p
+	}
+	// A non-empty payload that decoded to no show, generation, or revision
+	// at all is positive evidence of a wrong-family row (see
+	// cueCatalogDeployReplayAllZeroIdentityProblem): a genuine identity
+	// from this route's own writer never leaves all three blank. An empty
+	// payload is left exactly as it already was before this check: it
+	// fails the json.Unmarshal above (empty is not valid JSON) and never
+	// reaches this line at all.
+	if payload != "" && reqID.Show == "" && reqID.Generation == 0 && reqID.Revision == "" {
+		p := cueCatalogDeployReplayAllZeroIdentityProblem(existing.ID, nodeID)
 		return v1.CueCatalogDeployResult{}, &p
 	}
 	return v1.CueCatalogDeployResult{
