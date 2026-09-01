@@ -1229,7 +1229,7 @@ The store schema version, bumped by migrations in
 | v23 | released, dead | was Track J seam J1's fallback-program storage. Released 2026-08-31 for the same reason as v21 and v22. J1 takes v25 |
 | v24 | shipped | every stored `audio.settings` revision is backfilled with `duckFadeDurationMs`/`duckRestoreFadeDurationMs` when either is missing, using each field's own stated default, so a revision written before a duck fade (rather than an instant step) existed still decodes and can be pushed |
 | v25 | shipped | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, `fallback_programs` and `fallback_program_acknowledgements` (ADR-048, TRACK-J-fpp-fallback.md J1). Renumbered from v23 |
-| v26 | reserved | Lane 17a SM-111: renaming `commands.requested_revision` and formalizing its per-family discriminator (owner, 2026-08-19). Renumbered from v22, which was renumbered from v13 |
+| v26 | shipped | Lane 17a SM-111: renaming `commands.requested_revision` and formalizing its per-family discriminator (owner, 2026-08-19). Renumbered from v22, which was renumbered from v13 |
 | v27 | reserved | the multi-node audio branch's `audio_sessions` re-key, from `id` alone to `(node_id, id)`. Renumbered from v21 |
 | v28+ | unallocated | free |
 
