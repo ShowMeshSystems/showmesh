@@ -160,17 +160,27 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	case nightStateTransitionToShow:
 		// Intentionally no action: see this switch's own comment above.
 	case nightStateStopped:
-		// Intentionally no action: stopped is terminal, and end-session -
-		// the only path that forces a session to stopped without this
-		// controller's own outbox already having converged its background
-		// audio to a confirmed suspend - clears the bed itself, directly
-		// and synchronously, the moment it commits
-		// (nightClearBackgroundAudioAtEndSession, called from
-		// handleNightCommand). That clear does not go through this
-		// controller's own outbox, so nightStopBackgroundAudioIfRunning
-		// reading stale history here would only mint a redundant
-		// stop/pause against a session the node no longer has, forever,
-		// for as long as this stopped record stays current.
+		// end-session's own clear (nightClearBackgroundAudioAtEndSession,
+		// called from handleNightCommand the moment the session record
+		// commits to stopped) is warn-and-proceed, not guaranteed: when
+		// the node is unreachable, refused, or unacknowledged, that one
+		// synchronous attempt never lands. Falling into the default
+		// branch below (nightStopBackgroundAudioIfRunning) would be wrong
+		// two ways at once - a stop/pause leaves the node's own persisted
+		// session record in place for its RestoreAll to resurrect the
+		// bed, which is exactly what a clear (and ADR-038's promise of no
+		// resume) exists to prevent; and doing nothing at all, as this
+		// case once did, leaves the bed audibly playing over a session
+		// the operator was told is stopped, for as long as this record
+		// stays current - the same defect background audio's own clear
+		// was built to fix, one layer down. So this retries the CLEAR
+		// itself, through nightRetryEndSessionClear: every tick mints a
+		// fresh idempotency key (nightEndSessionClearIdempotencyKey) so a
+		// retry can never be answered by the first attempt's own cached,
+		// failed outcome, and the retry stops the moment a clear
+		// genuinely confirms - a session that already cleared costs only
+		// a JSON decode to recheck, never another dispatch.
+		h.nightRetryEndSessionClear(ctx, now, rec)
 	default:
 		h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -657,6 +658,172 @@ func TestNightClearBackgroundAudioAtEndSession_ClearsNotStops(t *testing.T) {
 	}
 	if pub.lastParams["sessionId"] != sessionID {
 		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+}
+
+// countActionDispatches counts every command pub actually put on the wire
+// (never one that failed before publish) whose action is action.
+func countActionDispatches(pub *fakeAudioPublisher, action string) int {
+	n := 0
+	for _, d := range pub.dispatched {
+		if d.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
+// TestNightClearBackgroundAudioAtEndSession_RepeatedCallDoesNotRedispatch
+// documents the exact defect this review finding fixed, and is kept
+// deliberately as a regression guard rather than discarded once the fix
+// landed: end-session's own clear (nightClearBackgroundAudioAtEndSession)
+// keeps ONE constant, per-session idempotency key by design (its own doc
+// comment). Calling it a SECOND time after a pre-wire failure does NOT
+// retry against the node - executeAudioSessionDispatch's own idempotency-
+// first replay (audiodispatch.go's InsertCommand duplicate-key path)
+// answers the second call with the first attempt's own cached, failed
+// outcome instead of dispatching again. That is exactly why nightTick's
+// stopped-state retry never calls this function a second time and mints
+// its own fresh, per-attempt key instead
+// ([nightEndSessionClearIdempotencyKey], nightRetryEndSessionClear). If a
+// future change ever gives THIS function a per-attempt key of its own,
+// this test starts failing - on purpose, so that change is deliberate,
+// not a silent reintroduction of the bug the retry above exists to fix.
+func TestNightClearBackgroundAudioAtEndSession_RepeatedCallDoesNotRedispatch(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	pub.beforePublishErr = errors.New("dial tcp: no route to host")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	before := countActionDispatches(pub, "audio.session.clear")
+
+	pub.beforePublishErr = nil
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if got := countActionDispatches(pub, "audio.session.clear"); got != before {
+		t.Fatalf("audio.session.clear dispatch count after a repeated call to nightClearBackgroundAudioAtEndSession = %d, want unchanged at %d - if this function now retries under its own key, nightTick's stopped-state retry may have become redundant; that is a deliberate design change to make, not an accident", got, before)
+	}
+}
+
+// TestNightTick_StoppedRetriesEndSessionClearUntilNodeReturns is this
+// review finding's own end-to-end proof: nightTick's stopped-state case
+// must RETRY end-session's own clear, not do nothing, when the node was
+// unreachable when it first ran. It drives the unreachable case end to
+// end - the clear fails, the bed is still resident, ticks while stopped
+// retry it, the node returns, a clear lands - and asserts convergence
+// specifically: the session record is released AND no further tick
+// dispatches anything more, not merely that a retry was attempted.
+func TestNightTick_StoppedRetriesEndSessionClearUntilNodeReturns(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	// 1. end-session runs and its own synchronous clear FAILS: the node
+	// is unreachable.
+	pub.beforePublishErr = errors.New("dial tcp: no route to host")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear reached the wire on the failed first attempt, want 0, got %d", got)
+	}
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	// 2. The bed is still resident: nothing released it. No clear anchor
+	// has confirmed.
+	cur, ok, err := st.GetCurrentNightSession(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetCurrentNightSession: ok=%v err=%v", ok, err)
+	}
+	if anchor, has := decodeNightContentAnchor(cur.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeEndSessionClear && !anchor.ObservedAt.IsZero() {
+		t.Fatalf("a clear is already confirmed before any retry ran")
+	}
+
+	// 3. Ticks occur while the session is stopped and the node is still
+	// unreachable: the clear is retried, but nothing lands.
+	h.nightTick(context.Background(), testNow)
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear reached the wire while the node was still unreachable, want 0, got %d", got)
+	}
+
+	// 4. The node returns: the very next tick's retry dispatches the
+	// clear again, under a fresh idempotency key, and this time it lands.
+	pub.beforePublishErr = nil
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightTick(context.Background(), testNow)
+
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+	cur, ok, err = st.GetCurrentNightSession(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetCurrentNightSession: ok=%v err=%v", ok, err)
+	}
+	anchor, has := decodeNightContentAnchor(cur.ContentAnchorJSON)
+	if !has || anchor.Purpose != nightAnchorPurposeEndSessionClear || anchor.ObservedAt.IsZero() {
+		t.Fatalf("anchor = %+v (has=%v), want a confirmed end-session-clear anchor - the session record was never released", anchor, has)
+	}
+
+	// Convergence, not just an attempt: further ticks dispatch NOTHING.
+	landedCount := countActionDispatches(pub, "audio.session.clear")
+	h.nightTick(context.Background(), testNow)
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != landedCount {
+		t.Fatalf("audio.session.clear dispatch count after confirming = %d, want unchanged at %d (no further dispatch once released)", got, landedCount)
+	}
+}
+
+// TestNightTick_StoppedDoesNotRedispatchClearOnceConfirmed proves the
+// concern the original review comment raised for the success case: once
+// end-session's own clear confirms (whether on its first synchronous
+// attempt or a later retry), further ticks while stopped never mint
+// another redundant clear.
+func TestNightTick_StoppedDoesNotRedispatchClearOnceConfirmed(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+
+	h.nightTick(context.Background(), testNow) // the stopped-state retry dispatches and confirms.
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 1 {
+		t.Fatalf("audio.session.clear dispatch count after the first stopped tick = %d, want exactly 1", got)
+	}
+
+	for i := 0; i < 5; i++ {
+		h.nightTick(context.Background(), testNow)
+	}
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 1 {
+		t.Fatalf("audio.session.clear dispatch count after 5 more stopped ticks = %d, want still 1 (no endless redundant traffic)", got)
 	}
 }
 
