@@ -185,23 +185,69 @@ func (h *handlers) nightAnnouncementHistory(ctx context.Context, rec store.Night
 }
 
 // nightAnnouncementRevisions computes this cycle's clear and start
-// revisions for one announcement cue. Both must strictly exceed every
-// revision this controller has ever sent at the session AND the apply's
-// own pinned config revision, since the apply lands between them.
+// revisions for one announcement cue. Both must strictly exceed the
+// coordinator's own persisted audio_sessions revision for this session
+// (store/audiosessions.go, read via
+// [handlers.nightAnnouncementPersistedRevision]) AND the apply's own
+// pinned config revision, since the apply lands between them.
+//
+// The floor is deliberately NOT derived from nightAnnouncementHistory:
+// that history is scoped to the CURRENT night session record's id, which
+// is a fresh uuid every time prepare-site opens a new epoch
+// (nightPrepareSiteTx) - so a new night session always found it empty and
+// the floor collapsed to applyRevision alone, while the node still held
+// whatever the previous night session left. audio_sessions is keyed by
+// the audio session id instead, so it survives exactly the boundary the
+// history-keyed floor did not. Deriving the floor from what the node
+// currently reports instead of this coordinator's own persisted record
+// was considered and rejected: that computes desired state from observed
+// state, and fails exactly when the node is unreachable.
 //
 // clear = floor+1 and start = floor+2, so the pair advances by two per
-// cycle and neither can ever be refused as stale, whether or not the
+// cycle and strictly exceeds both inputs to the floor, whether or not the
 // clear actually took effect: if it did, the apply meets a fresh session
 // at revision zero and start still outranks it; if it did not, start
 // still outranks the surviving session's own current revision.
-func nightAnnouncementRevisions(history []nightBackgroundAudioHistoryRow, applyRevision int64) (clearRevision, startRevision int64) {
+//
+// That guarantees the pair can never be refused as stale because of
+// anything THIS coordinator has itself previously sent — it does NOT
+// guarantee the pair is never refused at all. If the NODE's own revision
+// counter has run ahead of this coordinator's persisted audio_sessions
+// row — for example through the swallowed PutAudioSession error in
+// persistAudioSessionDesiredState (audiodispatch.go), logged and
+// discarded after the node has already applied the command — floor+1 can
+// still land at or below the node's own counter, and the node refuses it
+// as stale there. A caller of this pair must still be prepared to see
+// that refusal; this function only computes the floor-relative pair, it
+// does not and cannot see the node's own state.
+func nightAnnouncementRevisions(persistedRevision, applyRevision int64) (clearRevision, startRevision int64) {
 	floor := applyRevision
-	for _, row := range history {
-		if row.Row.ActionRevision > floor {
-			floor = row.Row.ActionRevision
-		}
+	if persistedRevision > floor {
+		floor = persistedRevision
 	}
 	return floor + 1, floor + 2
+}
+
+// nightAnnouncementPersistedRevision reads sessionID's own durable
+// audio_sessions row and returns its revision, or 0 when no row exists
+// yet (a session this coordinator has never dispatched anything against).
+// This is [nightAnnouncementRevisions]'s floor input across night
+// sessions - see that function's own doc comment. A read error other
+// than "not found" costs only the chance to advance past a revision this
+// coordinator could not read this time: the apply's own pinned config
+// revision is still in the floor, so this can never cause a rewind, only
+// fail to include evidence it could not get.
+func (h *handlers) nightAnnouncementPersistedRevision(ctx context.Context, sessionID string) int64 {
+	rec, err := h.deps.AudioSessions.GetAudioSession(ctx, sessionID)
+	switch {
+	case err == nil:
+		return int64(rec.Revision)
+	case errors.Is(err, store.ErrAudioSessionNotFound):
+		return 0
+	default:
+		h.logWarn("night loop: announcement: failed to read persisted audio session revision; the floor may not include it", "sessionId", sessionID, "error", err)
+		return 0
+	}
 }
 
 // nightAnnouncementAppliedThisCycle reports whether cue's own apply
@@ -240,7 +286,8 @@ func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	clearRevision, _ := nightAnnouncementRevisions(history, applyRevision)
+	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	clearRevision, _ := nightAnnouncementRevisions(persisted, applyRevision)
 	clear := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.clear", map[string]any{})
 	phase := nightPhaseAnnouncementClear + ":" + cuePhase
 	if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, clear, clearRevision, history); err != nil {
@@ -278,7 +325,8 @@ func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history for start", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	_, startRevision := nightAnnouncementRevisions(history, applyRevision)
+	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	_, startRevision := nightAnnouncementRevisions(persisted, applyRevision)
 	start := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.start", map[string]any{})
 	phase := nightPhaseAnnouncementStart + ":" + cuePhase
 	if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, start, startRevision, history); err != nil {

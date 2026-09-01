@@ -657,6 +657,7 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 	var gateObjectID string
 	var gateRevision int64
 	var overrideAuditParams []map[string]any
+	var newEpochPayload config.NightSessionPayload
 	if willAttemptNewEpoch {
 		objectID, revision, payload, problem, err := h.nightResolveActiveConfigForGate(ctx)
 		if err != nil {
@@ -673,12 +674,13 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 			return nightCommandOutcome{}, &p, nil
 		}
 		gateObjectID, gateRevision = objectID, revision
+		newEpochPayload = payload
 		if len(gate.Overridden) > 0 {
 			overrideAuditParams = nightInterlockOverrideAuditParams(gate.Overridden)
 		}
 	}
 
-	return h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+	out, problem, err := h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
 			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
 			return nightCommandOutcome{}, &p, nil
@@ -689,6 +691,143 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 		}
 		return out, problem, err
 	})
+	// Item 3: prepare-site is where this coordinator gets the site into a
+	// known state, so a genuinely NEW epoch (never an idempotent replay or
+	// an already-open session - see nightPrepareSiteTx) resets every
+	// announcement cue's own audio session. Only after nightRunGated has
+	// durably committed the new session: this dispatches live, WARN AND
+	// PROCEED (nightResetAnnouncementSessionsAtPrepareSite's own doc
+	// comment), and must never affect whether prepare-site itself
+	// succeeded.
+	if err == nil && problem == nil && out.outcome == nightOutcomeApplied {
+		h.nightResetAnnouncementSessionsAtPrepareSite(ctx, now, out.result, newEpochPayload)
+	}
+	return out, problem, err
+}
+
+// nightAnnouncementResetAtPrepareSiteBudget bounds, to at most itself
+// plus one in-flight audioCommandConfirmDeadline, the TOTAL real
+// wall-clock time nightResetAnnouncementSessionsAtPrepareSite's own pass
+// may add to prepare-site, regardless of how many distinct announcement
+// sessions the active night.session configures. Checked BEFORE each
+// distinct session's own audio.session.clear
+// (nightResetAnnouncementCueSessionOnce), not derived from ctx: that
+// dispatch (executeAudioSessionDispatch) awaits its result on
+// context.WithoutCancel(ctx) (audiodispatch.go's own "bgCtx cutover" —
+// deliberate, so a caller walking away can never abort a dispatch that is
+// already durably recorded), so nightBoundInterlockDispatch's own ctx
+// deadline cannot cut a stalled await short here the way it can for a
+// live interlock read elsewhere in this file. Without this, an
+// unreachable node costs this pass a full audioCommandConfirmDeadline
+// (15s) PER distinct session, unbounded by session count.
+//
+// Real time.Now(), deliberately independent of h.now() (Options.Clock,
+// fixed in tests to make STAMPED timestamps deterministic) — the
+// identical split confirmFPPCommand's own doc comment explains for the
+// same reason: a wait paced by a clock that never advances would never
+// end.
+//
+// A var, not a const, so a test can drive it to prove the bound the way
+// nightInterlockAggregateDispatchBudget already is.
+var nightAnnouncementResetAtPrepareSiteBudget = 2 * audioCommandConfirmDeadline
+
+// nightResetAnnouncementSessionsAtPrepareSite issues Item 3's reset: an
+// audio.session.clear against every announcement cue's own audio session
+// in the epoch just opened, so a node still holding whatever a PREVIOUS
+// night session left cannot make this session's first announcement play
+// against stale desired state. This runs at prepare-site, never at
+// run-readiness - readiness is a verification step and must stay free of
+// side effects (nightRunReadinessCommand's own doc comment); prepare-site
+// is already the "get the site into a known state" moment.
+//
+// WARN AND PROCEED, BOUNDED: the night must never block on an unreachable
+// node, and proceeding here is not free. This pass adds at most
+// nightAnnouncementResetAtPrepareSiteBudget plus one in-flight
+// audioCommandConfirmDeadline to prepare-site's own latency - never more,
+// because the budget is checked before each dispatch and a dispatch
+// already under way is never interrupted - regardless of how many
+// announcement sessions are configured: once the budget is spent, every
+// remaining distinct (node, session) pair is SKIPPED rather than
+// dispatched. A skipped session keeps whatever a previous night session
+// left on its node until a later prepare-site, or until the night loop's
+// own per-cycle clear reaches it once that cue actually runs. Every
+// failure here - skipped, unacknowledged, or refused - only logs a
+// warning and continues; none is ever returned to the caller, and none
+// is ever a reason to fail prepare-site itself.
+//
+// No node-reported revision is read or trusted here (RULED: deriving the
+// floor from what the node currently reports computes desired state from
+// observed state and fails exactly when the node is unreachable, per
+// nightAnnouncementRevisions's own doc comment). The revision this clear
+// carries is computed the SAME way the night loop's own per-cycle clear
+// is (nightAnnouncementRevisions over the persisted audio_sessions row),
+// so this reset counts as that floor's next advance rather than a second,
+// disagreeing source of truth for the same session.
+func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
+	dispatchCtx, cancel := nightBoundInterlockDispatch(ctx)
+	defer cancel()
+	budgetDeadline := time.Now().Add(nightAnnouncementResetAtPrepareSiteBudget)
+	seen := map[string]bool{}
+	skipped := 0
+	for _, cue := range payload.EnterShow.Cues {
+		skipped += h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen, budgetDeadline)
+	}
+	for _, cue := range payload.EnterResting.Cues {
+		skipped += h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen, budgetDeadline)
+	}
+	if skipped > 0 {
+		h.logWarn("night loop: prepare-site: announcement session reset budget exhausted; skipping the rest so prepare-site is never blocked on an unreachable node - each skipped session keeps whatever a previous night session left until a later prepare-site or the night loop's own per-cycle clear reaches it",
+			"sessionId", rec.ID, "skipped", skipped, "budget", nightAnnouncementResetAtPrepareSiteBudget)
+	}
+}
+
+// nightResetAnnouncementCueSessionOnce resolves cue's own announcement
+// session, if any, and clears it - skipping a (node, session) pair
+// already reset this pass so a cue reused across enterShow/enterResting
+// (or two cues bound to the same session) never dispatches the same
+// clear twice. Also skips - and reports as skipped via its own return
+// value - a pair reached after budgetDeadline: see
+// nightAnnouncementResetAtPrepareSiteBudget's own doc comment for why
+// that check happens here, in real wall-clock time, rather than through
+// ctx.
+func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, seen map[string]bool, budgetDeadline time.Time) (skipped int) {
+	target, applyRevision, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	if !ok {
+		return 0
+	}
+	key := target.AudioNodeID + "/" + target.AudioSessionID
+	if seen[key] {
+		return 0
+	}
+	seen[key] = true
+
+	if !time.Now().Before(budgetDeadline) {
+		return 1
+	}
+
+	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	clearRevision, _ := nightAnnouncementRevisions(persisted, applyRevision)
+	idemKey := fmt.Sprintf("night-prepare-site-reset:%s:%s", rec.ID, target.AudioSessionID)
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.clear", NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
+		Params: map[string]any{
+			"sessionId": target.AudioSessionID, "invocationId": idemKey, "revision": uint64(clearRevision),
+		},
+		Revision: uint64(clearRevision), IdempotencyKey: idemKey,
+		IssuerID: "night-controller", IssuerName: "night controller",
+	})
+	if err != nil {
+		h.logWarn("night loop: prepare-site: announcement session reset was not acknowledged", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "error", err)
+		return
+	}
+	if problem != nil {
+		h.logWarn("night loop: prepare-site: announcement session reset was refused", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "reason", problem.Detail)
+		return
+	}
+	if nightAudioCueOutcome(result.Outcome) != nightCueOutcomeConfirmed {
+		h.logWarn("night loop: prepare-site: announcement session reset did not confirm", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "outcome", result.Outcome, "reason", result.Reason)
+	}
+	return 0
 }
 
 // nightResolveActiveConfigForGate is [handlers.resolveActiveNightSessionConfigTx]'s
