@@ -10,7 +10,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
+import { Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
@@ -259,11 +259,9 @@ function CueTable({
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} aria-current={selectedId === row.id ? 'true' : undefined} className={selectedId === row.id ? 'sm-table__row--current' : undefined}>
+                <SelectableRow key={row.id} selected={selectedId === row.id} onActivate={() => onSelect(row.id)} ariaLabel={`Edit ${row.label}`}>
                   <td>
-                    <button type="button" className="sm-linkbutton" onClick={() => onSelect(row.id)} aria-pressed={selectedId === row.id}>
-                      {row.label}
-                    </button>
+                    <strong>{row.label}</strong>
                     {selectedId === row.id && <span className="sm-viewing">Editing</span>}
                     <br />
                     <span className="sm-data sm-small sm-faint">{row.id}</span>
@@ -288,7 +286,7 @@ function CueTable({
                     </td>
                   )}
                   {policyColumn && <td className="sm-small sm-muted">{row.announcementPolicy}</td>}
-                </tr>
+                </SelectableRow>
               ))
             )}
           </tbody>

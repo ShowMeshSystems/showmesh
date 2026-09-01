@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
 
 /**
  * Wide tables scroll inside this wrapper; the page never gains horizontal
@@ -14,6 +14,46 @@ export function TableWrap({ label, children }: { label: string; children: ReactN
 
 export function Table({ children }: { children: ReactNode }) {
   return <table className="sm-table">{children}</table>
+}
+
+const INTERACTIVE_DESCENDANT = 'a, button, input, select, textarea, summary, [role="button"], [role="link"]'
+
+/** A table row that opens its record without disguising one cell as the action. */
+export function SelectableRow({
+  children,
+  onActivate,
+  selected = false,
+  className,
+  ariaLabel,
+}: {
+  children: ReactNode
+  onActivate: () => void
+  selected?: boolean
+  className?: string
+  ariaLabel?: string
+}) {
+  const activateFromPointer = (event: MouseEvent<HTMLTableRowElement>) => {
+    if ((event.target as Element).closest(INTERACTIVE_DESCENDANT)) return
+    onActivate()
+  }
+  const activateFromKeyboard = (event: KeyboardEvent<HTMLTableRowElement>) => {
+    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return
+    event.preventDefault()
+    onActivate()
+  }
+
+  return (
+    <tr
+      tabIndex={0}
+      aria-label={ariaLabel}
+      aria-current={selected ? 'true' : undefined}
+      className={['sm-table__row--selectable', selected ? 'sm-table__row--current' : '', className ?? ''].filter(Boolean).join(' ')}
+      onClick={activateFromPointer}
+      onKeyDown={activateFromKeyboard}
+    >
+      {children}
+    </tr>
+  )
 }
 
 /** Freshness rides in the row, never in a banner above the table. */

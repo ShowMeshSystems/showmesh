@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Section, Segmented, StatusPair, Table, TableWrap, RuledStrip } from '../kit'
-import { Link } from 'react-router-dom'
+import { Section, Segmented, SelectableRow, StatusPair, Table, TableWrap, RuledStrip } from '../kit'
+import { useNavigate } from 'react-router-dom'
 import { useModelContext } from '../app/ModelContext'
 import { effectiveServerTimeIso } from '../domain/time'
 import { MonitorHead } from './Monitor'
@@ -15,6 +15,7 @@ const KINDS: readonly { value: FleetKind; label: string }[] = [
 
 export function MonitorSignals() {
   const model = useModelContext()
+  const navigate = useNavigate()
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const [kind, setKind] = useState<FleetKind>('all')
 
@@ -58,7 +59,7 @@ export function MonitorSignals() {
                 </thead>
                 <tbody>
                   {shown.map((row) => (
-                    <SignalTableRow key={row.key} row={row} />
+                    <SignalTableRow key={row.key} row={row} onOpen={() => navigate(row.resourceTo)} />
                   ))}
                 </tbody>
               </Table>
@@ -71,11 +72,11 @@ export function MonitorSignals() {
   )
 }
 
-function SignalTableRow({ row }: { row: SignalRow }) {
+function SignalTableRow({ row, onOpen }: { row: SignalRow; onOpen: () => void }) {
   return (
-    <tr>
+    <SelectableRow onActivate={onOpen} ariaLabel={`Open ${row.resource}`}>
       <td>
-        <Link to={row.resourceTo}>{row.resource}</Link>
+        <strong>{row.resource}</strong>
       </td>
       <td className="sm-data">{row.signal}</td>
       <td className="sm-data">{row.value}</td>
@@ -83,6 +84,6 @@ function SignalTableRow({ row }: { row: SignalRow }) {
         <StatusPair tone={row.tone} label={row.state} />
       </td>
       <td className="sm-data">{row.observed}</td>
-    </tr>
+    </SelectableRow>
   )
 }

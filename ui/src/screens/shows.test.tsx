@@ -117,7 +117,8 @@ describe('Shows · list', () => {
     renderShows({ currentRuns: { serverTime: '2026-08-30T21:00:00Z', activeShow: { configured: true, show: 'winter-ridge-2026', generation: 1 }, runs: [] } as never })
     await waitFor(() => expect(screen.getByText('Winter Ridge 2026')).toBeInTheDocument())
     expect(screen.getByText('Active')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Edit show' })).toHaveAttribute('href', '/shows/winter-ridge-2026/playlists')
+    expect(screen.getByRole('row', { name: 'Open Winter Ridge 2026' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Edit show' })).not.toBeInTheDocument()
   })
 
   it('never marks a show active when currentRuns has not been read', async () => {

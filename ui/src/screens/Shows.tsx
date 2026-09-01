@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { ApiError, getShowActive, getShowActiveRevisions, listConfigObjects, putShowActive } from '../api'
-import { Button, ButtonRow, DefinitionStrip, Field, FieldGrid, PageTitle, RevisionHistory, RuledStrip, Section, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, DefinitionStrip, Field, FieldGrid, PageTitle, RevisionHistory, RuledStrip, Section, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -310,12 +310,9 @@ export function Shows() {
                   {rows.map((row) => {
                     const rowCounts = counts.get(row.id)
                     return (
-                      <tr key={row.id} aria-current={row.active ? 'true' : undefined} className={row.active ? 'sm-table__row--current' : undefined}>
+                      <SelectableRow key={row.id} selected={row.active} onActivate={() => navigate(`/shows/${row.id}/playlists`)} ariaLabel={`Open ${row.label}`}>
                         <td>
-                          <Link to={`/shows/${row.id}`}>{row.label}</Link>{' '}
-                          <Link className="sm-linkbutton" to={`/shows/${row.id}/playlists`}>
-                            Edit show
-                          </Link>{' '}
+                          <strong>{row.label}</strong>{' '}
                           {row.active && <StatusPair tone="good" label="Active" />}
                           <br />
                           <span className="sm-data sm-small sm-faint">
@@ -332,7 +329,7 @@ export function Shows() {
                           )}
                         </td>
                         <td className="sm-small sm-muted">{formatClock(row.updatedAt) ?? 'unrecorded'}</td>
-                      </tr>
+                      </SelectableRow>
                     )
                   })}
                 </tbody>

@@ -9,7 +9,7 @@ import {
   type ConfigObjectSummary,
   type UploadProgress,
 } from '../api'
-import { Button, Callout, Field, Input, Panes, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, Field, Input, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
@@ -264,17 +264,15 @@ function AssetGroupRows({
       {group.current.map((asset) => {
         const identity = assetIdentityKey(asset)
         return (
-          <tr key={identity} aria-current={selectedIdentity === identity ? 'true' : undefined} className={selectedIdentity === identity ? 'sm-table__row--current' : undefined}>
+          <SelectableRow key={identity} selected={selectedIdentity === identity} onActivate={() => onSelect(identity)} ariaLabel={`View ${group.sequence} for ${targetLabel(asset)}`}>
             {showColumn && <td className="sm-data sm-small sm-muted">{asset.show}</td>}
             <td>
-              <button type="button" className="sm-linkbutton" onClick={() => onSelect(identity)} aria-pressed={selectedIdentity === identity}>
-                {targetLabel(asset)}
-              </button>
+              <strong>{targetLabel(asset)}</strong>
               {selectedIdentity === identity && <span className="sm-viewing">Viewing</span>}
             </td>
             <td className="sm-data sm-small sm-muted">{hashLabel(asset.contentHash)}</td>
             <td className="sm-data sm-small sm-muted" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
-          </tr>
+          </SelectableRow>
         )
       })}
     </>

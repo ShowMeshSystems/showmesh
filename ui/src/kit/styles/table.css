@@ -43,12 +43,29 @@
   border-bottom: 0;
 }
 
-.sm-table tbody tr:hover td {
+.sm-table tbody .sm-table__row--selectable:hover td {
   background: var(--raised);
+}
+
+.sm-table__row--selectable {
+  cursor: pointer;
+}
+
+.sm-table__row--selectable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sm-table__row--selectable > td:first-child > strong:first-child {
+  color: var(--accent);
 }
 
 .sm-table tbody tr[aria-current='true'] td {
   background: var(--accent-bg);
+}
+
+.sm-table tbody tr[aria-current='true'] td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .sm-table__num,

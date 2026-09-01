@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { getServiceDescriptor, type ServiceDescriptor } from '../api'
-import { DefinitionStrip, RuledStrip, Section, Table, TableWrap } from '../kit'
+import { DefinitionStrip, RuledStrip, Section, SelectableRow, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError } from '../domain/session'
 import { MonitorHead } from './Monitor'
@@ -30,6 +30,7 @@ function useCoordinatorBuild(): BuildState {
 
 export function MonitorCapabilities() {
   const model = useModelContext()
+  const navigate = useNavigate()
   const groups = capabilityGroups(model)
   const total = groups.reduce((sum, group) => sum + group.capabilities.length, 0)
   const build = useCoordinatorBuild()
@@ -74,7 +75,7 @@ export function MonitorCapabilities() {
                 </thead>
                 <tbody>
                   {groups.map((group) => (
-                    <CapabilityTableRow key={group.key} group={group} />
+                    <CapabilityTableRow key={group.key} group={group} onOpen={() => navigate(group.nodeTo)} />
                   ))}
                 </tbody>
               </Table>
@@ -90,11 +91,11 @@ export function MonitorCapabilities() {
   )
 }
 
-function CapabilityTableRow({ group }: { group: CapabilityGroup }) {
+function CapabilityTableRow({ group, onOpen }: { group: CapabilityGroup; onOpen: () => void }) {
   return (
-    <tr>
+    <SelectableRow onActivate={onOpen} ariaLabel={`Open ${group.node}`}>
       <td>
-        <Link to={group.nodeTo}>{group.node}</Link>
+        <strong>{group.node}</strong>
       </td>
       <td>
         {group.capabilities.length === 0 ? (
@@ -110,6 +111,6 @@ function CapabilityTableRow({ group }: { group: CapabilityGroup }) {
           </span>
         )}
       </td>
-    </tr>
+    </SelectableRow>
   )
 }

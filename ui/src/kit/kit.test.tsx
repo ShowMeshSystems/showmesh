@@ -1,8 +1,8 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Field, Input, NotWired, RuledStrip, Segmented, StatusPair } from './index'
+import { BlankingPlate, Button, ClockSkewStrip, Field, Input, NotWired, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 
 afterEach(cleanup)
 
@@ -98,6 +98,33 @@ describe('Button', () => {
   it('defaults to type button so it never submits a form by accident', () => {
     render(<Button>Run discovery</Button>)
     expect(screen.getByRole('button').getAttribute('type')).toBe('button')
+  })
+})
+
+describe('SelectableRow', () => {
+  it('activates from pointer, Enter, and Space without stealing nested controls', async () => {
+    const onActivate = vi.fn()
+    const nested = vi.fn()
+    render(
+      <Table>
+        <tbody>
+          <SelectableRow selected onActivate={onActivate} ariaLabel="Edit Alpha">
+            <td>Alpha</td>
+            <td><button type="button" onClick={nested}>Independent action</button></td>
+          </SelectableRow>
+        </tbody>
+      </Table>,
+    )
+    const row = screen.getByRole('row', { name: 'Edit Alpha' })
+    expect(row).toHaveAttribute('tabindex', '0')
+    expect(row).toHaveAttribute('aria-current', 'true')
+    await userEvent.click(row)
+    fireEvent.keyDown(row, { key: 'Enter' })
+    fireEvent.keyDown(row, { key: ' ' })
+    expect(onActivate).toHaveBeenCalledTimes(3)
+    await userEvent.click(screen.getByRole('button', { name: 'Independent action' }))
+    expect(nested).toHaveBeenCalledOnce()
+    expect(onActivate).toHaveBeenCalledTimes(3)
   })
 })
 

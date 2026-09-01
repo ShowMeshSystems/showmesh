@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getAssetManifest, type NodeAssetManifest } from '../api'
-import { Button, Panes, RuledStrip, Section, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Panes, RuledStrip, Section, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import type { Tone } from '../kit'
 import { formatBytes } from './showsModel'
 import { useModelContext } from '../app/ModelContext'
@@ -139,11 +139,9 @@ function ManifestTableRow({
   onSelect: () => void
 }) {
   return (
-    <tr aria-current={selected ? 'true' : undefined} className={selected ? 'sm-table__row--current' : undefined}>
+    <SelectableRow selected={selected} onActivate={onSelect} ariaLabel={`View manifest for ${manifest.node}`}>
       <td>
-        <button type="button" className="sm-linkbutton" onClick={onSelect} aria-pressed={selected}>
-          {manifest.node}
-        </button>
+        <strong>{manifest.node}</strong>
         {selected && <span className="sm-viewing">Viewing</span>}
       </td>
       <td>
@@ -159,7 +157,7 @@ function ManifestTableRow({
       <td className="sm-data">{manifest.gaps.length}</td>
       <td className="sm-data">{manifest.extra.length}</td>
       <td className="sm-data">{manifest.observedAt === null ? 'never' : (formatClock(manifest.observedAt) ?? 'unrecorded')}</td>
-    </tr>
+    </SelectableRow>
   )
 }
 

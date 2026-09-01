@@ -42,6 +42,7 @@ import {
   RuledStrip,
   Section,
   Select,
+  SelectableRow,
   StatusPair,
   Table,
   TableWrap,
@@ -972,7 +973,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
     <Panes>
       <div className="sm-night-session-list">
         <p className="sm-eyebrow">Definitions · {objects?.length ?? 0}</p>
-        {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : objects.length === 0 ? <RuledStrip absence="empty" label="No definitions" fact="Create the first night-session definition for this Show." /> : <TableWrap label="Night session definitions"><Table><thead><tr><th>Definition</th><th>Show playlist</th><th>Resting playlist</th><th>Revision</th><th>State</th></tr></thead><tbody>{objects.map((object) => <tr key={object.id} className={selected === object.id ? 'sm-table__row--selected' : undefined}><td><button className="sm-night-session-row-button" type="button" onClick={() => selectDefinition(object.id)}><strong>{object.payload.label}</strong><span className="sm-data sm-small">{object.id}</span></button></td><td><span className="sm-data">{object.payload.showPlaylist.fppInstanceId}</span><br />{object.payload.showPlaylist.playlist}</td><td><span className="sm-data">{object.payload.resting.fppInstanceId}</span><br />{object.payload.resting.playlist}</td><td className="sm-data">{object.revision}</td><td><span className={activeId === object.id ? 'sm-meta-status sm-meta-status--live' : 'sm-meta-status'}>{activeId === object.id ? 'Active' : 'Inactive'}</span></td></tr>)}</tbody></Table></TableWrap>}
+        {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : objects.length === 0 ? <RuledStrip absence="empty" label="No definitions" fact="Create the first night-session definition for this Show." /> : <TableWrap label="Night session definitions"><Table><thead><tr><th>Definition</th><th>Show playlist</th><th>Resting playlist</th><th>Revision</th><th>State</th></tr></thead><tbody>{objects.map((object) => <SelectableRow key={object.id} selected={selected === object.id} onActivate={() => selectDefinition(object.id)} ariaLabel={`Edit ${object.payload.label}`}><td><strong>{object.payload.label}</strong><br /><span className="sm-data sm-small">{object.id}</span></td><td><span className="sm-data">{object.payload.showPlaylist.fppInstanceId}</span><br />{object.payload.showPlaylist.playlist}</td><td><span className="sm-data">{object.payload.resting.fppInstanceId}</span><br />{object.payload.resting.playlist}</td><td className="sm-data">{object.revision}</td><td><span className={activeId === object.id ? 'sm-meta-status sm-meta-status--live' : 'sm-meta-status'}>{activeId === object.id ? 'Active' : 'Inactive'}</span></td></SelectableRow>)}</tbody></Table></TableWrap>}
         <p className="sm-small sm-muted sm-night-session-list__note">Definitions belong to this Show. Activation remains an operational action on Show Night.</p>
       </div>
       <aside>

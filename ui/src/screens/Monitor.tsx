@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, NavLink, useSearchParams } from 'react-router-dom'
+import { Link, NavLink, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   AttentionRow,
   Button,
@@ -7,6 +7,7 @@ import {
   Panes,
   RuledStrip,
   Section,
+  SelectableRow,
   StatTile,
   StatusPair,
   Table,
@@ -280,16 +281,21 @@ export function Monitor() {
 }
 
 function FleetTableRow({ row, selected, onSelect }: { row: FleetRow; selected: boolean; onSelect: () => void }) {
+  const navigate = useNavigate()
+  if (row.kind !== 'node' && row.kind !== 'fpp') {
+    return (
+      <SelectableRow onActivate={() => navigate(row.to)} ariaLabel={`Open ${row.name}`}>
+        <td><strong>{row.name}</strong><br /><span className="sm-small sm-faint">{row.detail}</span></td>
+        <td>{row.kindLabel}</td>
+        <td><StatusPair tone={row.tone} label={row.health} />{row.healthNote !== null && row.healthNote !== '' && <><br /><span className="sm-small sm-faint">{row.healthNote}</span></>}</td>
+        <td className="sm-data">{row.lastReport}</td>
+      </SelectableRow>
+    )
+  }
   return (
-    <tr aria-current={selected ? 'true' : undefined} className={selected ? 'sm-table__row--current' : undefined}>
+    <SelectableRow selected={selected} onActivate={onSelect} ariaLabel={`View ${row.name}`}>
       <td>
-        {row.kind === 'node' || row.kind === 'fpp' ? (
-          <button type="button" className="sm-linkbutton" onClick={onSelect} aria-pressed={selected}>
-            {row.name}
-          </button>
-        ) : (
-          <Link to={row.to}>{row.name}</Link>
-        )}
+        <strong>{row.name}</strong>
         {selected && <span className="sm-viewing">Viewing</span>}
         <br />
         <span className="sm-small sm-faint">{row.detail}</span>
@@ -305,7 +311,7 @@ function FleetTableRow({ row, selected, onSelect }: { row: FleetRow; selected: b
         )}
       </td>
       <td className="sm-data">{row.lastReport}</td>
-    </tr>
+    </SelectableRow>
   )
 }
 

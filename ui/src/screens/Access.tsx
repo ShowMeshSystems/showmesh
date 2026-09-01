@@ -23,6 +23,7 @@ import {
   RuledStrip,
   Section,
   Segmented,
+  SelectableRow,
   StatusPair,
   Table,
   TableWrap,
@@ -327,11 +328,9 @@ function PrincipalRow({
   const days = daysUnused(lastUsed, nowIso)
 
   return (
-    <tr aria-current={selected ? 'true' : undefined} className={selected ? 'sm-table__row--current' : undefined}>
+    <SelectableRow selected={selected} onActivate={onSelect} ariaLabel={`View credentials for ${principal.name}`}>
       <td>
-        <button type="button" className="sm-linkbutton" onClick={onSelect} aria-pressed={selected}>
-          {principal.name}
-        </button>{' '}
+        <strong>{principal.name}</strong>{' '}
         {isYou && <span className="sm-chip">You</span>}
         <br />
         <span className="sm-small sm-faint">
@@ -371,7 +370,7 @@ function PrincipalRow({
       <td>
         <StatusPair tone={state.tone} label={state.label} />
       </td>
-    </tr>
+    </SelectableRow>
   )
 }
 

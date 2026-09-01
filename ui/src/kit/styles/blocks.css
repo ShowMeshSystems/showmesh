@@ -1375,36 +1375,6 @@ a.sm-tile:hover {
   margin-top: var(--s-3);
 }
 
-.sm-night-session-row-button {
-  display: grid;
-  gap: 3px;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.sm-night-session-row-button strong {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.sm-night-session-row-button span {
-  color: var(--text-muted);
-}
-
-.sm-night-session-list tbody tr {
-  cursor: pointer;
-}
-
-.sm-night-session-list tbody tr:hover,
-.sm-night-session-list .sm-table__row--selected {
-  background: var(--raised);
-}
-
 .sm-night-session-inspector {
   border-color: var(--accent-border);
 }

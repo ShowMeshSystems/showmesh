@@ -202,7 +202,7 @@ describe('Shows · Cues tab', () => {
 
   it('save is disabled without config:write and is actually inert', async () => {
     setup([])
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     const save = await screen.findByRole('button', { name: 'Save cue' })
     expect(save).toBeDisabled()
@@ -222,7 +222,7 @@ describe('Shows · Cues tab', () => {
         ],
       })
     setup()
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
@@ -232,7 +232,7 @@ describe('Shows · Cues tab', () => {
   it('does not claim a read failure while the cue’s revisions fetch is still pending', async () => {
     stubs.getShowCueRevisions = () => new Promise(() => {})
     setup()
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     await screen.findByRole('button', { name: 'Save cue' })
     expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
@@ -241,7 +241,7 @@ describe('Shows · Cues tab', () => {
   it('reports the read failure honestly when the cue’s revisions fetch is rejected', async () => {
     stubs.getShowCueRevisions = () => Promise.reject(new Error('network down'))
     setup()
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
@@ -260,7 +260,7 @@ describe('Shows · Cues tab', () => {
     stubs.putShowCue = putSpy
     renderWorkspace({ session: signedIn(['config:write']) })
 
-    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    const row = await screen.findByRole('row', { name: 'Edit House Preshow Loop' })
     fireEvent.click(row)
     const save = await screen.findByRole('button', { name: 'Save cue' })
     fireEvent.click(save)

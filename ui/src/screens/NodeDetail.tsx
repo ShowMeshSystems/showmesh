@@ -32,6 +32,7 @@ import {
   PageTitle,
   RuledStrip,
   Section,
+  SelectableRow,
   StatusPair,
   Table,
   TableWrap,
@@ -517,9 +518,9 @@ export function NodeDetail() {
                       const display = surfaceDisplay(surface)
                       const end = surface.payload.channelRange.startChannel + surface.payload.channelRange.channelCount - 1
                       return (
-                        <tr key={surface.id}>
+                        <SelectableRow key={surface.id} onActivate={() => navigate(`/shows/${encodeURIComponent(surface.payload.show)}/presentation?surface=${encodeURIComponent(surface.id)}`)} ariaLabel={`Edit ${surface.payload.name}`}>
                           <td>
-                            <Link to={`/shows/${surface.payload.show}/presentation`}>{surface.payload.name}</Link>
+                            <strong>{surface.payload.name}</strong>
                             <br />
                             <span className="sm-data sm-small sm-faint">
                               {surface.payload.geometry.width}×{surface.payload.geometry.height} {surface.payload.geometry.pixelFormat} ·{' '}
@@ -532,7 +533,7 @@ export function NodeDetail() {
                             <StatusPair tone={status.tone} label={status.label} />
                             <RenderSurfaceControls nodeId={node.nodeId} surfaceId={surface.id} gate={renderGate} />
                           </td>
-                        </tr>
+                        </SelectableRow>
                       )
                     })}
                   </tbody>
