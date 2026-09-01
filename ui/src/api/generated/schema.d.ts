@@ -4248,7 +4248,7 @@ export interface components {
          *
          *     `ltcRoute` and `ltcChannel` are the one optional pair, and they are optional TOGETHER: omitting both declares a program-only node that emits no LTC at all, and giving one without the other is refused rather than half-honoured. A program-only declaration is the only way to place a two-output interface, whose LTC-capable route list is correctly empty because ADR-018 requires LTC on a channel discrete from the program pair. Every LTC refusal is unchanged for a declaration that DOES name an LTC route, including the check that the route is one the node advertised as LTC-capable. ADR-042 section 5 already treats losing LTC as costing timecode and never the audience's program audio.
          *
-         *     `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the routes run on, never inferred, and are required on a program-only node too.
+         *     `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the routes run on, never inferred, and are required on a program-only node too. `role` (ADR-045) is one of `program`, `program+ltc`, or `zone`; optional on the wire, and absent decodes to `program+ltc` - the role every pre-ADR-045 audio.node object already implicitly held, since an installation had exactly one and it always carried both program and LTC. At most one audio.node across the installation may carry `program+ltc` at a time (ADR-018's one clock domain, one LTC emitter); a second is refused, naming both node ids. `zone` is the operator's own name for the independent speaker zone this node drives, present only when `role` is `zone` - refused on any other role, since an ignored field would read as an applied one.
          */
         ConfigAudioNode: {
             programRoute: string;
@@ -4257,6 +4257,13 @@ export interface components {
             ltcChannel?: number;
             clockDomain: string;
             clockDomainProvenance: string;
+            /**
+             * @description Optional; absent decodes to "program+ltc" (ADR-045).
+             * @enum {string}
+             */
+            role?: "program" | "program+ltc" | "zone";
+            /** @description The operator's own name for this node's independent speaker zone. Present only when role is "zone". */
+            zone?: string;
         };
         /** @description The body of GET and PUT /config/audio.node/{id}. */
         AudioNodeConfigResponse: {
@@ -4409,8 +4416,8 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
-            /** @description audio-only: the target audio node id. */
-            audioNodeId?: string;
+            /** @description audio-only: the target audio node id(s), widened from one node to a list: a bare string (one node - the shape every payload stored before that change already used) or an array of distinct, non-empty node ids. A show.action bound to a night-session announcement, or the night-mode resting bed, may name more than one; every other consumer of an audio-integration show.action reads only the first. */
+            audioNodeId?: string | string[];
             /** @description audio-only: the target pkg/audio session id. */
             audioSessionId?: string;
             /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. `params` is otherwise opaque here and validated by the node, with one exception: `audio.gain.set` requires `params.gainDb` and `audio.gain.fade` requires `params.targetGainDb`, both in DECIBELS on the same scale as the gain endpoints (0 dB unity, -60 dB silence, +12 dB the most accepted). The pre-decibel `params.gain`/`params.targetGain` are refused here at authoring time, naming the replacement, rather than discovered when the Cue fires mid-show. */
@@ -4432,7 +4439,8 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
-            audioNodeId?: string;
+            /** @description audio-only: the target audio node id(s) - a bare string or an array of distinct, non-empty node ids. See ConfigShowActionTarget's own audioNodeId description. */
+            audioNodeId?: string | string[];
             audioSessionId?: string;
             audioAction?: string;
         };
@@ -5006,21 +5014,24 @@ export interface components {
         ConfigShowCueRenderOutput: {
             sequence: string;
         };
-        /** @description show.cue.outputs.audio (Track H seam H1). */
+        /** @description show.cue.outputs.audio (Track H seam H1). target (ADR-045) is an optional target node id, mirroring show.surface.node; absent resolves later to the installation's single program+ltc audio.node. Present, it must name an existing audio.node object — enforced server-side. */
         ConfigShowCueAudioOutput: {
             asset: string;
             startOffsetMillis: number;
+            target?: string;
         };
-        /** @description show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours; requires outputs.audio to also be present (ADR-018's one clock domain) — enforced server-side. */
+        /** @description show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours; requires outputs.audio to also be present (ADR-018's one clock domain) — enforced server-side. target (ADR-045) is the same optional target node as outputs.audio.target. */
         ConfigShowCueLTCOutput: {
             startOffsetMillis: number;
+            target?: string;
         };
-        /** @description show.cue.outputs.announcement (Track H seam H1, H0.4). Requires outputs.audio to also be present. duckGainDb is required when policy is "duck" and refused otherwise — enforced server-side. */
+        /** @description show.cue.outputs.announcement (Track H seam H1, H0.4). Requires outputs.audio to also be present. duckGainDb is required when policy is "duck" and refused otherwise — enforced server-side. target (ADR-045) is the same optional target node as outputs.audio.target. */
         ConfigShowCueAnnouncementOutput: {
             /** @enum {string} */
             policy: "duck" | "mix" | "interrupt";
             duckGainDb?: number;
             fadeMillis: number;
+            target?: string;
         };
         /** @description show.cue.outputs (Track H seam H1). At least one member is required — enforced server-side, since an empty object cannot be distinguished from "absent" by a plain JSON schema. */
         ConfigShowCueOutputs: {
@@ -5140,9 +5151,10 @@ export interface components {
             itemId: string;
             show: string;
             sequence: string;
+            /** @description The audio.node id this item plays on. Items are not required to share one target - every distinct target among them is its own node the bed plays on, each with its own independent playback progress. */
             target: string;
         };
-        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs are the show-boundary fade pair: fadeOutMs fades the bed to silence before it is paused or stopped for a show, fadeInMs fades it back up to maxGainDb after resting returns. They must be configured together, or both omitted for an instant cut exactly as before this pair existed (server-side; not expressible here). */
+        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8), playing on every distinct node its own items[].target names (a list of target nodes, derived from the items themselves - there is no separate "which output(s)" field). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs are the show-boundary fade pair: fadeOutMs fades the bed to silence before it is paused or stopped for a show, fadeInMs fades it back up to maxGainDb after resting returns. They must be configured together, or both omitted for an instant cut exactly as before this pair existed (server-side; not expressible here). */
         ConfigNightSessionBackgroundAudio: {
             items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
             /** @enum {string} */
@@ -5416,7 +5428,7 @@ export interface components {
             reason: string;
             cues: components["schemas"]["NightCue"][];
         };
-        /** @description One durable audio step Track F seam F5's own controller has recorded, across every cycle the session has lived through: either the resting bed's own playback sequence or an announcement session's clear and start. */
+        /** @description One durable audio step Track F seam F5's own controller has recorded, across every cycle the session has lived through: either the resting bed's own playback sequence or an announcement session's clear, apply, and start. The bed and an announcement each accept a list of target nodes, and every one of them, including the first, reports through this array with its own nodeId - never a first-node exception. */
         NightBackgroundAudioStep: {
             /**
              * @description Which of the controller's two audio sequences this step belongs to, so a failure is attributable without reading the internal phase string.
@@ -5426,8 +5438,10 @@ export interface components {
             /** @description The internal outbox phase this step was recorded under - a diagnostic identifier, not a value to round-trip back into a request. */
             phase: string;
             cueName: string;
+            /** @description The audio.node this step addressed. A refused or stalled step on one node is answerable from this field alone, without reading phase or relying on any array ordering. */
+            nodeId: string;
             /** @enum {string} */
-            kind: "apply" | "gain" | "start" | "pause" | "resume" | "stop" | "announcementClear" | "announcementStart";
+            kind: "apply" | "gain" | "start" | "pause" | "resume" | "stop" | "announcementClear" | "announcementApply" | "announcementStart";
             actionRevision: number;
             /** @enum {string} */
             state: "pending" | "dispatched" | "resolved" | "ambiguous";
