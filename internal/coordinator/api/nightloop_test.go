@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -511,6 +514,56 @@ func TestNightAdvanceRestingIntershow_InvalidatedBoundaryNeverRecomputed(t *test
 	if got.State != nightStateRestingIntershow {
 		t.Fatalf("state = %q, want still %q (an invalidated boundary must never silently re-arm)", got.State, nightStateRestingIntershow)
 	}
+	// This fix's own defect 2: today the silence around this permanent
+	// wedge is invisible. The operator must be told, via the same
+	// degrade mechanism as everywhere else in this file.
+	if !got.Degraded {
+		t.Fatalf("expected the session to be marked degraded once the invalid boundary is found never-recomputable")
+	}
+	if !strings.Contains(got.DegradedReason, "invalidated") {
+		t.Fatalf("degraded reason = %q, want it to name the invalid boundary", got.DegradedReason)
+	}
+}
+
+// Defect 2's visibility half must not re-warn or re-degrade on every tick:
+// once the session is marked degraded, a second tick over the same
+// never-recomputed invalid boundary must neither log again nor disturb the
+// state further.
+func TestNightAdvanceRestingIntershow_InvalidBoundaryDegradesOnceNotEveryTick(t *testing.T) {
+	dispatchedAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	anchor := nightContentAnchor{
+		Purpose: nightAnchorPurposeRestingOneShot, FPPInstanceID: "player-01", Playlist: "halloween-resting",
+		Item: "halloween-resting.fseq", DurationMS: 300000, PositionSeconds: 2, PositionMS: 2000, PositionMSKnown: true,
+		DispatchedAt: dispatchedAt, ObservedAt: dispatchedAt.Add(time.Second),
+	}
+	persistedInvalid := encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: "playback is paused"})
+	h, st, rec, now := setupRestingIntershowTest(t, func(now time.Time) []observation.Observation {
+		return []observation.Observation{
+			statusObservation("player-01", fppStatusValuePlaying, now),
+			playlistNameObservation("player-01", "halloween-resting", now),
+			positionMSObservation("player-01", 2000, now),
+		}
+	}, anchor, persistedInvalid)
+	var logBuf bytes.Buffer
+	h.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	h.nightAdvanceRestingIntershow(context.Background(), now, rec)
+	afterFirst := mustGetCurrentSession(t, st)
+	if !afterFirst.Degraded {
+		t.Fatalf("expected the session degraded after the first tick")
+	}
+
+	h.nightAdvanceRestingIntershow(context.Background(), now, afterFirst)
+	afterSecond := mustGetCurrentSession(t, st)
+	if afterSecond.State != nightStateRestingIntershow {
+		t.Fatalf("state = %q, want still %q (an invalidated boundary must never silently re-arm)", afterSecond.State, nightStateRestingIntershow)
+	}
+	if afterSecond.DegradedReason != afterFirst.DegradedReason {
+		t.Fatalf("degraded reason changed on a second tick: %q -> %q", afterFirst.DegradedReason, afterSecond.DegradedReason)
+	}
+	if got := strings.Count(logBuf.String(), "night loop: session degraded"); got != 1 {
+		t.Fatalf("\"session degraded\" logged %d times across two ticks, want exactly 1", got)
+	}
 }
 
 // Finding 1: a contradiction found THIS tick must invalidate the ANCHOR
@@ -607,6 +660,99 @@ func TestNightAdvanceLive_Rule4_AbsentPlaylistEvidenceIsNotCompletion(t *testing
 	got := mustGetCurrentSession(t, st)
 	if got.State != nightStateLive {
 		t.Fatalf("state = %q, want still %q (absent playlist evidence must never read as completion)", got.State, nightStateLive)
+	}
+}
+
+// withNightAdvanceLiveDeadline drives [nightAdvanceLiveDeadline] down for
+// one test and restores the original value afterward.
+func withNightAdvanceLiveDeadline(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := nightAdvanceLiveDeadline
+	nightAdvanceLiveDeadline = d
+	t.Cleanup(func() { nightAdvanceLiveDeadline = orig })
+}
+
+// A defect fixed by this change: nightAdvanceLive waited forever with no
+// deadline and no operator-visible sign of why. Past
+// [nightAdvanceLiveDeadline], a still-unmet completion condition must WARN
+// and mark the session degraded (never invent end evidence, so the state
+// stays live) - and, since "not idle" and "playlist still present" are two
+// different faults, the reason must name which one applies.
+func TestNightAdvanceLive_PastDeadlineStillPlayingWarnsAndDegradesWithoutTransitioning(t *testing.T) {
+	withNightAdvanceLiveDeadline(t, time.Minute)
+	stateEnteredAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := stateEnteredAt.Add(2 * time.Minute)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "halloween-show", now),
+	}}
+	h, st := nightLoopTestHandlers(t, func() time.Time { return now }, obs)
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", stateEnteredAt)
+	mustCreateLiveSession(t, st, stateEnteredAt, anchor)
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	got := mustGetCurrentSession(t, st)
+	if got.State != nightStateLive {
+		t.Fatalf("state = %q, want still %q (a deadline must never force the transition, only end the silence)", got.State, nightStateLive)
+	}
+	if !got.Degraded {
+		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
+	}
+	if !strings.Contains(got.DegradedReason, "not idle") {
+		t.Fatalf("degraded reason = %q, want it to name the unmet condition (status not idle)", got.DegradedReason)
+	}
+}
+
+// Same deadline, a different unmet condition: idle, but the playlist name
+// has not cleared. The degraded reason must name THIS condition, not the
+// "not idle" one above - an operator needs to know which of the two is
+// actually stuck.
+func TestNightAdvanceLive_PastDeadlinePlaylistStillNamedWarnsAndDegradesWithoutTransitioning(t *testing.T) {
+	withNightAdvanceLiveDeadline(t, time.Minute)
+	stateEnteredAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := stateEnteredAt.Add(2 * time.Minute)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValueIdle, now),
+		playlistNameObservation("player-01", "halloween-show", now),
+	}}
+	h, st := nightLoopTestHandlers(t, func() time.Time { return now }, obs)
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", stateEnteredAt)
+	mustCreateLiveSession(t, st, stateEnteredAt, anchor)
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	got := mustGetCurrentSession(t, st)
+	if got.State != nightStateLive {
+		t.Fatalf("state = %q, want still %q (a deadline must never force the transition, only end the silence)", got.State, nightStateLive)
+	}
+	if !got.Degraded {
+		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
+	}
+	if !strings.Contains(got.DegradedReason, `still named "halloween-show"`) {
+		t.Fatalf("degraded reason = %q, want it to name the unmet condition (playlist still named)", got.DegradedReason)
+	}
+}
+
+// Before the deadline elapses, the same unmet condition must stay silent:
+// this is a wait, not an instant fault.
+func TestNightAdvanceLive_BeforeDeadlineStaysSilent(t *testing.T) {
+	withNightAdvanceLiveDeadline(t, time.Hour)
+	stateEnteredAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := stateEnteredAt.Add(2 * time.Minute)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "halloween-show", now),
+	}}
+	h, st := nightLoopTestHandlers(t, func() time.Time { return now }, obs)
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", stateEnteredAt)
+	mustCreateLiveSession(t, st, stateEnteredAt, anchor)
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	got := mustGetCurrentSession(t, st)
+	if got.Degraded {
+		t.Fatalf("expected no degrade before nightAdvanceLiveDeadline has elapsed, got reason %q", got.DegradedReason)
 	}
 }
 
