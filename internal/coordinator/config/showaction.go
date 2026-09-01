@@ -711,11 +711,13 @@ type ShowActionTarget struct {
 	// operation's own command params, exactly as a direct
 	// audio.session.*/audio.gain.*/audio.output.* API call would.
 	//
-	// AudioNodeIDs widens target.audioNodeId from one node to a list, for
-	// the night-mode bed and announcements (the only
-	// two callers this coordinator ever dispatches an audio-integration
-	// show.action to - internal/coordinator/api's ShowActionIntegrationAudio
-	// usage is entirely night-session scoped). The wire KEY stays
+	// AudioNodeIDs widens target.audioNodeId from one node to a list
+	// (api/openapi.yaml's ConfigShowActionTarget.audioNodeId doc comment
+	// is the authority; this comment must not drift from it again): the
+	// night-mode bed and announcements use every listed node, every
+	// other dispatch consumer reads only the first, and configuration
+	// validation (the audio binding check) checks every named node
+	// regardless of which one a dispatch would reach. The wire KEY stays
 	// "audioNodeId": AudioNodeIDList's own UnmarshalJSON keeps decoding a
 	// bare JSON string (every installation's payload stored before this
 	// change) into a one-element list unchanged, and now also accepts a
