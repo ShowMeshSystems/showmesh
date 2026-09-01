@@ -178,9 +178,7 @@ func TestClearWithEmptyInvocationStillRefused(t *testing.T) {
 	if r.Outcome != pkgaudio.OutcomeRefused || r.Reason != "invocation id is required" {
 		t.Fatalf("clear with empty invocation = %+v, want refused/%q", r, "invocation id is required")
 	}
-	if _, ok := m.get(id); !ok {
-		t.Fatal("session was torn down by a clear that should have been refused for an empty invocation id")
-	}
+	assertSessionStillHoldsAppliedState(t, m, id)
 }
 
 // TestClearReusingInvocationWithDifferentRevisionStillRefused proves the
@@ -205,8 +203,32 @@ func TestClearReusingInvocationWithDifferentRevisionStillRefused(t *testing.T) {
 	if r.Outcome != pkgaudio.OutcomeRefused || r.Reason != pkgaudio.ReasonInvocationRevisionMismatch {
 		t.Fatalf("clear reusing an invocation id at a different revision = %+v, want refused/%s", r, pkgaudio.ReasonInvocationRevisionMismatch)
 	}
-	if _, ok := m.get(id); !ok {
-		t.Fatal("session was torn down by a clear that should have been refused for an invocation/revision mismatch")
+	assertSessionStillHoldsAppliedState(t, m, id)
+}
+
+// assertSessionStillHoldsAppliedState is the observable consequence a
+// caller actually depends on when a clear is refused: not merely that
+// the session's map entry still exists, but that the teardown Clear's
+// own exec would have performed (releasing the engine, wiping desired
+// state to its zero value, resetting state to Stopped) never ran.
+// Checking a refusal's reason string alone would keep passing under a
+// broader, wrong exemption that still happened to report the same
+// reason on some other path; checking that Apply's own media survives
+// on the live session object catches that a teardown actually ran,
+// regardless of what reason, if any, the caller was told.
+func assertSessionStillHoldsAppliedState(t *testing.T, m *Manager, id pkgaudio.SessionID) {
+	t.Helper()
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was torn down by a clear that should have been refused")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.desired.Media == nil {
+		t.Fatal("session's desired media was wiped by a clear that should have been refused")
+	}
+	if s.state == pkgaudio.StateStopped {
+		t.Fatal("session state was reset to stopped by a clear that should have been refused")
 	}
 }
 
