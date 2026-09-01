@@ -62,7 +62,7 @@ func drainHeartbeat(t *testing.T, pub *fakePublisher, nodeID, bootID string, sta
 	for i := 0; i < n; i++ {
 		clock.advance(HeartbeatInterval)
 		select {
-		case ticks <- clock.t:
+		case ticks <- clock.now():
 		case <-time.After(5 * time.Second):
 			t.Fatalf("timed out sending tick %d", i)
 		}
@@ -221,7 +221,7 @@ func TestRunHeartbeatACLRejectionLogsDistinctlyAndDoesNotStopLaterTicks(t *testi
 
 	for i := 0; i < 3; i++ {
 		clock.advance(HeartbeatInterval)
-		sendAndAwait(t, ticks, clock.t, pub, "tick")
+		sendAndAwait(t, ticks, clock.now(), pub, "tick")
 	}
 
 	cancel()
@@ -306,7 +306,7 @@ func TestRunHeartbeatConnectTrigger(t *testing.T) {
 	// where the connect-triggered publish left off rather than resetting or
 	// reusing it.
 	clock.advance(HeartbeatInterval)
-	sendAndAwait(t, ticks, clock.t, pub, "tick")
+	sendAndAwait(t, ticks, clock.now(), pub, "tick")
 
 	// A second connect signal (simulating a reconnect) must also publish
 	// immediately, again continuing Sequence: BootID is unchanged across a
