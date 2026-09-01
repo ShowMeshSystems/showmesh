@@ -4416,7 +4416,7 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
-            /** @description audio-only: the target audio node id(s), widened from one node to a list: a bare string (one node - the shape every payload stored before that change already used) or an array of distinct, non-empty node ids. A show.action bound to a night-session announcement, or the night-mode resting bed, may name more than one; every other consumer of an audio-integration show.action reads only the first. */
+            /** @description audio-only: the target audio node id(s), widened from one node to a list: a bare string (one node - the shape every payload stored before that change already used) or an array of distinct, non-empty node ids. A show.action bound to a night-session announcement or the night-mode resting bed may name more than one node, and those consumers use every listed node. Every other consumer dispatches to only the first listed node. Configuration validation is not a dispatch consumer: a binding check verifies that every named node is declared, regardless of which node a dispatch would reach. */
             audioNodeId?: string | string[];
             /** @description audio-only: the target pkg/audio session id. */
             audioSessionId?: string;
