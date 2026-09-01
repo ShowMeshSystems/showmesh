@@ -204,10 +204,22 @@ func (h *handlers) nightAnnouncementHistory(ctx context.Context, rec store.Night
 // state, and fails exactly when the node is unreachable.
 //
 // clear = floor+1 and start = floor+2, so the pair advances by two per
-// cycle and neither can ever be refused as stale, whether or not the
+// cycle and strictly exceeds both inputs to the floor, whether or not the
 // clear actually took effect: if it did, the apply meets a fresh session
 // at revision zero and start still outranks it; if it did not, start
 // still outranks the surviving session's own current revision.
+//
+// That guarantees the pair can never be refused as stale because of
+// anything THIS coordinator has itself previously sent — it does NOT
+// guarantee the pair is never refused at all. If the NODE's own revision
+// counter has run ahead of this coordinator's persisted audio_sessions
+// row — for example through the swallowed PutAudioSession error in
+// persistAudioSessionDesiredState (audiodispatch.go), logged and
+// discarded after the node has already applied the command — floor+1 can
+// still land at or below the node's own counter, and the node refuses it
+// as stale there. A caller of this pair must still be prepared to see
+// that refusal; this function only computes the floor-relative pair, it
+// does not and cannot see the node's own state.
 func nightAnnouncementRevisions(persistedRevision, applyRevision int64) (clearRevision, startRevision int64) {
 	floor := applyRevision
 	if persistedRevision > floor {

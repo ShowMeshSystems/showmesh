@@ -144,3 +144,141 @@ func TestNightPrepareSite_AnnouncementResetUnacknowledged_NightStillStartsAndWar
 		t.Fatalf("no warning naming the unacknowledged session %q was logged: %s", "announcement-1", logs.String())
 	}
 }
+
+// multiAnnouncementNightSessionBody names three announcement cues in
+// enterResting, each bound to its own show.action and its own distinct
+// audio session on node-a - three-item counterpart to
+// announcementNightSessionBody, above, purpose-built to prove
+// nightAnnouncementResetAtPrepareSiteBudget bounds the reset pass's own
+// total cost regardless of how many distinct sessions it walks.
+const multiAnnouncementNightSessionBody = `{
+	"show": "halloween-2026",
+	"label": "Halloween main loop",
+	"showPlaylist": {"fppInstanceId": "player-01", "playlist": "halloween-show"},
+	"resting": {
+		"fppInstanceId": "player-01",
+		"playlist": "halloween-resting",
+		"timelineAsset": {"show": "halloween-2026", "sequence": "resting-loop", "target": "player-01"},
+		"endOfNightRepeat": true
+	},
+	"enterShow": {
+		"cues": [
+			{"name": "lighting-fade", "role": "lighting", "action": "lighting-fade-out", "offsetMs": -20000, "barrier": true}
+		],
+		"blackoutHoldMs": 6000
+	},
+	"enterResting": {
+		"cues": [
+			{"name": "thank-you-1", "role": "announcement", "action": "thank-you-1", "offsetMs": 0},
+			{"name": "thank-you-2", "role": "announcement", "action": "thank-you-2", "offsetMs": 0},
+			{"name": "thank-you-3", "role": "announcement", "action": "thank-you-3", "offsetMs": 0}
+		],
+		"blackoutAfterShowMs": 6000
+	}
+}`
+
+func multiAnnouncementShowActionBody(sessionID string) string {
+	return `{
+		"show": "halloween-2026",
+		"label": "Thank you announcement",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": "node-a",
+			"audioSessionId": "` + sessionID + `",
+			"audioAction": "audio.session.apply"
+		}
+	}`
+}
+
+// setupPrepareSiteMultiAnnouncementFixture is
+// setupPrepareSiteAnnouncementFixture's three-session counterpart.
+func setupPrepareSiteMultiAnnouncementFixture(t *testing.T) (api *API, token string, obs *fakeObservationLister, pub *fakeAudioPublisher, logs *bytes.Buffer) {
+	t.Helper()
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	opToken := mustIssueToken(t, svc, operator.ID)
+
+	deps, obsLister := nightControlTestDeps(svc, st)
+	pub = &fakeAudioPublisher{}
+	deps.AudioPublisher = pub
+	deps.AudioSessions = st
+
+	logs = &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+
+	api = New(deps, Options{Clock: fixedClock(testNow), Logger: logger, NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "thank-you-1", multiAnnouncementShowActionBody("announcement-1"))
+	mustPutShowAction(t, api, adminToken, "thank-you-2", multiAnnouncementShowActionBody("announcement-2"))
+	mustPutShowAction(t, api, adminToken, "thank-you-3", multiAnnouncementShowActionBody("announcement-3"))
+	mustCreateNightSessionAsset(t, st, "halloween-2026", "resting-loop", "player-01")
+	mustPutNightSession(t, api, adminToken, "halloween-main", multiAnnouncementNightSessionBody)
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	return api, opToken, obsLister, pub, logs
+}
+
+// mutation target: nightAnnouncementResetAtPrepareSiteBudget's own check
+// in nightResetAnnouncementCueSessionOnce ("if
+// !time.Now().Before(budgetDeadline)"). Removing that check (or the
+// budget deadline computation in nightResetAnnouncementSessionsAtPrepareSite)
+// makes every one of the three distinct sessions dispatch in full,
+// regardless of how slow each one is - which is exactly the unbounded
+// cost this test proves is gone. nightAnnouncementResetAtPrepareSiteBudget
+// is driven down to 5ms (this package's own established test-only-override
+// convention for a dispatch-timing const/var - see
+// renderCommandConfirmDeadline in renderdispatch_test.go and
+// nightInterlockAggregateDispatchBudget in
+// nightinterlock_integration_test.go) and each simulated dispatch is made
+// to cost 50ms of REAL wall-clock time via onAwaitResponse, mimicking an
+// audio node that never answers within audioCommandConfirmDeadline. Only
+// the first of the three distinct sessions should fit inside the 5ms
+// budget; the other two must be skipped before ever being dispatched, so
+// the whole prepare-site call finishes in a small multiple of one 50ms
+// dispatch, not three.
+func TestNightPrepareSite_AnnouncementResetBudget_BoundedRegardlessOfSessionCount(t *testing.T) {
+	origBudget := nightAnnouncementResetAtPrepareSiteBudget
+	nightAnnouncementResetAtPrepareSiteBudget = 5 * time.Millisecond
+	t.Cleanup(func() { nightAnnouncementResetAtPrepareSiteBudget = origBudget })
+
+	api, token, obs, pub, logs := setupPrepareSiteMultiAnnouncementFixture(t)
+	setHealthyFPPReachable(obs, testNow)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.onAwaitResponse = func() { time.Sleep(50 * time.Millisecond) }
+
+	start := time.Now()
+	prep := mustNightCommand(t, api, token, "prepare-site")
+	elapsed := time.Since(start)
+
+	if prep.Command.Outcome != "applied" {
+		t.Fatalf("prepare-site outcome = %q, want applied even though the announcement reset budget was exhausted", prep.Command.Outcome)
+	}
+	if prep.Session.State != nightStatePreparing {
+		t.Fatalf("session state = %q, want %q; the night must still start when the reset budget runs out", prep.Session.State, nightStatePreparing)
+	}
+
+	// Unbounded, this would cost 3*50ms = 150ms. Bounded to one dispatch
+	// plus a wide scheduling margin, it must stay well under that.
+	if elapsed >= 3*50*time.Millisecond {
+		t.Fatalf("prepare-site took %s, want well under 150ms (3 unbounded dispatches): the reset pass must not grow with the number of announcement sessions", elapsed)
+	}
+
+	var clears []dispatchedAudioCommand
+	for _, d := range pub.dispatched {
+		if d.Action == "audio.session.clear" {
+			clears = append(clears, d)
+		}
+	}
+	if len(clears) != 1 {
+		t.Fatalf("dispatched %d audio.session.clear command(s), want exactly 1 (budget exhausted after the first): %v", len(clears), pub.dispatched)
+	}
+
+	if !strings.Contains(logs.String(), "budget exhausted") || !strings.Contains(logs.String(), "skipped=2") {
+		t.Fatalf("no warning naming 2 skipped sessions and the exhausted budget was logged: %s", logs.String())
+	}
+}
