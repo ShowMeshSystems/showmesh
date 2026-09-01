@@ -345,7 +345,16 @@ describe('Settings › Node routing', () => {
     vi.restoreAllMocks()
   })
 
-  function nodeConfig(overrides: Partial<{ programRoute: string; programChannels: number[]; ltcRoute: string; ltcChannel: number }> = {}) {
+  function nodeConfig(
+    overrides: Partial<{
+      programRoute: string
+      programChannels: number[]
+      ltcRoute: string
+      ltcChannel: number
+      role: 'program' | 'program+ltc' | 'zone'
+      zone: string
+    }> = {},
+  ) {
     return {
       serverTime: '2026-08-30T21:00:00Z',
       kind: 'audio.node',
@@ -357,6 +366,8 @@ describe('Settings › Node routing', () => {
         clockDomain: 'usb-audio-0',
         clockDomainProvenance: 'single interface',
         ...(overrides.ltcRoute !== undefined ? { ltcRoute: overrides.ltcRoute, ltcChannel: overrides.ltcChannel } : {}),
+        ...(overrides.role !== undefined ? { role: overrides.role } : {}),
+        ...(overrides.zone !== undefined ? { zone: overrides.zone } : {}),
       },
       updatedAt: '2026-08-30T18:00:00Z',
       createdByPrincipalId: 'p1',
@@ -429,6 +440,86 @@ describe('Settings › Node routing', () => {
     expect(screen.getByText('Output groups does nothing yet.')).toBeInTheDocument()
     expect(screen.getByLabelText('Program channels')).not.toBeDisabled()
   })
+
+  it('loads role and zone from the payload', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig({ role: 'zone', zone: 'lobby' }))
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Zone', pressed: true })).toBeInTheDocument())
+    expect(screen.getByLabelText('Zone')).toHaveValue('lobby')
+  })
+
+  it('sends zone when saving with role zone', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig())
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putAudioNode = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeConfig({ role: 'zone', zone: 'lobby' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Zone' }))
+    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'lobby' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ role: 'zone', zone: 'lobby' })
+  })
+
+  it('omits zone when saving with role program', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig({ role: 'program+ltc' }))
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putAudioNode = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeConfig({ role: 'program' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Program' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ role: 'program' })
+    expect(sentPayload).not.toHaveProperty('zone')
+  })
+
+  it('defaults a legacy node with no stored role to program+ltc on save', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig())
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putAudioNode = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeConfig())
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+    const channelsInput = screen.getByLabelText('Program channels')
+    fireEvent.change(channelsInput, { target: { value: '2, 1' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save routing' })).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ role: 'program+ltc' })
+    expect(sentPayload).not.toHaveProperty('zone')
+  })
 })
 
 describe('Settings › Mode', () => {
@@ -449,6 +540,7 @@ describe('Settings › Mode', () => {
         createdByPrincipalName: 'erbartos',
         source: 'api',
         resolumeWebSocketEffect: 'closed in show mode',
+        cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
       })
 
     renderAt('/settings/mode', { nightSession: { state: 'live', cycle: 3 } as unknown as Model['nightSession'] })
@@ -469,6 +561,7 @@ describe('Settings › Mode', () => {
         createdByPrincipalName: 'erbartos',
         source: 'api',
         resolumeWebSocketEffect: 'The Resolume WebSocket stays connected in show mode.',
+        cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
       })
     stubs.getCurrentNightSession = () => Promise.resolve({ session: { state: 'live', cycle: 3 } })
 
@@ -490,6 +583,7 @@ describe('Settings › Mode', () => {
         createdByPrincipalName: 'erbartos',
         source: 'api',
         resolumeWebSocketEffect: 'held open in program mode',
+        cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
       })
 
     renderAt('/settings/mode', { nightSession: null })
@@ -510,6 +604,7 @@ describe('Settings › Mode', () => {
       createdByPrincipalName: 'erbartos',
       source: 'api',
       resolumeWebSocketEffect: 'closed in show mode',
+      cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
     }
     const current = { ...loaded, revision: 3, createdByPrincipalName: 'someone-else', updatedAt: '2026-08-30T19:00:00Z' }
     let reads = 0
@@ -531,6 +626,55 @@ describe('Settings › Mode', () => {
 
     expect(await screen.findByText('Stale write')).toBeInTheDocument()
     expect(putCalled).toBe(false)
+  })
+
+  it('states the cue activation pin effect with no pin detail when unpinned', async () => {
+    stubs.getShowModeConfig = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.mode',
+        revision: 2,
+        payload: { mode: 'program' },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        resolumeWebSocketEffect: 'held open in program mode',
+        cueActivationPin: { pinned: false, effect: 'A show.cue edit saved now applies immediately.' },
+      })
+
+    renderAt('/settings/mode', { nightSession: null })
+
+    await waitFor(() => expect(screen.getByText('A show.cue edit saved now applies immediately.')).toBeInTheDocument())
+    expect(screen.queryByText(/Pinned to show/)).not.toBeInTheDocument()
+  })
+
+  it('names the pinned show, generation and pinned-at time when the cue activation pin is pinned', async () => {
+    stubs.getShowModeConfig = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.mode',
+        revision: 2,
+        payload: { mode: 'show' },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        resolumeWebSocketEffect: 'closed in show mode',
+        cueActivationPin: {
+          pinned: true,
+          effect: 'A show.cue edit saved now is staged and does not reach any node.',
+          show: 'winter-2026',
+          generation: 4,
+          pinnedAt: '2026-08-30T19:00:00Z',
+        },
+      })
+
+    renderAt('/settings/mode', { nightSession: null })
+
+    await waitFor(() => expect(screen.getByText(/A show\.cue edit saved now is staged/)).toBeInTheDocument())
+    expect(screen.getByText('winter-2026')).toBeInTheDocument()
+    expect(screen.getByText('4')).toBeInTheDocument()
   })
 })
 

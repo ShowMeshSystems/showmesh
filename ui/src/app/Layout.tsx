@@ -12,7 +12,7 @@ import {
   ShellBody,
   type Connection,
 } from '../kit'
-import { getShowModeConfig, type ConnectionState, type ConfigShowModePayload, type Model } from '../api'
+import { getShowModeConfig, type ConnectionState, type Model, type ShowModeConfigResponse } from '../api'
 import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
 import { describeSignInState, type SignInState } from '../domain/session'
 import { useModelContext } from './ModelContext'
@@ -87,13 +87,13 @@ function NowPlaying({ model, signInKind }: { model: Model; signInKind: SignInSta
 }
 
 function ShellMode() {
-  const [mode, setMode] = useState<ConfigShowModePayload['mode'] | null>(null)
+  const [response, setResponse] = useState<ShowModeConfigResponse | null>(null)
 
   useEffect(() => {
     let cancelled = false
     getShowModeConfig()
-      .then((response) => {
-        if (!cancelled) setMode(response.payload.mode)
+      .then((r) => {
+        if (!cancelled) setResponse(r)
       })
       .catch(() => {
         // The mode is a fact only after the coordinator has reported it.
@@ -103,8 +103,22 @@ function ShellMode() {
     }
   }, [])
 
-  if (mode === null) return null
-  return <Link className={`sm-mode-badge sm-mode-badge--${mode}`} to="/settings#show-mode">{mode}</Link>
+  if (response === null) return null
+  const mode = response.payload.mode
+  const pin = response.cueActivationPin
+  const firstSentence = response.resolumeWebSocketEffect.replace(/\.\s*$/, '')
+  const title = `${firstSentence}. ${pin.effect}`
+  return (
+    <Link className={`sm-mode-badge sm-mode-badge--${mode}`} to="/settings#show-mode" title={title}>
+      {mode}
+      {pin.pinned && ' (edit staged)'}
+      {pin.pinned && (
+        <span role="status" className="sm-sr-only">
+          Show mode: {mode}. A show.cue edit is staged and will not reach any node until the show is stopped and restarted.
+        </span>
+      )}
+    </Link>
+  )
 }
 
 function ShowPicker({ model }: { model: Model }) {

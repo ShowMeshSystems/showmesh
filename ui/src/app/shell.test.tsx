@@ -14,6 +14,7 @@ import { NotFound } from '../screens/NotFound'
 const loginMock = vi.fn()
 const claimBootstrapMock = vi.fn()
 const logoutMock = vi.fn()
+const getShowModeConfigMock = vi.fn()
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -22,6 +23,7 @@ vi.mock('../api', async () => {
     login: (...args: unknown[]) => loginMock(...args),
     claimBootstrap: (...args: unknown[]) => claimBootstrapMock(...args),
     logout: (...args: unknown[]) => logoutMock(...args),
+    getShowModeConfig: (...args: unknown[]) => getShowModeConfigMock(...args),
   }
 })
 
@@ -65,9 +67,48 @@ describe('app shell', () => {
     loginMock.mockReset().mockResolvedValue(undefined)
     claimBootstrapMock.mockReset().mockResolvedValue(undefined)
     logoutMock.mockReset().mockResolvedValue(undefined)
+    getShowModeConfigMock.mockReset().mockReturnValue(new Promise(() => {}))
     clearStoredToken()
   })
   afterEach(cleanup)
+
+  function showModeConfig(pin: { pinned: false } | { pinned: true; show: string; generation: number; pinnedAt: string }) {
+    return {
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'show.mode',
+      revision: 2,
+      payload: { mode: 'show' as const },
+      updatedAt: '2026-08-30T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+      resolumeWebSocketEffect: 'closed in show mode',
+      cueActivationPin: { effect: 'A show.cue edit saved now applies immediately.', ...pin },
+    }
+  }
+
+  it('shows the mode badge with no pin note when the cue activation pin is not pinned', async () => {
+    getShowModeConfigMock.mockResolvedValue(showModeConfig({ pinned: false }))
+    renderShell({})
+    const badge = await screen.findByRole('link', { name: /^show$/i })
+    expect(badge.textContent).not.toContain('edit staged')
+    expect(badge.title).toBe('closed in show mode. A show.cue edit saved now applies immediately.')
+  })
+
+  it('marks the mode badge staged and names the pin when the cue activation pin is pinned', async () => {
+    getShowModeConfigMock.mockResolvedValue(
+      showModeConfig({
+        pinned: true,
+        show: 'winter-2026',
+        generation: 4,
+        pinnedAt: '2026-08-30T19:00:00Z',
+      }),
+    )
+    renderShell({})
+    const badge = await screen.findByRole('link', { name: /edit staged/i })
+    expect(badge.title).toBe('closed in show mode. A show.cue edit saved now applies immediately.')
+    expect(screen.getByText(/A show\.cue edit is staged and will not reach any node/)).toBeInTheDocument()
+  })
 
   it('renders the Live Control Resolume sublink with the primary rail destinations', () => {
     renderShell({})
