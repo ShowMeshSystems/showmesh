@@ -397,8 +397,8 @@ func TestFrameWriterKeepsRenderingWhenFilenameMatches(t *testing.T) {
 	})
 
 	waitFor(t, func() bool {
-		written, _, _ := fw.Counts()
-		return written >= 1
+		snap, ok := sup.Snapshot(surfaceID)
+		return ok && snap.Drawing == DrawingContent
 	})
 
 	frame, ok := source.lastRequest()
