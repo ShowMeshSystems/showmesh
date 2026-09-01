@@ -1520,6 +1520,88 @@ a.sm-tile:hover {
   padding: 10px 14px;
 }
 
+/* Assets follows the library mock's grouped-record table: the show belongs to
+   the sequence band, leaving the target as the dominant row column. */
+.sm-assets-filters {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sm-assets-filters > .sm-input {
+  flex: 0 1 190px;
+}
+
+.sm-assets-filters__show {
+  flex: 0 1 186px;
+}
+
+.sm-assets-filters__show .sm-field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sm-assets-filters__show .sm-select {
+  width: 100%;
+}
+
+.sm-assets-table .sm-table {
+  min-width: 560px;
+}
+
+.sm-assets-table .sm-table th:first-child,
+.sm-assets-table .sm-table td:first-child {
+  padding-left: 14px;
+}
+
+.sm-assets-table .sm-table th:nth-child(2),
+.sm-assets-table .sm-table td:nth-child(2) {
+  width: 104px;
+}
+
+.sm-assets-table .sm-table th:last-child,
+.sm-assets-table .sm-table td:last-child {
+  width: 94px;
+  padding-right: 14px;
+}
+
+.sm-assets-table__group-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sm-assets-table__show {
+  font: var(--t-data);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.sm-assets-table__separator {
+  margin-left: -6px;
+  color: var(--text-faint);
+}
+
+.sm-assets-table .sm-table__row--current td {
+  border-block-color: var(--accent-border);
+}
+
+.sm-assets-table .sm-table__row--current .sm-viewing {
+  background: transparent;
+  color: var(--accent);
+  padding-inline: 0;
+}
+
 /* A manual file upload target. */
 .sm-dropzone {
   display: grid;

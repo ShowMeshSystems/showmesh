@@ -92,7 +92,7 @@ describe('Assets library', () => {
     return renderLibrary({ session: signedIn(scopes) })
   }
 
-  it('lists current assets across every show, each row tagged with its show', async () => {
+  it('lists current assets across every show, with each show named by its sequence group', async () => {
     const winterRidge = asset({ id: 'a1', show: 'winter-ridge-2026' })
     const hallowedHollow = asset({
       id: 'a2',
@@ -109,6 +109,8 @@ describe('Assets library', () => {
     expect(within(region).getByText('graveyard-shuffle')).toBeInTheDocument()
     expect(within(region).getByText('winter-ridge-2026')).toBeInTheDocument()
     expect(within(region).getByText('hallowed-hollow-2026')).toBeInTheDocument()
+    expect(within(region).queryByRole('columnheader', { name: 'Show' })).not.toBeInTheDocument()
+    expect(within(region).getByRole('columnheader', { name: 'Target' })).toBeInTheDocument()
   })
 
   it('the show filter narrows the list to one show', async () => {
