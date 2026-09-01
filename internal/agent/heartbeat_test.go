@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,13 +12,31 @@ import (
 
 // fakeClock lets tests drive runHeartbeat's timestamps deterministically,
 // matching the pattern internal/coordinator/broker's tests already use.
+//
+// mu guards t: a test's own goroutine calls advance() while a FrameWriter
+// (or any other component started against this clock) reads it via now()
+// on its own goroutine, concurrently — a real data race the race detector
+// catches even though both sides only ever read/write a single time.Time,
+// never producing a wrong answer either side could observe. Locking here,
+// rather than in each of the (at least ten) test files that use this
+// helper, fixes the type's actual defect once for every current and
+// future caller; no caller's own code changes.
 type fakeClock struct {
-	t time.Time
+	mu sync.Mutex
+	t  time.Time
 }
 
-func (c *fakeClock) now() time.Time { return c.t }
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
 
-func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 // drainHeartbeat runs runHeartbeat in a goroutine, sends n ticks (advancing
 // clock by HeartbeatInterval before each), waits for each resulting publish
