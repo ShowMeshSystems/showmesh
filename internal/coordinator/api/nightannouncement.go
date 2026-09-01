@@ -188,7 +188,7 @@ func (h *handlers) nightAnnouncementHistory(ctx context.Context, rec store.Night
 // revisions for one announcement cue, as three CONSECUTIVE values above a
 // single floor: the coordinator's own persisted audio_sessions revision for
 // this session (store/audiosessions.go, read via
-// [handlers.nightAnnouncementPersistedRevision]). The apply's own pinned
+// [handlers.nightAudioSessionPersistedRevision]). The apply's own pinned
 // CONFIGURATION revision (which cue names it ran, recorded on the outbox
 // row's own ActionRevision) plays no part in this floor: it is a config
 // object's revision, not a session desired-state counter, and the two are
@@ -242,7 +242,7 @@ func nightAnnouncementRevisions(persistedRevision int64) (clearRevision, applyRe
 	return floor + 1, floor + 2, floor + 3
 }
 
-// nightAnnouncementPersistedRevision reads sessionID's own durable
+// nightAudioSessionPersistedRevision reads sessionID's own durable
 // audio_sessions row and returns its revision, or 0 when no row exists
 // yet (a session this coordinator has never dispatched anything against).
 // This is [nightAnnouncementRevisions]'s floor input across night
@@ -251,7 +251,7 @@ func nightAnnouncementRevisions(persistedRevision int64) (clearRevision, applyRe
 // coordinator could not read this time: the apply's own pinned config
 // revision is still in the floor, so this can never cause a rewind, only
 // fail to include evidence it could not get.
-func (h *handlers) nightAnnouncementPersistedRevision(ctx context.Context, sessionID string) int64 {
+func (h *handlers) nightAudioSessionPersistedRevision(ctx context.Context, sessionID string) int64 {
 	rec, err := h.deps.AudioSessions.GetAudioSession(ctx, sessionID)
 	switch {
 	case err == nil:
@@ -300,7 +300,7 @@ func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
 	clearRevision, _, _ := nightAnnouncementRevisions(persisted)
 	clear := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.clear", map[string]any{})
 	phase := nightPhaseAnnouncementClear + ":" + cuePhase
@@ -339,7 +339,7 @@ func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history for start", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
 	_, _, startRevision := nightAnnouncementRevisions(persisted)
 	start := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.start", map[string]any{})
 	phase := nightPhaseAnnouncementStart + ":" + cuePhase
@@ -392,7 +392,7 @@ func (h *handlers) nightAnnouncementApplyDispatchRevision(ctx context.Context, c
 	if cue.Role != config.NightSessionCueRoleAnnouncement || !nightAnnouncementTargetDeclarable(target) {
 		return 0, false
 	}
-	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
 	_, applyRevision, _ := nightAnnouncementRevisions(persisted)
 	return applyRevision, true
 }
