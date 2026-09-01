@@ -208,9 +208,17 @@ echo "half of the shell clause's acceptance branch. Placed here, at the end, so"
 echo "it needs no cleanup and does not disturb the fresh-host state check 2 and"
 echo "check 5 depend on."
 usermod --shell /usr/bin/false showmesh
+set +e
 OUT="$(./install.sh "$REPO/bin/showmesh-agent-native" 2>&1)"
+RC=$?
+set -e
+if [ "$RC" -ne 0 ]; then
+  echo "FAIL: install.sh exited $RC (refused) for a showmesh account with a */false shell, which should be accepted" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
 if ! echo "$OUT" | grep -q 'already exists (system account, matches the shape this installer creates)'; then
-  echo "FAIL: install.sh refused or did not recognize a showmesh account with a */false shell as matching its own shape" >&2
+  echo "FAIL: install.sh accepted a showmesh account with a */false shell but not by way of the expected acceptance line" >&2
   echo "$OUT" >&2
   exit 1
 fi
