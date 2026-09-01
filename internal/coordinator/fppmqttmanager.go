@@ -267,10 +267,19 @@ func (m *fppMQTTManager) CollectorStatuses(context.Context) ([]api.CollectorStat
 		reason := "no FPP MQTT broker configured"
 		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
-	if silent, reason := bundle.collector.SilentSinceConnect(); silent {
-		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorConnectedNoData), Reason: &reason}}, nil
+	silent, reason := bundle.collector.SilentSinceConnect()
+	return []api.CollectorState{fppMQTTCollectorState(silent, reason)}, nil
+}
+
+// fppMQTTCollectorState maps [fppmqtt.Collector.SilentSinceConnect]'s
+// result to a [api.CollectorState], pure and independent of any live
+// connection so the silent=true direction is directly testable without a
+// broker.
+func fppMQTTCollectorState(silent bool, reason string) api.CollectorState {
+	if silent {
+		return api.CollectorState{ID: fppMQTTCollectorSourceID, State: string(api.CollectorConnectedNoData), Reason: &reason}
 	}
-	return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning)}}, nil
+	return api.CollectorState{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning)}
 }
 
 // CurrentHosts implements [api.FPPMQTTHostLister]: the id->HostName map
