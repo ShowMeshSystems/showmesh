@@ -171,9 +171,17 @@ func renderPutActiveShow(t *testing.T, st *store.Store, showID string) {
 
 func renderCreateAsset(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, contentHash, filename string) store.AssetRecord {
 	t.Helper()
+	return renderCreateAssetMediaType(t, st, showID, sequenceID, targetKind, targetID, "fseq", contentHash, filename)
+}
+
+// renderCreateAssetMediaType is renderCreateAsset with an explicit media
+// type, for tests that need a non-fseq current asset (e.g. an audio upload
+// for the sequence render.surface.apply must not hand to the node).
+func renderCreateAssetMediaType(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, mediaType, contentHash, filename string) store.AssetRecord {
+	t.Helper()
 	rec, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: contentHash + "-" + targetKind + "-" + targetID, ShowID: showID, SequenceID: sequenceID,
-		TargetKind: targetKind, TargetID: targetID, MediaType: "fseq", ContentHash: contentHash,
+		TargetKind: targetKind, TargetID: targetID, MediaType: mediaType, ContentHash: contentHash,
 		RuntimeFilename: filename, SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
 	})
 	if err != nil {
@@ -343,6 +351,98 @@ func TestRenderApplyRefusesOnAmbiguousAsset(t *testing.T) {
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0", setup.pub.count())
+	}
+}
+
+// TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio reproduces
+// the rehearsal-rig failure of 2026-08-30: an FSEQ is uploaded and current
+// for the sequence, then the show's audio is uploaded for the SAME
+// sequence and target, which (per assets.go's createAsset) supersedes the
+// FSEQ on the same (show, sequence, target) tuple. The only current asset
+// left for the sequence is the audio file. Before this fix,
+// resolveRenderApplyParams treated media type as irrelevant and handed the
+// MP3 to the node as fseqFilename, which the node correctly refused with
+// "fseq: not an FSEQ file (bad magic)", a media-file-shaped failure the
+// coordinator should never have let leave it. The refusal must name the
+// missing FSEQ, and must never dispatch anything.
+func TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "fseq", "hash-a", "opener.fseq")
+	// Superseding upload for the SAME (show, sequence, target): the fseq
+	// row above stops being current, exactly as createAsset documents.
+	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "audio", "hash-b", "opener.mp3")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	var problem struct{ Detail string }
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem response: %v", err)
+	}
+	if !strings.Contains(problem.Detail, "no fseq asset found") || !strings.Contains(problem.Detail, `sequence "opener"`) {
+		t.Fatalf("detail = %q, want it to name the missing fseq asset for the sequence, not pass the audio file through", problem.Detail)
+	}
+	if strings.Contains(problem.Detail, "opener.mp3") {
+		t.Fatalf("detail = %q, must never name the audio file as if it were a candidate FSEQ", problem.Detail)
+	}
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0: an audio file must never be dispatched downstream as fseqFilename", setup.pub.count())
+	}
+}
+
+// TestRenderApplyIgnoresNonFSEQCandidateWhenChoosingTheFSEQ proves the
+// media-type filter picks the sequence's fseq asset even when another
+// current asset of a different media type also matches the sequence (here,
+// a show-wide audio asset alongside a node-targeted fseq, different
+// targets, so both stay current per createAsset's (show, sequence, target)
+// key). Before this fix, resolveRenderApplyParams counted both as
+// candidates and reported "ambiguous", since it never looked at media type.
+func TestRenderApplyIgnoresNonFSEQCandidateWhenChoosingTheFSEQ(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "fseq", "hash-a", "opener.fseq")
+	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindShow, "", "audio", "hash-b", "opener.mp3")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: one current fseq and one current asset of a different media type is not ambiguous; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	env := setup.pub.payload[0]
+	if got := env.Payload.Params["fseqFilename"]; got != "opener.fseq" {
+		t.Errorf("fseqFilename = %v, want opener.fseq (the audio asset must never be selected)", got)
 	}
 }
 

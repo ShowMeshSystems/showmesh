@@ -301,23 +301,28 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve expected assets for node %q in show %q: %w", nodeID, base.Active.ShowID, err)
 	}
-	var matches []assetsync.ExpectedAsset
+	var sequenceMatches, fseqMatches []assetsync.ExpectedAsset
 	for _, a := range expected.Assets {
-		if a.SequenceID == sequenceID {
-			matches = append(matches, a)
+		if a.SequenceID != sequenceID {
+			continue
+		}
+		sequenceMatches = append(sequenceMatches, a)
+		if a.MediaType == "fseq" {
+			fseqMatches = append(fseqMatches, a)
 		}
 	}
-	switch len(matches) {
-	case 0:
+	switch {
+	case len(sequenceMatches) == 0:
 		p := invalidParameterProblem(fmt.Sprintf("no asset found for surface %q (sequence %q) in show %q", surfaceID, sequenceID, base.Active.ShowID))
 		return nil, &p, nil
-	default:
-		if len(matches) > 1 {
-			p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(matches), sequenceID, nodeID, base.Active.ShowID))
-			return nil, &p, nil
-		}
+	case len(fseqMatches) == 0:
+		p := invalidParameterProblem(fmt.Sprintf("no fseq asset found for surface %q (sequence %q) in show %q; %d current asset(s) exist for that sequence but none is an fseq", surfaceID, sequenceID, base.Active.ShowID, len(sequenceMatches)))
+		return nil, &p, nil
+	case len(fseqMatches) > 1:
+		p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current fseq assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(fseqMatches), sequenceID, nodeID, base.Active.ShowID))
+		return nil, &p, nil
 	}
-	asset := matches[0]
+	asset := fseqMatches[0]
 
 	raw, err := json.Marshal(renderApplyParamsPayload{
 		SurfaceID: surfaceID, Show: base.Payload.Show, Name: base.Payload.Name, Node: base.Payload.Node,
