@@ -973,8 +973,17 @@ func TestNightAnnouncement_FloorSurvivesConsecutiveNightSessionsSharingOneAudioS
 // mutation target: nightRunCue/nightResumeCueRow's dispatchRevision
 // selection. Put the apply back on its own pinned config revision
 // (row.ActionRevision / revision, unconditionally) and cycles 2 and 3 fail
-// here with stale_revision, while cycle 1 still passes - proving the
-// defect is real and that this test catches it.
+// here at the wire-revision monotonicity check - the apply wire revision
+// no longer advances past the previous cycle's - while cycle 1 still
+// passes, proving the defect is real and that this test catches it. The
+// apply row itself stays resolved/confirmed under the mutation:
+// announcementNodeResults answers by action name unconditionally, with no
+// revision awareness, so this stub can never produce a node-side
+// stale_revision refusal. What this test guards is the coordinator's own
+// job - emitting a strictly advancing dispatch revision for the apply,
+// which is exactly what this change fixes; node-side refusal of a stale
+// revision is the agent's behaviour, covered by the agent-side tests
+// where the merged clear exemption applies.
 func TestNightAnnouncement_ApplyConfirmsAcrossThreeCyclesAsSoleFirstOutwardCue(t *testing.T) {
 	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
 	mustPutAnnouncementCueAction(t, st)
