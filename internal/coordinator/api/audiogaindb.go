@@ -21,7 +21,7 @@ import (
 //     parameter, because an operator is on the other end of it;
 //   - an authored show.action reaches a node through
 //     nightDispatchCueAudio, which calls
-//     convertAuthoredAudioGainParams. That one converts a decibel
+//     ConvertAuthoredAudioGainParams. That one converts a decibel
 //     parameter when it is present and otherwise leaves params alone,
 //     because the night background-audio controller builds its own
 //     targets from resting.backgroundAudio.maxGainDb and has ALREADY
@@ -81,12 +81,12 @@ func convertAudioGainParamsToLinear(action string, params map[string]any) *v1.Pr
 	return nil
 }
 
-// convertAuthoredAudioGainParams converts an authored show.action gain
+// ConvertAuthoredAudioGainParams converts an authored show.action gain
 // target's decibel parameter to the linear one the node expects, in
 // place, and does nothing at all when no decibel parameter is present.
 // See this file's doc comment for why "absent is fine" is correct here
 // and would be wrong on the HTTP path.
-func convertAuthoredAudioGainParams(action string, params map[string]any) {
+func ConvertAuthoredAudioGainParams(action string, params map[string]any) {
 	fields, ok := audioGainDbFields[action]
 	if !ok {
 		return

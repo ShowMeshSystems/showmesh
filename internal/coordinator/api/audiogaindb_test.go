@@ -159,7 +159,7 @@ func TestAudioGainBoundaryUsesTheSharedSilenceFloor(t *testing.T) {
 // on the way to the node, exactly once.
 func TestAuthoredAudioGainParamsConvertDecibels(t *testing.T) {
 	params := map[string]any{"gainDb": -6.0206}
-	convertAuthoredAudioGainParams("audio.gain.set", params)
+	ConvertAuthoredAudioGainParams("audio.gain.set", params)
 	if _, present := params["gainDb"]; present {
 		t.Error("gainDb survived conversion; the node must receive linear")
 	}
@@ -169,7 +169,7 @@ func TestAuthoredAudioGainParamsConvertDecibels(t *testing.T) {
 	}
 
 	fade := map[string]any{"targetGainDb": pkgaudio.SilenceFloorDb, "durationMs": float64(500)}
-	convertAuthoredAudioGainParams("audio.gain.fade", fade)
+	ConvertAuthoredAudioGainParams("audio.gain.fade", fade)
 	if fade["targetGain"] != float64(0) || fade["durationMs"] != float64(500) {
 		t.Errorf("fade params = %v, want targetGain 0 and durationMs carried through", fade)
 	}
@@ -182,7 +182,7 @@ func TestAuthoredAudioGainParamsConvertDecibels(t *testing.T) {
 // silences the resting bed, so it is asserted rather than assumed.
 func TestAuthoredAudioGainParamsLeaveAlreadyLinearTargetsAlone(t *testing.T) {
 	params := map[string]any{"gain": 0.6}
-	convertAuthoredAudioGainParams("audio.gain.set", params)
+	ConvertAuthoredAudioGainParams("audio.gain.set", params)
 	if params["gain"] != 0.6 || len(params) != 1 {
 		t.Errorf("params = %v, want the already-linear gain untouched", params)
 	}
@@ -191,7 +191,7 @@ func TestAuthoredAudioGainParamsLeaveAlreadyLinearTargetsAlone(t *testing.T) {
 // Nothing else is a gain action, so nothing else is touched.
 func TestAuthoredAudioGainParamsIgnoreOtherActions(t *testing.T) {
 	params := map[string]any{"gainDb": -6.0}
-	convertAuthoredAudioGainParams("audio.session.apply", params)
+	ConvertAuthoredAudioGainParams("audio.session.apply", params)
 	if params["gainDb"] != -6.0 || len(params) != 1 {
 		t.Errorf("params = %v, want a non-gain action's params untouched", params)
 	}

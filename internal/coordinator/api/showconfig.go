@@ -618,6 +618,7 @@ func mapConfigShowActionTarget(t config.ShowActionTarget) v1.ConfigShowActionTar
 		InstanceID:  t.InstanceID, Primitive: t.Primitive, Params: t.Params,
 		Broker: t.Broker,
 		Action: t.Action, Ref: t.Ref,
+		AudioNodeID: t.AudioNodeID, AudioSessionID: t.AudioSessionID, AudioAction: t.AudioAction,
 	}
 	if t.Publish != nil {
 		out.Publish = &v1.ConfigShowActionMQTTPublish{

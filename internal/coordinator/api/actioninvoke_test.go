@@ -12,6 +12,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -322,6 +323,47 @@ func TestInvokeActionIdempotencyKeyReusedByADifferentCommandFamilyIs409(t *testi
 	}
 }
 
+// TestInvokeActionAudioConfirmed proves the audio branch dispatches
+// through [handlers.executeAudioSessionDispatch] — the same in-process
+// core POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/... uses —
+// rather than falling into dispatchActionTarget's default "unrecognized
+// integration" branch, which is what happened before this integration had
+// a case of its own.
+func TestInvokeActionAudioConfirmed(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Commands = st
+	pub := &fakeAudioPublisher{result: mqttproto.ResultPayload{
+		Outcome:  mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "started", "reason": "playback began"}},
+	}}
+	deps.AudioPublisher = pub
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "start-announcement", validShowActionAudioBody)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("start-announcement", "audio-key-1", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if result["outcome"] != "confirmed" {
+		t.Errorf("outcome = %v, want confirmed; body: %s", result["outcome"], body)
+	}
+	if pub.count() != 1 {
+		t.Errorf("audio publish calls = %d, want exactly 1", pub.count())
+	}
+	if pub.lastAction != "audio.session.start" {
+		t.Errorf("dispatched action = %q, want audio.session.start", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != "announcement" {
+		t.Errorf("dispatched params[sessionId] = %v, want announcement", pub.lastParams["sessionId"])
+	}
+}
+
 // TestInvokeActionMQTTConfirmedAndUnconfirmable proves the mqtt branch
 // dispatches through [DispatchMQTTAction] over [Dependencies.MQTTBrokers]:
 // a "none" expect kind reports unconfirmable, never success dressed up as
@@ -578,6 +620,18 @@ const validShowActionResolumeBlackoutBody = `{
 	"target": {
 		"integration": "resolume",
 		"action": "blackout"
+	}
+}`
+
+const validShowActionAudioBody = `{
+	"show": "halloween-2026",
+	"label": "Start the announcement",
+	"safetyClass": "none",
+	"target": {
+		"integration": "audio",
+		"audioNodeId": "node-a",
+		"audioSessionId": "announcement",
+		"audioAction": "audio.session.start"
 	}
 }`
 

@@ -240,6 +240,57 @@ describe('ShowActionDetail (new action authoring)', () => {
     )
   })
 
+  // Lane 17a: an audio show.action target could not be authored through
+  // this form at all — selecting "audio" fell through to the mqtt branch
+  // of both the render and buildPayload, so the operator saw MQTT fields
+  // and any submission built an mqtt-shaped payload regardless of what was
+  // typed. This proves an audio target is authored and submitted correctly
+  // instead.
+  it('submits a valid audio action with node, session, operation, and params', async () => {
+    putShowAction.mockResolvedValue({
+      serverTime: '2026-08-14T00:00:00Z',
+      kind: 'show.action',
+      id: 'start-announcement',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Start the announcement',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'audio', audioNodeId: 'node-a', audioSessionId: 'announcement', audioAction: 'audio.session.start' },
+      },
+      updatedAt: '2026-08-14T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.type(screen.getByLabelText('Action id'), 'start-announcement')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Label'), 'Start the announcement')
+    await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
+    await user.selectOptions(screen.getByLabelText('Integration'), 'audio')
+    await user.type(screen.getByLabelText(/Audio node id/), 'node-a')
+    await user.type(screen.getByLabelText(/Audio session id/), 'announcement')
+    await user.selectOptions(screen.getByLabelText(/Operation/), 'audio.session.start')
+    await user.click(screen.getByRole('button', { name: 'Create action' }))
+
+    expect(putShowAction).toHaveBeenCalledWith(
+      'start-announcement',
+      expect.objectContaining({
+        safetyClass: 'none',
+        target: expect.objectContaining({
+          integration: 'audio',
+          audioNodeId: 'node-a',
+          audioSessionId: 'announcement',
+          audioAction: 'audio.session.start',
+        }),
+      }),
+    )
+  })
+
   // This task's finding 4: the server (decodeMQTTExpect,
   // internal/coordinator/config/showaction.go) requires "match"'s value
   // KEY present but explicitly allows it to be an empty string — an

@@ -72,6 +72,31 @@ const RESOLUME_ACTIONS = [
   'setLayerMaster',
 ]
 
+// The thirteen audio.session.*/audio.gain.*/audio.output.* operation names
+// this coordinator's agent-facing dispatch ships
+// (internal/coordinator/config/showaction.go's own showActionAudioActions —
+// the SAME list decodeAudioTarget validates audioAction against), mirrored
+// here by value rather than fetched live: there is no GET /audio/actions
+// registry endpoint the way GET /resolume/actions is for RESOLUME_ACTIONS
+// above, so this hardcoded list follows FPP_PRIMITIVES' identical
+// docs-mirror precedent instead. A stale copy fails loudly at PUT time
+// rather than silently drifting, exactly as that comment states.
+const AUDIO_ACTIONS = [
+  'audio.session.apply',
+  'audio.session.prepare',
+  'audio.session.start',
+  'audio.session.pause',
+  'audio.session.resume',
+  'audio.session.seek',
+  'audio.session.advance',
+  'audio.session.stop',
+  'audio.session.clear',
+  'audio.gain.set',
+  'audio.gain.fade',
+  'audio.output.mute',
+  'audio.output.unmute',
+]
+
 interface FormState {
   show: string
   label: string
@@ -104,6 +129,10 @@ interface FormState {
   resolumeColumn: string
   resolumeBypassed: boolean
   resolumeMaster: string
+  // audio fields
+  audioNodeId: string
+  audioSessionId: string
+  audioAction: string
 }
 
 function emptyForm(): FormState {
@@ -134,6 +163,9 @@ function emptyForm(): FormState {
     resolumeColumn: '',
     resolumeBypassed: false,
     resolumeMaster: '',
+    audioNodeId: '',
+    audioSessionId: '',
+    audioAction: '',
   }
 }
 
@@ -181,6 +213,9 @@ function formFromPayload(payload: ConfigShowAction): FormState {
     resolumeColumn: refString(ref, 'column'),
     resolumeBypassed: refBoolean(ref, 'bypassed'),
     resolumeMaster: refNumber(ref, 'master'),
+    audioNodeId: target.audioNodeId ?? '',
+    audioSessionId: target.audioSessionId ?? '',
+    audioAction: target.audioAction ?? '',
   }
 }
 
@@ -331,6 +366,41 @@ function buildPayload(
           // ref shape is exactly what that step's own coordinator-required
           // constraint assumes exists.
           ...(Object.keys(ref).length > 0 ? { ref } : {}),
+        },
+      },
+    }
+  }
+
+  if (form.integration === 'audio') {
+    if (form.audioNodeId.trim() === '') return { error: 'Audio node id is required.' }
+    if (form.audioSessionId.trim() === '') return { error: 'Audio session id is required.' }
+    if (form.audioAction === '') return { error: 'Audio operation is required.' }
+    let params: Record<string, unknown> | undefined
+    if (form.paramsJson.trim() !== '') {
+      try {
+        const parsed: unknown = JSON.parse(form.paramsJson)
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          return { error: 'Params must be a JSON object, e.g. {"gainDb": -6}.' }
+        }
+        params = parsed as Record<string, unknown>
+      } catch {
+        return { error: 'Params is not valid JSON.' }
+      }
+    }
+    return {
+      payload: {
+        show: form.show.trim(),
+        label: form.label.trim(),
+        description: form.description,
+        safetyClass: form.safetyClass,
+        idempotent,
+        target: {
+          integration: 'audio',
+          audioNodeId: form.audioNodeId.trim(),
+          audioSessionId: form.audioSessionId.trim(),
+          audioAction: form.audioAction,
+          // Same exactOptionalPropertyTypes rule as the fpp branch above.
+          ...(params !== undefined ? { params } : {}),
         },
       },
     }
@@ -687,6 +757,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
             <option value="fpp">FPP primitive</option>
             <option value="mqtt">External MQTT command</option>
             <option value="resolume">Resolume action</option>
+            <option value="audio">Audio session command</option>
           </select>
         </label>
 
@@ -818,7 +889,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
               </>
             )}
           </>
-        ) : (
+        ) : form.integration === 'resolume' ? (
           <>
             <p className="text-muted">
               Every Resolume action is coordinator-required: Resolume holds no local fallback for
@@ -1007,6 +1078,47 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
                 />
               </label>
             )}
+          </>
+        ) : (
+          <>
+            <label className="form-field">
+              Audio node id
+              <input
+                type="text"
+                value={form.audioNodeId}
+                onChange={(e) => setForm({ ...form, audioNodeId: e.target.value })}
+              />
+            </label>
+            <label className="form-field">
+              Audio session id
+              <input
+                type="text"
+                value={form.audioSessionId}
+                onChange={(e) => setForm({ ...form, audioSessionId: e.target.value })}
+              />
+            </label>
+            <label className="form-field">
+              Operation
+              <select value={form.audioAction} onChange={(e) => setForm({ ...form, audioAction: e.target.value })}>
+                <option value="" disabled>
+                  Choose one
+                </option>
+                {AUDIO_ACTIONS.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form-field">
+              Params (JSON object, optional; shape depends on the operation chosen above &mdash; e.g.
+              {'{"gainDb": -6}'} for audio.gain.set, in decibels)
+              <textarea
+                rows={4}
+                value={form.paramsJson}
+                onChange={(e) => setForm({ ...form, paramsJson: e.target.value })}
+              />
+            </label>
           </>
         )}
       </fieldset>

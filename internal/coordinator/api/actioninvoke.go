@@ -18,6 +18,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/command"
 )
 
@@ -105,6 +106,17 @@ const actionInvokeTargetKind = "show.action"
 // [ReconcileStrandedActionInvocations]'s use of it to find that child
 // again at startup.
 const actionInvokeFPPChildIdempotencyKeyPrefix = "action-invoke:"
+
+// actionInvokeAudioChildIdempotencyKeyPrefix is
+// [dispatchActionTarget]'s audio branch's identical mirror of
+// [actionInvokeFPPChildIdempotencyKeyPrefix], one integration over: the
+// deterministic prefix its nested audio command's own idempotency key is
+// minted from ("action-invoke:"+cmdID). Not consulted by
+// [ReconcileStrandedActionInvocations] today — that reconciliation reads
+// only an FPP child back (reconcileActionInvokeOutcome's own doc comment),
+// so a stranded audio invocation reconciles to unconfirmed exactly as a
+// stranded Resolume or MQTT one already does, never a guess.
+const actionInvokeAudioChildIdempotencyKeyPrefix = "action-invoke:"
 
 // actionInvokeHTTPWriteDeadline covers this endpoint's worst case across
 // all three integrations, dominated by mqtt's 120s expect.deadlineSeconds
@@ -358,7 +370,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	dispatchCtx, dispatchCancel := context.WithTimeout(bgCtx, actionInvokeHTTPWriteDeadline-actionInvokeBookkeepingBudget)
 	defer dispatchCancel()
 
-	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, callerIntent, ac, h.clientAddr(r), auditExempt)
+	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, callerIntent, rev.Revision, ac, h.clientAddr(r), auditExempt)
 
 	// evidenceState is currently unused on the wire directly but kept for
 	// parity with the outcome-audit entry below, which does carry it.
@@ -471,14 +483,18 @@ func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, r
 // handler's own outer decision. callerIntent (store.CallerIntentRevision-
 // tagged) is threaded into the FPP branch's own child command row, so the
 // nested dispatch carries the SAME pinned revision the outer invocation
-// resolved against.
+// resolved against. revision is that identical pinned show.action revision
+// as a raw int64, threaded into the audio branch's own pkg/audio.Revision —
+// nightDispatchCueAudio's (nightcue.go) identical use of "the pinned
+// show.action revision, never the live one" as pkg/audio's own revision,
+// applied here for the same reason.
 //
-// outcomeState is empty for FPP and Resolume (the caller derives a
+// outcomeState is empty for FPP, Resolume, and audio (the caller derives a
 // pkg/observation-vocabulary fallback from outcome itself, unchanged) and
 // carries DispatchMQTTAction's own mqttActionState* vocabulary for MQTT —
 // macro/vocab.go's identical split, applied here instead of re-deriving a
 // second classification for the same dispatch.
-func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID, callerIntent string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
+func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID, callerIntent string, revision int64, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
 	target := payload.Target
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP:
@@ -531,10 +547,74 @@ func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.Show
 		}
 		return res.Outcome, res.OutcomeState, res.OutcomeReason, dispatched, res.ResolvedAt
 
+	case config.ShowActionIntegrationAudio:
+		params := make(map[string]any, len(target.Params)+3)
+		for k, v := range target.Params {
+			params[k] = v
+		}
+		// An authored show.action carries its gain in decibels; the node
+		// expects the linear multiplier it has always received — see
+		// nightDispatchCueAudio's (nightcue.go) identical conversion at its
+		// own dispatch point.
+		ConvertAuthoredAudioGainParams(target.AudioAction, params)
+		audioIdemKey := actionInvokeAudioChildIdempotencyKeyPrefix + cmdID
+		params["sessionId"] = target.AudioSessionID
+		params["invocationId"] = audioIdemKey
+		params["revision"] = uint64(revision)
+
+		result, problem, err := h.executeAudioSessionDispatch(ctx, h.now(), AudioDispatchInput{
+			Action: target.AudioAction, NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
+			Params: params, Revision: uint64(revision), IdempotencyKey: audioIdemKey,
+			IssuerID: ac.result.Principal.ID, IssuerName: ac.result.Principal.Name,
+			IssuerForm: ac.result.Form, IssuerCredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
+		})
+		resolvedAt = h.now()
+		switch {
+		case err != nil:
+			return outcomeWordFailed, "", "this action could not be dispatched because of an internal coordinator error", nil, resolvedAt
+		case problem != nil:
+			return outcomeWordRefused, "", problem.Detail, nil, resolvedAt
+		}
+		var audioDispatchedAt *time.Time
+		if result.DispatchedAt != "" {
+			if t, perr := parseTime(result.DispatchedAt); perr == nil {
+				audioDispatchedAt = &t
+			}
+		}
+		return mapAudioOutcomeWord(result.Outcome), "", result.Reason, audioDispatchedAt, resolvedAt
+
 	default:
-		// Unreachable given write-time validation of target.integration's
-		// closed enum.
+		// Reached whenever payload.Target.Integration is a value this
+		// switch does not name: NOT unreachable. Write-time validation
+		// (config.DecodeShowActionPayload) only closes the enum against
+		// the same list this switch itself must be kept in sync with by
+		// hand — "fpp", "mqtt", "resolume", and "audio" today — so this
+		// branch is what actually answers a config row hand-edited to
+		// carry a fifth value, or a future integration added to the
+		// decoder's enum without a matching case added here.
 		return outcomeWordFailed, "", fmt.Sprintf("action names an unrecognized integration %q", target.Integration), nil, h.now()
+	}
+}
+
+// mapAudioOutcomeWord converts a [pkgaudio.Outcome] wire string into this
+// endpoint's own five-word outcome vocabulary, mirroring
+// mapResolumeOutcomeWord's identical role for Resolume and
+// nightAudioCueOutcome's (nightcue.go) identical mapping for the night cue
+// dispatcher — three separate callers translating the SAME pkg/audio
+// vocabulary into their own outcome words, never a shared function, because
+// each caller's own vocabulary differs (this one has "unconfirmed",
+// nightcue.go's does not).
+func mapAudioOutcomeWord(o string) string {
+	switch pkgaudio.Outcome(o) {
+	case pkgaudio.OutcomeStarted, pkgaudio.OutcomePosition, pkgaudio.OutcomeGain,
+		pkgaudio.OutcomeFadeComplete, pkgaudio.OutcomeStopped, pkgaudio.OutcomeCompleted:
+		return outcomeWordConfirmed
+	case pkgaudio.OutcomeUnconfirmable:
+		return outcomeWordUnconfirmable
+	case pkgaudio.OutcomeRefused:
+		return outcomeWordRefused
+	default:
+		return outcomeWordFailed
 	}
 }
 
