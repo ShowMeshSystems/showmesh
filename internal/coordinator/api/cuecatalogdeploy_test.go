@@ -303,6 +303,232 @@ func TestCueCatalogDeployReplayOfAnInFlightCommandReportsAbsentOutcome(t *testin
 	assertMatchesSchema(t, newOpenAPICompiler(t), "CueCatalogDeployResponse", body)
 }
 
+// TestCueCatalogDeployReplayFailsCleanlyOnAWrongFamilyCallerIntent is the
+// central regression this task's own defect targets: commands.caller_intent
+// holds two untagged JSON families sharing a "node" field, this route's own
+// cueCatalogDeployRequestIdentity and renderRequestIdentity
+// (renderdispatch.go). Seeds a row whose action/node match this route (so
+// it passes the first check in resolveCueCatalogDeployReplay) but whose
+// caller_intent is TAGGED as a render-request identity, not this route's
+// own: a row that could only exist from data corruption or a future
+// writer bug, never a reachable path today, but exactly the shape
+// resolveCueCatalogDeployReplay must not answer with a confidently wrong,
+// zero-valued Show/Generation/Revision. Before this fix, the discarded
+// json.Unmarshal error let this decode succeed as far as
+// json.Unmarshal([]byte(payload), &reqID) is concerned... except a
+// wrong-KIND-tagged value is returned by store.CallerIntentPayload still
+// wearing its own tag prefix (never valid JSON on its own), so the
+// unmarshal genuinely fails, and it was THAT failure being silently
+// discarded that let a 200 with an empty identity through instead of a
+// conflict.
+func TestCueCatalogDeployReplayFailsCleanlyOnAWrongFamilyCallerIntent(t *testing.T) {
+	api, st, _, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	const idempotencyKey = "idem-wrong-family"
+	wrongFamilyIntent := store.FormatCallerIntent(store.CallerIntentRenderRequest,
+		`{"action":"clear","node":"render-01","surface":"wall-1","sequenceId":""}`)
+	_, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "cmd-wrong-family", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
+		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		CallerIntent:       wrongFamilyIntent,
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("seed wrong-family command: %v", err)
+	}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy",
+		`{"idempotencyKey":"`+idempotencyKey+`"}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("replay against a wrong-family caller_intent: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "cmd-wrong-family") {
+		t.Fatalf("detail = %q, want it to name the undecodable command", p.Detail)
+	}
+}
+
+// TestCueCatalogDeployReplayRefusesAnUntaggedWrongFamilyRowByItsAllZeroIdentity
+// covers the case the tagged wrong-family test above does not: commands.
+// caller_intent's legacy, untagged fallback (store.CallerIntentPayload's
+// own documented "falls back to the raw value for a row written before
+// this tagging scheme existed" case) accepts a bare JSON object of EITHER
+// family, since Go's json.Unmarshal ignores fields it does not recognize.
+// The tagged test above is refused only because store.CallerIntentPayload
+// returns a wrong-kind value still wearing its own tag prefix, which is
+// not valid JSON and so fails to decode; an UNTAGGED render identity
+// carries no such prefix, so it decodes cleanly into
+// cueCatalogDeployRequestIdentity, populating only NodeID (both structs
+// tag a "node" field) and leaving Show, Generation, and Revision at their
+// zero values, exactly the shape cueCatalogDeployReplayAllZeroIdentityProblem
+// exists to catch: a non-empty payload that decoded to no show,
+// generation, or revision at all. This is narrowed defense, not the full
+// requested_revision/caller_intent discriminator work the issue names as
+// separate: a wrong-family row carrying plausible NON-ZERO overlapping
+// values (e.g. a render identity whose node happens to look like a show
+// name) would still decode into a wrong-but-non-zero identity here and
+// slip through undetected.
+func TestCueCatalogDeployReplayRefusesAnUntaggedWrongFamilyRowByItsAllZeroIdentity(t *testing.T) {
+	api, st, _, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	const idempotencyKey = "idem-untagged-wrong-family"
+	untaggedRenderIdentity := `{"action":"clear","node":"render-01","surface":"wall-1","sequenceId":""}`
+	_, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "cmd-untagged-wrong-family", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
+		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		CallerIntent:       untaggedRenderIdentity,
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("seed untagged wrong-family command: %v", err)
+	}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy",
+		`{"idempotencyKey":"`+idempotencyKey+`"}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("replay against an untagged wrong-family caller_intent: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != ProblemTypeConflict {
+		t.Fatalf("problem type = %q, want %q", p.Type, ProblemTypeConflict)
+	}
+	if !strings.Contains(p.Detail, "cmd-untagged-wrong-family") {
+		t.Fatalf("detail = %q, want it to name the refused command", p.Detail)
+	}
+	if !strings.Contains(p.Detail, "show, generation, revision") {
+		t.Fatalf("detail = %q, want it to name the evidence (the fields a deploy identity always has)", p.Detail)
+	}
+}
+
+// TestCueCatalogDeployReplayAcceptsAGenuineZeroGenerationIdentity proves
+// the all-zero guard checks Show, Generation, AND Revision together, not
+// Generation alone: Generation 0 is a plausible real value (the first
+// resolved generation of a catalog), so a genuine identity carrying a
+// real Show and Revision but Generation 0 must still replay normally, not
+// be refused as though it looked like a wrong-family row.
+func TestCueCatalogDeployReplayAcceptsAGenuineZeroGenerationIdentity(t *testing.T) {
+	api, st, _, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	const idempotencyKey = "idem-zero-generation"
+	goodIntent := store.FormatCallerIntent(store.CallerIntentCueCatalogDeploy,
+		`{"node":"render-01","show":"halloween-2026","generation":0,"revision":"r0"}`)
+	_, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "cmd-zero-generation", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
+		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		CallerIntent:       goodIntent,
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("seed zero-generation command: %v", err)
+	}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy",
+		`{"idempotencyKey":"`+idempotencyKey+`"}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("replay against a genuine zero-generation identity: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		Command struct {
+			Show       string `json:"show"`
+			Generation int64  `json:"generation"`
+			Revision   string `json:"revision"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("decode replay response: %v", err)
+	}
+	if result.Command.Show != "halloween-2026" || result.Command.Revision != "r0" {
+		t.Fatalf("show/revision = %q/%q, want halloween-2026/r0; body: %s", result.Command.Show, result.Command.Revision, body)
+	}
+}
+
+// TestCueCatalogDeployReplayFailsCleanlyOnMalformedCallerIntent covers the
+// plain "does not decode at all" case (never valid JSON, tagged or not),
+// distinct from the wrong-family case above.
+func TestCueCatalogDeployReplayFailsCleanlyOnMalformedCallerIntent(t *testing.T) {
+	api, st, _, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	const idempotencyKey = "idem-malformed-intent"
+	_, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "cmd-malformed-intent", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
+		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		CallerIntent:       "not valid json at all",
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("seed malformed-intent command: %v", err)
+	}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy",
+		`{"idempotencyKey":"`+idempotencyKey+`"}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("replay against a malformed caller_intent: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestCueCatalogDeployReplayFailsCleanlyOnMalformedResultJSON covers the
+// third discarded decode: a row whose result_json does not parse, isolated
+// from caller_intent by giving this row a well-formed, correctly tagged
+// caller_intent of its own.
+func TestCueCatalogDeployReplayFailsCleanlyOnMalformedResultJSON(t *testing.T) {
+	api, st, _, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	const idempotencyKey = "idem-malformed-result"
+	goodIntent := store.FormatCallerIntent(store.CallerIntentCueCatalogDeploy,
+		`{"node":"render-01","show":"halloween-2026","generation":1,"revision":"r1"}`)
+	_, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "cmd-malformed-result", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
+		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		CallerIntent:       goodIntent,
+		ConfirmationMethod: "evidence", State: "pending",
+		ResultJSON: "{not valid json",
+	})
+	if err != nil {
+		t.Fatalf("seed malformed-result command: %v", err)
+	}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy",
+		`{"idempotencyKey":"`+idempotencyKey+`"}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("replay against a malformed result_json: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
 // TestCueCatalogDeployOutcomeSurvivesClientDisconnect proves this route's
 // post-dispatch bookkeeping (recording dispatchedAt, waiting for the node's
 // result, recording the resolved outcome, and writing the outcome audit
