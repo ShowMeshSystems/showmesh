@@ -7,13 +7,22 @@ import {
   type AudioNodeConfigResponse,
   type ConfigObjectSummary,
 } from '../api'
-import { Button, ButtonRow, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Select, StatusPair } from '../kit'
+import { Button, ButtonRow, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
+import type { ConfigAudioNode } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { advertisedRoutes, audioNodeVerdict, hasAudioCapability } from './settingsModel'
+
+type AudioNodeRole = NonNullable<ConfigAudioNode['role']>
+const DEFAULT_ROLE: AudioNodeRole = 'program+ltc'
+const ROLE_OPTIONS: readonly { value: AudioNodeRole; label: string }[] = [
+  { value: 'program', label: 'Program' },
+  { value: 'program+ltc', label: 'Program + LTC' },
+  { value: 'zone', label: 'Zone' },
+]
 
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
 type NodeState =
@@ -112,6 +121,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const [ltcChannelText, setLtcChannelText] = useState('')
   const [clockDomain, setClockDomain] = useState('')
   const [clockDomainProvenance, setClockDomainProvenance] = useState('')
+  const [role, setRole] = useState<AudioNodeRole>(DEFAULT_ROLE)
+  const [zone, setZone] = useState('')
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -130,6 +141,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         setLtcChannelText(response.payload.ltcChannel !== undefined ? String(response.payload.ltcChannel) : '')
         setClockDomain(response.payload.clockDomain)
         setClockDomainProvenance(response.payload.clockDomainProvenance)
+        setRole(response.payload.role ?? DEFAULT_ROLE)
+        setZone(response.payload.zone ?? '')
         setDirty(false)
       })
       .catch((err: unknown) => {
@@ -149,7 +162,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   })
   const channelsValid = programChannels.every((n) => Number.isInteger(n) && n >= 1) && programChannels.length > 0
   const ltcChannelValid = !ltcOn || (Number.isInteger(Number(ltcChannelText)) && ltcChannelText.trim() !== '')
-  const canSave = verdict.ok && channelsValid && ltcChannelValid && clockDomain.trim() !== '' && clockDomainProvenance.trim() !== ''
+  const zoneValid = role !== 'zone' || zone.trim() !== ''
+  const canSave = verdict.ok && channelsValid && ltcChannelValid && zoneValid && clockDomain.trim() !== '' && clockDomainProvenance.trim() !== ''
 
   const discard = () => {
     if (state.kind !== 'loaded') return
@@ -159,6 +173,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
     setLtcChannelText(state.response.payload.ltcChannel !== undefined ? String(state.response.payload.ltcChannel) : '')
     setClockDomain(state.response.payload.clockDomain)
     setClockDomainProvenance(state.response.payload.clockDomainProvenance)
+    setRole(state.response.payload.role ?? DEFAULT_ROLE)
+    setZone(state.response.payload.zone ?? '')
     setDirty(false)
     setSaveError(null)
   }
@@ -177,7 +193,9 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
           programChannels,
           clockDomain,
           clockDomainProvenance,
+          role,
           ...(ltcOn ? { ltcRoute: programRoute, ltcChannel: Number(ltcChannelText) } : {}),
+          ...(role === 'zone' ? { zone } : {}),
         }),
     })
       .then((outcome) => {
@@ -206,6 +224,38 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
 
   return (
     <>
+      <Section id="st-role" title="Role">
+        <div className="sm-grid sm-form-column">
+          <Segmented
+            label="Role"
+            value={role}
+            options={ROLE_OPTIONS}
+            onChange={(v) => {
+              setRole(v)
+              setDirty(true)
+            }}
+          />
+          <p className="sm-small sm-muted">
+            One audio node across the installation may hold program+ltc. The coordinator refuses a second and
+            names both.
+          </p>
+          {role === 'zone' && (
+            <Field label="Zone" help="Your own name for the independent speaker zone this node drives.">
+              {(props) => (
+                <Input
+                  {...props}
+                  value={zone}
+                  onChange={(e) => {
+                    setZone(e.target.value)
+                    setDirty(true)
+                  }}
+                />
+              )}
+            </Field>
+          )}
+        </div>
+      </Section>
+
       <Section id="st-program" title="Program output">
         <div className="sm-grid sm-form-column">
           {programRoutes !== null && programRoutes.length > 0 ? (
@@ -373,7 +423,13 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
           variant="primary"
           onClick={save}
           disabled={!dirty || saving || !canSave || !saveGate.allowed}
-          title={!saveGate.allowed ? saveGate.reason : !canSave ? (verdict.ok ? undefined : verdict.reason) : undefined}
+          title={
+            !saveGate.allowed
+              ? saveGate.reason
+              : !canSave
+                ? (!verdict.ok ? verdict.reason : !zoneValid ? 'A zone name is required when the role is zone.' : undefined)
+                : undefined
+          }
         >
           {saving ? 'Saving…' : 'Save routing'}
         </Button>
