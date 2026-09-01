@@ -611,6 +611,119 @@ func TestNightTick_LiveStopsBackgroundAudio(t *testing.T) {
 	}
 }
 
+// TestNightTick_PreshowStartsBackgroundAudio proves preshow runs the
+// same apply/gain/start path resting-intershow already uses: the bed is
+// not withheld until the first inter-show resting period.
+func TestNightTick_PreshowStartsBackgroundAudio(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	_ = mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action = %q, want audio.session.apply", pub.lastAction)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("publish count = %d, want 1", pub.count())
+	}
+}
+
+// TestNightTick_PreshowToRestingIntershowDoesNotRestartBackgroundAudio
+// proves requirement 2: the bed already applied, gained, and started
+// during preshow is left alone at the preshow -> resting-intershow
+// boundary. The step history is keyed by the session's own stable
+// nightBackgroundAudioSessionID, not by state, so the state change alone
+// commits no new apply/start step.
+func TestNightTick_PreshowToRestingIntershowDoesNotRestartBackgroundAudio(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countAfterStart := pub.count()
+
+	rec.State = nightStateRestingIntershow
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.count() != countAfterStart {
+		t.Fatalf("publish count = %d after entering resting-intershow, want unchanged at %d (must not re-apply/restart)", pub.count(), countAfterStart)
+	}
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("nightBackgroundAudioHistory: %v", err)
+	}
+	steps := nightBackgroundAudioSteps(history)
+	if len(steps) != 3 {
+		t.Fatalf("steps = %d, want 3 (apply, gain, start only - no duplicate apply/start across the boundary)", len(steps))
+	}
+	if steps[len(steps)-1].Step.Kind != nightBGStepStart {
+		t.Fatalf("latest step = %q, want %q", steps[len(steps)-1].Step.Kind, nightBGStepStart)
+	}
+}
+
+// TestNightTick_PreshowNoBackgroundAudioConfiguredDoesNothing proves
+// requirement 4: a preshow session with no resting.backgroundAudio
+// configured behaves unchanged - nightAdvanceBackgroundAudio's existing
+// ba == nil early return covers preshow exactly as it already covers the
+// resting states.
+func TestNightTick_PreshowNoBackgroundAudioConfiguredDoesNothing(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	_ = mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", nil, nightStatePreshow)
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (no background audio configured)", pub.count())
+	}
+}
+
+// TestNightTick_LeavingPreshowForShowStopsBackgroundAudio proves
+// requirement 3: leaving preshow for a show still stops the bed exactly
+// as leaving resting-intershow does, and transition-to-show still takes
+// no action of its own (the deliberate no-op this switch's own comment
+// documents).
+func TestNightTick_LeavingPreshowForShowStopsBackgroundAudio(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countAfterStart := pub.count()
+
+	rec.State = nightStateTransitionToShow
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.count() != countAfterStart {
+		t.Fatalf("publish count = %d after entering transition-to-show, want unchanged at %d (must not hard-stop here)", pub.count(), countAfterStart)
+	}
+
+	rec.State = nightStateLive
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("stop", nightBackgroundAudioSessionID(rec), "stopped")
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.lastAction != "audio.session.stop" {
+		t.Fatalf("dispatched action = %q, want audio.session.stop", pub.lastAction)
+	}
+}
+
 // mutation target: nightBackgroundAudioHistory keeping rows it cannot
 // parse, and nightNextBackgroundAudioRevision counting them. Drop an
 // unrecognized row at the store read and this fails: the next revision
