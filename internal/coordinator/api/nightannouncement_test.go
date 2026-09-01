@@ -443,23 +443,57 @@ func TestNightAnnouncement_DispatchesClearThenApplyThenStart(t *testing.T) {
 	if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
 		t.Fatalf("start row = %+v, want resolved/confirmed", startRow)
 	}
-	clearRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you")
-	if err != nil {
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you"); err != nil {
 		t.Fatalf("the clear was not committed as a durable outbox row: %v", err)
 	}
 	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterResting, "thank-you")
 	if err != nil {
 		t.Fatalf("apply row: %v", err)
 	}
-	// The revision order the node's own RevisionState requires: clear,
-	// then the pinned apply on the session the clear deleted, then start
-	// strictly above both.
-	if clearRow.ActionRevision <= applyRow.ActionRevision {
-		t.Fatalf("clear revision %d must exceed the apply's pinned %d", clearRow.ActionRevision, applyRow.ActionRevision)
+	if applyRow.State != nightCueStateResolved || applyRow.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("apply row = %+v, want resolved/confirmed", applyRow)
 	}
-	if startRow.ActionRevision <= clearRow.ActionRevision {
-		t.Fatalf("start revision %d must exceed the clear's %d", startRow.ActionRevision, clearRow.ActionRevision)
+	// The apply's own outbox row still pins the CONFIGURATION revision the
+	// cue ran against (mustPutAnnouncementCueAction's first and only PUT,
+	// so 1) - unaffected by the session-revision floor the three wire
+	// dispatches below advance through instead.
+	if applyRow.ActionRevision != 1 {
+		t.Fatalf("apply row ActionRevision = %d, want 1 (the pinned show.action config revision)", applyRow.ActionRevision)
 	}
+
+	// The wire revision order the node's own RevisionState requires: clear,
+	// then apply (both floor-derived, never the apply's pinned config
+	// revision), then start strictly above both.
+	clearWireRev := dispatchedRevision(t, pub, "audio.session.clear", before)
+	applyWireRev := dispatchedRevision(t, pub, "audio.session.apply", before)
+	startWireRev := dispatchedRevision(t, pub, "audio.session.start", before)
+	if clearWireRev >= applyWireRev {
+		t.Fatalf("clear wire revision %d must be strictly below the apply's %d", clearWireRev, applyWireRev)
+	}
+	if applyWireRev >= startWireRev {
+		t.Fatalf("apply wire revision %d must be strictly below the start's %d", applyWireRev, startWireRev)
+	}
+	if applyWireRev == int64(applyRow.ActionRevision) {
+		t.Fatalf("apply wire revision %d must NOT be the pinned config revision %d - that constant-fed-into-a-counter is exactly the stale_revision defect this floor replaces", applyWireRev, applyRow.ActionRevision)
+	}
+}
+
+// dispatchedRevision returns the params["revision"] of the first dispatch
+// of action found at or after index from, failing the test if none exists.
+func dispatchedRevision(t *testing.T, pub *fakeAudioPublisher, action string, from int) int64 {
+	t.Helper()
+	for _, d := range pub.dispatched[from:] {
+		if d.Action != action {
+			continue
+		}
+		rev, ok := d.Params["revision"].(float64)
+		if !ok {
+			t.Fatalf("dispatched %q carried no numeric revision param: %v", action, d.Params)
+		}
+		return int64(rev)
+	}
+	t.Fatalf("no %q was dispatched", action)
+	return 0
 }
 
 // mutation target: nightAnnouncementRevisions' floor computation over
@@ -814,16 +848,20 @@ func TestNightAnnouncement_NextCycleAfterFirstOutwardCueStillClearsBeforeApply(t
 	before = len(pub.dispatched)
 	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{lights, announcement}, payload)
 
-	clearRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow, "thank-you")
-	if err != nil {
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow, "thank-you"); err != nil {
 		t.Fatalf("cycle 2: no clear row for the announcement: %v", err)
 	}
 	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterShow, "thank-you")
 	if err != nil {
 		t.Fatalf("cycle 2: no apply row for the announcement: %v", err)
 	}
-	if clearRow.ActionRevision <= applyRow.ActionRevision {
-		t.Fatalf("clear revision %d must exceed the apply's pinned %d", clearRow.ActionRevision, applyRow.ActionRevision)
+	if applyRow.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("cycle 2 apply row = %+v, want confirmed (not refused as stale)", applyRow)
+	}
+	clearWireRev := dispatchedRevision(t, pub, "audio.session.clear", before)
+	applyWireRev := dispatchedRevision(t, pub, "audio.session.apply", before)
+	if clearWireRev >= applyWireRev {
+		t.Fatalf("clear wire revision %d must be strictly below the apply's %d", clearWireRev, applyWireRev)
 	}
 	var clearIdx, applyIdx = -1, -1
 	for i, d := range pub.dispatched[before:] {
@@ -918,25 +956,152 @@ func TestNightAnnouncement_FloorSurvivesConsecutiveNightSessionsSharingOneAudioS
 	}
 }
 
-// mutation target: nightAnnouncementRevisions' floor comparison. Ordering
-// still holds regardless of which input is larger: the returned pair
-// always strictly exceeds BOTH the persisted revision and the apply's own
-// pinned revision, so a command built from it can never be refused as
-// carrying a revision at or below either one.
-func TestNightAnnouncementRevisions_FloorNeverBelowPersistedOrApplyRevision(t *testing.T) {
-	cases := []struct{ persisted, apply int64 }{
-		{0, 1},
-		{5, 1},
-		{1, 5},
-		{100, 1},
-	}
-	for _, c := range cases {
-		clear, start := nightAnnouncementRevisions(c.persisted, c.apply)
-		if clear <= c.persisted || clear <= c.apply {
-			t.Fatalf("persisted=%d apply=%d: clear=%d, want it to strictly exceed both", c.persisted, c.apply, clear)
+// TestNightAnnouncement_ApplyConfirmsAcrossThreeCyclesAsSoleFirstOutwardCue
+// is the acceptance test for the apply-revision-floor defect: an
+// announcement that is the ONLY (and therefore first outward-facing) cue
+// in nightPhaseEnterShow skips its own clear every cycle
+// (nightAnnouncementCueWithResolvedPolicy's isFirst gate, unchanged by this
+// fix), so before this fix its apply carried the bound action's frozen
+// pinned config revision (1, forever) into a node counter that only the
+// start ever advanced - refused as stale_revision from the second cycle
+// on, exactly as the owner's rehearsal-stack trace showed. Two cycles is
+// not enough to prove this: the first cycle's apply is accepted no matter
+// what revision it carries, because the node has nothing to compare
+// against yet. The defect - and the fix - only show from the SECOND
+// confirmed apply on, which is why this drives three.
+//
+// mutation target: nightRunCue/nightResumeCueRow's dispatchRevision
+// selection. Put the apply back on its own pinned config revision
+// (row.ActionRevision / revision, unconditionally) and cycles 2 and 3 fail
+// here at the wire-revision monotonicity check - the apply wire revision
+// no longer advances past the previous cycle's - while cycle 1 still
+// passes, proving the defect is real and that this test catches it. The
+// apply row itself stays resolved/confirmed under the mutation:
+// announcementNodeResults answers by action name unconditionally, with no
+// revision awareness, so this stub can never produce a node-side
+// stale_revision refusal. What this test guards is the coordinator's own
+// job - emitting a strictly advancing dispatch revision for the apply,
+// which is exactly what this change fixes; node-side refusal of a stale
+// revision is the agent's behaviour, covered by the agent-side tests
+// where the merged clear exemption applies.
+func TestNightAnnouncement_ApplyConfirmsAcrossThreeCyclesAsSoleFirstOutwardCue(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	var lastApplyWireRev int64 = -1
+	for cycle := 1; cycle <= 3; cycle++ {
+		if cycle > 1 {
+			rec.Cycle++
+			rec.ShowCommitted = false
+			if err := st.UpdateNightSession(ctx, rec, testNow); err != nil {
+				t.Fatalf("cycle %d: advance cycle: %v", cycle, err)
+			}
 		}
-		if start <= clear {
-			t.Fatalf("persisted=%d apply=%d: start=%d, want it to strictly exceed clear=%d", c.persisted, c.apply, start, clear)
+
+		before := len(pub.dispatched)
+		h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+		rec = mustRefreshNightSession(t, st, rec.ID)
+
+		if got := announcementActions(pub, before); len(got) > 0 && got[0] == "audio.session.clear" {
+			t.Fatalf("cycle %d: dispatched %v, want no clear - this announcement is the sole cue and stays the first outward-facing cue every cycle", cycle, got)
+		}
+
+		applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterShow, "thank-you")
+		if err != nil {
+			t.Fatalf("cycle %d: apply row: %v", cycle, err)
+		}
+		if applyRow.State != nightCueStateResolved || applyRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("cycle %d: apply row = %+v, want resolved/confirmed - not refused as stale_revision", cycle, applyRow)
+		}
+		if applyRow.ActionRevision != 1 {
+			t.Fatalf("cycle %d: apply row ActionRevision = %d, want 1 (the pinned config revision, unaffected by any cycle)", cycle, applyRow.ActionRevision)
+		}
+		startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow, "thank-you")
+		if err != nil {
+			t.Fatalf("cycle %d: start row: %v", cycle, err)
+		}
+		if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("cycle %d: start row = %+v, want resolved/confirmed", cycle, startRow)
+		}
+
+		applyWireRev := dispatchedRevision(t, pub, "audio.session.apply", before)
+		if applyWireRev <= lastApplyWireRev {
+			t.Fatalf("cycle %d: apply wire revision %d did not advance past the previous cycle's %d", cycle, applyWireRev, lastApplyWireRev)
+		}
+		lastApplyWireRev = applyWireRev
+	}
+}
+
+// TestNightAnnouncement_ApplyConfirmsAcrossTwoNightSessionsAsSoleFirstOutwardCue
+// is acceptance bullet 2: the same guarantee holds across two CONSECUTIVE
+// night sessions sharing one audio session id, not just across cycles of
+// one session - mirroring
+// TestNightAnnouncement_FloorSurvivesConsecutiveNightSessionsSharingOneAudioSession
+// but for the apply specifically, and with the announcement as the sole
+// enterShow cue so its clear is skipped in both sessions, the same shape
+// that hid the defect on the owner's rig.
+func TestNightAnnouncement_ApplyConfirmsAcrossTwoNightSessionsAsSoleFirstOutwardCue(t *testing.T) {
+	h, st, pub, rec1, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	h.nightAdvanceCueList(ctx, testNow, rec1, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+	applyRow1, err := st.GetNightCueOutboxRow(ctx, rec1.ID, rec1.Cycle, nightPhaseEnterShow, "thank-you")
+	if err != nil {
+		t.Fatalf("session 1: apply row: %v", err)
+	}
+	if applyRow1.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("session 1: apply row = %+v, want confirmed", applyRow1)
+	}
+
+	// A brand-new night session record - a fresh uuid, per nightPrepareSiteTx
+	// - reusing the same node and background-audio config, and therefore the
+	// same announcement audio session id ("announcement-1").
+	rec2 := store.NightSessionRecord{
+		ID: "sess-2", ConfigObjectID: rec1.ConfigObjectID, ConfigRevision: rec1.ConfigRevision,
+		State: rec1.State, StateEnteredAt: testNow,
+	}
+	if err := st.CreateNightSession(ctx, rec2, testNow); err != nil {
+		t.Fatalf("create night session 2: %v", err)
+	}
+
+	h.nightAdvanceCueList(ctx, testNow, rec2, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+	applyRow2, err := st.GetNightCueOutboxRow(ctx, rec2.ID, rec2.Cycle, nightPhaseEnterShow, "thank-you")
+	if err != nil {
+		t.Fatalf("session 2: apply row: %v", err)
+	}
+	if applyRow2.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("session 2: apply row = %+v, want confirmed - not refused as stale against session 1's own surviving floor", applyRow2)
+	}
+	if applyRow2.ActionRevision != 1 {
+		t.Fatalf("session 2: apply row ActionRevision = %d, want 1 (the pinned config revision)", applyRow2.ActionRevision)
+	}
+}
+
+// mutation target: nightAnnouncementRevisions' floor computation. The
+// returned triple always strictly exceeds the persisted revision, and is
+// three CONSECUTIVE values - clear, then apply, then start - with no gap
+// an apply carrying its own pinned config revision could ever fall into.
+func TestNightAnnouncementRevisions_TripleStrictlyExceedsPersistedRevision(t *testing.T) {
+	for _, persisted := range []int64{0, 1, 5, 100} {
+		clear, apply, start := nightAnnouncementRevisions(persisted)
+		if clear <= persisted {
+			t.Fatalf("persisted=%d: clear=%d, want it to strictly exceed persisted", persisted, clear)
+		}
+		if apply != clear+1 {
+			t.Fatalf("persisted=%d: apply=%d, want exactly clear+1=%d (three consecutive values)", persisted, apply, clear+1)
+		}
+		if start != apply+1 {
+			t.Fatalf("persisted=%d: start=%d, want exactly apply+1=%d (three consecutive values)", persisted, start, apply+1)
 		}
 	}
 }

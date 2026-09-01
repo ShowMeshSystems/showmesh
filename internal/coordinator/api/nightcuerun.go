@@ -113,7 +113,7 @@ func (h *handlers) nightCommitCueRow(ctx context.Context, now time.Time, rec sto
 // identity) and persists the outcome into the row, which must already
 // exist. It is the ONE code path both the ordinary advance and crash
 // recovery use — see [nightCueDispatchHooks] for its two crash windows.
-func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer, actionRevision int64) (store.NightCueOutboxRecord, error) {
+func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer, dispatchRevision int64) (store.NightCueOutboxRecord, error) {
 	if h.hookAfterCommit(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
 	}
@@ -135,7 +135,7 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 		}
 	}
 
-	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, actionRevision)
+	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, dispatchRevision)
 
 	if h.hookAfterDispatch(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
@@ -180,7 +180,11 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			return store.NightCueOutboxRecord{}, err
 		}
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, row.ActionRevision)
+		dispatchRevision := row.ActionRevision
+		if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
+			dispatchRevision = r
+		}
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision)
 
 	case nightCueStateDispatched:
 		action, err := nightResolveShowActionRevision(ctx, h.deps.Config, cue.Action, row.ActionRevision)
@@ -202,7 +206,11 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			return row, nil
 		}
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, row.ActionRevision)
+		dispatchRevision := row.ActionRevision
+		if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
+			dispatchRevision = r
+		}
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision)
 
 	default:
 		return store.NightCueOutboxRecord{}, fmt.Errorf("api: night cue outbox row %s/%d/%s/%s has unrecognized state %q", rec.ID, rec.Cycle, phase, cue.Name, row.State)
@@ -258,7 +266,11 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 	}
 
 	idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, revision)
+	dispatchRevision := revision
+	if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
+		dispatchRevision = r
+	}
+	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision)
 }
 
 // nightBarrierResolutionDeadline bounds how long a barrier cue may hold

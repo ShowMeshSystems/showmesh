@@ -132,10 +132,17 @@ type nightCueDispatchResult struct {
 
 // nightDispatchCueTarget dispatches target through its integration's own
 // adapter. It never inspects night_cue_outbox; the caller owns timing.
-// actionRevision is the cue's own pinned show.action revision (never the
-// live one) - only the audio branch currently needs it, to carry as
-// pkg/audio's own Revision.
-func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, actionRevision int64) nightCueDispatchResult {
+// dispatchRevision - only the audio branch currently needs it, to carry as
+// pkg/audio's own Revision - is normally the cue's own pinned show.action
+// revision (never the live one), EXCEPT for an announcement cue's own
+// audio.session.apply, whose caller (nightRunCue/nightResumeCueRow) instead
+// passes the audio-session-scoped floor value
+// [handlers.nightAnnouncementApplyDispatchRevision] computes, so it advances
+// in lockstep with that same announcement's clear and start. Either way,
+// the cue's own pinned CONFIGURATION revision is committed on the outbox
+// row's own ActionRevision by the caller before this runs, and is
+// unaffected by which value dispatchRevision carries.
+func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, dispatchRevision int64) nightCueDispatchResult {
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP:
 		return h.nightDispatchCueFPP(ctx, now, issuer, target, idemKey)
@@ -144,7 +151,7 @@ func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, is
 	case config.ShowActionIntegrationMQTT:
 		return h.nightDispatchCueMQTT(ctx, now, target)
 	case config.ShowActionIntegrationAudio:
-		return h.nightDispatchCueAudio(ctx, now, issuer, target, idemKey, actionRevision)
+		return h.nightDispatchCueAudio(ctx, now, issuer, target, idemKey, dispatchRevision)
 	default:
 		return nightCueDispatchResult{
 			dispatched: false, resolved: true,
@@ -279,12 +286,13 @@ func nightAudioCueOutcome(outcome string) string {
 // pkg/audio's own InvocationID, so a crash-recovery replay can never play
 // something twice (executeAudioSessionDispatch's own InsertCommand
 // duplicate-key path returns the first attempt's recorded outcome rather
-// than redispatching). actionRevision - the pinned show.action revision,
-// never the live one - becomes params["revision"]: pkg/audio's
+// than redispatching). dispatchRevision - see [nightDispatchCueTarget]'s
+// own doc comment for what it carries and why it is not always the pinned
+// config revision - becomes params["revision"]: pkg/audio's
 // RevisionState.Apply refuses to apply a revision that does not strictly
 // advance the session's own desired revision, so a delayed retry can
 // never rewind a newer command that has already landed.
-func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, actionRevision int64) nightCueDispatchResult {
+func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, dispatchRevision int64) nightCueDispatchResult {
 	params := make(map[string]any, len(target.Params)+3)
 	for k, v := range target.Params {
 		params[k] = v
@@ -296,11 +304,11 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 	ConvertAuthoredAudioGainParams(target.AudioAction, params)
 	params["sessionId"] = target.AudioSessionID
 	params["invocationId"] = idemKey
-	params["revision"] = uint64(actionRevision)
+	params["revision"] = uint64(dispatchRevision)
 
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: target.AudioAction, NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
-		Params: params, Revision: uint64(actionRevision), IdempotencyKey: idemKey,
+		Params: params, Revision: uint64(dispatchRevision), IdempotencyKey: idemKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID, ClientAddr: issuer.ClientAddr,
 	})
