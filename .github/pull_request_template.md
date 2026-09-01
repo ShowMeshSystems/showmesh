@@ -14,8 +14,8 @@
 
 | Check | Result |
 | --- | --- |
-| Local gate | `command` — Passed / Failed / Not run: reason |
-| Integration | `command` — Passed / Failed / Not run: reason |
+| Local gate | `command`: Passed / Failed / Not run: reason |
+| Integration | `command`: Passed / Failed / Not run: reason |
 | GitHub checks | Passed / Pending / Failed at `commit` |
 
 ## Review status
