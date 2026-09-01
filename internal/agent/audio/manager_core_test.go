@@ -132,6 +132,105 @@ func TestClearNeverRefusedForWantOfEvidence(t *testing.T) {
 	}
 }
 
+// TestClearTearsDownDespiteStaleRevision is the recovery property this
+// exemption exists for: a clear carrying a revision below the session's
+// current one, exactly the shape a delayed clear would arrive with after
+// a newer start already re-established the session, must still tear the
+// session down rather than being refused stale_revision.
+func TestClearTearsDownDespiteStaleRevision(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+
+	if r := m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("apply = %+v", r)
+	}
+	if r := m.Start(ctx, id, "inv-start", 2); r.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("start = %+v", r)
+	}
+
+	// revision 1 is stale against the session's current revision of 2:
+	// an ordinary command carrying it would be refused stale_revision
+	// (see TestApplyRejectsStaleRevision). Clear must not be.
+	r := m.Clear(ctx, id, "inv-clear-stale", 1)
+	if r.Outcome == pkgaudio.OutcomeRefused || r.Reason == pkgaudio.ReasonStaleRevision {
+		t.Fatalf("clear with a stale revision = %+v, want it to tear the session down, not refuse", r)
+	}
+	if _, ok := m.get(id); ok {
+		t.Fatal("session still exists after a clear that should have torn it down despite its stale revision")
+	}
+}
+
+// TestClearWithEmptyInvocationStillRefused proves the exemption is
+// narrower than "clear always executes": an empty invocation id is a
+// caller bug, not an ordering symptom, and must still refuse.
+func TestClearWithEmptyInvocationStillRefused(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+
+	r := m.Clear(ctx, id, "", 2)
+	if r.Outcome != pkgaudio.OutcomeRefused || r.Reason != "invocation id is required" {
+		t.Fatalf("clear with empty invocation = %+v, want refused/%q", r, "invocation id is required")
+	}
+	if _, ok := m.get(id); !ok {
+		t.Fatal("session was torn down by a clear that should have been refused for an empty invocation id")
+	}
+}
+
+// TestClearReusingInvocationWithDifferentRevisionStillRefused proves the
+// exemption does not waive invocation_revision_mismatch either: reusing
+// an invocation id for a second, different revision is a caller bug, not
+// an ordering symptom.
+func TestClearReusingInvocationWithDifferentRevisionStillRefused(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+
+	if r := m.Apply(ctx, id, "reused-inv", 3, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("apply = %+v", r)
+	}
+
+	// "reused-inv" was already recorded against revision 3; asking Clear
+	// to apply it against revision 7 is a reused invocation id carrying a
+	// different revision, not a legitimate replay.
+	r := m.Clear(ctx, id, "reused-inv", 7)
+	if r.Outcome != pkgaudio.OutcomeRefused || r.Reason != pkgaudio.ReasonInvocationRevisionMismatch {
+		t.Fatalf("clear reusing an invocation id at a different revision = %+v, want refused/%s", r, pkgaudio.ReasonInvocationRevisionMismatch)
+	}
+	if _, ok := m.get(id); !ok {
+		t.Fatal("session was torn down by a clear that should have been refused for an invocation/revision mismatch")
+	}
+}
+
+// TestNonClearCommandsStillEnforceRevisionOrdering proves the exemption
+// is scoped to Clear alone: on the very same session a stale clear just
+// tore down would have been exempted for, a non-clear command carrying a
+// stale revision is still refused.
+func TestNonClearCommandsStillEnforceRevisionOrdering(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+
+	if r := m.Apply(ctx, id, "inv-apply", 5, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("apply = %+v", r)
+	}
+
+	r := m.Stop(ctx, id, "inv-stop-stale", 2) // 2 is not strictly greater than 5
+	if r.Outcome != pkgaudio.OutcomeRefused || r.Reason != pkgaudio.ReasonStaleRevision {
+		t.Fatalf("stop with a stale revision = %+v, want refused/%s", r, pkgaudio.ReasonStaleRevision)
+	}
+}
+
 // TestStartReprepresIdentityChangedBetweenPrepareAndStart proves finding
 // 7: preparing item A, then Applying a change to item B, then Start must
 // play B, never A. Before the fix, Start only checked s.handleLoaded and
