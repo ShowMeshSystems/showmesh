@@ -86,14 +86,27 @@ func (c *client) endpoint(apiPath string, query url.Values) string {
 // HTML error page, a truncated body) still produces a *cliError, using
 // only the HTTP status to classify it.
 func (c *client) getJSON(ctx context.Context, apiPath string, query url.Values, out any) error {
+	_, err := c.getJSONKeepingRaw(ctx, apiPath, query, out)
+	return err
+}
+
+// getJSONKeepingRaw is getJSON plus the exact bytes getJSON would
+// otherwise discard. A command whose --output json must pass the API
+// response body through unmodified (the owner ruling this exists for:
+// -output json must never round-trip a response through this package's
+// own structs, since encoding/json silently drops any field a struct does
+// not declare) calls this instead of getJSON: it still decodes into out
+// for TEXT-mode rendering, but the caller gets raw to print verbatim for
+// JSON mode rather than re-marshaling out. See printJSONBody.
+func (c *client) getJSONKeepingRaw(ctx context.Context, apiPath string, query url.Values, out any) ([]byte, error) {
 	body, err := c.getRaw(ctx, apiPath, query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, query), err)
+		return nil, newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, query), err)
 	}
-	return nil
+	return body, nil
 }
 
 // getRaw is getJSON's building block: it performs the request, applies the

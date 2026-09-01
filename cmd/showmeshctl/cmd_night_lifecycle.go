@@ -44,13 +44,14 @@ func cmdNightLifecycleStatus(args []string, stdout, stderr io.Writer, clock func
 	defer cancel()
 
 	var resp nightSessionLifecycleResponse
-	if err := c.getJSON(ctx, "/api/v1/night/session", nil, &resp); err != nil {
+	raw, err := c.getJSONKeepingRaw(ctx, "/api/v1/night/session", nil, &resp)
+	if err != nil {
 		return reportError(stderr, "night status", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
 
 	if g.output == outputJSON {
-		if err := printJSON(stdout, resp); err != nil {
+		if err := printJSONBody(stdout, raw); err != nil {
 			return reportError(stderr, "night status", err)
 		}
 		return exitOK

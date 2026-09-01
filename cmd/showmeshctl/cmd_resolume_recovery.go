@@ -191,13 +191,14 @@ func cmdResolumeRecoveryStatus(args []string, stdout, stderr io.Writer, clock fu
 	defer cancel()
 
 	var resp resolumeRecoveryResponse
-	if err := c.getJSON(ctx, "/api/v1/resolume/recovery", nil, &resp); err != nil {
+	raw, err := c.getJSONKeepingRaw(ctx, "/api/v1/resolume/recovery", nil, &resp)
+	if err != nil {
 		return reportError(stderr, "resolume recovery status", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
 
 	if g.output == outputJSON {
-		if err := printJSON(stdout, resp); err != nil {
+		if err := printJSONBody(stdout, raw); err != nil {
 			return reportError(stderr, "resolume recovery status", err)
 		}
 		return exitOK
