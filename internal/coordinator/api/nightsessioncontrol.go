@@ -193,8 +193,11 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 const maxNightCommandRequestBodyBytes = 4 << 10
 
 // decodeNightCommandBody reads the optional {"idempotencyKey": string,
-// "interlockOverrides": [{"rule": string, "reason": string}]?} body. An
-// absent or empty body is valid: every field is optional.
+// "interlockOverrides": [{"rule": string, "reason": string}]?,
+// "skipEnterShowLead": bool?} body. An absent or empty body is valid:
+// every field is optional. skipEnterShowLead is honored only by
+// start-night, the same way idempotencyKey is honored only by
+// prepare-site; every other command ignores it.
 // interlockOverrides is Track F seam F6's own addition
 // (RESTING-MODE.md §10.1): naming a rule here is the caller's request to
 // override it, and is honored only where that rule itself declares
@@ -214,13 +217,14 @@ var nightCommandsConsultingNoInterlock = map[string]bool{
 	nightCommandEndSession:       true,
 }
 
-func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, problem *v1.Problem) {
+func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead bool, problem *v1.Problem) {
 	if r.ContentLength == 0 {
-		return "", nil, nil
+		return "", nil, false, nil
 	}
 	var body struct {
 		IdempotencyKey     string                          `json:"idempotencyKey"`
 		InterlockOverrides []nightInterlockOverrideRequest `json:"interlockOverrides"`
+		SkipEnterShowLead  bool                            `json:"skipEnterShowLead"`
 	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxNightCommandRequestBodyBytes+1))
 	// Strict decoding, found by review this seam's safety review round: a
@@ -229,20 +233,20 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 	// with no hint the override never arrived at all.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && err != io.EOF {
-		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?,\"interlockOverrides\":[{\"rule\":string,\"reason\":string}]?}, with no other keys")
-		return "", nil, &p
+		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?,\"interlockOverrides\":[{\"rule\":string,\"reason\":string}]?,\"skipEnterShowLead\":bool?}, with no other keys")
+		return "", nil, false, &p
 	}
 	for _, o := range body.InterlockOverrides {
 		if o.Rule == "" || o.Reason == "" {
 			p := invalidParameterProblem("every interlockOverrides entry requires a non-empty \"rule\" and \"reason\"")
-			return "", nil, &p
+			return "", nil, false, &p
 		}
 	}
 	if len(body.InterlockOverrides) > 0 && nightCommandsConsultingNoInterlock[cmd] {
 		p := invalidParameterProblem(fmt.Sprintf("%q declares no interlock phase and consults no gate; interlockOverrides must be omitted, not silently ignored", cmd))
-		return "", nil, &p
+		return "", nil, false, &p
 	}
-	return body.IdempotencyKey, body.InterlockOverrides, nil
+	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, nil
 }
 
 // handleNightCommand serves POST /api/v1/night/commands/{command}, behind
@@ -256,7 +260,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session", cmd)))
 		return
 	}
-	idempotencyKey, interlockOverrides, problem := decodeNightCommandBody(r, cmd)
+	idempotencyKey, interlockOverrides, skipEnterShowLead, problem := decodeNightCommandBody(r, cmd)
 	if problem != nil {
 		writeProblem(w, h.logger, now, *problem)
 		return
@@ -310,7 +314,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		})
 	default:
 		out, problem, opErr = h.nightRunGated(ctx, now, cmd, issuer, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey, interlockOverrides, callerHasOverrideScope)
+			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
 		})
 	}
 
@@ -368,7 +372,7 @@ func (h *handlers) nightDecideExemptCommand(ctx context.Context, tx *store.Tx, c
 // any transaction, so handleNightCommand routes them to
 // [handlers.nightRunReadinessCommand] and
 // [handlers.nightPrepareSiteCommand] directly instead.
-func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
+func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
 		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
 		return nightCommandOutcome{}, &p, nil
@@ -377,7 +381,7 @@ func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cm
 	case nightCommandStartPreshow:
 		return h.nightStartPreshow(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
 	case nightCommandStartNight:
-		return h.nightStartNightTx(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
+		return h.nightStartNightTx(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
 	}
 	return nightCommandOutcome{}, nil, fmt.Errorf("api: no gated decide function for %q", cmd)
 }
@@ -920,7 +924,12 @@ func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time
 // stored readiness result the freshness check just accepted) refuses
 // start-night unless every withholding rule is covered by a valid,
 // authorized override in interlockOverrides.
-func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
+//
+// skipEnterShowLead, when true, is the operator's own request to start a
+// late night without waiting out the enterShow lead (see boundaryE
+// below): an announcement still dispatches, but the show itself launches
+// immediately rather than the usual lead later.
+func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		p := nightNotReadyProblem("start-night: no active preparation; run prepare-site, run-readiness, and start-preshow first")
 		return nightCommandOutcome{}, &p, nil
@@ -968,10 +977,28 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		next.Cycle = current.Cycle + 1
 		next.ContentAnchorJSON = ""
 		// The first show of the night has no resting playback to lead
-		// from, so E is the moment this transition begins - written
-		// explicitly, never left for a fallback to reconstruct.
-		boundaryE := now
-		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &boundaryE, Reason: "content boundary E is this transition's own start; no resting playback preceded it"})
+		// from, so E is placed its own enterShow lead ahead of this
+		// transition's start (RESTING-MODE.md section 7.1's own rule,
+		// [nightEnterShowLeadMs]), never left at now itself - a night
+		// with no negatively offset enterShow cues still gets lead 0
+		// and launches immediately, unchanged. skipEnterShowLead is the
+		// operator's own request to skip that wait for a late start.
+		lead := time.Duration(nightEnterShowLeadMs(payload.EnterShow.Cues)) * time.Millisecond
+		if skipEnterShowLead {
+			lead = 0
+		}
+		boundaryE := now.Add(lead)
+		// LastTickAt is the clock-jump guard's own checkpoint
+		// (nightboundary.go's nightBoundary doc comment, nightloop.go's
+		// resync branch): it must read "now", the instant this was
+		// committed, never boundaryE itself - a future LastTickAt trips
+		// the guard's backstep check on the very next tick for any lead
+		// past nightClockBackstepTolerance, discarding this Reason for
+		// "resynchronized after a clock discontinuity" on a healthy
+		// clock.
+		lastTick := now
+		reason := fmt.Sprintf("content boundary E is this transition's own start plus its enterShow lead; no resting playback preceded it to lead from otherwise; show launch expected at %s", boundaryE.Format(time.RFC3339))
+		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: reason})
 		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
 		if len(gate.Overridden) > 0 {
 			out.auditParams = map[string]any{"interlockOverrides": nightInterlockOverrideAuditParams(gate.Overridden)}

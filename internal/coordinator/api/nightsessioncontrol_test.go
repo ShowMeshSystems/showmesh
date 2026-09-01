@@ -1138,11 +1138,16 @@ func newTableTestHandlers(t *testing.T) (*handlers, *store.Store) {
 
 func runStartNightTx(t *testing.T, h *handlers, st *store.Store, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem) {
 	t.Helper()
+	return runStartNightTxWithSkip(t, h, st, current, false)
+}
+
+func runStartNightTxWithSkip(t *testing.T, h *handlers, st *store.Store, current *store.NightSessionRecord, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem) {
+	t.Helper()
 	var out nightCommandOutcome
 	var problem *v1.Problem
 	err := st.InTx(context.Background(), func(ctx context.Context, tx *store.Tx) error {
 		var derr error
-		out, problem, derr = h.nightStartNightTx(ctx, tx, testNow, current, nil, false)
+		out, problem, derr = h.nightStartNightTx(ctx, tx, testNow, current, nil, false, skipEnterShowLead)
 		return derr
 	})
 	if err != nil {
@@ -1245,6 +1250,144 @@ func TestStartNightTable_Inactive_RejectedAsNotReady(t *testing.T) {
 		t.Fatalf("inactive (no session): problem=%v, want %s", problem, ProblemTypeNightNotReady)
 	}
 	_ = out
+}
+
+// --- The first show of the night must lead the same way every
+// later cycle already does (RESTING-MODE.md section 7.1), never collapse
+// its own boundary E to "now" and fire every negatively offset cue at once.
+
+const leadTestConfigPayload = `{
+	"show": "halloween-2026", "label": "lead test",
+	"showPlaylist": {"fppInstanceId": "player-01", "playlist": "halloween-show"},
+	"resting": {"fppInstanceId": "player-01", "playlist": "halloween-resting", "timelineAsset": {"show":"halloween-2026","sequence":"resting-loop","target":"player-01"}, "endOfNightRepeat": true},
+	"enterShow": {"cues": [{"name": "announce", "role": "announcement", "action": "announce-intro", "offsetMs": -60000}], "blackoutHoldMs": 0},
+	"enterResting": {"cues": [], "blackoutAfterShowMs": 0}
+}`
+
+func seedNightSessionWithPayload(t *testing.T, st *store.Store, state string, payload string) store.NightSessionRecord {
+	t.Helper()
+	if _, err := st.CreateConfigObject(context.Background(), "night.session", "halloween-main"); err != nil {
+		t.Fatalf("seed night.session config object: %v", err)
+	}
+	if _, err := st.CreateConfigRevision(context.Background(), store.ConfigRevisionRecord{
+		Kind: "night.session", ObjectID: "halloween-main", Revision: 1, PayloadJSON: payload, Source: "api",
+	}); err != nil {
+		t.Fatalf("seed night.session config revision: %v", err)
+	}
+	rec := store.NightSessionRecord{ID: "s1", ConfigObjectID: "halloween-main", ConfigRevision: 1, State: state, StateEnteredAt: testNow}
+	if err := st.CreateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("seed night session in state %q: %v", state, err)
+	}
+	return rec
+}
+
+func TestStartNightTx_EnterShowLead_HoldsLaunchForTheLead(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSessionWithPayload(t, st, "preshow", leadTestConfigPayload)
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTx(t, h, st, &session)
+	if problem != nil {
+		t.Fatalf("start-night with a -60000 enterShow cue: problem=%v, want success", problem)
+	}
+	boundary, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || boundary.ExpectedAt == nil {
+		t.Fatalf("start-night with a -60000 enterShow cue: no boundary recorded, want one armed with an ExpectedAt")
+	}
+	want := testNow.Add(60 * time.Second)
+	if !boundary.ExpectedAt.Equal(want) {
+		t.Fatalf("start-night with a -60000 enterShow cue: boundary E = %s, want %s (60s lead held, not collapsed to the transition's own start %s)", boundary.ExpectedAt, want, testNow)
+	}
+}
+
+// TestStartNightTx_EnterShowLead_ReasonSurvivesOneTick is the
+// operator-visible half of the lead fix: the launch-time explanation
+// nightStartNightTx writes into the boundary's Reason (session.transition
+// on the wire, rendered by the NightSession UI panel regardless of
+// lifecycle state) must still read that way after the night loop ticks
+// once, not "resynchronized after a clock discontinuity" - the clock-jump
+// guard's own resync text (nightloop.go), which fires on a healthy clock
+// whenever LastTickAt is left at a future instant instead of the tick
+// that actually committed it.
+func TestStartNightTx_EnterShowLead_ReasonSurvivesOneTick(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSessionWithPayload(t, st, "preshow", leadTestConfigPayload)
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTx(t, h, st, &session)
+	if problem != nil {
+		t.Fatalf("start-night with a -60000 enterShow cue: problem=%v, want success", problem)
+	}
+	before, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || before.Reason == "" {
+		t.Fatalf("start-night with a -60000 enterShow cue: no boundary reason recorded")
+	}
+
+	// runStartNightTx exercises nightStartNightTx exactly like
+	// handleNightCommand's own gated path, but neither persists the
+	// result - handleNightCommand's persistence is nightRunGated's own
+	// job, one layer up. Persist it here so the tick below (which reads
+	// and writes the store, not this in-memory result) finds the session
+	// it is actually meant to advance.
+	if err := st.UpdateNightSession(context.Background(), out.result, testNow); err != nil {
+		t.Fatalf("persist start-night result: %v", err)
+	}
+
+	// nightAdvanceTransitionToShow reads the pinned payload through
+	// deps.Config directly (unlike nightStartNightTx's tx-bound read), so
+	// the tick's own handlers need Config wired to the same store.
+	hTick := &handlers{deps: Dependencies{NightSessions: st, Config: st}.withDefaults(), clock: h.clock, nightReadinessMaxAge: h.nightReadinessMaxAge}
+	oneTickLater := testNow.Add(3 * time.Second)
+	hTick.nightAdvanceTransitionToShow(context.Background(), oneTickLater, out.result)
+
+	after := mustGetCurrentSession(t, st)
+	afterBoundary, ok := decodeNightBoundary(after.BoundaryJSON)
+	if !ok {
+		t.Fatalf("after one tick: no boundary decodable at all")
+	}
+	if afterBoundary.Reason != before.Reason {
+		t.Fatalf("after one tick following start-night with a 60s lead: boundary reason = %q, want unchanged from start-night's own %q (an operator reading this panel mid-wait must not see a false clock-discontinuity alarm)", afterBoundary.Reason, before.Reason)
+	}
+}
+
+func TestStartNightTx_NoNegativeOffsetCues_LaunchesImmediately(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSession(t, st, "preshow")
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTx(t, h, st, &session)
+	if problem != nil {
+		t.Fatalf("start-night with no negatively offset enterShow cues: problem=%v, want success", problem)
+	}
+	boundary, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || boundary.ExpectedAt == nil {
+		t.Fatalf("start-night with no negatively offset enterShow cues: no boundary recorded, want one armed with an ExpectedAt")
+	}
+	if !boundary.ExpectedAt.Equal(testNow) {
+		t.Fatalf("start-night with no negatively offset enterShow cues: boundary E = %s, want %s (no lead, unchanged path)", boundary.ExpectedAt, testNow)
+	}
+}
+
+func TestStartNightTx_SkipEnterShowLead_BypassesTheWaitForALateStart(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSessionWithPayload(t, st, "preshow", leadTestConfigPayload)
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTxWithSkip(t, h, st, &session, true)
+	if problem != nil {
+		t.Fatalf("start-night with skipEnterShowLead: problem=%v, want success", problem)
+	}
+	boundary, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || boundary.ExpectedAt == nil {
+		t.Fatalf("start-night with skipEnterShowLead: no boundary recorded, want one armed with an ExpectedAt")
+	}
+	if !boundary.ExpectedAt.Equal(testNow) {
+		t.Fatalf("start-night with skipEnterShowLead: boundary E = %s, want %s (operator skip bypasses the 60s lead)", boundary.ExpectedAt, testNow)
+	}
 }
 
 // --- RESTING-MODE.md §4.5's request-final-show table, one test per row ---
