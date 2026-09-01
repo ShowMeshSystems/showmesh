@@ -284,6 +284,61 @@ describe('Shows · Playlists tab editing', () => {
       expect(payload.entries).toHaveLength(2)
     })
 
+    it('round-trips stored expectedSequenceFilename/expectedMediaFilename for an unchanged entry', async () => {
+      setup({
+        storedMismatchPolicy: 'blackAndSilence',
+      })
+      stubs.getShowPlaylist = (id: string) =>
+        Promise.resolve(
+          playlistResponse(
+            fppPlaylist({
+              mismatchPolicy: 'blackAndSilence',
+              entries: [
+                {
+                  id: 'e1',
+                  cue: 'cue-1',
+                  fpp: {
+                    section: 'mainPlaylist',
+                    position: 0,
+                    expectedSequenceFilename: 'wizards-in-winter.fseq',
+                    expectedMediaFilename: 'wizards-in-winter.mp4',
+                  },
+                },
+              ],
+            }),
+            id,
+          ),
+        )
+      await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
+
+      // Make an unrelated edit so Save is enabled, without touching entry e1.
+      const selects = screen.getAllByRole('combobox', { name: /Bound cue for/ })
+      fireEvent.change(selects[1] as HTMLElement, { target: { value: 'cue-2' } })
+
+      let sent: unknown = null
+      stubs.putShowPlaylist = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(playlistResponse(payload as ConfigShowPlaylist, 'p1', 2))
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Save playlist' }))
+
+      await waitFor(() => expect(sent).not.toBeNull())
+      const payload = sent as ConfigShowPlaylist
+      expect(payload.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            cue: 'cue-1',
+            fpp: expect.objectContaining({
+              section: 'mainPlaylist',
+              position: 0,
+              expectedSequenceFilename: 'wizards-in-winter.fseq',
+              expectedMediaFilename: 'wizards-in-winter.mp4',
+            }),
+          }),
+        ]),
+      )
+    })
+
     it('never invents a mismatch policy the playlist does not store', async () => {
       setup()
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())

@@ -300,7 +300,11 @@ function FPPPlaylistEditor({
       const cue = entryCue[key]
       if (cue === undefined || cue === '') continue
       const existing = playlist.payload.entries.find((e) => e.fpp !== undefined && `${e.fpp.section}:${e.fpp.position}` === key)
-      entries.push({ id: existing?.id ?? randomUUIDv4(), cue, fpp: { section: entry.section, position: entry.position } })
+      entries.push({
+        id: existing?.id ?? randomUUIDv4(),
+        cue,
+        fpp: { ...existing?.fpp, section: entry.section, position: entry.position },
+      })
     }
     if (entries.length === 0) {
       setSaveError('At least one imported entry must be bound to a cue; a playlist cannot save with no entries.')
