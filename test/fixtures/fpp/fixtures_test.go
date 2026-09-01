@@ -62,10 +62,38 @@ type canonicalizationCase struct {
 	Name              string `json:"name"`
 	Description       string `json:"description"`
 	Input             string `json:"input"`
+	InputHex          string `json:"inputHex"`
 	ExpectedCanonical string `json:"expectedCanonical"`
 	ExpectedSha256    string `json:"expectedSha256"`
 	ExpectError       bool   `json:"expectError"`
 	ErrorKind         string `json:"errorKind"`
+}
+
+// caseBytes resolves a canonicalizationCase's input: exactly one of Input
+// or InputHex must be set. InputHex exists because a JSON string cannot
+// carry a byte sequence that is not valid UTF-8 (see README.md); a case
+// supplying neither or both is a fixture bug, not an empty-input case, and
+// must fail loudly rather than silently canonicalize an empty string.
+func caseBytes(t *testing.T, tc canonicalizationCase) []byte {
+	t.Helper()
+	hasInput := tc.Input != ""
+	hasHex := tc.InputHex != ""
+	switch {
+	case hasInput && hasHex:
+		t.Fatalf("case %q: sets both input and inputHex; exactly one is required", tc.Name)
+		return nil
+	case !hasInput && !hasHex:
+		t.Fatalf("case %q: sets neither input nor inputHex; exactly one is required", tc.Name)
+		return nil
+	case hasHex:
+		b, err := hex.DecodeString(tc.InputHex)
+		if err != nil {
+			t.Fatalf("case %q: inputHex is not valid lowercase hex: %v", tc.Name, err)
+		}
+		return b
+	default:
+		return []byte(tc.Input)
+	}
 }
 
 func TestCanonicalizationFixtures(t *testing.T) {
@@ -82,7 +110,7 @@ func TestCanonicalizationFixtures(t *testing.T) {
 		}
 		seen[tc.Name] = true
 		t.Run(tc.Name, func(t *testing.T) {
-			canonical, hashHex, err := fppidentity.HashCanonical([]byte(tc.Input))
+			canonical, hashHex, err := fppidentity.HashCanonical(caseBytes(t, tc))
 			if tc.ExpectError {
 				if err == nil {
 					t.Fatalf("case %q: expected an error (%s), got canonical=%q", tc.Name, tc.ErrorKind, canonical)
