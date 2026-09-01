@@ -426,6 +426,53 @@ createServer((req, res) => {
     { id: 'barn-controller', label: 'barn-controller', show: '', currentRevision: 4, updatedAt: ago(86_400_000) },
     { id: 'media-garage', label: 'media-garage', show: '', currentRevision: 2, updatedAt: ago(86_400_000) },
   ] })
+  if (p === '/config/night.session.active') return json(res, {
+    serverTime: NOW(), kind: 'night.session.active', id: 'night.session.active', revision: 5,
+    payload: { session: 'winter-ridge' },
+    updatedAt: ago(2_700_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+  })
+  if (p === '/config/night.session') return json(res, { serverTime: NOW(), kind: 'night.session', objects: [
+    { id: 'winter-ridge', label: 'Winter Ridge nightly', show: 'winter-ridge-2026', currentRevision: 4, updatedAt: ago(2_700_000) },
+  ] })
+  if (p.startsWith('/config/night.session/') && !p.endsWith('/revisions')) {
+    const parts = p.split('/')
+    const id = parts[3]
+    return json(res, {
+      serverTime: NOW(), kind: 'night.session', id, revision: 4,
+      payload: {
+        show: 'winter-ridge-2026', label: 'Winter Ridge nightly',
+        showPlaylist: { fppInstanceId: 'main-player', playlist: 'WinterRidge_Main' },
+        resting: {
+          fppInstanceId: 'main-player', playlist: 'WinterRidge_Rest', endOfNightPlaylist: 'WinterRidge_Rest', endOfNightRepeat: true,
+          timelineAsset: { show: 'winter-ridge-2026', sequence: 'carol-of-the-bells', target: 'media-front' },
+          backgroundAudio: {
+            items: [{ itemId: 'winter-bed', show: 'winter-ridge-2026', sequence: 'winter-ambient-bed', target: 'barn-controller' }],
+            repeat: 'playlist', resume: 'resume', itemTransition: 'crossfade', crossfadeMs: 2_000,
+            maxGainDb: -18, fadeOutMs: 1_500, fadeInMs: 2_500,
+          },
+        },
+        enterShow: {
+          blackoutHoldMs: 500,
+          cues: [
+            { name: 'Fade down resting lights', role: 'lighting', action: 'resting-fade-out', offsetMs: -300, fadeDurationMs: 400, barrier: true, onFailure: 'continue' },
+            { name: 'Duck background bed', role: 'audio', action: 'background-duck', offsetMs: 0, barrier: false, onFailure: 'continue' },
+            { name: 'Strike garage projector', role: 'projection', action: 'strike-garage-projector', offsetMs: 200, barrier: false, onFailure: 'continue' },
+          ],
+        },
+        enterResting: {
+          blackoutAfterShowMs: 800,
+          cues: [
+            { name: 'Blackout barrier (into resting)', role: 'lighting', action: 'blackout', offsetMs: 0, barrier: true, onFailure: 'continue' },
+            { name: 'Restore background bed', role: 'audio', action: 'background-restore', offsetMs: 300, barrier: false, onFailure: 'continue' },
+            { name: 'Start resting sequence', role: 'other', action: 'WinterRidge_Rest', offsetMs: 600, barrier: false, onFailure: 'continue' },
+            { name: 'Fade up resting lights', role: 'lighting', action: 'resting-fade-in', offsetMs: 900, barrier: false, onFailure: 'continue' },
+          ],
+        },
+        announcementDefaultPolicy: 'duck',
+      },
+      updatedAt: ago(2_700_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
   if (p.startsWith('/config/show.action/')) {
     const id = p.split('/').pop()
     const resolume = id === 'resting-fade-out'
