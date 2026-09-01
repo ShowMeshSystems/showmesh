@@ -52,12 +52,14 @@ type audioSettingsConfigResponse struct {
 // present but empty. Omitting the pair is how "this node emits no LTC"
 // is expressed on the wire.
 type configAudioNode struct {
-	ProgramRoute          string `json:"programRoute"`
-	LTCRoute              string `json:"ltcRoute,omitempty"`
-	ProgramChannels       []int  `json:"programChannels"`
-	LTCChannel            int    `json:"ltcChannel,omitempty"`
-	ClockDomain           string `json:"clockDomain"`
-	ClockDomainProvenance string `json:"clockDomainProvenance"`
+	ProgramRoute          string  `json:"programRoute"`
+	LTCRoute              string  `json:"ltcRoute,omitempty"`
+	ProgramChannels       []int   `json:"programChannels"`
+	LTCChannel            int     `json:"ltcChannel,omitempty"`
+	ClockDomain           string  `json:"clockDomain"`
+	ClockDomainProvenance string  `json:"clockDomainProvenance"`
+	Role                  string  `json:"role,omitempty"`
+	Zone                  *string `json:"zone,omitempty"`
 }
 
 type audioNodeConfigResponse struct {
@@ -413,6 +415,13 @@ positive, 1-based indices (1,2 for reference stereo, 1 for mono);
 --program-channels. Advertise the node first (the agent must be running
 and have probed its audio hardware) before configuring it here.
 
+--role (ADR-045) is one of "program", "program+ltc", or "zone"; omitted,
+the coordinator defaults it to "program+ltc" (the role every node had by
+implication before ADR-045). At most one node across the installation may
+carry "program+ltc" at a time — a second is refused, naming both node ids.
+--zone names the independent speaker zone this node drives and is accepted
+only when --role is "zone".
+
 Subcommands:
   list             enumerate audio.node objects (id is the node id)
   get <node-id>    show one node's full audio placement
@@ -512,7 +521,7 @@ func cmdAudioNodeGet(args []string, stdout, stderr io.Writer, clock func() time.
 
 func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audio node set", stderr)
-	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance string
+	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance, role, zone string
 	var ltcChannel int
 	fs.StringVar(&programRoute, "program-route", "", "the advertised output route to carry program audio (required)")
 	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC, must equal --program-route (omit with --ltc-channel for a program-only node)")
@@ -520,6 +529,8 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (omit with --ltc-route for a program-only node)")
 	fs.StringVar(&clockDomain, "clock-domain", "", "the operator's own name for the shared clock domain (required)")
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
+	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone (ADR-045); omitted, defaults to program+ltc")
+	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
@@ -553,10 +564,13 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	// the authority on rejecting, mirroring assets settings set's
 	// identical fs.Visit-over-zero-value pattern) is sent through rather
 	// than refused here as if it had been omitted.
-	ltcChannelSet := false
+	ltcChannelSet, zoneSet := false, false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "ltc-channel" {
+		switch f.Name {
+		case "ltc-channel":
 			ltcChannelSet = true
+		case "zone":
+			zoneSet = true
 		}
 	})
 	if programRoute == "" || programChannels == "" || clockDomain == "" || clockDomainProvenance == "" {
@@ -595,9 +609,13 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		ProgramRoute:    programRoute,
 		ProgramChannels: channels,
 		ClockDomain:     clockDomain, ClockDomainProvenance: clockDomainProvenance,
+		Role: role,
 	}
 	if wantLTC {
 		body.LTCRoute, body.LTCChannel = ltcRoute, ltcChannel
+	}
+	if zoneSet {
+		body.Zone = &zone
 	}
 	var resp audioNodeConfigResponse
 	if err := c.putJSON(ctx, "/api/v1/config/audio.node/"+url.PathEscape(id), body, &resp); err != nil {
@@ -694,6 +712,14 @@ func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 	}
 	_, _ = fmt.Fprintf(w, "Clock domain:           %s\n", p.ClockDomain)
 	_, _ = fmt.Fprintf(w, "Clock domain provenance: %s\n", p.ClockDomainProvenance)
+	role := p.Role
+	if role == "" {
+		role = "program+ltc (default)"
+	}
+	_, _ = fmt.Fprintf(w, "Role:                   %s\n", role)
+	if p.Zone != nil {
+		_, _ = fmt.Fprintf(w, "Zone:                   %s\n", *p.Zone)
+	}
 	_, _ = fmt.Fprintf(w, "Revision:               %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:                %s\n", resp.UpdatedAt.Format(time.RFC3339))
 	if resp.CreatedByPrincipalName != nil {

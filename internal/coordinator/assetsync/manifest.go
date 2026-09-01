@@ -176,6 +176,10 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 	if err != nil {
 		return nil, err
 	}
+	targets, err := loadAudioTargets(ctx, st, nodeID)
+	if err != nil {
+		return nil, err
+	}
 
 	cueObjs, err := st.ListConfigObjects(ctx, config.ShowCueConfigKind)
 	if err != nil {
@@ -194,7 +198,7 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 			}
 			return nil, fmt.Errorf("assetsync: node cue sequence ids: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
 		}
-		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue)
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
 		if verr != nil {
 			return nil, fmt.Errorf("assetsync: node cue sequence ids: decode stored show.cue %q: %s", obj.ID, verr.Detail)
 		}
@@ -208,7 +212,7 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 		if payload.Outputs.Render != nil && nodeHasSurface {
 			seqs[payload.Outputs.Render.Sequence] = true
 		}
-		if payload.Outputs.Audio != nil && nodeHasAudioNode {
+		if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Audio.Target) {
 			seqs[payload.Outputs.Audio.Asset] = true
 		}
 	}

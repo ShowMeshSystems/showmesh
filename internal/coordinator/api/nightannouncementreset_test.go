@@ -114,7 +114,7 @@ func TestNightPrepareSite_ResetsAnnouncementSessionOnNewEpoch(t *testing.T) {
 		t.Fatalf("clear params = %v, want sessionId \"announcement-1\"", clears[0].Params)
 	}
 
-	persisted, err := st.GetAudioSession(context.Background(), "announcement-1")
+	persisted, err := st.GetAudioSession(context.Background(), "node-a", "announcement-1")
 	if err != nil {
 		t.Fatalf("get persisted audio session: %v", err)
 	}

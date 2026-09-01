@@ -807,7 +807,18 @@ func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now
 	if !ok {
 		return 0
 	}
-	key := target.AudioNodeID + "/" + target.AudioSessionID
+	for _, nodeID := range target.AudioNodeIDs {
+		skipped += h.nightResetAnnouncementNodeSessionOnce(ctx, now, rec, cue, nodeID, target.AudioSessionID, seen, budgetDeadline)
+	}
+	return skipped
+}
+
+// nightResetAnnouncementNodeSessionOnce is
+// [handlers.nightResetAnnouncementCueSessionOnce]'s own per-node body: one
+// (node, session) pair's own reset, skipped independently of every other
+// node's own outcome or budget standing.
+func (h *handlers) nightResetAnnouncementNodeSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, nodeID, sessionID string, seen map[string]bool, budgetDeadline time.Time) (skipped int) {
+	key := nodeID + "/" + sessionID
 	if seen[key] {
 		return 0
 	}
@@ -817,27 +828,27 @@ func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now
 		return 1
 	}
 
-	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
+	persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID)
 	clearRevision, _, _ := nightAnnouncementRevisions(persisted)
-	idemKey := fmt.Sprintf("night-prepare-site-reset:%s:%s", rec.ID, target.AudioSessionID)
+	idemKey := fmt.Sprintf("night-prepare-site-reset:%s:%s:%s", rec.ID, nodeID, sessionID)
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
-		Action: "audio.session.clear", NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
+		Action: "audio.session.clear", NodeID: nodeID, SessionID: sessionID,
 		Params: map[string]any{
-			"sessionId": target.AudioSessionID, "invocationId": idemKey, "revision": uint64(clearRevision),
+			"sessionId": sessionID, "invocationId": idemKey, "revision": uint64(clearRevision),
 		},
 		Revision: uint64(clearRevision), IdempotencyKey: idemKey,
 		IssuerID: "night-controller", IssuerName: "night controller",
 	})
 	if err != nil {
-		h.logWarn("night loop: prepare-site: announcement session reset was not acknowledged", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "error", err)
+		h.logWarn("night loop: prepare-site: announcement session reset was not acknowledged", "sessionId", sessionID, "nodeId", nodeID, "cue", cue.Name, "error", err)
 		return
 	}
 	if problem != nil {
-		h.logWarn("night loop: prepare-site: announcement session reset was refused", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "reason", problem.Detail)
+		h.logWarn("night loop: prepare-site: announcement session reset was refused", "sessionId", sessionID, "nodeId", nodeID, "cue", cue.Name, "reason", problem.Detail)
 		return
 	}
 	if nightAudioCueOutcome(result.Outcome) != nightCueOutcomeConfirmed {
-		h.logWarn("night loop: prepare-site: announcement session reset did not confirm", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "outcome", result.Outcome, "reason", result.Reason)
+		h.logWarn("night loop: prepare-site: announcement session reset did not confirm", "sessionId", sessionID, "nodeId", nodeID, "cue", cue.Name, "outcome", result.Outcome, "reason", result.Reason)
 	}
 	return 0
 }
@@ -1551,8 +1562,10 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// MODE.md §13), only when it is configured at all.
 	if ba := payload.Resting.BackgroundAudio; ba != nil {
 		checks = append(checks, h.nightCheckBackgroundAudioAssets(ctx, payload.Show, ba))
-		checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, ba))
-		checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, ba))
+		for _, nodeID := range ba.OutputNodeIDs() {
+			checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, nodeID, ba))
+			checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, nodeID, ba))
+		}
 	}
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
 	checks = append(checks, nightCheckAnnouncementAssets(allCues))
@@ -1802,19 +1815,20 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	}
 	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
-		step, ok := nightParseBackgroundAudioRow(row)
+		step, nodeID, ok := nightParseBackgroundAudioRow(row)
 		if !ok {
 			continue
 		}
-		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceBackground, step.Kind))
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceBackground, step.Kind, nodeID))
 	}
 	for _, row := range announcementRows {
-		kind, ok := nightParseAnnouncementRow(row)
+		kind, nodeID, ok := nightParseAnnouncementRow(row)
 		if !ok {
 			continue
 		}
-		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind))
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind, nodeID))
 	}
+	out = append(out, mapNightAnnouncementPrimaryApplySteps(ctx, deps, rec)...)
 
 	if current && !nightSessionIsRunning(rec.State) {
 		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
@@ -1845,6 +1859,69 @@ func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec 
 	}
 	g := payload.Resting.BackgroundAudio.MaxGainDb
 	return &g, "", nil
+}
+
+// mapNightAnnouncementPrimaryApplySteps mirrors each announcement cue's
+// own bound-action apply outcome - already recorded in cues[] via the
+// generic per-cue engine (nightRunCue), under no node suffix at all, for
+// reasons unrelated to this array (barrier satisfaction gates on that
+// same row) - into backgroundAudio.steps[], tagged with that action's
+// own FIRST target node. Owner ruling: every node a cue's own action
+// names, including its first, is answerable from backgroundAudio.steps[]
+// alone; this never dispatches anything, it only projects a row
+// [mapNightCues] and barrier evaluation already depend on, unchanged,
+// into this array too.
+func mapNightAnnouncementPrimaryApplySteps(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) []v1.NightBackgroundAudioStep {
+	if rec.ID == "" || rec.ConfigObjectID == "" {
+		return nil
+	}
+	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
+	if err != nil {
+		return nil
+	}
+	var payload config.NightSessionPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return nil
+	}
+	rows, err := deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
+	if err != nil {
+		return nil
+	}
+	byKey := make(map[string]store.NightCueOutboxRecord, len(rows))
+	for _, row := range rows {
+		byKey[row.Phase+"\x00"+row.CueName] = row
+	}
+
+	type phaseCues struct {
+		phase string
+		cues  []config.NightSessionCue
+	}
+	lists := []phaseCues{
+		{nightPhaseEnterShow, payload.EnterShow.Cues},
+		{nightPhaseEnterResting, payload.EnterResting.Cues},
+		// fadeOut replays the enterShow cue definitions under its own
+		// phase, mirroring mapNightCues' own appendDispatchedNightCues.
+		{nightPhaseFadeOut, payload.EnterShow.Cues},
+	}
+
+	var out []v1.NightBackgroundAudioStep
+	for _, list := range lists {
+		for _, cue := range list.cues {
+			if cue.Role != config.NightSessionCueRoleAnnouncement {
+				continue
+			}
+			row, has := byKey[list.phase+"\x00"+cue.Name]
+			if !has {
+				continue
+			}
+			action, _, err := nightResolveShowAction(ctx, deps.Config, cue.Action)
+			if err != nil || !nightAnnouncementTargetDeclarable(action.Target) || len(action.Target.AudioNodeIDs) == 0 {
+				continue
+			}
+			out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, nightAnnouncementStepApply, action.Target.AudioNodeIDs[0]))
+		}
+	}
+	return out
 }
 
 // mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read
@@ -2178,9 +2255,9 @@ func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, r
 
 // nightMapAudioStep is one durable audio step's wire shape, shared by the
 // background-audio and announcement-session sequences.
-func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind string) v1.NightBackgroundAudioStep {
+func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind, nodeID string) v1.NightBackgroundAudioStep {
 	return v1.NightBackgroundAudioStep{
-		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, Kind: kind,
+		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, NodeID: nodeID, Kind: kind,
 		ActionRevision: row.ActionRevision,
 		State:          row.State, Outcome: row.Outcome, Reason: row.OutcomeReason,
 		DispatchedAt: formatTimePtr(row.DispatchedAt), ResolvedAt: formatTimePtr(row.ResolvedAt),

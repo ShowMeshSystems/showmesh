@@ -59,9 +59,9 @@ var showCueTopLevelKeys = map[string]bool{
 var (
 	showCueOutputsKeys      = map[string]bool{"render": true, "audio": true, "ltc": true, "announcement": true}
 	showCueRenderKeys       = map[string]bool{"sequence": true}
-	showCueAudioKeys        = map[string]bool{"asset": true, "startOffsetMillis": true}
-	showCueLTCKeys          = map[string]bool{"startOffsetMillis": true}
-	showCueAnnouncementKeys = map[string]bool{"policy": true, "duckGainDb": true, "fadeMillis": true}
+	showCueAudioKeys        = map[string]bool{"asset": true, "startOffsetMillis": true, "target": true}
+	showCueLTCKeys          = map[string]bool{"startOffsetMillis": true, "target": true}
+	showCueAnnouncementKeys = map[string]bool{"policy": true, "duckGainDb": true, "fadeMillis": true, "target": true}
 )
 
 // ShowCuePayload is config_revisions.payload_json's decoded, VALIDATED
@@ -98,26 +98,40 @@ type ShowCueRenderOutput struct {
 // audio asset; this seam does not validate its existence (not in
 // TRACK-H-H1-SPEC.md section 4's refused list). StartOffsetMillis is where
 // inside that asset the Cue begins, default 0, must be >= 0, and is
-// bounded at 24 hours like outputs.ltc.startOffsetMillis.
+// bounded at 24 hours like outputs.ltc.startOffsetMillis. Target is
+// ADR-045's optional target node, mirroring show.surface.node's "node"
+// field: absent means resolve later to the installation's single
+// program+ltc audio.node, exactly the one-node behavior this Cue had
+// before ADR-045. Present, it must name an existing audio.node object
+// (DecodeShowCuePayload's audioNodeExists callback) — the same "refused
+// against what actually exists" posture show.surface.node's nodeDeclared
+// check uses.
 type ShowCueAudioOutput struct {
 	Asset             string `json:"asset"`
 	StartOffsetMillis int    `json:"startOffsetMillis"`
+	Target            string `json:"target,omitempty"`
 }
 
 // ShowCueLTCOutput is show.cue.outputs.ltc. StartOffsetMillis is H0.3's
 // single LTC offset; its runtime meaning ("Cue LTC start offset + current
-// Cue position") is H4's arithmetic, not this seam's.
+// Cue position") is H4's arithmetic, not this seam's. Target is ADR-045's
+// optional target node — see [ShowCueAudioOutput.Target]'s doc comment;
+// the same absent/present rule applies here.
 type ShowCueLTCOutput struct {
-	StartOffsetMillis int `json:"startOffsetMillis"`
+	StartOffsetMillis int    `json:"startOffsetMillis"`
+	Target            string `json:"target,omitempty"`
 }
 
 // ShowCueAnnouncementOutput is show.cue.outputs.announcement. DuckGainDb is
 // non-nil only when Policy is "duck" — refused on "mix" and "interrupt" at
-// decode time, since an ignored field reads as an applied one.
+// decode time, since an ignored field reads as an applied one. Target is
+// ADR-045's optional target node — see [ShowCueAudioOutput.Target]'s doc
+// comment; the same absent/present rule applies here.
 type ShowCueAnnouncementOutput struct {
 	Policy     string   `json:"policy"`
 	DuckGainDb *float64 `json:"duckGainDb,omitempty"`
 	FadeMillis int      `json:"fadeMillis"`
+	Target     string   `json:"target,omitempty"`
 }
 
 // EncodeShowCuePayload marshals p into config_revisions.payload_json's
@@ -135,8 +149,11 @@ func EncodeShowCuePayload(p ShowCuePayload) (string, error) {
 // TRACK-H-H1-SPEC.md section 2. showExists reports whether a "show"
 // reference names an existing show config object — caller-supplied,
 // matching showsurface.go's own showExists parameter, because this
-// package has no store access.
-func DecodeShowCuePayload(raw string, showExists func(string) bool) (ShowCuePayload, *ValidationError) {
+// package has no store access. audioNodeExists reports whether an
+// outputs.audio/ltc/announcement "target" names an existing audio.node
+// object (ADR-045) — caller-supplied for the identical reason, mirroring
+// showsurface.go's nodeDeclared parameter.
+func DecodeShowCuePayload(raw string, showExists func(string) bool, audioNodeExists func(string) bool) (ShowCuePayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowCuePayload{}, verr
@@ -170,7 +187,7 @@ func DecodeShowCuePayload(raw string, showExists func(string) bool) (ShowCuePayl
 		}
 	}
 
-	outputs, verr := decodeShowCueOutputs(top)
+	outputs, verr := decodeShowCueOutputs(top, audioNodeExists)
 	if verr != nil {
 		return ShowCuePayload{}, verr
 	}
@@ -182,7 +199,7 @@ func DecodeShowCuePayload(raw string, showExists func(string) bool) (ShowCuePayl
 // Absent, explicit null, and an explicitly empty object ({}) are three
 // distinct refusals — see decodeRequiredObject for the first two and this
 // function's own "at least one output" check for the third.
-func decodeShowCueOutputs(top map[string]json.RawMessage) (ShowCueOutputs, *ValidationError) {
+func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(string) bool) (ShowCueOutputs, *ValidationError) {
 	fields, verr := decodeRequiredObject(top, "outputs", "outputs")
 	if verr != nil {
 		return ShowCueOutputs{}, verr
@@ -202,7 +219,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage) (ShowCueOutputs, *Vali
 	}
 
 	if raw, present := fields["audio"]; present {
-		audio, verr := decodeShowCueAudioOutput(raw)
+		audio, verr := decodeShowCueAudioOutput(raw, audioNodeExists)
 		if verr != nil {
 			return ShowCueOutputs{}, verr
 		}
@@ -210,7 +227,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage) (ShowCueOutputs, *Vali
 	}
 
 	if raw, present := fields["ltc"]; present {
-		ltc, verr := decodeShowCueLTCOutput(raw)
+		ltc, verr := decodeShowCueLTCOutput(raw, audioNodeExists)
 		if verr != nil {
 			return ShowCueOutputs{}, verr
 		}
@@ -218,7 +235,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage) (ShowCueOutputs, *Vali
 	}
 
 	if raw, present := fields["announcement"]; present {
-		announcement, verr := decodeShowCueAnnouncementOutput(raw)
+		announcement, verr := decodeShowCueAnnouncementOutput(raw, audioNodeExists)
 		if verr != nil {
 			return ShowCueOutputs{}, verr
 		}
@@ -286,7 +303,31 @@ func decodeShowCueRenderOutput(raw json.RawMessage) (ShowCueRenderOutput, *Valid
 	return ShowCueRenderOutput{Sequence: sequence}, nil
 }
 
-func decodeShowCueAudioOutput(raw json.RawMessage) (ShowCueAudioOutput, *ValidationError) {
+// decodeShowCueTarget decodes and validates the optional "target" field
+// shared by outputs.audio, outputs.ltc, and outputs.announcement
+// (ADR-045). Absent means "" — resolve later to the installation's single
+// program+ltc audio.node, the pre-ADR-045 behavior unchanged; explicit
+// null and an explicit empty string are refused by
+// [decodeOptionalNonEmptyString], and a present, non-empty value must name
+// an existing audio.node object.
+func decodeShowCueTarget(fields map[string]json.RawMessage, path string, audioNodeExists func(string) bool) (string, *ValidationError) {
+	target, verr := decodeOptionalNonEmptyString(fields, "target", path+".target")
+	if verr != nil {
+		return "", verr
+	}
+	if target == "" {
+		return "", nil
+	}
+	if !audioNodeExists(target) {
+		return "", &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: path + ".target",
+			Detail: fmt.Sprintf("target %q is not a configured audio.node", target),
+		}
+	}
+	return target, nil
+}
+
+func decodeShowCueAudioOutput(raw json.RawMessage, audioNodeExists func(string) bool) (ShowCueAudioOutput, *ValidationError) {
 	fields, verr := decodeRequiredObjectFromRaw(raw, "outputs.audio")
 	if verr != nil {
 		return ShowCueAudioOutput{}, verr
@@ -311,7 +352,11 @@ func decodeShowCueAudioOutput(raw json.RawMessage) (ShowCueAudioOutput, *Validat
 			Detail: fmt.Sprintf("startOffsetMillis must be at most %d (24 hours)", maxLTCStartOffsetMillis),
 		}
 	}
-	return ShowCueAudioOutput{Asset: asset, StartOffsetMillis: startOffsetMillis}, nil
+	target, verr := decodeShowCueTarget(fields, "outputs.audio", audioNodeExists)
+	if verr != nil {
+		return ShowCueAudioOutput{}, verr
+	}
+	return ShowCueAudioOutput{Asset: asset, StartOffsetMillis: startOffsetMillis, Target: target}, nil
 }
 
 // decodeDefaultedNonNegativeInt is [decodeRequiredNonNegativeInt] with a
@@ -325,7 +370,7 @@ func decodeDefaultedNonNegativeInt(top map[string]json.RawMessage, key, field st
 	return decodeRequiredNonNegativeInt(top, key, field)
 }
 
-func decodeShowCueLTCOutput(raw json.RawMessage) (ShowCueLTCOutput, *ValidationError) {
+func decodeShowCueLTCOutput(raw json.RawMessage, audioNodeExists func(string) bool) (ShowCueLTCOutput, *ValidationError) {
 	fields, verr := decodeRequiredObjectFromRaw(raw, "outputs.ltc")
 	if verr != nil {
 		return ShowCueLTCOutput{}, verr
@@ -343,10 +388,14 @@ func decodeShowCueLTCOutput(raw json.RawMessage) (ShowCueLTCOutput, *ValidationE
 			Detail: fmt.Sprintf("startOffsetMillis must be at most %d (24 hours)", maxLTCStartOffsetMillis),
 		}
 	}
-	return ShowCueLTCOutput{StartOffsetMillis: startOffsetMillis}, nil
+	target, verr := decodeShowCueTarget(fields, "outputs.ltc", audioNodeExists)
+	if verr != nil {
+		return ShowCueLTCOutput{}, verr
+	}
+	return ShowCueLTCOutput{StartOffsetMillis: startOffsetMillis, Target: target}, nil
 }
 
-func decodeShowCueAnnouncementOutput(raw json.RawMessage) (ShowCueAnnouncementOutput, *ValidationError) {
+func decodeShowCueAnnouncementOutput(raw json.RawMessage, audioNodeExists func(string) bool) (ShowCueAnnouncementOutput, *ValidationError) {
 	fields, verr := decodeRequiredObjectFromRaw(raw, "outputs.announcement")
 	if verr != nil {
 		return ShowCueAnnouncementOutput{}, verr
@@ -399,7 +448,12 @@ func decodeShowCueAnnouncementOutput(raw json.RawMessage) (ShowCueAnnouncementOu
 		}
 	}
 
-	return ShowCueAnnouncementOutput{Policy: policy, DuckGainDb: duckGainDb, FadeMillis: fadeMillis}, nil
+	target, verr := decodeShowCueTarget(fields, "outputs.announcement", audioNodeExists)
+	if verr != nil {
+		return ShowCueAnnouncementOutput{}, verr
+	}
+
+	return ShowCueAnnouncementOutput{Policy: policy, DuckGainDb: duckGainDb, FadeMillis: fadeMillis, Target: target}, nil
 }
 
 // decodeRequiredObjectFromRaw is decodeRequiredObject for a

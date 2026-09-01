@@ -156,18 +156,20 @@ func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payl
 // looked up, so a session that does not exist yet is not a broken binding,
 // exactly as an unresolvable one is not checked at write time either.
 func (h *handlers) checkAudioActionBinding(ctx context.Context, target config.ShowActionTarget) (state, reason string) {
-	hasNode, err := nodeHasAudioNodeObject(ctx, h.deps.Config, target.AudioNodeID)
-	if err != nil {
-		return v1.ActionBindingStateUnknown, fmt.Sprintf("this coordinator could not check whether audio node %q is still declared: %v", target.AudioNodeID, err)
-	}
-	if !hasNode {
-		return v1.ActionBindingStateBroken, fmt.Sprintf("audio node %q is not a declared audio.node", target.AudioNodeID)
+	for _, nodeID := range target.AudioNodeIDs {
+		hasNode, err := nodeHasAudioNodeObject(ctx, h.deps.Config, nodeID)
+		if err != nil {
+			return v1.ActionBindingStateUnknown, fmt.Sprintf("this coordinator could not check whether audio node %q is still declared: %v", nodeID, err)
+		}
+		if !hasNode {
+			return v1.ActionBindingStateBroken, fmt.Sprintf("audio node %q is not a declared audio.node", nodeID)
+		}
 	}
 	if !config.IsSupportedAudioAction(target.AudioAction) {
 		return v1.ActionBindingStateBroken, fmt.Sprintf("audioAction %q is no longer a supported audio operation (supported: %s)",
 			target.AudioAction, strings.Join(config.ShowActionAudioActions(), ", "))
 	}
-	return v1.ActionBindingStateOK, fmt.Sprintf("audio node %q is declared and operation %q is still supported", target.AudioNodeID, target.AudioAction)
+	return v1.ActionBindingStateOK, fmt.Sprintf("audio node(s) %v are declared and operation %q is still supported", []string(target.AudioNodeIDs), target.AudioAction)
 }
 
 // checkFPPActionBinding is a configuration check only — no network call.

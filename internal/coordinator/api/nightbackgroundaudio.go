@@ -72,13 +72,29 @@ import (
 // audio.session.apply or audio.gain.set today (a contract gap filed
 // separately, not invented here).
 
-// nightPhaseRestingBackground is the exact phase for every step this
-// controller commits for background audio: apply, gain, start, pause,
-// resume, stop, and (when resting.backgroundAudio.fadeOutMs/fadeInMs are
-// configured) fadedown and fadeup. It is read back through
+// nightPhaseRestingBackground is the phase FAMILY prefix for every step
+// this controller commits for background audio: apply, gain, start,
+// pause, resume, stop, and (when resting.backgroundAudio.fadeOutMs/
+// fadeInMs are configured) fadedown and fadeup. It is read back through
 // [NightSessionStore.ListNightCueOutboxRowsForPhasePrefix]
 // (store/nightsession.go).
+//
+// An individual step's own phase is this prefix plus ":"+nodeID
+// ([nightPhaseRestingBackgroundNode]) - one node's own steps never share
+// an outbox row identity with another's, so a refused step on one node
+// can never block or corrupt another's state machine. The revision
+// COUNTER (nightNextBackgroundAudioRevision, nightBackgroundAudioRevisionState)
+// stays shared across every node's history under this same prefix: a
+// shared, monotonically-advancing counter is still safe per node (it can
+// only ever REQUIRE a revision higher than necessary, never lower), and
+// sharing it avoids a second, per-node revision space to reason about.
 const nightPhaseRestingBackground = "restingBackground"
+
+// nightPhaseRestingBackgroundNode is nodeID's own phase under the
+// background-audio family.
+func nightPhaseRestingBackgroundNode(nodeID string) string {
+	return nightPhaseRestingBackground + ":" + nodeID
+}
 
 // nightBackgroundAudioSessionID is this session's own deterministic
 // pkg/audio.SessionID: stable for the whole lifetime of the night.session
@@ -141,46 +157,49 @@ func nightBackgroundAudioSeqFromCueName(name string) (int, bool) {
 	return seq, true
 }
 
-// nightParseBackgroundAudioRow classifies one outbox row already known
-// to belong to this session's background-audio phase. false means the row
-// does not match any recognized shape - never expected in practice,
-// answered rather than panicking on a malformed row. A row left behind by
-// an older build under a phase this one no longer writes lands here too,
-// and is dropped rather than mistaken for a step.
-func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (nightBackgroundAudioStep, bool) {
-	if row.Phase != nightPhaseRestingBackground {
-		return nightBackgroundAudioStep{}, false
+// nightParseBackgroundAudioRow classifies one outbox row already known to
+// belong to this session's background-audio phase family and recovers
+// the node it addressed. false means the row does not match any
+// recognized shape - never expected in practice, answered rather than
+// panicking on a malformed row. A row left behind by an older build
+// under a phase this one no longer writes lands here too, and is dropped
+// rather than mistaken for a step.
+func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (step nightBackgroundAudioStep, nodeID string, ok bool) {
+	nodeID, ok = strings.CutPrefix(row.Phase, nightPhaseRestingBackground+":")
+	if !ok || nodeID == "" {
+		return nightBackgroundAudioStep{}, "", false
 	}
 	seq, ok := nightBackgroundAudioSeqFromCueName(row.CueName)
 	if !ok {
-		return nightBackgroundAudioStep{}, false
+		return nightBackgroundAudioStep{}, "", false
 	}
 	switch {
 	case strings.HasSuffix(row.CueName, "-apply"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-gain"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepGain}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepGain}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-start"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStart}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStart}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-pause"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepPause}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepPause}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-resume"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepResume}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepResume}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-stop"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStop}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStop}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-fadedown"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeDown}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeDown}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-fadeup"):
-		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeUp}, true
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeUp}, nodeID, true
 	}
-	return nightBackgroundAudioStep{}, false
+	return nightBackgroundAudioStep{}, "", false
 }
 
 // nightBackgroundAudioHistoryRow pairs a parsed step with the outbox row
 // it came from.
 type nightBackgroundAudioHistoryRow struct {
-	Step nightBackgroundAudioStep
-	Row  store.NightCueOutboxRecord
+	Step   nightBackgroundAudioStep
+	Row    store.NightCueOutboxRecord
+	NodeID string
 
 	// Parsed is false for a row this build recognizes no step shape for,
 	// which in practice means a row written by an older build under a
@@ -209,9 +228,28 @@ func nightBackgroundAudioSteps(history []nightBackgroundAudioHistoryRow) []night
 	return out
 }
 
+// nightBackgroundAudioStepsForNode is [nightBackgroundAudioSteps] further
+// narrowed to nodeID's own steps - the state machine decides each
+// node's own next step from that node's own step history alone, so
+// a stalled or refused step on one node is never mistaken for another
+// node's own latest step.
+func nightBackgroundAudioStepsForNode(history []nightBackgroundAudioHistoryRow, nodeID string) []nightBackgroundAudioHistoryRow {
+	out := make([]nightBackgroundAudioHistoryRow, 0, len(history))
+	for _, row := range nightBackgroundAudioSteps(history) {
+		if row.NodeID == nodeID {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
 // nightBackgroundAudioHistory returns every step ever recorded for rec's
-// background-audio session across every cycle, sorted stably by
-// Row.CreatedAt/rowid (the store's own insertion order).
+// background-audio session, across every node and every cycle, sorted
+// stably by Row.CreatedAt/rowid (the store's own insertion order). Used
+// whole for revision counting (safe to share across nodes - see
+// [nightPhaseRestingBackground]'s own doc comment) and narrowed to one
+// node via [nightBackgroundAudioStepsForNode] for that node's own state
+// machine decisions.
 func (h *handlers) nightBackgroundAudioHistory(ctx context.Context, rec store.NightSessionRecord) ([]nightBackgroundAudioHistoryRow, error) {
 	rows, err := h.deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseRestingBackground)
 	if err != nil {
@@ -219,8 +257,8 @@ func (h *handlers) nightBackgroundAudioHistory(ctx context.Context, rec store.Ni
 	}
 	out := make([]nightBackgroundAudioHistoryRow, 0, len(rows))
 	for _, r := range rows {
-		step, ok := nightParseBackgroundAudioRow(r)
-		out = append(out, nightBackgroundAudioHistoryRow{Step: step, Row: r, Parsed: ok})
+		step, nodeID, ok := nightParseBackgroundAudioRow(r)
+		out = append(out, nightBackgroundAudioHistoryRow{Step: step, Row: r, NodeID: nodeID, Parsed: ok})
 	}
 	return out, nil
 }
@@ -422,8 +460,8 @@ func nightBackgroundAudioFadeSettled(audio NodeAudioLister, now time.Time, nodeI
 
 func nightAudioTarget(nodeID, sessionID, action string, params map[string]any) config.ShowActionTarget {
 	return config.ShowActionTarget{
-		Integration: config.ShowActionIntegrationAudio,
-		AudioNodeID: nodeID, AudioSessionID: sessionID, AudioAction: action, Params: params,
+		Integration:  config.ShowActionIntegrationAudio,
+		AudioNodeIDs: config.AudioNodeIDList{nodeID}, AudioSessionID: sessionID, AudioAction: action, Params: params,
 	}
 }
 
@@ -457,7 +495,11 @@ func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSe
 // nightAdvanceBackgroundAudio is nightTick's own per-tick entry point
 // while rec is in preshow or a resting state. It never blocks: every call either
 // resumes an in-flight step or decides and commits the next one,
-// returning immediately either way.
+// returning immediately either way. It runs
+// [nightAdvanceBackgroundAudioForNode] independently for every node the
+// bed plays on: each node's own state machine advances (or stalls, or is
+// refused) entirely on that node's own step history - a refused or
+// stalled node can never block another's.
 func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
 	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
 	if err != nil {
@@ -468,7 +510,21 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 	if ba == nil {
 		return
 	}
-	nodeID := ba.OutputNodeID()
+	history, err := h.nightBackgroundAudioHistory(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: background audio: failed to read history", "sessionId", rec.ID, "error", err)
+		return
+	}
+	for _, nodeID := range ba.OutputNodeIDs() {
+		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, payload.Show, nodeID, ba, history)
+	}
+}
+
+// nightAdvanceBackgroundAudioForNode is [nightAdvanceBackgroundAudio]'s
+// own per-node body, unchanged in shape from the single-node state
+// machine this coordinator has always run - a single-target installation
+// (one node in ba.OutputNodeIDs()) behaves exactly as it always has.
+func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
 	sessionID := nightBackgroundAudioSessionID(rec)
 
 	confirms, _, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, pkgaudio.ItemTransition(ba.ItemTransition))
@@ -477,25 +533,20 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 		return
 	}
 	if err := pkgaudio.ValidateItemTransitionSupport(pkgaudio.ItemTransition(ba.ItemTransition), confirms); err != nil {
-		h.logWarn("night loop: background audio: requested item transition is not confirmed by the output; refusing to start", "sessionId", rec.ID, "itemTransition", ba.ItemTransition, "error", err)
+		h.logWarn("night loop: background audio: requested item transition is not confirmed by the output; refusing to start", "sessionId", rec.ID, "nodeId", nodeID, "itemTransition", ba.ItemTransition, "error", err)
 		return
 	}
 
-	items, err := h.nightBuildBackgroundPlaylistItems(ctx, payload.Show, ba.Items)
+	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ItemsForTarget(nodeID))
 	if err != nil {
-		h.logWarn("night loop: background audio: failed to resolve playlist items", "sessionId", rec.ID, "error", err)
+		h.logWarn("night loop: background audio: failed to resolve playlist items", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
 		return
 	}
 	if len(items) == 0 {
 		return
 	}
 
-	history, err := h.nightBackgroundAudioHistory(ctx, rec)
-	if err != nil {
-		h.logWarn("night loop: background audio: failed to read history", "sessionId", rec.ID, "error", err)
-		return
-	}
-	steps := nightBackgroundAudioSteps(history)
+	steps := nightBackgroundAudioStepsForNode(history, nodeID)
 	if len(steps) == 0 {
 		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, items, history)
 		return
@@ -577,7 +628,7 @@ func (h *handlers) nightBackgroundAudioApply(ctx context.Context, now time.Time,
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameApply(int(revision))
 	target := nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(rec, ba, items))
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: apply failed", "sessionId", rec.ID, "error", err)
 	}
 }
@@ -600,7 +651,7 @@ func (h *handlers) nightBackgroundAudioGain(ctx context.Context, now time.Time, 
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameGain(int(revision))
 	target := nightAudioTarget(nodeID, sessionID, "audio.gain.set", map[string]any{"gain": float64(result.Effective)})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: gain failed", "sessionId", rec.ID, "error", err, "requested", float64(result.Requested), "effective", float64(result.Effective), "clamped", result.Clamped)
 	}
 }
@@ -616,7 +667,7 @@ func (h *handlers) nightBackgroundAudioFadeDown(ctx context.Context, now time.Ti
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameFadeDown(int(revision))
 	target := nightAudioTarget(nodeID, sessionID, "audio.gain.fade", map[string]any{"targetGain": 0.0, "durationMs": float64(fadeOutMs)})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: fade-down failed", "sessionId", rec.ID, "error", err)
 	}
 }
@@ -636,7 +687,7 @@ func (h *handlers) nightBackgroundAudioFadeUp(ctx context.Context, now time.Time
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameFadeUp(int(revision))
 	target := nightAudioTarget(nodeID, sessionID, "audio.gain.fade", map[string]any{"targetGain": float64(result.Effective), "durationMs": float64(fadeInMs)})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: fade-up failed", "sessionId", rec.ID, "error", err)
 	}
 }
@@ -645,7 +696,7 @@ func (h *handlers) nightBackgroundAudioStart(ctx context.Context, now time.Time,
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameStart(int(revision))
 	target := nightAudioTarget(nodeID, sessionID, "audio.session.start", map[string]any{})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: start failed", "sessionId", rec.ID, "error", err)
 	}
 }
@@ -654,7 +705,7 @@ func (h *handlers) nightBackgroundAudioResume(ctx context.Context, now time.Time
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameResume(int(revision))
 	target := nightAudioTarget(nodeID, sessionID, "audio.session.resume", map[string]any{})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: resume failed", "sessionId", rec.ID, "error", err)
 	}
 }
@@ -671,7 +722,7 @@ func (h *handlers) nightBackgroundAudioStop(ctx context.Context, now time.Time, 
 		cueName, action = nightBackgroundAudioCueNameStop(int(revision)), "audio.session.stop"
 	}
 	target := nightAudioTarget(nodeID, sessionID, action, map[string]any{})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: suspend failed", "sessionId", rec.ID, "kind", kind, "error", err)
 	}
 }
@@ -729,15 +780,29 @@ func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time,
 // still logically playing, per resume policy, retrying until the
 // outcome is genuinely confirmed rather than accepting any resolved
 // state - a refused, failed, or unconfirmable stop must never read as
-// "stopped" while the bed keeps playing over the show.
+// "stopped" while the bed keeps playing over the show. Runs
+// independently per node, exactly like [nightAdvanceBackgroundAudio] -
+// a stall on one node never withholds the stop/pause another node's own
+// history already shows is due.
 func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
-	sessionID := nightBackgroundAudioSessionID(rec)
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil || payload.Resting.BackgroundAudio == nil {
+		return
+	}
+	ba := payload.Resting.BackgroundAudio
 	history, err := h.nightBackgroundAudioHistory(ctx, rec)
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to read history for stop", "sessionId", rec.ID, "error", err)
 		return
 	}
-	steps := nightBackgroundAudioSteps(history)
+	for _, nodeID := range ba.OutputNodeIDs() {
+		h.nightStopBackgroundAudioIfRunningForNode(ctx, now, rec, payload.Show, nodeID, ba, history)
+	}
+}
+
+func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
+	sessionID := nightBackgroundAudioSessionID(rec)
+	steps := nightBackgroundAudioStepsForNode(history, nodeID)
 	if len(steps) == 0 {
 		return
 	}
@@ -750,24 +815,13 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 	}
 
 	if latest.Row.State == nightCueStatePending || latest.Row.State == nightCueStateDispatched {
-		payload, err := h.getPinnedNightSessionPayload(ctx, rec)
-		if err != nil || payload.Resting.BackgroundAudio == nil {
-			return
-		}
-		items, err := h.nightBuildBackgroundPlaylistItems(ctx, payload.Show, payload.Resting.BackgroundAudio.Items)
+		items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ItemsForTarget(nodeID))
 		if err != nil {
 			return
 		}
-		h.nightResumeBackgroundStep(ctx, now, rec, payload.Resting.BackgroundAudio.OutputNodeID(), sessionID, payload.Resting.BackgroundAudio, items, latest, history)
+		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, items, latest, history)
 		return
 	}
-
-	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
-	if err != nil || payload.Resting.BackgroundAudio == nil {
-		return
-	}
-	ba := payload.Resting.BackgroundAudio
-	nodeID := ba.OutputNodeID()
 
 	if ba.FadeOutMs == nil {
 		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
@@ -843,11 +897,19 @@ func (h *handlers) nightClearBackgroundAudioAtEndSession(ctx context.Context, no
 	if ba == nil {
 		return
 	}
-	nodeID := ba.OutputNodeID()
 	sessionID := nightBackgroundAudioSessionID(rec)
+	for _, nodeID := range ba.OutputNodeIDs() {
+		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, nodeID, sessionID)
+	}
+}
 
-	clearRevision := h.nightAudioSessionPersistedRevision(ctx, sessionID) + 1
-	idemKey := fmt.Sprintf("night-end-session-clear:%s", sessionID)
+// nightClearBackgroundAudioAtEndSessionForNode is
+// [handlers.nightClearBackgroundAudioAtEndSession]'s own per-node body: one
+// node's own clear attempt, warned and abandoned independently of every
+// other node's own outcome.
+func (h *handlers) nightClearBackgroundAudioAtEndSessionForNode(ctx context.Context, now time.Time, nodeID, sessionID string) {
+	clearRevision := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) + 1
+	idemKey := fmt.Sprintf("night-end-session-clear:%s:%s", nodeID, sessionID)
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: "audio.session.clear", NodeID: nodeID, SessionID: sessionID,
 		Params: map[string]any{
@@ -921,11 +983,11 @@ const nightAnchorPurposeEndSessionClear = "end-session-clear"
 // (nightDispatchEndSessionClearRetry's own clearRevision) must always
 // change together, per attempt, never a reused key against a moving
 // revision.
-func nightEndSessionClearIdempotencyKey(sessionID string, attempt int64) string {
+func nightEndSessionClearIdempotencyKey(nodeID, sessionID string, attempt int64) string {
 	if attempt == 0 {
-		return "night-end-session-clear-retry:" + sessionID
+		return "night-end-session-clear-retry:" + nodeID + ":" + sessionID
 	}
-	return fmt.Sprintf("night-end-session-clear-retry:%s:%d", sessionID, attempt)
+	return fmt.Sprintf("night-end-session-clear-retry:%s:%s:%d", nodeID, sessionID, attempt)
 }
 
 // nightRetryEndSessionClear is nightTick's own stopped-state entry point -
@@ -952,9 +1014,21 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 	if ba == nil {
 		return
 	}
-	nodeID := ba.OutputNodeID()
+	nodeIDs := ba.OutputNodeIDs()
+	if len(nodeIDs) == 0 {
+		return
+	}
+	// KNOWN GAP, flagged for an owner decision: this retry safety net
+	// tracks its confirmation via ONE anchor slot on the record
+	// (ContentAnchorJSON), which can only represent one node's own
+	// retry state. A bed configured onto more than one node only gets
+	// this crash-recovery retry for its first target node
+	// (nodeIDs[0]); nightClearBackgroundAudioAtEndSession's own
+	// synchronous warn-and-proceed attempt above still reaches every
+	// node once, so only a node whose SYNCHRONOUS attempt also failed
+	// is left unrecovered by this tick-based safety net.
 	sessionID := nightBackgroundAudioSessionID(rec)
-	h.nightDispatchEndSessionClearRetry(ctx, now, rec, nodeID, sessionID, anchor)
+	h.nightDispatchEndSessionClearRetry(ctx, now, rec, nodeIDs[0], sessionID, anchor)
 }
 
 // nightDispatchEndSessionClearRetry issues one clear attempt and persists
@@ -976,8 +1050,8 @@ func (h *handlers) nightDispatchEndSessionClearRetry(ctx context.Context, now ti
 		h.nightCommitEndSessionClearAnchor(ctx, now, rec, next)
 	}
 
-	idemKey := nightEndSessionClearIdempotencyKey(sessionID, anchor.Attempts)
-	clearRevision := h.nightAudioSessionPersistedRevision(ctx, sessionID) + 1
+	idemKey := nightEndSessionClearIdempotencyKey(nodeID, sessionID, anchor.Attempts)
+	clearRevision := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) + 1
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: "audio.session.clear", NodeID: nodeID, SessionID: sessionID,
 		Params: map[string]any{

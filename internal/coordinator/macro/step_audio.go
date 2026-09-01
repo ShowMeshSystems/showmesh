@@ -51,8 +51,12 @@ func (e *Executor) dispatchAudioStep(ctx context.Context, run store.MacroRunReco
 	params["invocationId"] = stepKey
 	params["revision"] = uint64(action.Revision)
 
+	audioNodeID := ""
+	if len(target.AudioNodeIDs) > 0 {
+		audioNodeID = target.AudioNodeIDs[0]
+	}
 	result, problem, err := e.audioActions.Dispatch(ctx, api.AudioDispatchInput{
-		Action: target.AudioAction, NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
+		Action: target.AudioAction, NodeID: audioNodeID, SessionID: target.AudioSessionID,
 		Params: params, Revision: uint64(action.Revision), IdempotencyKey: stepKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID, ClientAddr: issuer.ClientAddr,

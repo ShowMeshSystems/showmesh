@@ -183,6 +183,27 @@ function refNumber(ref: Record<string, unknown> | undefined, key: string): strin
   return typeof v === 'number' ? String(v) : ''
 }
 
+// audioNodeId is a bare string or an array of node ids on the wire
+// (api/openapi.yaml's ConfigShowActionTarget.audioNodeId doc comment).
+// This form represents both as one comma-separated text field: join for
+// display, split back into a list on save (parseAudioNodeIds below).
+function joinAudioNodeIds(v: string | string[] | undefined): string {
+  if (v === undefined) return ''
+  return Array.isArray(v) ? v.join(', ') : v
+}
+
+// parseAudioNodeIds splits the form field back into the wire shape: a
+// single trimmed string when exactly one id was entered (preserving the
+// scalar shape every pre-widening payload already used), an array when
+// more than one was.
+function parseAudioNodeIds(raw: string): string | string[] {
+  const ids = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+  return ids.length <= 1 ? (ids[0] ?? '') : ids
+}
+
 function formFromPayload(payload: ConfigShowAction): FormState {
   const target = payload.target
   const ref = target.ref
@@ -213,7 +234,7 @@ function formFromPayload(payload: ConfigShowAction): FormState {
     resolumeColumn: refString(ref, 'column'),
     resolumeBypassed: refBoolean(ref, 'bypassed'),
     resolumeMaster: refNumber(ref, 'master'),
-    audioNodeId: target.audioNodeId ?? '',
+    audioNodeId: joinAudioNodeIds(target.audioNodeId),
     audioSessionId: target.audioSessionId ?? '',
     audioAction: target.audioAction ?? '',
   }
@@ -396,7 +417,7 @@ function buildPayload(
         idempotent,
         target: {
           integration: 'audio',
-          audioNodeId: form.audioNodeId.trim(),
+          audioNodeId: parseAudioNodeIds(form.audioNodeId),
           audioSessionId: form.audioSessionId.trim(),
           audioAction: form.audioAction,
           // Same exactOptionalPropertyTypes rule as the fpp branch above.
@@ -1082,7 +1103,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
         ) : (
           <>
             <label className="form-field">
-              Audio node id
+              Audio node id (comma-separated for more than one)
               <input
                 type="text"
                 value={form.audioNodeId}

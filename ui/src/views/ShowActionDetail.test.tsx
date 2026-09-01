@@ -291,6 +291,85 @@ describe('ShowActionDetail (new action authoring)', () => {
     )
   })
 
+  // audioNodeId widened from a bare string to string | string[]
+  // (api/openapi.yaml's ConfigShowActionTarget.audioNodeId doc comment):
+  // proves entering more than one comma-separated node id builds an
+  // array on the wire, not a single joined string that would silently
+  // collapse a multi-node target back to one node on save.
+  it('submits an array of node ids when more than one is entered, comma-separated', async () => {
+    putShowAction.mockResolvedValue({
+      serverTime: '2026-08-14T00:00:00Z',
+      kind: 'show.action',
+      id: 'start-multi',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Start on a multi-node target',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'audio', audioNodeId: ['porch-node', 'yard-node'], audioSessionId: 'announcement', audioAction: 'audio.session.start' },
+      },
+      updatedAt: '2026-08-14T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.type(screen.getByLabelText('Action id'), 'start-multi')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Label'), 'Start on a multi-node target')
+    await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
+    await user.selectOptions(screen.getByLabelText('Integration'), 'audio')
+    await user.type(screen.getByLabelText(/Audio node id/), 'porch-node, yard-node')
+    await user.type(screen.getByLabelText(/Audio session id/), 'announcement')
+    await user.selectOptions(screen.getByLabelText(/Operation/), 'audio.session.start')
+    await user.click(screen.getByRole('button', { name: 'Create action' }))
+
+    expect(putShowAction).toHaveBeenCalledWith(
+      'start-multi',
+      expect.objectContaining({
+        target: expect.objectContaining({
+          audioNodeId: ['porch-node', 'yard-node'],
+        }),
+      }),
+    )
+  })
+
+  // The display half of the same round trip: an existing multi-node
+  // target must load back into the text field as every node, not just
+  // the first - the display-side counterpart to the submit test above.
+  it('loads an existing array-valued audioNodeId as a comma-joined list', async () => {
+    getActionBinding.mockRejectedValue(new Error('not mocked for this test'))
+    getShowAction.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'show.action',
+      id: 'start-multi',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Start on a multi-node target',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'audio', audioNodeId: ['porch-node', 'yard-node', 'attic-node'], audioSessionId: 'announcement', audioAction: 'audio.session.start' },
+      },
+      updatedAt: '2026-08-25T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    getShowActionRevisions.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'show.action',
+      revisions: [],
+    })
+    renderExistingAction(makeModel({ session: adminSession }), 'start-multi')
+
+    const input = (await screen.findByLabelText(/Audio node id/)) as HTMLInputElement
+    expect(input.value).toBe('porch-node, yard-node, attic-node')
+  })
+
   // This task's finding 4: the server (decodeMQTTExpect,
   // internal/coordinator/config/showaction.go) requires "match"'s value
   // KEY present but explicitly allows it to be an empty string — an

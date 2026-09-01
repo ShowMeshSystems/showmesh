@@ -364,6 +364,58 @@ func TestInvokeActionAudioConfirmed(t *testing.T) {
 	}
 }
 
+// TestInvokeActionAudioDispatchesOnlyTheFirstOfMultipleTargetNodes pins the
+// ad hoc action-invocation path's own documented contract: every consumer
+// of an audio-integration show.action OTHER than a night-session
+// announcement or the night-mode resting bed reads only the FIRST
+// configured audioNodeId (api/openapi.yaml's ConfigShowActionTarget.
+// audioNodeId doc comment). Names three distinct node ids, none of them
+// alphabetically or positionally special beyond "first", so a test that
+// happened to read the last or a sorted element would not accidentally
+// pass. dispatchActionTarget (actioninvoke.go) is what resolves target.
+// AudioNodeIDs down to the one dispatched node; asserting the exact
+// dispatched node id, not merely that a dispatch happened, is what a
+// silent last-element or all-elements substitution would fail.
+func TestInvokeActionAudioDispatchesOnlyTheFirstOfMultipleTargetNodes(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Commands = st
+	pub := &fakeAudioPublisher{result: mqttproto.ResultPayload{
+		Outcome:  mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "started", "reason": "playback began"}},
+	}}
+	deps.AudioPublisher = pub
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "start-multi-target", `{
+		"show": "halloween-2026",
+		"label": "Start on a multi-node target",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": ["porch-node", "yard-node", "attic-node"],
+			"audioSessionId": "announcement",
+			"audioAction": "audio.session.start"
+		}
+	}`)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("start-multi-target", "audio-key-multi", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("audio publish calls = %d, want exactly 1 (only the first node dispatched)", pub.count())
+	}
+	if len(pub.dispatched) != 1 {
+		t.Fatalf("dispatched = %+v, want exactly 1 recorded command", pub.dispatched)
+	}
+	if got := pub.dispatched[0].NodeID; got != "porch-node" {
+		t.Fatalf("dispatched nodeId = %q, want %q (the first configured target node)", got, "porch-node")
+	}
+}
+
 // TestInvokeActionMQTTConfirmedAndUnconfirmable proves the mqtt branch
 // dispatches through [DispatchMQTTAction] over [Dependencies.MQTTBrokers]:
 // a "none" expect kind reports unconfirmable, never success dressed up as
