@@ -32,8 +32,8 @@ import (
 // not imported" rule (the import-graph guard forbids importing any
 // internal/coordinator package).
 type observationsResponse struct {
-	ServerTime   time.Time  `json:"serverTime"`
-	Observations []evidence `json:"observations"`
+	ServerTime   time.Time          `json:"serverTime"`
+	Observations []observationEntry `json:"observations"`
 }
 
 const (
@@ -133,15 +133,15 @@ type renderTransportResult struct {
 // line said "(stale)" but the exit code, which scripts actually read,
 // lied. --output json's State field preserves the discarded distinction
 // for a caller that wants it.
-func interpretTransportObservations(obs []evidence) renderTransportResult {
+func interpretTransportObservations(obs []observationEntry) renderTransportResult {
 	var available *evidence
 	var reason *evidence
 	for i := range obs {
 		switch obs[i].Signal {
 		case signalSurfaceTransportAvailable:
-			available = &obs[i]
+			available = &obs[i].evidence
 		case signalSurfaceTransportReason:
-			reason = &obs[i]
+			reason = &obs[i].evidence
 		}
 	}
 

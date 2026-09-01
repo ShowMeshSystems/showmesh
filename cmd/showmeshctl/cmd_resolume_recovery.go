@@ -49,8 +49,16 @@ type resolumeRecoveryRestoreReport struct {
 	OmittedLayerCount int                            `json:"omittedLayerCount"`
 }
 
+// resolumeRecoveryResponse.ResolumeConfigured is false when this
+// coordinator has no Resolume instance configured at all
+// (SHOWMESH_RESOLUME_URL unset), distinct from AutoRestoreConfigured,
+// which is about whether the toggle has a stored value. printResolumeRecoveryStatus
+// renders "not configured" rather than AutoRestoreEnabled's default-ON
+// value when this is false: an operator who believes recovery is armed and
+// is wrong is worse off than one who knows it is unavailable.
 type resolumeRecoveryResponse struct {
 	ServerTime            time.Time                      `json:"serverTime"`
+	ResolumeConfigured    bool                           `json:"resolumeConfigured"`
 	AutoRestoreEnabled    bool                           `json:"autoRestoreEnabled"`
 	AutoRestoreConfigured bool                           `json:"autoRestoreConfigured"`
 	SettleDelaySeconds    float64                        `json:"settleDelaySeconds"`
@@ -384,6 +392,10 @@ func cmdResolumeRecoveryRevisions(args []string, stdout, stderr io.Writer, clock
 
 // printResolumeRecoveryStatus renders resp as human-readable text.
 func printResolumeRecoveryStatus(stdout io.Writer, resp resolumeRecoveryResponse) {
+	if !resp.ResolumeConfigured {
+		_, _ = fmt.Fprintln(stdout, "resolume: not configured (no Resolume instance configured on this coordinator)")
+		return
+	}
 	configuredNote := "stored choice"
 	if !resp.AutoRestoreConfigured {
 		configuredNote = "default"
