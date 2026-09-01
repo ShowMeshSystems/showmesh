@@ -248,20 +248,27 @@ func (m *fppMQTTManager) Run(ctx context.Context) {
 	}
 }
 
-func (m *fppMQTTManager) configured() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.bundle != nil
-}
-
 // CollectorStatuses implements [api.CollectorStatusLister], reflecting
 // whether a bundle is current RIGHT NOW — live, unlike the old
 // fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""}
 // startup snapshot this replaces.
+//
+// One row for the whole collector, matching this method's own existing
+// shape: with two or more configured hosts, one publishing host clears
+// [api.CollectorConnectedNoData] for all of them, so a single silent host
+// among several stays invisible here. Per-host status is out of scope for
+// this change.
 func (m *fppMQTTManager) CollectorStatuses(context.Context) ([]api.CollectorState, error) {
-	if !m.configured() {
+	m.mu.Lock()
+	bundle := m.bundle
+	m.mu.Unlock()
+
+	if bundle == nil {
 		reason := "no FPP MQTT broker configured"
 		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
+	}
+	if silent, reason := bundle.collector.SilentSinceConnect(); silent {
+		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorConnectedNoData), Reason: &reason}}, nil
 	}
 	return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning)}}, nil
 }
