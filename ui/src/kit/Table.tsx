@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
+import type { CSSProperties, KeyboardEvent, MouseEvent, ReactNode } from 'react'
 
 /**
  * Wide tables scroll inside this wrapper; the page never gains horizontal
@@ -12,8 +12,12 @@ export function TableWrap({ label, children }: { label: string; children: ReactN
   )
 }
 
-export function Table({ children }: { children: ReactNode }) {
-  return <table className="sm-table">{children}</table>
+export function Table({ children, minWidth = 520 }: { children: ReactNode; minWidth?: number }) {
+  return (
+    <table className="sm-table" style={{ '--sm-table-min-width': `${minWidth}px` } as CSSProperties}>
+      {children}
+    </table>
+  )
 }
 
 const INTERACTIVE_DESCENDANT = 'a, button, input, select, textarea, summary, [role="button"], [role="link"]'

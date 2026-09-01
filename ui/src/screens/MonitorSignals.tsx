@@ -47,7 +47,7 @@ export function MonitorSignals() {
         ) : (
           <>
             <TableWrap label="Signals, scrollable">
-              <Table>
+              <Table minWidth={520}>
                 <thead>
                   <tr>
                     <th scope="col">Resource</th>

@@ -189,7 +189,7 @@ export function Monitor() {
             ) : (
               <>
                 <TableWrap label="Fleet resources, scrollable">
-                  <Table>
+                  <Table minWidth={540}>
                     <thead>
                       <tr>
                         <th scope="col">Resource</th>
@@ -230,7 +230,7 @@ export function Monitor() {
             ) : (
               <>
                 <TableWrap label="Recent activity, scrollable">
-                  <Table>
+                  <Table minWidth={520}>
                     <thead>
                       <tr>
                         <th scope="col">Time</th>

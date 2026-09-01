@@ -17,8 +17,19 @@
 
 .sm-table {
   width: 100%;
+  min-width: var(--sm-table-min-width, 520px);
   border-collapse: collapse;
   font: var(--t-body);
+}
+
+.sm-table th:first-child,
+.sm-table td:first-child {
+  padding-left: 14px;
+}
+
+.sm-table th:last-child,
+.sm-table td:last-child {
+  padding-right: 14px;
 }
 
 .sm-table th {

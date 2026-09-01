@@ -66,7 +66,7 @@ export function MonitorCapabilities() {
         ) : (
           <>
             <TableWrap label="Node capabilities, scrollable">
-              <Table>
+              <Table minWidth={520}>
                 <thead>
                   <tr>
                     <th scope="col">Node</th>

@@ -87,7 +87,7 @@ export function MonitorManifest() {
           <Panes>
             <div>
               <TableWrap label="Node asset manifest, scrollable">
-                <Table>
+                <Table minWidth={640}>
                   <thead>
                     <tr>
                       <th scope="col">Node</th>

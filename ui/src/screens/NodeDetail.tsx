@@ -437,7 +437,7 @@ export function NodeDetail() {
           <RuledStrip absence="empty" label="None" fact="This node advertises no capability." />
         ) : (
           <TableWrap label="Capabilities, scrollable">
-            <Table>
+            <Table minWidth={520}>
               <thead>
                 <tr>
                   <th scope="col">Capability</th>
@@ -504,7 +504,7 @@ export function NodeDetail() {
               <RuledStrip absence="empty" label="None" fact="No surface is assigned to this node." />
             ) : (
               <TableWrap label="Surfaces on this node, scrollable">
-                <Table>
+                <Table minWidth={540}>
                   <thead>
                     <tr>
                       <th scope="col">Surface</th>
@@ -595,7 +595,7 @@ export function NodeDetail() {
               <ManifestEmptyRow manifest={manifestData} fact="Nothing this node should hold is missing." />
             ) : (
               <TableWrap label="Missing assets, scrollable">
-                <Table>
+                <Table minWidth={540}>
                   <thead>
                     <tr>
                       <th scope="col">Sequence</th>
@@ -627,7 +627,7 @@ export function NodeDetail() {
               <ManifestEmptyRow manifest={manifestData} fact="No sequence the active show holds an asset for is uncovered." />
             ) : (
               <TableWrap label="Uncovered sequences, scrollable">
-                <Table>
+                <Table minWidth={520}>
                   <thead>
                     <tr>
                       <th scope="col">Sequence</th>
@@ -651,7 +651,7 @@ export function NodeDetail() {
               <ManifestEmptyRow manifest={manifestData} fact="This node holds nothing it was not expected to." />
             ) : (
               <TableWrap label="Extra assets, scrollable">
-                <Table>
+                <Table minWidth={540}>
                   <thead>
                     <tr>
                       <th scope="col">Filename</th>

@@ -199,7 +199,7 @@ export function Access() {
         {data.kind === 'loaded' && (
           <>
             <TableWrap label="Principals, scrollable">
-              <Table>
+              <Table minWidth={660}>
                 <thead>
                   <tr>
                     <th scope="col">Principal</th>
@@ -577,7 +577,7 @@ function CredentialsPanel({
 
       {tokens !== null && (
         <TableWrap label="Credentials for this principal, scrollable">
-          <Table>
+          <Table minWidth={560}>
             <thead>
               <tr>
                 <th scope="col">Credential</th>

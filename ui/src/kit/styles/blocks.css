@@ -1553,15 +1553,6 @@ a.sm-tile:hover {
   width: 100%;
 }
 
-.sm-assets-table .sm-table {
-  min-width: 560px;
-}
-
-.sm-assets-table .sm-table th:first-child,
-.sm-assets-table .sm-table td:first-child {
-  padding-left: 14px;
-}
-
 .sm-assets-table .sm-table th:nth-child(2),
 .sm-assets-table .sm-table td:nth-child(2) {
   width: 104px;
@@ -1570,7 +1561,6 @@ a.sm-tile:hover {
 .sm-assets-table .sm-table th:last-child,
 .sm-assets-table .sm-table td:last-child {
   width: 94px;
-  padding-right: 14px;
 }
 
 .sm-assets-table__group-heading {

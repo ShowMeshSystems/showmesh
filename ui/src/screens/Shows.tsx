@@ -298,7 +298,7 @@ export function Shows() {
         ) : (
           <>
             <TableWrap label="Shows, scrollable">
-              <Table>
+              <Table minWidth={620}>
                 <thead>
                   <tr>
                     <th scope="col">Show</th>

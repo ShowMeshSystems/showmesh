@@ -503,7 +503,7 @@ export function ResolumeConfig() {
                   <>
                     <StatusPair tone="warn" label={`${ambiguous.length} of ${total}`} />
                     <TableWrap label="Clips that cannot be named, scrollable">
-                      <Table>
+                      <Table minWidth={680}>
                         <thead>
                           <tr>
                             <th scope="col">Clip</th>
@@ -647,7 +647,7 @@ export function ResolumeConfig() {
                   layers recorded.
                 </p>
                 <TableWrap label="Recovery record, scrollable">
-                  <Table>
+                  <Table minWidth={520}>
                     <thead>
                       <tr>
                         <th scope="col">Layer</th>
@@ -718,7 +718,7 @@ function RestoreReportSection({ report }: { report: NonNullable<ResolumeRecovery
         {report.trigger === 'manual' ? ` by ${report.principal}` : ''}.
       </p>
       <TableWrap label="Last restore, scrollable">
-        <Table>
+        <Table minWidth={520}>
           <thead>
             <tr>
               <th scope="col">Layer</th>

@@ -102,6 +102,16 @@ describe('Button', () => {
 })
 
 describe('SelectableRow', () => {
+  it('exposes each table minimum width without changing its accessible structure', () => {
+    render(
+      <Table minWidth={680}>
+        <tbody><tr><td>Layer</td></tr></tbody>
+      </Table>,
+    )
+    const table = screen.getByRole('table')
+    expect(table).toHaveStyle({ '--sm-table-min-width': '680px' })
+  })
+
   it('activates from pointer, Enter, and Space without stealing nested controls', async () => {
     const onActivate = vi.fn()
     const nested = vi.fn()

@@ -186,7 +186,7 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
 
             <div className="sm-assets-table sm-stack-3">
               <TableWrap label={tableLabel}>
-                <Table>
+                <Table minWidth={scope.kind === 'all' ? 560 : 520}>
                   <thead>
                     <tr>
                       <th scope="col">Target</th>

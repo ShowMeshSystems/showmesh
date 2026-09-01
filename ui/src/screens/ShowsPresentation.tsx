@@ -132,7 +132,7 @@ export function ShowsPresentation() {
             <RuledStrip absence="empty" label="None" fact="This show has no surface configured." />
           ) : (
             <TableWrap label="Surfaces, scrollable">
-              <Table>
+              <Table minWidth={540}>
                 <thead>
                   <tr>
                     <th scope="col">Surface</th>

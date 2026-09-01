@@ -330,7 +330,7 @@ export function LiveControl() {
         ) : (
           <>
             <TableWrap label="Outputs, scrollable">
-              <Table>
+              <Table minWidth={600}>
                 <thead>
                   <tr>
                     <th scope="col">Output</th>

@@ -96,7 +96,7 @@ export function NotFound() {
         detail="Six destinations that each answered part of one question were folded into Monitor. A bookmark from before the change lands here."
       >
         <TableWrap label="Old addresses and where they went">
-          <Table>
+          <Table minWidth={520}>
             <thead>
               <tr>
                 <th scope="col">Old address</th>

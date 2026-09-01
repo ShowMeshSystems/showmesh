@@ -240,7 +240,7 @@ function CueTable({
         </h3>
       )}
       <TableWrap label={`${title}, scrollable`}>
-        <Table>
+        <Table minWidth={520}>
           <thead>
             <tr>
               <th scope="col">Cue</th>
