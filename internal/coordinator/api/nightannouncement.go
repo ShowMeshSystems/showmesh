@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -201,6 +202,28 @@ func nightAnnouncementRevisions(history []nightBackgroundAudioHistoryRow, applyR
 		}
 	}
 	return floor + 1, floor + 2
+}
+
+// nightAnnouncementAppliedThisCycle reports whether cue's own apply
+// already has an outbox row for rec's current cycle and phase. Once it
+// does, the clear must never run again this cycle: the cue list is
+// re-walked every tick, and a clear reached on a later tick would land
+// after the apply-then-start sequence, cutting off an announcement that
+// is already playing. A lookup error is treated the same as
+// "applied": skipping a clear costs only the stale-apply protection for
+// this cycle, while running one on a false positive risks cutting off
+// live audio.
+func (h *handlers) nightAnnouncementAppliedThisCycle(ctx context.Context, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) bool {
+	_, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, cuePhase, cue.Name)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, store.ErrNightCueOutboxNotFound):
+		return false
+	default:
+		h.logWarn("night loop: announcement: failed to check whether this cycle's apply already ran; skipping the clear so a playing announcement is never cut off", "sessionId", rec.ID, "cue", cue.Name, "error", err)
+		return true
+	}
 }
 
 // nightAdvanceAnnouncementClear runs BEFORE an announcement cue's own

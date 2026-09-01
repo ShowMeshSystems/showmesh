@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -634,5 +635,211 @@ func TestNightAnnouncement_StepsAreOnTheOperatorSurface(t *testing.T) {
 	// background: adding one sequence must not swallow the other.
 	if step, ok := byKind[nightBGStepStart]; !ok || step.Sequence != v1.NightAudioSequenceBackground {
 		t.Fatalf("background start step = %+v (present=%v), want it present and tagged background", step, ok)
+	}
+}
+
+// mustRefreshNightSession re-reads rec's own row, the way the real night
+// loop begins every tick: nightAdvanceCueList never mutates its rec
+// parameter, so a test that re-walks the cue list across ticks (as the
+// loop does) must fetch ShowCommitted and Cycle back out of the store
+// itself rather than assuming the previous call's local value.
+func mustRefreshNightSession(t *testing.T, st *store.Store, id string) store.NightSessionRecord {
+	t.Helper()
+	rec, err := st.GetNightSession(context.Background(), id)
+	if err != nil {
+		t.Fatalf("refresh night session: %v", err)
+	}
+	return rec
+}
+
+// mustPutPlainFirstCueAction binds a confirmable, non-announcement action
+// suitable for a cue that is meant to BE the first outward-facing cue,
+// standing in for something like a lighting or FPP cue that normally
+// precedes an announcement in a real show.
+func mustPutPlainFirstCueAction(t *testing.T, st *store.Store, id string) {
+	t.Helper()
+	putNightAction(t, st, id, config.ShowActionPayload{
+		Show: "halloween", Label: "Enter show lighting", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationFPP, InstanceID: "fpp-main",
+			Primitive: "startPlaylist", Params: map[string]any{"playlist": id},
+		},
+	})
+}
+
+// mutation target: nightAdvanceCueList's clear gate. Gating the clear on
+// !isFirst alone let the skip on the commit tick evaporate the very next
+// tick, since the cue list is re-walked and isFirst is then false —
+// landing the clear one tick after the announcement's own start and
+// cutting it off. An announcement that is the first outward-facing cue
+// must get exactly one apply, one start, and no clear at all this cycle,
+// no matter how many more ticks re-walk the same cue list.
+func TestNightAnnouncement_FirstOutwardCue_NoClearAfterStartAcrossTicks(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	before := len(pub.dispatched)
+	// Tick 1: the show is not yet committed, so this announcement is the
+	// first outward-facing cue.
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+	rec = mustRefreshNightSession(t, st, rec.ID)
+	if !rec.ShowCommitted {
+		t.Fatal("show not committed after the first outward-facing cue ran")
+	}
+
+	// Ticks 2 and 3: re-walk the exact same cue list, as the real night
+	// loop does every tick. isFirst is now false on both.
+	for i := 0; i < 2; i++ {
+		h.nightAdvanceCueList(ctx, testNow.Add(time.Duration(i+1)*time.Second), rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+		rec = mustRefreshNightSession(t, st, rec.ID)
+	}
+
+	counts := map[string]int{}
+	for _, d := range pub.dispatched[before:] {
+		counts[d.Action]++
+	}
+	if counts["audio.session.clear"] != 0 {
+		t.Fatalf("dispatched %d clears for the first outward-facing announcement this cycle, want 0", counts["audio.session.clear"])
+	}
+	if counts["audio.session.apply"] != 1 {
+		t.Fatalf("dispatched %d applies, want exactly 1", counts["audio.session.apply"])
+	}
+	if counts["audio.session.start"] != 1 {
+		t.Fatalf("dispatched %d starts, want exactly 1", counts["audio.session.start"])
+	}
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow, "thank-you"); err == nil {
+		t.Fatal("a clear step was committed for the first outward-facing cue, even after later ticks re-walked the cue list")
+	}
+}
+
+// mutation target: the same clear gate, from the other direction. A
+// non-first announcement must not lose its clear-before-apply ordering
+// to the new per-cycle-applied check: the clear has to run on the very
+// first tick, before any apply row exists for this cue this cycle.
+func TestNightAnnouncement_NotFirstOutwardCue_ClearStillRunsBeforeApply(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	before := len(pub.dispatched)
+	// enterResting carries no first-outward-cue boundary at all, so this
+	// announcement is never "first" here.
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	got := announcementActions(pub, before)
+	if len(got) < 2 || got[0] != "audio.session.clear" {
+		t.Fatalf("dispatched %v, want the clear to run first, before the apply", got)
+	}
+}
+
+// mutation target: nightAnnouncementAppliedThisCycle's per-cycle row
+// lookup. A stale announcement session left over from an earlier cycle
+// must still be cleared: otherwise it can hold the background bed ducked
+// indefinitely (this file's own clear-ordering doc comment).
+func TestNightAnnouncement_StaleAnnouncementFromEarlierCycleIsStillCleared(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	// Cycle 1: run the announcement to completion via enterResting, so it
+	// is left applied and started, exactly as a session left playing by
+	// an earlier cycle would be.
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	// Cycle 2: a fresh cycle has no outbox row yet for this cue's own
+	// phase, so the clear must run again before the apply, even though a
+	// clear already ran once for this same cue in the prior cycle.
+	rec.Cycle++
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	got := announcementActions(pub, before)
+	if len(got) < 2 || got[0] != "audio.session.clear" {
+		t.Fatalf("cycle 2 dispatched %v, want a clear first, stopping any announcement left over from cycle 1", got)
+	}
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you"); err != nil {
+		t.Fatalf("no clear row committed for cycle 2: %v", err)
+	}
+}
+
+// mutation target: nightAnnouncementAppliedThisCycle scoped to the
+// current cycle. Following the cut-off scenario through to its next
+// cycle: once a cycle where the announcement was the first outward cue
+// ends, the very next cycle must still clear before its own apply, even
+// though no clear ever ran the cycle before.
+func TestNightAnnouncement_NextCycleAfterFirstOutwardCueStillClearsBeforeApply(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	mustPutPlainFirstCueAction(t, st, "lights")
+	duck := config.NightSessionAnnouncementPolicyDuck
+	announcement := announcementCue(&duck)
+	lights := config.NightSessionCue{
+		Name: "lights", Role: "", Action: "lights", OffsetMs: 0, OnFailure: config.NightSessionCueOnFailureContinue,
+	}
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	// Cycle 1: the announcement is the only enterShow cue, so it is
+	// itself the first outward-facing cue and gets no clear this cycle.
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{announcement}, payload)
+	if got := announcementActions(pub, before); len(got) > 0 && got[0] == "audio.session.clear" {
+		t.Fatalf("cycle 1 dispatched %v: a clear was sent ahead of the show-commit boundary", got)
+	}
+	rec = mustRefreshNightSession(t, st, rec.ID)
+
+	// Cycle 2: both cues are due from the first tick, "lights" sorts
+	// first by offset and becomes the first outward-facing cue instead,
+	// so the announcement is no longer first and its clear must run
+	// before its apply.
+	rec.Cycle++
+	rec.ShowCommitted = false
+	if err := st.UpdateNightSession(ctx, rec, testNow); err != nil {
+		t.Fatalf("advance to cycle 2: %v", err)
+	}
+	before = len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{lights, announcement}, payload)
+
+	clearRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow, "thank-you")
+	if err != nil {
+		t.Fatalf("cycle 2: no clear row for the announcement: %v", err)
+	}
+	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterShow, "thank-you")
+	if err != nil {
+		t.Fatalf("cycle 2: no apply row for the announcement: %v", err)
+	}
+	if clearRow.ActionRevision <= applyRow.ActionRevision {
+		t.Fatalf("clear revision %d must exceed the apply's pinned %d", clearRow.ActionRevision, applyRow.ActionRevision)
+	}
+	var clearIdx, applyIdx = -1, -1
+	for i, d := range pub.dispatched[before:] {
+		if d.Action == "audio.session.clear" && clearIdx == -1 {
+			clearIdx = i
+		}
+		if d.Action == "audio.session.apply" && applyIdx == -1 {
+			if _, isLights := d.Params["playlist"]; !isLights {
+				applyIdx = i
+			}
+		}
+	}
+	if clearIdx == -1 {
+		t.Fatal("cycle 2: the announcement's clear was never dispatched")
+	}
+	if applyIdx == -1 || clearIdx > applyIdx {
+		t.Fatalf("cycle 2: clear dispatched at index %d, apply at %d; the clear must run before the apply", clearIdx, applyIdx)
 	}
 }

@@ -392,7 +392,13 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 		// itself that boundary (nightRunCue's isFirstOutwardCue). An
 		// announcement that IS the first outward cue simply goes without
 		// its clear, which costs it only the stale-apply protection.
-		if cue.Role == config.NightSessionCueRoleAnnouncement && !isFirst {
+		//
+		// And never once this cycle's own apply has already run: the cue
+		// list is re-walked every tick, so without this check a clear
+		// skipped on the tick that applied and started the announcement
+		// would run on the very next tick instead - one tick after
+		// start, cutting the announcement off.
+		if cue.Role == config.NightSessionCueRoleAnnouncement && !isFirst && !h.nightAnnouncementAppliedThisCycle(ctx, rec, phase, cue) {
 			h.nightAdvanceAnnouncementClear(ctx, now, rec, phase, cue)
 		}
 		_, err := h.nightRunCue(ctx, now, rec, phase, cue, issuer, isFirst)
