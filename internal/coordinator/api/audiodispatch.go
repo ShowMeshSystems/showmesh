@@ -252,7 +252,7 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 	// every dispatch outright with "params.revision is required".
 	params["revision"] = body.Revision
 
-	result, problem, err := h.executeAudioSessionDispatch(ctx, now, audioDispatchInput{
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: action, NodeID: nodeID, SessionID: sessionID, Params: params,
 		Revision: body.Revision, IdempotencyKey: idempotencyKey,
 		IssuerID: issuerID, IssuerName: issuerName,
@@ -270,7 +270,11 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 	jsonWrite(w, v1.AudioSessionCommandResponse{ServerTime: formatTime(h.now()), Command: result})
 }
 
-type audioDispatchInput struct {
+// AudioDispatchInput is [handlers.executeAudioSessionDispatch]'s input,
+// exported so [AudioActionDispatcher.Dispatch] (audiodispatch_export.go)
+// can build one from another package, mirroring [FPPCommandInput]'s
+// identical exported-for-cross-package-dispatch role.
+type AudioDispatchInput struct {
 	Action         string
 	NodeID         string
 	SessionID      string
@@ -293,7 +297,7 @@ type audioDispatchInput struct {
 // error with a non-nil problem means "the request was refused"; a
 // non-nil error means an internal failure this coordinator cannot
 // attribute to the caller.
-func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Time, in audioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error) {
+func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Time, in AudioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error) {
 	if h.deps.Commands == nil {
 		return v1.AudioSessionCommandResult{}, nil, errors.New("no command store is configured")
 	}
@@ -518,7 +522,7 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 // commanded, never only of what was confirmed (see
 // [audioOutcomeShouldPersist]). The write is bounded so a locked store
 // cannot block this detached-completion path forever.
-func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in audioDispatchInput) {
+func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in AudioDispatchInput) {
 	ctx, cancel := context.WithTimeout(parent, dbWriteTimeout)
 	defer cancel()
 	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.SessionID)

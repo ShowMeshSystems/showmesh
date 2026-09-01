@@ -65,8 +65,9 @@ type ConfigShowActionMQTTExpect struct {
 
 // ConfigShowActionTarget is show.action.target (STEP-9-SPEC.md section
 // 5.3), flattened exactly as the specification's own wire examples show
-// it: Integration plus either the fpp, mqtt, or resolume fields directly,
-// never nested a second level under an "fpp"/"mqtt"/"resolume" key.
+// it: Integration plus either the fpp, mqtt, resolume, or audio fields
+// directly, never nested a second level under an
+// "fpp"/"mqtt"/"resolume"/"audio" key.
 type ConfigShowActionTarget struct {
 	Integration string `json:"integration"`
 
@@ -85,6 +86,15 @@ type ConfigShowActionTarget struct {
 	// column, persistent, bypassed, master) — never a Resolume object id.
 	Action string         `json:"action,omitempty"`
 	Ref    map[string]any `json:"ref,omitempty"`
+
+	// audio-only: the target audio node id, pkg/audio session id, and one
+	// of the reserved audio.session.*/audio.gain.*/audio.output.*
+	// operation names. Params (above) carries that operation's own command
+	// params, exactly as api/openapi.yaml's ConfigShowActionTarget already
+	// documents.
+	AudioNodeID    string `json:"audioNodeId,omitempty"`
+	AudioSessionID string `json:"audioSessionId,omitempty"`
+	AudioAction    string `json:"audioAction,omitempty"`
 }
 
 // ConfigShowAction is the "show.action" configuration kind's decoded

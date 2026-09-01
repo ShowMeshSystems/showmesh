@@ -280,6 +280,23 @@ func TestPutShowActionGetThenPutRoundTrips(t *testing.T) {
 			"expect":{"kind":"match","topic":"home/projectors/state","value":"","deadlineSeconds":10}}}`
 		roundTrip(t, "/api/v1/config/show.action/rt-mqtt-match-empty", body)
 	})
+	t.Run("audio-action", func(t *testing.T) {
+		// Lane 17a: an audio show.action's target carries audioNodeId,
+		// audioSessionId, and audioAction, all three required by
+		// decodeAudioTarget (config/showaction.go) on write. If GET ever
+		// drops one of them from the response (the read-mapping defect
+		// this test exists to catch — mapConfigShowActionTarget failing to
+		// copy a field v1.ConfigShowActionTarget does not declare), PUTting
+		// that GET body straight back fails with a missing-required-field
+		// 400, because the write path still requires it. That failure,
+		// not a byte-level diff, is what proves the read shape dropped a
+		// field: a decoder that requires a key can only accept its own
+		// prior output back unchanged if that output still carries the key.
+		body := `{"show":"halloween-2026","label":"x","safetyClass":"none","target":{"integration":"audio",
+			"audioNodeId":"node-a","audioSessionId":"night-session","audioAction":"audio.session.apply","params":{"foo":"bar"}}}`
+		roundTrip(t, "/api/v1/config/show.action/rt-audio", body)
+	})
+
 	t.Run("show-macro", func(t *testing.T) {
 		putActionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/rt-macro-action", validShowActionFPPBody,
 			map[string]string{"Authorization": "Bearer " + token})

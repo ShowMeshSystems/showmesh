@@ -293,12 +293,12 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 	// background-audio controller builds its own targets already linear.
 	// See audiogaindb.go for why converting only when a decibel key is
 	// present is right on this path and would be wrong on the HTTP one.
-	convertAuthoredAudioGainParams(target.AudioAction, params)
+	ConvertAuthoredAudioGainParams(target.AudioAction, params)
 	params["sessionId"] = target.AudioSessionID
 	params["invocationId"] = idemKey
 	params["revision"] = uint64(actionRevision)
 
-	result, problem, err := h.executeAudioSessionDispatch(ctx, now, audioDispatchInput{
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: target.AudioAction, NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
 		Params: params, Revision: uint64(actionRevision), IdempotencyKey: idemKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,

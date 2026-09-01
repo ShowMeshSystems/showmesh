@@ -626,7 +626,7 @@ func (h *handlers) dispatchBlackAndSilenceAudioStopSession(ctx context.Context, 
 	// second, independently written revision rule left this stop refused
 	// as stale for the life of the session.
 	revision := cueactivation.AudioSessionRevision(stopAt, cueactivation.AudioSessionStepStop)
-	in := audioDispatchInput{
+	in := AudioDispatchInput{
 		Action: "audio.session.stop", NodeID: nodeID, SessionID: sessionID,
 		Params: map[string]any{
 			"sessionId": sessionID, "invocationId": idempotencyKey, "revision": revision,

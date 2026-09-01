@@ -365,7 +365,7 @@ func (h *handlers) emergencyStopRunOneFollowUp(ctx context.Context, idempotencyK
 
 	auditExempt := payload.SafetyClass != config.ShowSafetyClassNone
 	cmdID := emergencyStopFollowUpCommandID(idempotencyKey, actionID)
-	outcome, _, outcomeReason, _, _ := h.dispatchActionTarget(ctx, payload, cmdID, strconv.FormatInt(rev.Revision, 10), ac, clientAddr, auditExempt)
+	outcome, _, outcomeReason, _, _ := h.dispatchActionTarget(ctx, payload, cmdID, strconv.FormatInt(rev.Revision, 10), rev.Revision, ac, clientAddr, auditExempt)
 	return v1.EmergencyStopFollowUpResult{ActionID: actionID, Label: payload.Label, Outcome: outcome, OutcomeReason: outcomeReason}
 }
 
