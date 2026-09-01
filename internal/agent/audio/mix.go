@@ -106,12 +106,17 @@ func (m *Manager) applyEffectiveGainBestEffortLocked(ctx context.Context, s *Ses
 // Shares fadePending/fadeState/fadeDispatchedTarget with an
 // operator-invoked [Session.startFadeLocked] fade on purpose: the same
 // [Manager.watchTick]/[Session.checkFadeCompletionLocked] polling
-// resolves either kind, and dispatching this while an operator fade is
-// still pending simply overwrites its tracking the same way a second
-// gain.fade already does today, with no separate bookkeeping to invent.
-// This fade carries no invocation of its own: nothing outside this
-// package ever waits on a duck transition's own outcome. Caller holds
-// s.mu.
+// resolves either kind. Unlike a second operator gain.fade replacing a
+// first (both share one invocation lineage, so overwriting the tracking
+// is the whole story), this fade carries no invocation of its own (a
+// duck transition's outcome is never awaited by anything outside this
+// package), so overwriting s.fadeInvocation here would silently orphan
+// a genuine operator fade caught mid-flight, leaving its invocation
+// cached at whatever [Session.dispatch] recorded when it was first
+// dispatched, forever. [Session.resolveSupersededFadeInvocationLocked]
+// is the bookkeeping that closes that gap: it resolves any such
+// invocation to Unconfirmable before this function clears it. Caller
+// holds s.mu.
 func (s *Session) fadeToEffectiveGainLocked(ctx context.Context, durationMs int) pkgaudio.OutcomeResult {
 	effective := s.effectiveGainLocked()
 	if !s.handleLoaded {
@@ -130,9 +135,9 @@ func (s *Session) fadeToEffectiveGainLocked(ctx context.Context, durationMs int)
 	if err != nil {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
+	s.resolveSupersededFadeInvocationLocked()
 	s.fadeDispatchedTarget = effective
 	s.fadePending = true
-	s.fadeInvocation = ""
 	s.fadeHandleNeverFaded = false
 	s.fadeState = FadeStateInProgress
 	if obs.ObservedAt.Before(dispatchedAt) {
@@ -301,16 +306,23 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 // [pkgaudio.OutcomeUnconfirmable] otherwise, gated through
 // [Manager.gateAvailability] exactly as every other outcome in this
 // package is. Judged against the target actually dispatched, not
-// against the CURRENT effective gain: a mute or a duck landing mid-fade
-// cancels the ramp by driving the engine to its own target through
+// against the CURRENT effective gain: a mute landing mid-fade cancels
+// the ramp by driving the engine to its own target through
 // [Session.applyEffectiveGainLocked]'s own SetGain call, and a fade
 // judged against the current effective gain at that point would compare
 // the engine's evidence to a question the dispatched fade was never
-// asked, reporting a cancelled fade as complete. s's own configured
-// gain was already recorded at dispatch time in
-// [Session.startFadeLocked]; this never rewrites it from the engine's
-// observed value, which would reintroduce the desired/observed
-// conflation this package's evidence rules forbid. Caller holds s.mu.
+// asked, reporting a cancelled fade as complete. A duck or duck-release
+// landing mid-fade cancels it a different way, by dispatching its OWN
+// replacement fade through [Session.fadeToEffectiveGainLocked], which
+// resolves whatever invocation it is superseding itself, via
+// [Session.resolveSupersededFadeInvocationLocked], before this function
+// ever runs against the transition; by the time this reads s.fadeInvocation,
+// it names only the operator fade that is genuinely still in flight, if
+// any, never one a duck already took over. s's own configured gain was
+// already recorded at dispatch time in [Session.startFadeLocked]; this
+// never rewrites it from the engine's observed value, which would
+// reintroduce the desired/observed conflation this package's evidence
+// rules forbid. Caller holds s.mu.
 func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	if !s.fadePending || !s.handleLoaded {
 		return
@@ -369,6 +381,29 @@ func (s *Session) resolveFadeInterruptedByRestartLocked() {
 	s.fadeHandleNeverFaded = false
 	s.fadeState = FadeStateNone
 	s.persistBestEffortLocked("state change")
+}
+
+// resolveSupersededFadeInvocationLocked resolves a still-outstanding
+// fade invocation to Unconfirmable before a duck transition's own fade
+// replaces it in the engine: [Engine.Fade] replaces "any fade already in
+// progress" without ever giving the invocation that started it a say, so
+// without this the superseded invocation's cached result would stay
+// whatever [Session.dispatch] cached at the moment it was FIRST
+// dispatched ("fade dispatched, not yet complete") forever, since
+// [Session.checkFadeCompletionLocked]'s own resolution only ever fires
+// while s.fadeInvocation still names it, and the caller here is about to
+// clear that. A duck's own fade carries no invocation of its own (see
+// [Session.fadeToEffectiveGainLocked]'s doc), so this is a no-op unless a
+// genuine operator fade is what is being cut short. Caller holds s.mu.
+func (s *Session) resolveSupersededFadeInvocationLocked() {
+	if !s.fadePending || s.fadeInvocation == "" {
+		return
+	}
+	s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(pkgaudio.OutcomeResult{
+		Outcome: pkgaudio.OutcomeUnconfirmable,
+		Reason:  "fade was superseded by a duck transition before it reached its target",
+	}))
+	s.fadeInvocation = ""
 }
 
 // resolveFadePendingStrandedLocked resolves a still-pending fade to
