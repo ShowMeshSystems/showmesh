@@ -67,6 +67,15 @@ func (f *fakeTimelineSource) set(state multisync.State, positionMS int64) {
 	f.mu.Unlock()
 }
 
+// setWithFilename is [fakeTimelineSource.set] plus a reported filename, for
+// tests that drive the timeline-versus-held-sequence mismatch check rather
+// than only state/position.
+func (f *fakeTimelineSource) setWithFilename(state multisync.State, positionMS int64, filename string) {
+	f.mu.Lock()
+	f.snap = multisync.Snapshot{State: state, PositionMS: positionMS, Filename: filename}
+	f.mu.Unlock()
+}
+
 // newTestFrameWriterSupervisor builds a real Supervisor over the fake
 // process starter, applies a spec for surfaceID, and waits for it to reach
 // Running — so [Supervisor.Stdin] returns a real, byte-recording writer
@@ -122,7 +131,7 @@ func TestFrameWriterWritesContentWhilePlaying(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -177,7 +186,7 @@ func TestFrameWriterReportsDrawStateOnSupervisorSnapshot(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputDiagnostic, nil, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputDiagnostic, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -247,7 +256,7 @@ func TestFrameWriterDrawsIdleOutputWhenStopped(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StateStopped, 5000)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -282,6 +291,167 @@ func TestFrameWriterDrawsIdleOutputWhenStopped(t *testing.T) {
 	}
 }
 
+// TestFrameWriterStopsDrawingOnSequenceMismatch is the regression test for
+// a render surface drawing the wrong sequence forever as long as sync
+// keeps arriving: the timeline reports Playing, sync keeps arriving, but
+// the filename it reports is not the sequence this writer opened. Before this
+// fix, Playing was drawn as content unconditionally, whatever FSEQ the
+// surface held — this is the exact rehearsal-stack incident (a node kept
+// rendering the previous show's sequence once FPP moved to one the node had
+// no content for). The FSEQ source must never even be asked for a frame:
+// its buffer holds content for the WRONG sequence, so there is nothing safe
+// to extract from it for this tick.
+func TestFrameWriterStopsDrawingOnSequenceMismatch(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, fp := newTestFrameWriterSupervisor(t, surfaceID)
+
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+	tl.setWithFilename(multisync.StatePlaying, 250, "kpop.fseq")
+
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "resting.fseq", 0, 8, 8, 1, IdleOutputHold, nil, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+	requestsAtConstruction := len(source.requests)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		fw.Stop()
+	})
+
+	waitFor(t, func() bool {
+		snap, ok := sup.Snapshot(surfaceID)
+		return ok && snap.Drawing == DrawingStale
+	})
+	snap, ok := sup.Snapshot(surfaceID)
+	if !ok {
+		t.Fatalf("no snapshot for %q", surfaceID)
+	}
+	if snap.Drawing != DrawingStale {
+		t.Fatalf("Drawing = %q while timeline filename disagrees with the held sequence, want %q", snap.Drawing, DrawingStale)
+	}
+	// The reason must be visible on the reported evidence itself (the
+	// acceptance line this test proves), not only inside the frame writer:
+	// TimelineState still says Playing, so a reader of this snapshot alone
+	// can see sync is arriving AND that this surface stopped drawing
+	// content for it.
+	if snap.TimelineState != string(multisync.StatePlaying) {
+		t.Fatalf("TimelineState = %q, want %q (sync is still arriving)", snap.TimelineState, multisync.StatePlaying)
+	}
+	if snap.TimelinePositionMS != nil {
+		t.Fatalf("TimelinePositionMS = %v while stale, want nil", *snap.TimelinePositionMS)
+	}
+	// idleOutput is configured as Hold: if the stale check fell through to
+	// idleOutputFor as an ordinary idle tick, Hold would draw fw.buf, the
+	// last successfully extracted frame — which, for a writer that has
+	// never had a healthy tick, is still its zero-valued buffer, so this
+	// alone would not catch the regression. IdleMode being reported empty
+	// is the real proof: a genuine Hold idle tick always reports
+	// IdleMode == IdleOutputHold (see TestFrameWriterHoldDrawsLastContentFrame),
+	// so an empty IdleMode here proves the stale branch bypassed
+	// idleOutputFor entirely rather than merely happening to draw black.
+	if snap.IdleMode != "" {
+		t.Fatalf("IdleMode = %q while stale, want empty (a stale mismatch is not an idle mode)", snap.IdleMode)
+	}
+	if snap.FailureOutput != "" {
+		t.Fatalf("FailureOutput = %q while stale, want empty (a stale mismatch is not an extraction failure)", snap.FailureOutput)
+	}
+
+	source.mu.Lock()
+	gotRequests := len(source.requests)
+	source.mu.Unlock()
+	if gotRequests != requestsAtConstruction {
+		t.Fatalf("ChannelRange was called %d time(s) after Run started while stale; the writer must never extract from a source holding the wrong sequence", gotRequests-requestsAtConstruction)
+	}
+	for _, b := range fp.stdinSnapshot() {
+		if b != 0 {
+			t.Fatalf("stdin byte = %d while stale, want all-zero output — never the previous sequence's content", b)
+		}
+	}
+}
+
+// TestFrameWriterKeepsRenderingWhenFilenameMatches proves the mismatch
+// check does not blank a healthy surface: the timeline's reported filename
+// matching the writer's own sequence is content, exactly as before this
+// fix, with no dropped frames introduced by the new comparison.
+func TestFrameWriterKeepsRenderingWhenFilenameMatches(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, fp := newTestFrameWriterSupervisor(t, surfaceID)
+
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+	tl.setWithFilename(multisync.StatePlaying, 250, "kpop.fseq") // 250ms / 25ms = frame 10
+
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "kpop.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		fw.Stop()
+	})
+
+	waitFor(t, func() bool {
+		written, _, _ := fw.Counts()
+		return written >= 1
+	})
+
+	frame, ok := source.lastRequest()
+	if !ok || frame != 10 {
+		t.Fatalf("last ChannelRange request frame = %d (ok=%v), want 10", frame, ok)
+	}
+	written, _, dropped := fw.Counts()
+	if written == 0 || dropped != 0 {
+		t.Fatalf("written=%d dropped=%d, want written>0 dropped=0 when the held sequence matches the timeline's reported filename", written, dropped)
+	}
+	snap, ok := sup.Snapshot(surfaceID)
+	if !ok || snap.Drawing != DrawingContent {
+		t.Fatalf("Drawing = %q (ok=%v), want %q when the filenames match", snap.Drawing, ok, DrawingContent)
+	}
+	for _, b := range fp.stdinSnapshot() {
+		if b == 0 {
+			t.Fatalf("stdin contains a zero byte with matching filenames; want content, not the stale/idle output")
+		}
+	}
+}
+
+// TestFrameWriterDrawsContentWhenTimelineFilenameNotYetObserved proves the
+// other half of the mismatch check's match semantics: an empty timeline filename means
+// MultiSync has not reported one yet, not a mismatch — a writer must never
+// blank a surface for lack of evidence, only for evidence that actually
+// disagrees (the same reading internal/agent/cueactivationrender.go's
+// activateSurfaceRender already gives an empty Snapshot.Filename, ADR-043
+// decision 6).
+func TestFrameWriterDrawsContentWhenTimelineFilenameNotYetObserved(t *testing.T) {
+	const surfaceID = "surface-1"
+	sup, _ := newTestFrameWriterSupervisor(t, surfaceID)
+
+	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
+	tl := &fakeTimelineSource{}
+	tl.set(multisync.StatePlaying, 250) // no filename observed yet
+
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "kpop.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
+	if err != nil {
+		t.Fatalf("NewFrameWriter: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go fw.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		fw.Stop()
+	})
+
+	waitFor(t, func() bool {
+		snap, ok := sup.Snapshot(surfaceID)
+		return ok && snap.Drawing == DrawingContent
+	})
+}
+
 // TestFrameWriterHoldDrawsLastContentFrame proves IdleOutputHold: once the
 // timeline goes idle, the writer keeps drawing the LAST successfully
 // extracted content frame rather than black — and never asks the FSEQ
@@ -296,7 +466,7 @@ func TestFrameWriterHoldDrawsLastContentFrame(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 50) // 50ms / 5ms = frame 10 -> byte value 11
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputHold, nil, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputHold, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -368,7 +538,7 @@ func TestFrameWriterDiagnosticNeverBlackAndNeverFrozen(t *testing.T) {
 	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
 	tl := &fakeTimelineSource{}
 
-	fw, err := NewFrameWriter(nil, "surface-1", source, tl, 0, diagWidth, diagWidth, 1, IdleOutputDiagnostic, nil, testLogger{})
+	fw, err := NewFrameWriter(nil, "surface-1", source, tl, "seq.fseq", 0, diagWidth, diagWidth, 1, IdleOutputDiagnostic, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -444,7 +614,7 @@ func TestFrameWriterCountsDroppedOnStdinFailure(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 0)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -480,7 +650,7 @@ func TestNewFrameWriterRefusesUncoveredChannelRange(t *testing.T) {
 	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: 0} // every frame uncovered
 	tl := &fakeTimelineSource{}
 
-	if _, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{}); err == nil {
+	if _, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{}); err == nil {
 		t.Fatalf("NewFrameWriter with an uncovered channel range: want error, got nil")
 	}
 }
@@ -601,7 +771,7 @@ func TestFrameWriterRateDropsToZeroAfterPipelineStalls(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 0)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}

@@ -757,7 +757,8 @@ type RenderSurfaceReport struct {
 
 	// Drawing is what this surface's frame writer actually wrote to the
 	// pipeline's stdin on its most recent tick: [RenderDrawingContent],
-	// [RenderDrawingIdle], or [RenderDrawingFailure]. "" means no frame
+	// [RenderDrawingIdle], [RenderDrawingFailure], or [RenderDrawingStale].
+	// "" means no frame
 	// writer is currently active for this surface. This is the evidence
 	// this build contract names explicitly: PipelineState=="running" alone
 	// cannot tell an operator "rendering content" from "emitting black at
@@ -768,14 +769,19 @@ type RenderSurfaceReport struct {
 	// [RenderIdleOutputHold], or [RenderIdleOutputDiagnostic]) whenever
 	// Drawing is [RenderDrawingIdle]; "" otherwise, matching Reason's and
 	// TransportReason's identical required-whenever-the-flag-says-so rule.
-	// Never carries a value while Drawing is [RenderDrawingFailure]: a
-	// failure is not an idle mode, and reporting one there is what let a
-	// broken assignment read as a normal idle cycle.
+	// Never carries a value while Drawing is [RenderDrawingFailure] or
+	// [RenderDrawingStale]: neither a failure nor a stale mismatch is an
+	// idle mode, and reporting one there is the same hazard as reporting
+	// a broken assignment as a normal idle cycle, applied to a surface
+	// drawing the wrong sequence instead of no sequence.
 	IdleMode string `json:"idleMode"`
 
 	// FailureOutput is what a [RenderDrawingFailure] tick actually put on
 	// the wire, [RenderFailureOutputAlert] or [RenderFailureOutputBlack];
-	// "" whenever Drawing is anything else. Required whenever Drawing is
+	// "" whenever Drawing is anything else, [RenderDrawingStale] included —
+	// a stale mismatch is a different condition from the extraction
+	// failure this field describes (see [RenderDrawingStale]'s own doc
+	// comment). Required whenever Drawing is
 	// [RenderDrawingFailure], IdleMode's identical rule one field up,
 	// because the two failure outputs look nothing alike at the wall and
 	// an operator reading this report has to know which one is in front of
@@ -851,18 +857,29 @@ type RenderSurfaceReport struct {
 	Generation int64 `json:"generation"`
 }
 
-// RenderDrawingContent, RenderDrawingIdle, and RenderDrawingFailure are the
-// three values [RenderSurfaceReport.Drawing] can carry.
+// RenderDrawingContent, RenderDrawingIdle, RenderDrawingFailure, and
+// RenderDrawingStale are the four values [RenderSurfaceReport.Drawing] can
+// carry.
 //
 // RenderDrawingFailure is neither of the other two on purpose: the writer
 // could not extract the frame it was asked for, so what reached the wire is
 // a fallback nobody configured. Reporting that as "idle" with an idle mode
 // (which this payload did until an owner ruling) makes a broken assignment
 // read as an operator-chosen idle cycle in every report that renders it.
+//
+// RenderDrawingStale is a distinct fourth condition for the same
+// reason: the frame writer's timeline is reporting a filename this surface
+// never opened, so what it would otherwise draw is real content extracted
+// for the WRONG sequence, not a lack of content ([RenderDrawingIdle]) and
+// not a failure to extract anything at all ([RenderDrawingFailure]).
+// Reporting a stale mismatch as idle is the identical hazard
+// RenderDrawingFailure's own ruling already rejected, applied to a surface
+// stuck drawing the wrong sequence instead of no sequence.
 const (
 	RenderDrawingContent = "content"
 	RenderDrawingIdle    = "idle"
 	RenderDrawingFailure = "failure"
+	RenderDrawingStale   = "stale"
 )
 
 // RenderFailureOutputAlert and RenderFailureOutputBlack are the two values
@@ -1201,9 +1218,9 @@ func (p RenderPayload) Validate() error {
 			return fmt.Errorf("%w: surfaces[%d].lastStderr is %d bytes, max %d (must be truncated before publish, with %q appended)",
 				ErrPayloadTooLarge, i, len(s.LastStderr), maxRenderStderrBytes, RenderStderrTruncatedSuffix)
 		}
-		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle && s.Drawing != RenderDrawingFailure {
-			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, %q, or empty",
-				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle, RenderDrawingFailure)
+		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle && s.Drawing != RenderDrawingFailure && s.Drawing != RenderDrawingStale {
+			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, %q, %q, or empty",
+				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle, RenderDrawingFailure, RenderDrawingStale)
 		}
 		if s.Drawing == RenderDrawingIdle && s.IdleMode == "" {
 			return fmt.Errorf("%w: surfaces[%d].idleMode (required whenever drawing is %q)",
@@ -1212,6 +1229,10 @@ func (p RenderPayload) Validate() error {
 		if s.Drawing == RenderDrawingFailure && s.FailureOutput == "" {
 			return fmt.Errorf("%w: surfaces[%d].failureOutput (required whenever drawing is %q)",
 				ErrPayloadMissingField, i, RenderDrawingFailure)
+		}
+		if s.Drawing == RenderDrawingStale && (s.IdleMode != "" || s.FailureOutput != "") {
+			return fmt.Errorf("%w: surfaces[%d].idleMode and failureOutput must both be empty when drawing is %q",
+				ErrPayloadInvalidDrawing, i, RenderDrawingStale)
 		}
 		if s.FailureOutput != "" && s.FailureOutput != RenderFailureOutputAlert && s.FailureOutput != RenderFailureOutputBlack {
 			return fmt.Errorf("%w: surfaces[%d].failureOutput %q must be %q, %q, or empty",
