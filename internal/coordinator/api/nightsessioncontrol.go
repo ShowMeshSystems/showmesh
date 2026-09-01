@@ -657,6 +657,7 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 	var gateObjectID string
 	var gateRevision int64
 	var overrideAuditParams []map[string]any
+	var newEpochPayload config.NightSessionPayload
 	if willAttemptNewEpoch {
 		objectID, revision, payload, problem, err := h.nightResolveActiveConfigForGate(ctx)
 		if err != nil {
@@ -673,12 +674,13 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 			return nightCommandOutcome{}, &p, nil
 		}
 		gateObjectID, gateRevision = objectID, revision
+		newEpochPayload = payload
 		if len(gate.Overridden) > 0 {
 			overrideAuditParams = nightInterlockOverrideAuditParams(gate.Overridden)
 		}
 	}
 
-	return h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+	out, problem, err := h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
 			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
 			return nightCommandOutcome{}, &p, nil
@@ -689,6 +691,93 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 		}
 		return out, problem, err
 	})
+	// Item 3: prepare-site is where this coordinator gets the site into a
+	// known state, so a genuinely NEW epoch (never an idempotent replay or
+	// an already-open session - see nightPrepareSiteTx) resets every
+	// announcement cue's own audio session. Only after nightRunGated has
+	// durably committed the new session: this dispatches live, WARN AND
+	// PROCEED (nightResetAnnouncementSessionsAtPrepareSite's own doc
+	// comment), and must never affect whether prepare-site itself
+	// succeeded.
+	if err == nil && problem == nil && out.outcome == nightOutcomeApplied {
+		h.nightResetAnnouncementSessionsAtPrepareSite(ctx, now, out.result, newEpochPayload)
+	}
+	return out, problem, err
+}
+
+// nightResetAnnouncementSessionsAtPrepareSite issues Item 3's reset: an
+// audio.session.clear against every announcement cue's own audio session
+// in the epoch just opened, so a node still holding whatever a PREVIOUS
+// night session left cannot make this session's first announcement play
+// against stale desired state. This runs at prepare-site, never at
+// run-readiness - readiness is a verification step and must stay free of
+// side effects (nightRunReadinessCommand's own doc comment); prepare-site
+// is already the "get the site into a known state" moment.
+//
+// WARN AND PROCEED: the night must never block on an unreachable node.
+// Background audio and the show run regardless of whether this
+// confirms, so every failure here only logs a warning naming the
+// session and continues - never returned to the caller, never a reason
+// to fail prepare-site itself.
+//
+// No node-reported revision is read or trusted here (RULED: deriving the
+// floor from what the node currently reports computes desired state from
+// observed state and fails exactly when the node is unreachable, per
+// nightAnnouncementRevisions's own doc comment). The revision this clear
+// carries is computed the SAME way the night loop's own per-cycle clear
+// is (nightAnnouncementRevisions over the persisted audio_sessions row),
+// so this reset counts as that floor's next advance rather than a second,
+// disagreeing source of truth for the same session.
+func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
+	dispatchCtx, cancel := nightBoundInterlockDispatch(ctx)
+	defer cancel()
+	seen := map[string]bool{}
+	for _, cue := range payload.EnterShow.Cues {
+		h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen)
+	}
+	for _, cue := range payload.EnterResting.Cues {
+		h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen)
+	}
+}
+
+// nightResetAnnouncementCueSessionOnce resolves cue's own announcement
+// session, if any, and clears it - skipping a (node, session) pair
+// already reset this pass so a cue reused across enterShow/enterResting
+// (or two cues bound to the same session) never dispatches the same
+// clear twice.
+func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, seen map[string]bool) {
+	target, applyRevision, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	if !ok {
+		return
+	}
+	key := target.AudioNodeID + "/" + target.AudioSessionID
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+
+	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	clearRevision, _ := nightAnnouncementRevisions(persisted, applyRevision)
+	idemKey := fmt.Sprintf("night-prepare-site-reset:%s:%s", rec.ID, target.AudioSessionID)
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.clear", NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
+		Params: map[string]any{
+			"sessionId": target.AudioSessionID, "invocationId": idemKey, "revision": uint64(clearRevision),
+		},
+		Revision: uint64(clearRevision), IdempotencyKey: idemKey,
+		IssuerID: "night-controller", IssuerName: "night controller",
+	})
+	if err != nil {
+		h.logWarn("night loop: prepare-site: announcement session reset was not acknowledged", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "error", err)
+		return
+	}
+	if problem != nil {
+		h.logWarn("night loop: prepare-site: announcement session reset was refused", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "reason", problem.Detail)
+		return
+	}
+	if nightAudioCueOutcome(result.Outcome) != nightCueOutcomeConfirmed {
+		h.logWarn("night loop: prepare-site: announcement session reset did not confirm", "sessionId", target.AudioSessionID, "nodeId", target.AudioNodeID, "cue", cue.Name, "outcome", result.Outcome, "reason", result.Reason)
+	}
 }
 
 // nightResolveActiveConfigForGate is [handlers.resolveActiveNightSessionConfigTx]'s

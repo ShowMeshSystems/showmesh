@@ -843,3 +843,100 @@ func TestNightAnnouncement_NextCycleAfterFirstOutwardCueStillClearsBeforeApply(t
 		t.Fatalf("cycle 2: clear dispatched at index %d, apply at %d; the clear must run before the apply", clearIdx, applyIdx)
 	}
 }
+
+// mutation target: nightAnnouncementRevisions' floor computation itself.
+// Make the floor ignore persistedRevision (e.g. return applyRevision+1,
+// applyRevision+2 unconditionally) and this fails: a persisted revision
+// above applyRevision must still push the floor up.
+//
+// This is the acceptance bullet that matters most: two CONSECUTIVE night
+// sessions reusing one audio session id ("announcement-1") must produce a
+// clear/start pair that strictly exceeds what the first session left
+// persisted, never revisions that collapse back to the bound action's own
+// pinned config revision the way a fresh, empty
+// nightAnnouncementHistory (keyed by the new session's own id) used to
+// produce.
+func TestNightAnnouncement_FloorSurvivesConsecutiveNightSessionsSharingOneAudioSession(t *testing.T) {
+	h, st, pub, rec1, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	// Night session 1: run the announcement cue to completion, exactly as
+	// a real first night would.
+	h.nightAdvanceCueList(ctx, testNow, rec1, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	firstStart, err := st.GetNightCueOutboxRow(ctx, rec1.ID, rec1.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("session 1 start row: %v", err)
+	}
+
+	// A brand-new night session record - a fresh uuid, per
+	// nightPrepareSiteTx, exactly as prepare-site mints for a new epoch -
+	// reusing the SAME node and background-audio config, and therefore the
+	// SAME announcement audio session id ("announcement-1"). Its own
+	// announcement-session history is empty: nothing has ever run under
+	// this session's own id.
+	rec2 := store.NightSessionRecord{
+		ID: "sess-2", ConfigObjectID: rec1.ConfigObjectID, ConfigRevision: rec1.ConfigRevision,
+		State: nightStateRestingIntershow, StateEnteredAt: testNow, Cycle: 1,
+	}
+	if err := st.CreateNightSession(ctx, rec2, testNow); err != nil {
+		t.Fatalf("create night session 2: %v", err)
+	}
+	if history, err := h.nightAnnouncementHistory(ctx, rec2); err != nil {
+		t.Fatalf("session 2 history: %v", err)
+	} else if len(history) != 0 {
+		t.Fatalf("session 2 announcement history = %v, want empty (this is exactly the case the fix must not depend on)", history)
+	}
+
+	h.nightAdvanceCueList(ctx, testNow, rec2, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	secondClear, err := st.GetNightCueOutboxRow(ctx, rec2.ID, rec2.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("session 2 clear row: %v", err)
+	}
+	secondStart, err := st.GetNightCueOutboxRow(ctx, rec2.ID, rec2.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("session 2 start row: %v", err)
+	}
+
+	if secondClear.ActionRevision <= firstStart.ActionRevision {
+		t.Fatalf("session 2 clear revision %d did not advance past session 1's start revision %d; the floor collapsed back to the config revision instead of surviving across night sessions", secondClear.ActionRevision, firstStart.ActionRevision)
+	}
+	if secondStart.ActionRevision <= secondClear.ActionRevision {
+		t.Fatalf("session 2 start revision %d did not advance past its own clear's %d", secondStart.ActionRevision, secondClear.ActionRevision)
+	}
+
+	persisted, err := st.GetAudioSession(ctx, "announcement-1")
+	if err != nil {
+		t.Fatalf("get persisted audio session: %v", err)
+	}
+	if int64(persisted.Revision) != secondStart.ActionRevision {
+		t.Fatalf("persisted audio_sessions revision = %d, want it to track session 2's own start revision %d", persisted.Revision, secondStart.ActionRevision)
+	}
+}
+
+// mutation target: nightAnnouncementRevisions' floor comparison. Ordering
+// still holds regardless of which input is larger: the returned pair
+// always strictly exceeds BOTH the persisted revision and the apply's own
+// pinned revision, so a command built from it can never be refused as
+// carrying a revision at or below either one.
+func TestNightAnnouncementRevisions_FloorNeverBelowPersistedOrApplyRevision(t *testing.T) {
+	cases := []struct{ persisted, apply int64 }{
+		{0, 1},
+		{5, 1},
+		{1, 5},
+		{100, 1},
+	}
+	for _, c := range cases {
+		clear, start := nightAnnouncementRevisions(c.persisted, c.apply)
+		if clear <= c.persisted || clear <= c.apply {
+			t.Fatalf("persisted=%d apply=%d: clear=%d, want it to strictly exceed both", c.persisted, c.apply, clear)
+		}
+		if start <= clear {
+			t.Fatalf("persisted=%d apply=%d: start=%d, want it to strictly exceed clear=%d", c.persisted, c.apply, start, clear)
+		}
+	}
+}
