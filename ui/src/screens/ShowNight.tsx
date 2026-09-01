@@ -15,6 +15,7 @@ import {
   putNightSessionConfig,
   randomUUIDv4,
   type ConfigObjectSummary,
+  type ConfigNightSessionCue,
   type ConfigNightSessionWrite,
   type NightCommandName,
   type NightInterlockOverride,
@@ -718,7 +719,7 @@ function NightSessionActivation() {
   )
 }
 
-type CueDraft = { name: string; role: 'lighting' | 'projection' | 'audio' | 'announcement' | 'other'; action: string; offsetMs: string }
+type CueDraft = { name: string; role: 'lighting' | 'projection' | 'audio' | 'announcement' | 'other'; action: string; offsetMs: string; base: ConfigNightSessionCue | null }
 type DefinitionDraft = {
   id: string
   show: string
@@ -735,12 +736,12 @@ type DefinitionDraft = {
   base: ConfigNightSessionWrite | null
 }
 
-const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0' })
+const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', base: null })
 const blankDefinition = (): DefinitionDraft => ({ id: '', show: '', label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '', timelineShow: '', timelineSequence: '', timelineTarget: '', enterShow: [], enterResting: [], base: null })
 
 function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDraft {
   const { payload } = response
-  const cue = (item: (typeof payload.enterShow.cues)[number]): CueDraft => ({ name: item.name, role: item.role, action: item.action, offsetMs: String(item.offsetMs) })
+  const cue = (item: (typeof payload.enterShow.cues)[number]): CueDraft => ({ name: item.name, role: item.role, action: item.action, offsetMs: String(item.offsetMs), base: item })
   return {
     id: response.id, show: payload.show, label: payload.label,
     showFpp: payload.showPlaylist.fppInstanceId, showPlaylist: payload.showPlaylist.playlist,
@@ -762,7 +763,9 @@ function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { 
     for (const [index, item] of items.entries()) {
       const offset = Number(item.offsetMs)
       if (item.name.trim() === '' || item.action.trim() === '' || !Number.isInteger(offset)) return { ok: false, error: `${phase} transition step ${index + 1} needs a name, action, and whole-millisecond offset.` }
-      result.push({ name: item.name.trim(), role: item.role, action: item.action.trim(), offsetMs: offset })
+      const carried: Partial<ConfigNightSessionCue> = { ...item.base }
+      if (item.role !== 'announcement') delete carried.announcementPolicy
+      result.push({ ...carried, name: item.name.trim(), role: item.role, action: item.action.trim(), offsetMs: offset })
     }
     return { ok: true, cues: result }
   }

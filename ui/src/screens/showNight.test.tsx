@@ -15,6 +15,8 @@ const stubs = vi.hoisted(() => ({
   listConfigObjects: (() => Promise.resolve({ serverTime: '', kind: 'night.session', objects: [] })) as (
     ...args: never[]
   ) => Promise<unknown>,
+  getNightSessionConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putNightSessionConfig: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
 }))
 
 function commandResponse(command: string, outcome: 'applied' | 'idempotent_no_op' = 'applied', attributionDegraded = false) {
@@ -46,6 +48,8 @@ vi.mock('../api', async () => {
     putNightSessionActiveConfig: (...args: never[]) => stubs.putNightSessionActiveConfig(...args),
     getNightSessionActiveConfigRevisions: (...args: never[]) => stubs.getNightSessionActiveConfigRevisions(...args),
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
+    getNightSessionConfig: (...args: never[]) => stubs.getNightSessionConfig(...args),
+    putNightSessionConfig: (...args: never[]) => stubs.putNightSessionConfig(...args),
   }
 })
 
@@ -96,6 +100,8 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => new Promise(() => {})
     stubs.putNightSessionActiveConfig = () => Promise.resolve({})
     stubs.listConfigObjects = () => Promise.resolve({ serverTime: '', kind: 'night.session', objects: [] })
+    stubs.getNightSessionConfig = () => new Promise(() => {})
+    stubs.putNightSessionConfig = () => Promise.resolve({})
   })
 
   it('says the session has not reported rather than showing a cycle it does not know', () => {
@@ -684,5 +690,64 @@ describe('Show Night', () => {
     fireEvent.click(clearButton)
     expect(await screen.findByText('none - the pointer is cleared')).toBeInTheDocument()
     expect(calls[0]).toEqual({ session: '' })
+  })
+
+  it('preserves barrier, onFailure, fadeDurationMs, and announcementPolicy on a cue when only the label changes', async () => {
+    const definitionResponse = (label: string) => ({
+      serverTime: '2026-08-28T21:07:00Z',
+      kind: 'night.session',
+      id: 'winter-ridge-2026',
+      revision: 1,
+      payload: {
+        show: 'winter-ridge',
+        label,
+        showPlaylist: { fppInstanceId: 'fpp-1', playlist: 'show' },
+        resting: {
+          fppInstanceId: 'fpp-1', playlist: 'resting', endOfNightPlaylist: 'resting', endOfNightRepeat: true,
+          timelineAsset: { show: 'winter-ridge', sequence: 'seq', target: 'target' },
+        },
+        enterShow: {
+          blackoutHoldMs: 0,
+          cues: [{ name: 'Announce', role: 'announcement', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500, announcementPolicy: 'duck' }],
+        },
+        enterResting: { blackoutAfterShowMs: 0, cues: [] },
+        announcementDefaultPolicy: 'duck',
+      },
+      updatedAt: '2026-08-28T16:00:00Z',
+      createdByPrincipalId: 'p',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    })
+    const captured: { body: { enterShow?: { cues?: unknown[] } } | null } = { body: null }
+    stubs.listConfigObjects = () =>
+      Promise.resolve({
+        serverTime: '',
+        kind: 'night.session',
+        objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+      })
+    stubs.getNightSessionConfig = () => Promise.resolve(definitionResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as { enterShow?: { cues?: unknown[] } }
+      return Promise.resolve(definitionResponse('Winter Ridge Updated'))
+    }
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.change(await screen.findByLabelText('Definition'), { target: { value: 'winter-ridge-2026' } })
+    const labelInput = await screen.findByLabelText('Label')
+    expect(labelInput).toHaveValue('Winter Ridge')
+    fireEvent.change(labelInput, { target: { value: 'Winter Ridge Updated' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge Updated')
+    expect(captured.body?.enterShow?.cues).toEqual([
+      { name: 'Announce', role: 'announcement', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500, announcementPolicy: 'duck' },
+    ])
+
+    // Changing the role off announcement must drop the policy, which the coordinator refuses on any other role.
+    fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'lighting' } })
+    fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Winter Ridge Relit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge Relit')
+    expect(captured.body?.enterShow?.cues).toEqual([
+      { name: 'Announce', role: 'lighting', action: 'play-announcement', offsetMs: 0, barrier: true, onFailure: 'abort', fadeDurationMs: 500 },
+    ])
   })
 })
