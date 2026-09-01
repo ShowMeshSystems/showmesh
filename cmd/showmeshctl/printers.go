@@ -621,11 +621,15 @@ func printSnapshotDetail(w io.Writer, s snapshot) {
 		printMacroRunsTable(w, macroRunsListResponse{ServerTime: s.ServerTime, Runs: s.MacroRuns})
 	}
 
-	_, _ = fmt.Fprintf(w, "\nAudit store: %s", s.AuditStore.State)
-	if r := s.AuditStore.Reason; r != nil && *r != "" {
-		_, _ = fmt.Fprintf(w, " (%s)", *r)
+	if s.AuditStore == nil {
+		_, _ = fmt.Fprintln(w, "\nAudit store: not reported by this coordinator (predates this field)")
+	} else {
+		_, _ = fmt.Fprintf(w, "\nAudit store: %s", s.AuditStore.State)
+		if r := s.AuditStore.Reason; r != nil && *r != "" {
+			_, _ = fmt.Fprintf(w, " (%s)", *r)
+		}
+		_, _ = fmt.Fprintln(w)
 	}
-	_, _ = fmt.Fprintln(w)
 
 	if s.AudioConfigPush == nil {
 		_, _ = fmt.Fprintln(w, "\nAudio config push: not reported by this coordinator (predates this field)")

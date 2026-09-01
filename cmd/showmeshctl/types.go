@@ -395,7 +395,7 @@ type snapshot struct {
 	Collectors      []collectorState      `json:"collectors"`
 	MacroRuns       []macroRunSummary     `json:"macroRuns"`
 	Resolume        []resolumeInstance    `json:"resolume"`
-	AuditStore      auditStoreStatus      `json:"auditStore"`
+	AuditStore      *auditStoreStatus     `json:"auditStore"`
 	AudioConfigPush *audioConfigPushState `json:"audioConfigPush"`
 }
 
@@ -403,6 +403,14 @@ type snapshot struct {
 // currently write to its audit store, computed fresh on every request via a
 // real probe write (always rolled back, never committed), not cached from
 // past traffic.
+//
+// *auditStoreStatus, not a bare value: this field is required by the
+// current contract, but a coordinator that predates it omits "auditStore"
+// from the response entirely rather than sending a zero-value object,
+// following AudioConfigPushState's own doc comment above -- a bare struct
+// here would decode that absence as state="", which is not a member of the
+// state enum and prints/re-marshals as if the coordinator had actually
+// reported something.
 type auditStoreStatus struct {
 	State  string  `json:"state"`
 	Reason *string `json:"reason"`
