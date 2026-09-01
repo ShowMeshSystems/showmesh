@@ -49,7 +49,7 @@ func audioAction(nodeID, sessionID, action, safetyClass string) config.ShowActio
 	return config.ShowActionPayload{
 		Show: "test-show", Label: "test audio action", SafetyClass: safetyClass,
 		Target: config.ShowActionTarget{
-			Integration: config.ShowActionIntegrationAudio,
+			Integration:  config.ShowActionIntegrationAudio,
 			AudioNodeIDs: config.AudioNodeIDList{nodeID}, AudioSessionID: sessionID, AudioAction: action,
 		},
 	}
