@@ -352,7 +352,7 @@ func TestDispatchBlackAndSilenceAudioStopSurvivesNodeClockAheadOfCoordinator(t *
 	// cue.activate command row on file for this node — exactly what
 	// dispatchBlackAndSilenceAudioStop now reads back to compensate for
 	// the node's ahead-of-coordinator clock.
-	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if activateOutcome.Err != nil || !activateOutcome.Confirmed {
 		t.Fatalf("dispatchOneCueActivation: outcome = %+v", activateOutcome)
 	}
@@ -391,7 +391,7 @@ func TestDispatchBlackAndSilenceAudioStopOrdinaryCoordinatorClockAhead(t *testin
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if activateOutcome.Err != nil || !activateOutcome.Confirmed {
 		t.Fatalf("dispatchOneCueActivation: outcome = %+v", activateOutcome)
 	}
@@ -510,7 +510,7 @@ func TestDispatchOneCueActivationAssetMissingNamesTheSequenceAndAsset(t *testing
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}

@@ -39,6 +39,10 @@ const programDefault = {
   createdByPrincipalName: null,
   source: 'default',
   resolumeWebSocketEffect: 'program mode: the Resolume WebSocket wake-up channel is held OPEN.',
+  cueActivationPin: {
+    pinned: false,
+    effect: 'program mode: cue activation re-resolves the current show.cue configuration on its own next tick.',
+  },
 }
 
 const showConfigured = {
@@ -49,6 +53,13 @@ const showConfigured = {
   createdByPrincipalName: 'admin-1',
   source: 'api',
   resolumeWebSocketEffect: 'show mode: the Resolume WebSocket wake-up channel is held CLOSED.',
+  cueActivationPin: {
+    pinned: true,
+    show: 'show-1',
+    generation: 2,
+    pinnedAt: '2026-08-23T21:00:00Z',
+    effect: 'show mode: this coordinator is holding the cue authorization identity it captured for the show and generation named above.',
+  },
 }
 
 describe('ShowModeIndicator', () => {
@@ -95,10 +106,29 @@ describe('ShowModeIndicator', () => {
     renderIndicator()
 
     await waitFor(() => screen.getByLabelText('Show mode'))
-    expect(screen.getByLabelText('Show mode')).toHaveAttribute(
-      'title',
-      showConfigured.resolumeWebSocketEffect,
-    )
+    const title = screen.getByLabelText('Show mode').getAttribute('title')
+    expect(title).toContain(showConfigured.resolumeWebSocketEffect)
+  })
+
+  // A show.cue edit saved on a DIFFERENT screen (a cue editor, not
+  // /config) is invisible unless the ONE indicator that renders on every
+  // route says so - this proves it does, and that it does not merely say
+  // "Show" like an unpinned show-mode session would.
+  it('marks a held show-mode pin as a staged edit, on the badge every route renders', async () => {
+    getShowModeConfig.mockResolvedValue(showConfigured)
+    renderIndicator()
+
+    await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/staged/i))
+    const title = screen.getByLabelText('Show mode').getAttribute('title')
+    expect(title).toContain(showConfigured.cueActivationPin.effect)
+  })
+
+  it('does not mark an unpinned program-mode session as staged', async () => {
+    getShowModeConfig.mockResolvedValue(programDefault)
+    renderIndicator()
+
+    await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/Program/))
+    expect(screen.getByLabelText('Show mode').textContent).not.toMatch(/staged/i)
   })
 
   // Operator-reported: this read as a clickable affordance but did nothing

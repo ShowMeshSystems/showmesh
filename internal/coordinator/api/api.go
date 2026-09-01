@@ -386,6 +386,16 @@ type Dependencies struct {
 	// "an unwired dependency is not this API failing" posture.
 	CueActivationNudger CueActivationNudger
 
+	// CueActivationPinStatus is ADR-033 show-mode's own pin
+	// visibility: see [CueActivationPinStatus]'s own doc comment. In
+	// practice the real value is the same *CueActivationLoop
+	// CueActivationNudger already wires, shared through Dependencies
+	// exactly like it is. A nil field is replaced by
+	// [noCueActivationPinStatus], under which GET /api/v1/config/show.mode
+	// reports unpinned always, the "an unwired dependency is not this API
+	// failing" posture every other optional field here already holds.
+	CueActivationPinStatus CueActivationPinStatus
+
 	// AssetSettingsEnvVarsSet is [FPPEndpointsEnvVarSet]'s mirror for Track
 	// G seam G-4 (ADR-039 decision 4): whether ANY of the four
 	// SHOWMESH_ASSET_CONTENT_BASE_URL/SHOWMESH_ASSET_MAX_UPLOAD_BYTES/
@@ -635,6 +645,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.CueActivationNudger == nil {
 		d.CueActivationNudger = noCueActivationNudger{}
 	}
+	if d.CueActivationPinStatus == nil {
+		d.CueActivationPinStatus = noCueActivationPinStatus{}
+	}
 	if d.Resolume == nil {
 		d.Resolume = noResolumeLister{}
 	}
@@ -827,6 +840,15 @@ func (noAssetFetchFailureSource) LastFetchFailure(string, string) (string, time.
 type noCueActivationNudger struct{}
 
 func (noCueActivationNudger) Nudge() {}
+
+// noCueActivationPinStatus is [Dependencies.CueActivationPinStatus]'s
+// nil-safe default: always reports unpinned, matching
+// [noCueActivationNudger]'s identical shape one field over.
+type noCueActivationPinStatus struct{}
+
+func (noCueActivationPinStatus) PinStatus() (bool, string, int64, time.Time) {
+	return false, "", 0, time.Time{}
+}
 
 // defaultAssetManifestInventoryInterval mirrors
 // internal/coordinator/config's own defaultAssetInventoryInterval (2

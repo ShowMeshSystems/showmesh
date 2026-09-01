@@ -895,6 +895,7 @@ func Run() int {
 	// further down, alongside every other background reconcile loop.
 	cueActivationLoop := api.NewCueActivationLoop(apiDeps, apiOpts)
 	apiDeps.CueActivationNudger = cueActivationLoop
+	apiDeps.CueActivationPinStatus = cueActivationLoop
 
 	apiInst := api.New(apiDeps, apiOpts)
 	hub = apiInst.Hub

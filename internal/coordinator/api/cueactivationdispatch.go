@@ -138,18 +138,18 @@ type cueActivationDispatchOutcome struct {
 // simply skipped (recorded in its own outcome); it never blocks dispatch
 // to the other nodes — H4's envelope is per-node, so a refusal for one
 // node is not evidence about any other.
-func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer) []cueActivationDispatchOutcome {
+func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
 	out := make([]cueActivationDispatchOutcome, 0, len(activations))
 	for nodeID, act := range activations {
-		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer)
+		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, pin)
 		out = append(out, outcome)
 	}
 	return out
 }
 
-func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) cueActivationDispatchOutcome {
+func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) cueActivationDispatchOutcome {
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
-	refusalOutcome, refusalReason, cueOutputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act)
+	refusalOutcome, refusalReason, cueOutputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act, pin)
 	if err != nil {
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("authorize cue activation for node %q: %w", nodeID, err)}
 	}

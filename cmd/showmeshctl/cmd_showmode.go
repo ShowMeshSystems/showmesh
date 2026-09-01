@@ -36,7 +36,23 @@ type showModeConfigResponse struct {
 	CreatedByPrincipalName *string               `json:"createdByPrincipalName"`
 	Source                 string                `json:"source"`
 
-	ResolumeWebSocketEffect string `json:"resolumeWebSocketEffect"`
+	ResolumeWebSocketEffect string                 `json:"resolumeWebSocketEffect"`
+	CueActivationPin        configCueActivationPin `json:"cueActivationPin"`
+}
+
+// configCueActivationPin mirrors v1.CueActivationPin field for field, this
+// program's own independent transcription (this file's own header comment
+// gives the reason: no shared type with the coordinator). Whether a
+// show.cue edit saved right now is STAGED, invisible to every node until
+// the show restarts, or applies live: an operator working through
+// showmeshctl mid-show has no other way to see that, so this is not an
+// optional field to drop for a smaller struct.
+type configCueActivationPin struct {
+	Pinned     bool   `json:"pinned"`
+	Show       string `json:"show,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	PinnedAt   string `json:"pinnedAt,omitempty"`
+	Effect     string `json:"effect"`
 }
 
 // showModeValues is ADR-033's closed vocabulary, checked here so a typo is
@@ -274,5 +290,12 @@ func printShowModeConfig(w io.Writer, resp showModeConfigResponse) {
 	}
 	if resp.ResolumeWebSocketEffect != "" {
 		_, _ = fmt.Fprintf(w, "  effect: %s\n", resp.ResolumeWebSocketEffect)
+	}
+	if resp.CueActivationPin.Pinned {
+		_, _ = fmt.Fprintf(w, "  cue activation: STAGED, held to show %q generation %d since %s\n",
+			resp.CueActivationPin.Show, resp.CueActivationPin.Generation, resp.CueActivationPin.PinnedAt)
+		_, _ = fmt.Fprintf(w, "    a show.cue edit saved now will NOT reach any node until the show is stopped and restarted\n")
+	} else if resp.CueActivationPin.Effect != "" {
+		_, _ = fmt.Fprintf(w, "  cue activation: %s\n", resp.CueActivationPin.Effect)
 	}
 }

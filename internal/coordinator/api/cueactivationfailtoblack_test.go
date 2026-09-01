@@ -161,7 +161,7 @@ func TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface(t *te
 		t.Fatalf("get fpp playlist entry observation: %v", err)
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs)
+	h.cueActivationTickOne(context.Background(), now, obs, nil)
 
 	// The fail-to-black dispatch is async (problem 3's own fix) — poll
 	// for the audio stop to appear rather than asserting immediately.
@@ -256,7 +256,7 @@ func TestCueActivationTickOneAssetMissingNeverBlacksInProgramMode(t *testing.T) 
 		t.Fatalf("get fpp playlist entry observation: %v", err)
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs)
+	h.cueActivationTickOne(context.Background(), now, obs, nil)
 
 	// The fail-to-black decision is made in its own goroutine (problem
 	// 3's own fix); give it a generous window to have run and NOT
@@ -325,7 +325,7 @@ func TestCueActivationTickOneNodeSideAssetMissingReachesScopedFailToBlack(t *tes
 		t.Fatalf("get fpp playlist entry observation: %v", err)
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs)
+	h.cueActivationTickOne(context.Background(), now, obs, nil)
 
 	deadline := time.After(2 * time.Second)
 	for {
@@ -438,7 +438,7 @@ func TestCueActivationTickOneAssetMissingFailToBlackDoesNotBlockTick(t *testing.
 	// ran on cueActivationTickOne's own goroutine, this call would take
 	// at least renderCommandConfirmDeadline to return.
 	start := time.Now()
-	h.cueActivationTickOne(context.Background(), now, obs)
+	h.cueActivationTickOne(context.Background(), now, obs, nil)
 	elapsed := time.Since(start)
 	if elapsed >= renderCommandConfirmDeadline {
 		t.Fatalf("cueActivationTickOne took %s, want well under renderCommandConfirmDeadline (%s): the fail-to-black dispatch must not block the caller", elapsed, renderCommandConfirmDeadline)

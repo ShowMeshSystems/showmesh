@@ -154,7 +154,7 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}
@@ -196,7 +196,7 @@ func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testi
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}

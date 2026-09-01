@@ -113,23 +113,31 @@ export function ShowModeIndicator() {
   const mode = state.config.payload.mode
   const never = state.config.revision === 0
   const modeLabel = mode === 'show' ? 'Show' : 'Program'
+  const pin = state.config.cueActivationPin
+  // The pin's own text and the Resolume effect are two separate
+  // mode-caused behaviours; both are named, per ADR-033 decision 3's "a
+  // behaviour caused by the mode states the mode as its reason." This is
+  // the ONE indicator that renders on every route (this file's own header
+  // comment), so it is where an operator who just saved a show.cue edit on
+  // a DIFFERENT screen, mid-show, sees that the edit is staged rather than
+  // applied - the ShowModePanel a few lines over only renders on /config.
+  const title = `${state.config.resolumeWebSocketEffect} ${pin.effect}`
   return (
     <>
       <Link
         to="/config#show-mode"
         className={`show-mode show-mode--${mode}`}
         aria-label="Show mode"
-        // ADR-033 decision 3: a behaviour caused by the mode states the mode
-        // as its reason, and this is where an operator hovering the badge
-        // reads it.
-        title={state.config.resolumeWebSocketEffect}
+        title={title}
       >
         Mode: {modeLabel}
         {never && <span className="show-mode__note"> (default)</span>}
+        {pin.pinned && <span className="show-mode__note"> (edit staged)</span>}
       </Link>
       <span role="status" className="visually-hidden">
         Show mode: {modeLabel}
         {never && ' (default)'}
+        {pin.pinned && '. A show.cue edit is staged and will not reach any node until the show is stopped and restarted.'}
       </span>
     </>
   )

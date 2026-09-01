@@ -155,6 +155,20 @@ export function ShowModePanel() {
                 {state.config.resolumeWebSocketEffect}
               </p>
 
+              <p className="panel" role="status">
+                {state.config.cueActivationPin.effect}
+                {state.config.cueActivationPin.pinned && (
+                  <>
+                    {' '}
+                    (pinned to show <code>{state.config.cueActivationPin.show}</code>, generation{' '}
+                    {state.config.cueActivationPin.generation}, since{' '}
+                    {state.config.cueActivationPin.pinnedAt !== undefined &&
+                      formatAbsolute(state.config.cueActivationPin.pinnedAt)}
+                    )
+                  </>
+                )}
+              </p>
+
               <div className="config-form">
                 <label htmlFor="show-mode">Operating mode</label>
                 <select
