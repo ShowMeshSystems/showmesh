@@ -336,7 +336,7 @@ function historyAnnotation(entry: Asset, history: readonly Asset[]): string | nu
     const priorMatch = history.find((e) => e.id !== entry.id && e.contentHash === entry.contentHash)
     if (priorMatch === undefined) return null
     const restoredBefore = priorMatch.supersededAt !== null ? formatDateClock(priorMatch.supersededAt) : null
-    return `Rollback, these exact bytes were current before ${restoredBefore ?? 'an unrecorded time'}`
+    return `Rolled back to bytes current before ${restoredBefore ?? 'an unrecorded time'}`
   }
   if (currentEntry !== undefined && entry.contentHash === currentEntry.contentHash) return 'Same bytes as current'
   return null
@@ -453,7 +453,7 @@ function AssetDetail({
 
                 {isConfirming && (
                   <div className="sm-inspector__group">
-                    <Field label={`Type ${entry.sequence} to confirm the rollback`} help="Re-uploads these exact bytes; the coordinator performs the swap (ADR-028).">
+                    <Field label={`Type ${entry.sequence} to confirm the rollback`} help="Re-uploads these bytes; the coordinator swaps them in as current.">
                       {(props) => (
                         <Input
                           {...props}
@@ -485,8 +485,8 @@ function AssetDetail({
                     <StatusPair tone={done.rolledBack ? 'warn' : 'good'} label={done.rolledBack ? 'Rolled back' : 'Uploaded'} />
                     <span className="sm-verdict__detail">
                       {done.rolledBack
-                        ? 'These bytes matched a superseded version, which is now current again; the previously current version is now superseded.'
-                        : 'Registered, and now the current asset for this identity.'}
+                        ? 'This superseded version is current again; the previous current version is now superseded.'
+                        : 'Registered as the current asset for this identity.'}
                     </span>
                   </p>
                 )}
@@ -686,7 +686,7 @@ function AssetUploadForm({
         <Notice
           tone="warn"
           headline="This will be a rollback"
-          explanation={`These exact bytes are already stored as a superseded version from ${formatDateClock(matchedRollback.createdAt) ?? 'an unrecorded time'}. Uploading makes that version current again and supersedes today's.`}
+          explanation={`Already stored as a superseded version from ${formatDateClock(matchedRollback.createdAt) ?? 'an unrecorded time'}; uploading makes it current again and supersedes today's.`}
           live="status"
         />
       )}

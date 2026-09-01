@@ -236,11 +236,10 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
             }}
           />
           <p className="sm-small sm-muted">
-            One audio node across the installation may hold program+ltc. The coordinator refuses a second and
-            names both.
+            Only one audio node may hold program+ltc; the coordinator refuses a second.
           </p>
           {role === 'zone' && (
-            <Field label="Zone" help="Your own name for the independent speaker zone this node drives.">
+            <Field label="Zone" help="Your name for the speaker zone this node drives.">
               {(props) => (
                 <Input
                   {...props}

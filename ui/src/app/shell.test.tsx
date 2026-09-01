@@ -9,7 +9,7 @@ import { clearStoredToken, setStoredToken } from '../api/token'
 import { initialModel } from '../api/domain'
 import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
-import { BootstrapBand, SignedOutBand } from './SessionBand'
+import { BootstrapBand, SignedOutBand, useSignedOutBand } from './SessionBand'
 import { NotFound } from '../screens/NotFound'
 
 const loginMock = vi.fn()
@@ -40,6 +40,12 @@ function session(overrides: Partial<SessionResponse>): SessionResponse {
     bootstrapRequired: false,
     ...overrides,
   }
+}
+
+/** SignedOutBand and SignedOutPlate share one credential-form state; the hook needs a component to run in. */
+function SignedOutBandHarness() {
+  const state = useSignedOutBand()
+  return <SignedOutBand state={state} />
 }
 
 /** Both the heading button and the submit button read "Sign in"; only the submit button actually submits. */
@@ -286,7 +292,7 @@ describe('app shell', () => {
   })
 
   it('gives the signed-out and bootstrap bands exactly one h1, matching the mock', () => {
-    const { unmount: unmountSignedOut } = render(<SignedOutBand />)
+    const { unmount: unmountSignedOut } = render(<SignedOutBandHarness />)
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     expect(screen.getByRole('heading', { level: 1, name: 'Signed out on this device' })).toBeInTheDocument()
     unmountSignedOut()
@@ -294,6 +300,26 @@ describe('app shell', () => {
     render(<BootstrapBand />)
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     expect(screen.getByRole('heading', { level: 1, name: 'No administrator exists on this coordinator' })).toBeInTheDocument()
+  })
+
+  it('puts the unobserved plate in main, in the Outlet’s place, while signed out', () => {
+    renderShell({ session: session({ authenticated: false }) })
+    // Exactly one h1 in the whole document: the band's. The plate's own heading is an h2.
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'Signed out on this device' })).toBeInTheDocument()
+    const main = document.querySelector('main.sm-main')
+    expect(main).not.toBeNull()
+    expect(main?.querySelector('.sm-plate--unobserved')).not.toBeNull()
+    expect(main).toHaveTextContent('Nothing here has ever been collected')
+  })
+
+  it('puts the empty plate in main, in the Outlet’s place, during bootstrap', () => {
+    renderShell({ session: session({ authenticated: false, bootstrapRequired: true }) })
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: 'No administrator exists on this coordinator' })).toBeInTheDocument()
+    const main = document.querySelector('main.sm-main')
+    expect(main).not.toBeNull()
+    expect(main).toHaveTextContent('No shows, no nodes, no principals')
   })
 
   it('names both outstanding reads on the connecting band', () => {

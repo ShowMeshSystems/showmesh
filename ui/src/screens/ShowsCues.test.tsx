@@ -13,6 +13,26 @@ const stubs = vi.hoisted(() => ({
   getShowCueRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAudioSettingsConfig: (() =>
+    Promise.resolve({
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'audio.settings',
+      revision: 1,
+      payload: {
+        defaultFadeDurationMs: 400,
+        defaultMaxBackgroundGainDb: 0,
+        duckTargetGainDb: -18,
+        duckFadeDurationMs: 200,
+        duckRestoreFadeDurationMs: 600,
+        driftIgnoreThresholdMs: 20,
+        ltcFrameRate: '30',
+        ltcDefaultStartOffset: '00:00:00:00',
+      },
+      updatedAt: '2026-08-30T18:22:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    })) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -26,6 +46,7 @@ vi.mock('../api', async () => {
     getShowCueRevisions: (...args: never[]) => stubs.getShowCueRevisions(...args),
     getShowPlaylist: (...args: never[]) => stubs.getShowPlaylist(...args),
     putShowCue: (...args: never[]) => stubs.putShowCue(...args),
+    getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
   }
 })
 
@@ -572,24 +593,25 @@ describe('Shows · Cues tab', () => {
       expect(payload.outputs.audio?.target).toBe('node-x')
     })
 
-    it('round-trips audio and LTC start offsets, and saves an edited value', async () => {
+    it('round-trips audio and LTC start offsets as timecode, and saves an edited value', async () => {
       const cue = cueResponse(
         cuePayload({
           outputs: {
-            audio: { asset: 'house-preshow-loop', startOffsetMillis: 120 },
-            ltc: { startOffsetMillis: 50 },
+            // Frame-aligned at 30 fps (100ms = 3 frames, 500ms = 15 frames) so formatting and parsing round-trip exactly.
+            audio: { asset: 'house-preshow-loop', startOffsetMillis: 100 },
+            ltc: { startOffsetMillis: 500 },
           },
         }),
       )
       setupWithTargets(cue)
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
-      const offsets = await screen.findAllByLabelText('Start offset (ms)')
+      const offsets = await screen.findAllByLabelText('Start offset')
       expect(offsets).toHaveLength(2)
       const [audioOffset, ltcOffset] = offsets as [HTMLInputElement, HTMLInputElement]
-      expect(audioOffset).toHaveValue(120)
-      expect(ltcOffset).toHaveValue(50)
+      await waitFor(() => expect(audioOffset).toHaveValue('00:00:00.03'))
+      await waitFor(() => expect(ltcOffset).toHaveValue('00:00:00.15'))
 
-      fireEvent.change(audioOffset, { target: { value: '300' } })
+      fireEvent.change(audioOffset, { target: { value: '00:00:01.00' } })
 
       let sent: unknown = null
       stubs.putShowCue = (_id: string, payload: unknown) => {
@@ -599,16 +621,34 @@ describe('Shows · Cues tab', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
       await waitFor(() => expect(sent).not.toBeNull())
       const payload = sent as ConfigShowCue
-      expect(payload.outputs.audio?.startOffsetMillis).toBe(300)
-      expect(payload.outputs.ltc?.startOffsetMillis).toBe(50)
+      expect(payload.outputs.audio?.startOffsetMillis).toBe(1000)
+      expect(payload.outputs.ltc?.startOffsetMillis).toBe(500)
+    })
+
+    it('accepts a bare millisecond integer, paste-friendly', async () => {
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      const audioOffset = (await screen.findByLabelText('Start offset')) as HTMLInputElement
+      await waitFor(() => expect(audioOffset).toHaveValue('00:00:00'))
+      fireEvent.change(audioOffset, { target: { value: '1500' } })
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as ConfigShowCue).outputs.audio?.startOffsetMillis).toBe(1500)
     })
 
     it('defaults a new cue’s start offsets to 0', async () => {
       const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
       setupWithTargets(cue)
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
-      const audioOffset = (await screen.findByLabelText('Start offset (ms)')) as HTMLInputElement
-      expect(audioOffset).toHaveValue(0)
+      const audioOffset = (await screen.findByLabelText('Start offset')) as HTMLInputElement
+      await waitFor(() => expect(audioOffset).toHaveValue('00:00:00'))
 
       let sent: unknown = null
       stubs.putShowCue = (_id: string, payload: unknown) => {
@@ -618,6 +658,29 @@ describe('Shows · Cues tab', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
       await waitFor(() => expect(sent).not.toBeNull())
       expect((sent as ConfigShowCue).outputs.audio?.startOffsetMillis).toBe(0)
+    })
+
+    it('rejects malformed timecode text and names the guide', async () => {
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      const audioOffset = (await screen.findByLabelText('Start offset')) as HTMLInputElement
+      await waitFor(() => expect(audioOffset).toHaveValue('00:00:00'))
+      fireEvent.change(audioOffset, { target: { value: 'not a time' } })
+
+      const save = await screen.findByRole('button', { name: 'Save cue' })
+      expect(save).toBeDisabled()
+      expect(save).toHaveAttribute('title', 'Start offset must be hh:mm:ss.ff or a whole number of milliseconds.')
+    })
+
+    it('falls back to a frame-less field and says so in help when the frame rate could not be read', async () => {
+      stubs.getAudioSettingsConfig = () => Promise.reject(new Error('network down'))
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      const audioOffset = (await screen.findByLabelText('Start offset')) as HTMLInputElement
+      await waitFor(() => expect(audioOffset).toHaveValue('00:00:00'))
+      expect(screen.getByText('hh:mm:ss. Frame rate unavailable.')).toBeInTheDocument()
     })
 
     it('a stored announcement target round-trips unchanged', async () => {

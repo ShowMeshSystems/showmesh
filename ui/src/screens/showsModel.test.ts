@@ -147,7 +147,7 @@ describe('cueRows asset-missing signal', () => {
 })
 
 describe('cueActivationSummary', () => {
-  const empty: CueActivationDraft = { render: null, audio: null, ltc: null, announcement: null }
+  const empty: CueActivationDraft = { render: null, audio: null, ltc: null, announcement: null, ltcFps: null }
 
   it('asks for an output when nothing is picked yet', () => {
     expect(cueActivationSummary(empty)).toBe('Pick at least one output to see what this cue will do.')
@@ -159,20 +159,22 @@ describe('cueActivationSummary', () => {
       audio: { asset: 'thank-you.wav', startOffsetMillis: 0, target: '' },
       ltc: null,
       announcement: { policy: 'duck', duckGainDb: -18, fadeMillis: 400, target: '' },
+      ltcFps: null,
     }
     expect(cueActivationSummary(draft)).toBe(
       'On activation this cue will play thank-you.wav, duck the background bed to -18 dB over 400 ms, and leave FPP untouched.',
     )
   })
 
-  it('states a positive start offset and a target node as facts', () => {
+  it('states a positive start offset as timecode and a target node as facts', () => {
     const draft: CueActivationDraft = {
       render: null,
       audio: { asset: 'carol-bells.wav', startOffsetMillis: 250, target: 'node-a' },
       ltc: null,
       announcement: null,
+      ltcFps: 30,
     }
-    expect(cueActivationSummary(draft)).toBe('On activation this cue will play carol-bells.wav at +250 ms on node-a and leave FPP untouched.')
+    expect(cueActivationSummary(draft)).toBe('On activation this cue will play carol-bells.wav at 00:00:00.08 on node-a and leave FPP untouched.')
   })
 
   it('narrates render, audio, and ltc together without the "leave FPP untouched" fact', () => {
@@ -181,12 +183,21 @@ describe('cueActivationSummary', () => {
       audio: { asset: 'wizards-winter.wav', startOffsetMillis: 0, target: '' },
       ltc: { startOffsetMillis: 0, target: '' },
       announcement: null,
+      ltcFps: null,
     }
-    expect(cueActivationSummary(draft)).toBe('On activation this cue will render sequence wizards-winter, play wizards-winter.wav, and emit LTC from 0 ms.')
+    expect(cueActivationSummary(draft)).toBe(
+      'On activation this cue will render sequence wizards-winter, play wizards-winter.wav, and emit LTC from 00:00:00.',
+    )
   })
 
   it('states an unnamed sequence and an unselected asset literally, never inventing a value', () => {
-    const draft: CueActivationDraft = { render: { sequence: '' }, audio: { asset: '', startOffsetMillis: 0, target: '' }, ltc: null, announcement: null }
+    const draft: CueActivationDraft = {
+      render: { sequence: '' },
+      audio: { asset: '', startOffsetMillis: 0, target: '' },
+      ltc: null,
+      announcement: null,
+      ltcFps: null,
+    }
     expect(cueActivationSummary(draft)).toBe('On activation this cue will render an unnamed sequence and play an unselected asset.')
   })
 })

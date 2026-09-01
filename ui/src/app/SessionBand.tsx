@@ -39,7 +39,13 @@ function SignInFailure({ err }: { err: unknown }) {
   )
 }
 
-export function SignedOutBand() {
+/**
+ * Shared between `SignedOutBand` (the form, above `ShellBody`) and
+ * `SignedOutPlate` (the blanking plate, inside `main` in the Outlet's
+ * place): one credential form, so the plate's own "Sign in" CTA focuses
+ * the same field the band's does rather than opening a second form.
+ */
+export function useSignedOutBand() {
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [deviceName, setDeviceName] = useState('')
@@ -58,6 +64,22 @@ export function SignedOutBand() {
   }, [tokenOpen])
 
   const { busy, err, onSubmit } = useSignIn(() => login(name, password, deviceName.trim()))
+
+  return {
+    name, setName, password, setPassword, deviceName, setDeviceName,
+    token, setToken, tokenOpen, setTokenOpen, hasToken, setHasToken,
+    formRef, tokenFormRef, focusFirstInput, busy, err, onSubmit,
+  }
+}
+
+type SignedOutBandState = ReturnType<typeof useSignedOutBand>
+
+export function SignedOutBand({ state }: { state: SignedOutBandState }) {
+  const {
+    name, setName, password, setPassword, deviceName, setDeviceName,
+    token, setToken, tokenOpen, setTokenOpen, hasToken, setHasToken,
+    formRef, tokenFormRef, focusFirstInput, busy, err, onSubmit,
+  } = state
 
   return (
     <section className="sm-band" aria-labelledby="band-signed-out">
@@ -147,31 +169,37 @@ export function SignedOutBand() {
           </Button>
         </form>
       )}
-
-      <BlankingPlate
-        absence="unobserved"
-        stamp="No cred"
-        eyebrow="This device · unobserved"
-        title="Nothing here has ever been collected"
-        detail={
-          <>
-            <span className="sm-plate__detail-line">
-              No dashboard, no fleet, no now-playing, not stale, not empty. This device has never held a credential,
-              so no read has ever been made from it.
-            </span>
-            <span className="sm-plate__detail-line">Every destination in the rail still works. All of them will say this until you sign in.</span>
-          </>
-        }
-        actions={
-          <>
-            <Button onClick={() => focusFirstInput(formRef.current)}>Sign in</Button>
-            <Button variant="quiet" onClick={() => setTokenOpen(true)}>
-              Paste a machine token
-            </Button>
-          </>
-        }
-      />
     </section>
+  )
+}
+
+/** The `unobserved` plate for `main`, in the Outlet's place while signed out. */
+export function SignedOutPlate({ state }: { state: SignedOutBandState }) {
+  const { formRef, focusFirstInput, setTokenOpen } = state
+  return (
+    <BlankingPlate
+      absence="unobserved"
+      stamp="No cred"
+      eyebrow="This device · unobserved"
+      title="Nothing here has ever been collected"
+      detail={
+        <>
+          <span className="sm-plate__detail-line">
+            No dashboard, no fleet, no now-playing, not stale, not empty. This device has never held a credential,
+            so no read has ever been made from it.
+          </span>
+          <span className="sm-plate__detail-line">Every destination in the rail still works. All of them will say this until you sign in.</span>
+        </>
+      }
+      actions={
+        <>
+          <Button onClick={() => focusFirstInput(formRef.current)}>Sign in</Button>
+          <Button variant="quiet" onClick={() => setTokenOpen(true)}>
+            Paste a machine token
+          </Button>
+        </>
+      }
+    />
   )
 }
 
@@ -298,25 +326,30 @@ export function BootstrapBand() {
         </p>
         <p className="sm-band__footnote">A wrong code is rate-limited per network, shared with ordinary sign-in, and is never a lockout.</p>
       </form>
-
-      <BlankingPlate
-        absence="empty"
-        stamp="Empty"
-        eyebrow="Installation · empty"
-        title="No shows, no nodes, no principals"
-        detail={
-          <>
-            <span className="sm-plate__detail-line">
-              This is a settled zero, not missing evidence: the coordinator answered and it holds nothing. Every
-              destination in the rail exists and all of them are empty.
-            </span>
-            <span className="sm-plate__detail-line">
-              The first administrator creates the first show. Nodes appear on their own once an agent is pointed at this coordinator.
-            </span>
-          </>
-        }
-      />
     </section>
+  )
+}
+
+/** The `empty` plate for `main`, in the Outlet's place while the coordinator is unclaimed. */
+export function BootstrapPlate() {
+  return (
+    <BlankingPlate
+      absence="empty"
+      stamp="Empty"
+      eyebrow="Installation · empty"
+      title="No shows, no nodes, no principals"
+      detail={
+        <>
+          <span className="sm-plate__detail-line">
+            This is a settled zero, not missing evidence: the coordinator answered and it holds nothing. Every
+            destination in the rail exists and all of them are empty.
+          </span>
+          <span className="sm-plate__detail-line">
+            The first administrator creates the first show. Nodes appear on their own once an agent is pointed at this coordinator.
+          </span>
+        </>
+      }
+    />
   )
 }
 

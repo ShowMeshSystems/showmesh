@@ -15,7 +15,7 @@ import type {
 } from '../api'
 import type { Tone } from '../kit'
 import { EVIDENCE_ABSENCE, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
-import { ageMs, formatClock, formatDuration } from '../domain/time'
+import { ageMs, formatClock, formatDuration, millisToTimecode } from '../domain/time'
 
 /** The id of the show `currentRuns` reports as active, or null when unknown. */
 export function activeShowId(model: Model): string | null {
@@ -226,6 +226,8 @@ export type CueActivationDraft = {
   audio: { asset: string; startOffsetMillis: number; target: string } | null
   ltc: { startOffsetMillis: number; target: string } | null
   announcement: { policy: 'duck' | 'mix' | 'interrupt'; duckGainDb: number; fadeMillis: number; target: string } | null
+  /** The installation's LTC frame rate, for formatting audio/ltc start offsets as timecode. Null when it has not been read. */
+  ltcFps: number | null
 }
 
 function joinFacts(parts: readonly string[]): string {
@@ -253,14 +255,14 @@ export function cueActivationSummary(draft: CueActivationDraft): string {
 
   if (draft.audio !== null) {
     const asset = draft.audio.asset.trim() === '' ? 'an unselected asset' : draft.audio.asset
-    const offset = draft.audio.startOffsetMillis > 0 ? ` at +${draft.audio.startOffsetMillis} ms` : ''
+    const offset = draft.audio.startOffsetMillis > 0 ? ` at ${millisToTimecode(draft.audio.startOffsetMillis, draft.ltcFps)}` : ''
     const target = draft.audio.target !== '' ? ` on ${draft.audio.target}` : ''
     parts.push(`play ${asset}${offset}${target}`)
   }
 
   if (draft.ltc !== null) {
     const target = draft.ltc.target !== '' ? ` on ${draft.ltc.target}` : ''
-    parts.push(`emit LTC from ${draft.ltc.startOffsetMillis} ms${target}`)
+    parts.push(`emit LTC from ${millisToTimecode(draft.ltc.startOffsetMillis, draft.ltcFps)}${target}`)
   }
 
   if (draft.announcement !== null) {

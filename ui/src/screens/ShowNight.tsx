@@ -370,7 +370,7 @@ export function ShowNight() {
                     disabled={!gate.allowed}
                     onChange={(e) => setSkipEnterShowLead(e.target.checked)}
                   />
-                  <span>Late start: skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
+                  <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
                 </label>
               )}
             </div>
@@ -1254,8 +1254,8 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                     <Field label="Crossfade (ms)" help="Required when item transition is crossfade.">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.backgroundAudio.crossfadeMs} onChange={(e) => updateBackgroundAudio({ crossfadeMs: e.target.value })} />}</Field>
                   )}
                   <Field label="Maximum gain (dB)" help="Must be 0 dB or lower.">{(p) => <Input {...p} type="number" max="0" step="0.1" value={draft.backgroundAudio.maxGainDb} onChange={(e) => updateBackgroundAudio({ maxGainDb: e.target.value })} />}</Field>
-                  <Field label="Fade-out (ms)" help="Fades the bed to silence before a show. Fade-out and fade-in must be set together, or both left blank for an instant cut.">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.backgroundAudio.fadeOutMs} onChange={(e) => updateBackgroundAudio({ fadeOutMs: e.target.value })} />}</Field>
-                  <Field label="Fade-in (ms)" help="Fades the bed back up to the max gain after resting returns.">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.backgroundAudio.fadeInMs} onChange={(e) => updateBackgroundAudio({ fadeInMs: e.target.value })} />}</Field>
+                  <Field label="Fade-out (ms)" help="Set together with fade-in, or leave both blank for an instant cut.">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.backgroundAudio.fadeOutMs} onChange={(e) => updateBackgroundAudio({ fadeOutMs: e.target.value })} />}</Field>
+                  <Field label="Fade-in (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.backgroundAudio.fadeInMs} onChange={(e) => updateBackgroundAudio({ fadeInMs: e.target.value })} />}</Field>
                 </div>
                 {draft.backgroundAudio.items.map((item, index) => (
                   <div className="sm-night-session-item" key={`bg-item-${index}`}>
@@ -1284,7 +1284,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
           </div>
           <div className="sm-inspector__group">
             <h4 className="sm-subsection__title">Site control</h4>
-            <Field label="Request thermal profile" help="Names the show.action this deployment runs to request a thermal profile.">
+            <Field label="Request thermal profile" help="The show.action this deployment runs.">
               {(p) => <Input {...p} value={draft.siteControl.requestThermalProfile} onChange={(e) => updateSiteControl({ requestThermalProfile: e.target.value })} />}
             </Field>
             <div className="sm-night-session-group-head"><h4 className="sm-subsection__title">Presentation power-on</h4></div>
@@ -1293,7 +1293,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               <div className="sm-night-session-compact-grid">
                 <Field label="Action">{(p) => <Input {...p} value={draft.siteControl.powerOnAction} onChange={(e) => updateSiteControl({ powerOnAction: e.target.value })} />}</Field>
                 <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOnDomain} onChange={(e) => updateSiteControl({ powerOnDomain: e.target.value as SiteControlDraft['powerOnDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                <Field label="Domain provenance" help="The coordinator refuses provider for this binding: no control provider can authoritatively identify a power binding's physical targets, so operator-declared is the only accepted value.">
+                <Field label="Domain provenance" help="Only operator-declared is accepted for this binding.">
                   {(p) => <Select {...p} value={draft.siteControl.powerOnProvenance} onChange={(e) => updateSiteControl({ powerOnProvenance: e.target.value as SiteControlDraft['powerOnProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
                 </Field>
               </div>
@@ -1306,7 +1306,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                   <Field label="Action">{(p) => <Input {...p} value={draft.siteControl.powerOffAction} onChange={(e) => updateSiteControl({ powerOffAction: e.target.value })} />}</Field>
                   <Field label="Power domain">{(p) => <Select {...p} value={draft.siteControl.powerOffDomain} onChange={(e) => updateSiteControl({ powerOffDomain: e.target.value as SiteControlDraft['powerOffDomain'] })}>{POWER_DOMAINS.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
                   <Field label="Domain provenance">{(p) => <Select {...p} value={draft.siteControl.powerOffProvenance} onChange={(e) => updateSiteControl({ powerOffProvenance: e.target.value as SiteControlDraft['powerOffProvenance'] })}>{DOMAIN_PROVENANCES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                  <Field label="Removal policy" help="Immediate requires the safe-to-remove attestation and no prerequisites; after-actions requires at least one prerequisite and forbids the attestation.">
+                  <Field label="Removal policy" help="Immediate needs the attestation and no prerequisites; after-actions needs a prerequisite and no attestation.">
                     {(p) => <Select {...p} value={draft.siteControl.removalPolicy} onChange={(e) => updateSiteControl({ removalPolicy: e.target.value as SiteControlDraft['removalPolicy'] })}>{REMOVAL_POLICIES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
                   </Field>
                 </div>
@@ -1344,15 +1344,15 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                 <Field label="Name">{(p) => <Input {...p} value={item.name} onChange={(e) => updateInterlock(index, { name: e.target.value })} />}</Field>
                 <div className="sm-night-session-compact-grid">
                   <Field label="Phase">{(p) => <Select {...p} value={item.phase} onChange={(e) => updateInterlock(index, { phase: e.target.value as InterlockDraft['phase'] })}>{INTERLOCK_PHASES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}</Field>
-                  <Field label="Posture" help="A disabled entry carries only name, phase, and posture. An observe entry must not set on-unavailable or override policy; a block entry requires both.">
+                  <Field label="Posture" help="Block requires on-unavailable and override policy.">
                     {(p) => <Select {...p} value={item.posture} onChange={(e) => updateInterlock(index, { posture: e.target.value as InterlockDraft['posture'] })}>{INTERLOCK_POSTURES.map((option) => <option key={option} value={option}>{option}</option>)}</Select>}
                   </Field>
                   {item.posture !== 'disabled' && (
                     <>
-                      <Field label="Signal action" help="Must name a show.action that declares an mqtt target with a response expectation.">
+                      <Field label="Signal action" help="Must name a show.action with an mqtt target and a response expectation.">
                         {(p) => <Input {...p} value={item.signal} onChange={(e) => updateInterlock(index, { signal: e.target.value })} />}
                       </Field>
-                      <Field label="Freshness (s)" help="Bounds how old the evidence this rule consults may be before it is treated as unavailable.">
+                      <Field label="Freshness (s)" help="Evidence older than this is treated as unavailable.">
                         {(p) => <Input {...p} type="number" min="0" step="1" value={item.freshnessSeconds} onChange={(e) => updateInterlock(index, { freshnessSeconds: e.target.value })} />}
                       </Field>
                       <Field label="Failure text">{(p) => <Input {...p} value={item.failureText} onChange={(e) => updateInterlock(index, { failureText: e.target.value })} />}</Field>

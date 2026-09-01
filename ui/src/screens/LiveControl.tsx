@@ -45,6 +45,7 @@ import { effectiveServerTimeIso } from '../domain/time'
 import {
   audioRows,
   classifyStartPlaylistConflict,
+  currentRunsAbsence,
   describeFPPOutcome,
   formatPosition,
   outputRows,
@@ -166,6 +167,7 @@ export function LiveControl() {
   const state = instance === undefined ? null : transportState(instance)
   const rows = [...outputRows(model, nowIso), ...audioRows(model, nowIso)]
   const confirmed = rows.filter((row) => row.confirmed).length
+  const runsAbsence = currentRunsAbsence(model)
 
   return (
     <>
@@ -275,18 +277,12 @@ export function LiveControl() {
                   <span aria-hidden="true">⏭ </span>Next item
                 </Button>
                 <ButtonRule />
-                <div>
-                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
-                    Stop after this item
-                  </Button>
-                  <p className="sm-small sm-muted">FPP finishes the current item, then stops the playlist.</p>
-                </div>
-                <div>
-                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this loop', () => stopFPPPlaylistGracefully(instance.instanceId, true))}>
-                    Stop after this loop
-                  </Button>
-                  <p className="sm-small sm-muted">FPP finishes the current loop through the playlist, then stops.</p>
-                </div>
+                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
+                  Stop after this item
+                </Button>
+                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this loop', () => stopFPPPlaylistGracefully(instance.instanceId, true))}>
+                  Stop after this loop
+                </Button>
                 <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
                   <span aria-hidden="true">■ </span>Stop now
                 </Button>
@@ -329,6 +325,17 @@ export function LiveControl() {
         title="What each output is doing"
         aside={<span className="sm-small sm-muted">As each output last reported it</span>}
       >
+        {runsAbsence !== null && (
+          <RuledStrip
+            absence={runsAbsence}
+            label={runsAbsence === 'unavailable' ? 'Now playing not reported' : 'Reading'}
+            fact={
+              runsAbsence === 'unavailable'
+                ? 'This coordinator does not serve current-run state, so program audio has no row here.'
+                : 'Reading current-run state for program audio.'
+            }
+          />
+        )}
         {rows.length === 0 ? (
           <RuledStrip
             absence="unobserved"

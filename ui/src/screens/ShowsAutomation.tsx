@@ -1299,7 +1299,7 @@ function AudioTarget({ value, onChange, nodesState }: { value: AudioTargetValue;
               ))}
             </fieldset>
             <span className="sm-field__help" id={helpId}>
-              Declared nodes only. A night announcement or the resting bed plays on every checked node; any other consumer dispatches to the first.
+              Announcements and the resting bed play on every checked node; other actions use the first.
             </span>
           </div>
         ))}

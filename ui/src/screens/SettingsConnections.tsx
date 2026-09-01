@@ -507,8 +507,7 @@ export function SettingsConnections() {
             <div className="sm-stack-3" data-testid="mqtt-hosts">
               <p className="sm-field__label">Host name overrides</p>
               <p className="sm-small sm-muted">
-                Maps a player id from FPP players above to the HostName that player publishes in its own MQTT
-                topics. Only a player id listed here is ingested.
+                Maps a player id to the HostName it publishes in MQTT topics; unlisted ids are ignored.
               </p>
               <div className="sm-panel sm-stack-4">
                 {hosts.map((row, index) => (

@@ -198,3 +198,15 @@ export function audioRows(model: Model, nowIso: string | null): OutputRow[] {
       }
     })
 }
+
+/**
+ * `audioRows` falls back to an empty array whenever `currentRuns` is null,
+ * which reads identically whether the coordinator has never answered yet or
+ * cannot answer at all (an older coordinator serving no `GET /current-runs`).
+ * Those are different facts; this tells them apart so the caller can say
+ * which one it is instead of silently dropping the audio evidence.
+ */
+export function currentRunsAbsence(model: Model): 'loading' | 'unavailable' | null {
+  if (model.currentRuns !== null) return null
+  return model.currentRunsFetchFailed ? 'unavailable' : 'loading'
+}

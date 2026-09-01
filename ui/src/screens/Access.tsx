@@ -52,7 +52,7 @@ const ROLE_HELP: Readonly<Record<PrincipalObject['role'], string>> = {
   operator: 'Runs the show night-to-night: macros, night commands, and the usual live controls.',
   admin: 'Everything, including managing other principals.',
   scheduler: 'Runs macros on a schedule, nothing else.',
-  recovery: 'Holds exactly one scope, Resolume action requests, the narrow bundle the built-in automatic-recovery principal uses rather than a general operator or machine login.',
+  recovery: 'Holds exactly one scope: Resolume action requests. That is the narrow bundle the built-in automatic-recovery principal uses, not a general operator or machine login.',
 }
 
 type AccessData =
@@ -77,7 +77,12 @@ function useAccessData(model: Model, reloadKey: number): AccessData {
       return
     }
     let cancelled = false
-    setState({ kind: 'loading' })
+    // A reload never blanks the region it is refreshing (design guide §6):
+    // once a load has succeeded, later reloads keep that data on screen
+    // until the fresh read lands, rather than collapsing through 'loading'
+    // and unmounting whatever the operator is looking at (the credentials
+    // panel, including a just-issued token value it is showing).
+    setState((prev) => (prev.kind === 'loaded' ? prev : { kind: 'loading' }))
     listPrincipals()
       .then((response) =>
         Promise.all(
@@ -526,6 +531,20 @@ function CredentialsPanel({
   const [revoking, setRevoking] = useState(false)
   const [revokeError, setRevokeError] = useState<string | null>(null)
 
+  const [copyStatus, setCopyStatus] = useState<string | null>(null)
+
+  const copyIssuedValue = () => {
+    if (issuedValue === null) return
+    if (navigator.clipboard === undefined) {
+      setCopyStatus('Copy failed: the browser refused clipboard access on this connection.')
+      return
+    }
+    navigator.clipboard.writeText(issuedValue.value).then(
+      () => setCopyStatus('Copied.'),
+      () => setCopyStatus('Copy failed. Select the value and copy it by hand.'),
+    )
+  }
+
   const issue = () => {
     setIssuing(true)
     setIssueError(null)
@@ -533,6 +552,7 @@ function CredentialsPanel({
     if (expiresLocal !== '') payload.expiresAt = new Date(expiresLocal).toISOString()
     issuePrincipalToken(principal.id, payload)
       .then((response) => {
+        setCopyStatus(null)
         onIssued(response)
         setLabel('')
         setExpiresLocal('')
@@ -576,17 +596,22 @@ function CredentialsPanel({
           <p className="sm-small sm-muted">New credential value. Copy it now; it will not be shown again.</p>
           <p className="sm-data">{issuedValue.value}</p>
           <ButtonRow>
+            <Button onClick={copyIssuedValue}>Copy</Button>
             <Button
+              variant="quiet"
               onClick={() => {
-                void navigator.clipboard?.writeText(issuedValue.value)
+                setCopyStatus(null)
+                onIssued(null)
               }}
             >
-              Copy
-            </Button>
-            <Button variant="quiet" onClick={() => onIssued(null)}>
               Dismiss
             </Button>
           </ButtonRow>
+          {copyStatus !== null && (
+            <p className="sm-small sm-muted" role="status">
+              {copyStatus}
+            </p>
+          )}
         </div>
       )}
 

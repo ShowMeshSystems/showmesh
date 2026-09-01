@@ -16,7 +16,7 @@ import { getShowModeConfig, type ConnectionState, type Model, type ShowModeConfi
 import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
 import { describeSignInState, type SignInState } from '../domain/session'
 import { useModelContext } from './ModelContext'
-import { BootstrapBand, ConnectingBand, SignedOutBand, SignOutControl } from './SessionBand'
+import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
 const CONNECTION_LABEL: Record<Connection, string> = {
   live: 'Live',
@@ -139,6 +139,9 @@ export function Layout() {
   const signIn = describeSignInState(model.session)
   const connection = connectionOf(model.connection)
   const principal = BLIND_PRINCIPAL[signIn.kind] ?? model.session?.principal?.name ?? 'Not signed in'
+  // Shared with SignedOutPlate below: one credential form, so the plate's
+  // own "Sign in" CTA in `main` focuses the same field the band above does.
+  const signedOutBand = useSignedOutBand()
 
   return (
     <div className="sm-shell">
@@ -164,7 +167,7 @@ export function Layout() {
       )}
       {signIn.kind === 'loading' && <ConnectingBand liveUpdatesConnected={model.connection.kind === 'live'} />}
       {signIn.kind === 'bootstrap_required' && <BootstrapBand />}
-      {signIn.kind === 'signed_out' && <SignedOutBand />}
+      {signIn.kind === 'signed_out' && <SignedOutBand state={signedOutBand} />}
       {model.auditStore?.state === 'unusable' && (
         <Notice
           tone="warn"
@@ -188,7 +191,13 @@ export function Layout() {
           <RailLink to="/settings">Settings</RailLink>
         </Rail>
         <main className="sm-main">
-          <Outlet />
+          {signIn.kind === 'signed_out' ? (
+            <SignedOutPlate state={signedOutBand} />
+          ) : signIn.kind === 'bootstrap_required' ? (
+            <BootstrapPlate />
+          ) : (
+            <Outlet />
+          )}
         </main>
       </ShellBody>
     </div>

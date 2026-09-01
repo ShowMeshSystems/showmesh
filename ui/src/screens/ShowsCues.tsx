@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
+  getAudioSettingsConfig,
   getShowCue,
   getShowCueRevisions,
   listConfigObjects,
@@ -14,6 +15,7 @@ import {
 } from '../api'
 import { Button, Callout, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
+import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
@@ -323,6 +325,31 @@ function useAudioNodes(): AudioNodesState {
   return state
 }
 
+type LtcFrameRateState = { kind: 'loading' } | { kind: 'loaded'; fps: number } | { kind: 'failed' }
+
+function useLtcFrameRate(): LtcFrameRateState {
+  const [state, setState] = useState<LtcFrameRateState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    getAudioSettingsConfig()
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', fps: Number(response.payload.ltcFrameRate) })
+      })
+      .catch(() => {
+        if (!cancelled) setState({ kind: 'failed' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+/** hh:mm:ss.ff help, naming the installation's own frame rate, or the honest fallback when it could not be read. */
+function offsetHelp(frameRateState: LtcFrameRateState): string {
+  return frameRateState.kind === 'loaded' ? `hh:mm:ss.ff at ${frameRateState.fps} fps.` : 'hh:mm:ss. Frame rate unavailable.'
+}
+
 function TargetNodeField({
   label,
   value,
@@ -412,8 +439,12 @@ function CueEditor({
   const [kinds, setKinds] = useState<Kinds>(initialKinds(cue))
   const [renderSequence, setRenderSequence] = useState(cue?.payload.outputs.render?.sequence ?? '')
   const [audioAsset, setAudioAsset] = useState(cue?.payload.outputs.audio?.asset ?? '')
-  const [audioStartOffsetMillis, setAudioStartOffsetMillis] = useState(String(cue?.payload.outputs.audio?.startOffsetMillis ?? 0))
-  const [ltcStartOffsetMillis, setLtcStartOffsetMillis] = useState(String(cue?.payload.outputs.ltc?.startOffsetMillis ?? 0))
+  const initialAudioOffsetMillis = cue?.payload.outputs.audio?.startOffsetMillis ?? 0
+  const initialLtcOffsetMillis = cue?.payload.outputs.ltc?.startOffsetMillis ?? 0
+  const [audioStartOffsetText, setAudioStartOffsetText] = useState(() => millisToTimecode(initialAudioOffsetMillis, null))
+  const [ltcStartOffsetText, setLtcStartOffsetText] = useState(() => millisToTimecode(initialLtcOffsetMillis, null))
+  const [audioOffsetTouched, setAudioOffsetTouched] = useState(false)
+  const [ltcOffsetTouched, setLtcOffsetTouched] = useState(false)
   const [announcementPolicy, setAnnouncementPolicy] = useState<'duck' | 'mix' | 'interrupt'>(cue?.payload.outputs.announcement?.policy ?? 'duck')
   const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
@@ -421,11 +452,23 @@ function CueEditor({
   const [ltcTarget, setLtcTarget] = useState(cue?.payload.outputs.ltc?.target ?? '')
   const [announcementTarget, setAnnouncementTarget] = useState(cue?.payload.outputs.announcement?.target ?? '')
   const audioNodes = useAudioNodes()
+  const ltcFrameRateState = useLtcFrameRate()
+  const fps = ltcFrameRateState.kind === 'loaded' ? ltcFrameRateState.fps : null
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowCueConfigResponse>, { kind: 'stale' }> | null>(null)
 
+  useEffect(() => {
+    if (fps === null) return
+    if (!audioOffsetTouched) setAudioStartOffsetText(millisToTimecode(initialAudioOffsetMillis, fps))
+    if (!ltcOffsetTouched) setLtcStartOffsetText(millisToTimecode(initialLtcOffsetMillis, fps))
+    // Reformats the field with the newly-read frame rate only while the operator has not yet typed into it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fps])
+
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const audioOffsetMillis = timecodeToMillis(audioStartOffsetText, fps)
+  const ltcOffsetMillis = timecodeToMillis(ltcStartOffsetText, fps)
 
   const toggleKind = (kind: CueOutputKind) => {
     setKinds((prev) => {
@@ -453,22 +496,22 @@ function CueEditor({
     const fade = Number(fadeMillis)
     if (!Number.isInteger(fade) || fade < 0 || fade > 60000) blockReason = 'Fade must be a whole number of milliseconds, 0 to 60000.'
   }
-  if (blockReason === null && kinds.has('audio')) {
-    const offset = Number(audioStartOffsetMillis)
-    if (!Number.isInteger(offset) || offset < 0) blockReason = 'Audio start offset must be a whole number of milliseconds, 0 or more.'
+  if (blockReason === null && kinds.has('audio') && audioOffsetMillis === null) {
+    blockReason = 'Start offset must be hh:mm:ss.ff or a whole number of milliseconds.'
   }
   if (blockReason === null && kinds.has('ltc')) {
-    const offset = Number(ltcStartOffsetMillis)
-    if (!Number.isInteger(offset) || offset < 0 || offset > 86400000) blockReason = 'LTC start offset must be a whole number of milliseconds, 0 to 86400000.'
+    if (ltcOffsetMillis === null) blockReason = 'Start offset must be hh:mm:ss.ff or a whole number of milliseconds.'
+    else if (ltcOffsetMillis > 86400000) blockReason = 'Start offset must be 24 hours or less.'
   }
 
   const activationDraft: CueActivationDraft = {
     render: kinds.has('render') ? { sequence: renderSequence } : null,
-    audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: Number(audioStartOffsetMillis) || 0, target: audioTarget } : null,
-    ltc: kinds.has('ltc') ? { startOffsetMillis: Number(ltcStartOffsetMillis) || 0, target: ltcTarget } : null,
+    audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: audioOffsetMillis ?? 0, target: audioTarget } : null,
+    ltc: kinds.has('ltc') ? { startOffsetMillis: ltcOffsetMillis ?? 0, target: ltcTarget } : null,
     announcement: kinds.has('announcement')
       ? { policy: announcementPolicy, duckGainDb: Number(duckGainDb) || 0, fadeMillis: Number(fadeMillis) || 0, target: announcementTarget }
       : null,
+    ltcFps: fps,
   }
 
   const save = () => {
@@ -479,7 +522,7 @@ function CueEditor({
         ? {
             audio: {
               asset: audioAsset,
-              startOffsetMillis: Number(audioStartOffsetMillis),
+              startOffsetMillis: audioOffsetMillis ?? 0,
               ...(audioTarget !== '' ? { target: audioTarget } : {}),
             },
           }
@@ -487,7 +530,7 @@ function CueEditor({
       ...(kinds.has('ltc')
         ? {
             ltc: {
-              startOffsetMillis: Number(ltcStartOffsetMillis),
+              startOffsetMillis: ltcOffsetMillis ?? 0,
               ...(ltcTarget !== '' ? { target: ltcTarget } : {}),
             },
           }
@@ -617,10 +660,7 @@ function CueEditor({
               </Select>
             )}
           </Field>
-          <p className="sm-small sm-faint">
-            This show's current audio assets, by logical sequence. A cue stores the sequence, never an asset id:
-            the coordinator resolves it that way in <span className="sm-data">assetsync/cuecatalog.go</span>.
-          </p>
+          <p className="sm-small sm-faint">This show's current audio assets, by sequence.</p>
           {audioAsset !== '' && !audioAssets.some((asset) => asset.sequence === audioAsset) && (
             <RuledStrip
               absence="failed"
@@ -629,9 +669,18 @@ function CueEditor({
               detail="Upload it in Assets, or choose a different one."
             />
           )}
-          <Field label="Start offset (ms)" help="Milliseconds into the asset where playback begins.">
+          <Field label="Start offset" help={offsetHelp(ltcFrameRateState)}>
             {(props) => (
-              <Input {...props} type="number" min={0} step={1} value={audioStartOffsetMillis} onChange={(e) => setAudioStartOffsetMillis(e.target.value)} />
+              <Input
+                {...props}
+                inputMode="numeric"
+                placeholder="00:00:00.00"
+                value={audioStartOffsetText}
+                onChange={(e) => {
+                  setAudioOffsetTouched(true)
+                  setAudioStartOffsetText(e.target.value)
+                }}
+              />
             )}
           </Field>
           <TargetNodeField label="Audio target node" value={audioTarget} onChange={setAudioTarget} nodesState={audioNodes} />
@@ -640,9 +689,18 @@ function CueEditor({
 
       {kinds.has('ltc') && (
         <div className="sm-inspector__group">
-          <Field label="Start offset (ms)" help="Milliseconds of timecode to skip before it starts emitting.">
+          <Field label="Start offset" help={offsetHelp(ltcFrameRateState)}>
             {(props) => (
-              <Input {...props} type="number" min={0} max={86400000} step={1} value={ltcStartOffsetMillis} onChange={(e) => setLtcStartOffsetMillis(e.target.value)} />
+              <Input
+                {...props}
+                inputMode="numeric"
+                placeholder="00:00:00.00"
+                value={ltcStartOffsetText}
+                onChange={(e) => {
+                  setLtcOffsetTouched(true)
+                  setLtcStartOffsetText(e.target.value)
+                }}
+              />
             )}
           </Field>
           <TargetNodeField label="LTC target node" value={ltcTarget} onChange={setLtcTarget} nodesState={audioNodes} />

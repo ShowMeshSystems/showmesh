@@ -362,10 +362,46 @@ describe('Live Control', () => {
     expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
   })
 
-  it('states the consequence of each graceful stop button', () => {
+  it('keeps the graceful-stop buttons in the transport button row, undescribed, matching the mock', () => {
     renderScreen({ fpp: [fppInstance('playing')], session: commandAllowedSession })
 
-    expect(screen.getByText('FPP finishes the current item, then stops the playlist.')).toBeInTheDocument()
-    expect(screen.getByText('FPP finishes the current loop through the playlist, then stops.')).toBeInTheDocument()
+    const item = screen.getByRole('button', { name: 'Stop after this item' })
+    const loop = screen.getByRole('button', { name: 'Stop after this loop' })
+    const now = screen.getByRole('button', { name: /Stop now/ })
+    // Same row as every other transport button, in mock order: no wrapper div, no description paragraph.
+    expect(item.parentElement).toBe(loop.parentElement)
+    expect(item.parentElement).toBe(now.parentElement)
+    expect(item.parentElement).toHaveClass('sm-btn-row')
+    expect(screen.queryByText('FPP finishes the current item, then stops the playlist.')).not.toBeInTheDocument()
+    expect(screen.queryByText('FPP finishes the current loop through the playlist, then stops.')).not.toBeInTheDocument()
+  })
+
+  it('shows that current-run state has not loaded yet, before the first response', () => {
+    renderScreen({ fpp: [fppInstance('playing')], session: commandAllowedSession })
+    expect(screen.getByText('Reading')).toBeInTheDocument()
+    expect(screen.getByText('Reading current-run state for program audio.')).toBeInTheDocument()
+  })
+
+  it('shows current-run state as unavailable, not silently dropped, when the coordinator does not serve it', () => {
+    renderScreen({
+      fpp: [fppInstance('playing')],
+      session: commandAllowedSession,
+      currentRuns: null,
+      currentRunsFetchFailed: true,
+    })
+    expect(screen.getByText('Now playing not reported')).toBeInTheDocument()
+    expect(
+      screen.getByText('This coordinator does not serve current-run state, so program audio has no row here.'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows no current-run absence notice once current-run state has loaded', () => {
+    renderScreen({
+      fpp: [fppInstance('playing')],
+      session: commandAllowedSession,
+      currentRuns: { serverTime: '2026-08-28T21:07:00Z', activeShow: { configured: false }, runs: [] } as never,
+    })
+    expect(screen.queryByText('Now playing not reported')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reading current-run state for program audio.')).not.toBeInTheDocument()
   })
 })

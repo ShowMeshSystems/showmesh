@@ -257,7 +257,7 @@ describe('Shows · Assets tab', () => {
     fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
 
-    expect(screen.getByText(/Rollback, these exact bytes were current before/)).toBeInTheDocument()
+    expect(screen.getByText(/Rolled back to bytes current before/)).toBeInTheDocument()
     expect(screen.getByText('Same bytes as current')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Make current' })).toHaveLength(1)
   })

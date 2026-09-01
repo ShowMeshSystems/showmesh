@@ -65,3 +65,66 @@ export function formatDateClock(iso: string | null): string | null {
   const clock = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
   return `${day} ${clock}`
 }
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/** How many distinct frame numbers an fps names, 0-based. 29.97 is counted (and rejected) as 30 non-drop frames, matching audio.settings' own ltcFrameRate vocabulary. */
+function frameCeiling(fps: number): number {
+  return fps === 29.97 ? 30 : Math.round(fps)
+}
+
+/**
+ * `hh:mm:ss` at a known fps, `.ff` appended only when the frame remainder is
+ * nonzero. `fps === null` drops the frame field entirely - the caller's own
+ * fallback for an unread frame rate.
+ */
+export function millisToTimecode(ms: number, fps: number | null): string {
+  const totalMs = Math.max(0, Math.round(ms))
+  const totalSeconds = Math.floor(totalMs / 1000)
+  const hh = Math.floor(totalSeconds / 3600)
+  const mm = Math.floor((totalSeconds % 3600) / 60)
+  const ss = totalSeconds % 60
+  const base = `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`
+  if (fps === null || fps <= 0) return base
+  const remainderMs = totalMs - totalSeconds * 1000
+  const frames = Math.min(Math.round((remainderMs / 1000) * fps), frameCeiling(fps) - 1)
+  return frames === 0 ? base : `${base}.${pad2(frames)}`
+}
+
+/**
+ * Parses `hh:mm:ss`, `hh:mm:ss.ff`, `mm:ss`, `mm:ss.ff`, or a bare integer of
+ * milliseconds (paste-friendly). Returns null for anything malformed, an
+ * out-of-range minute/second field, or a frame count at or beyond `fps`
+ * (a `.ff` suffix is itself refused when `fps` is null - there is no rate to
+ * interpret it against). Rounds to a whole millisecond.
+ */
+export function timecodeToMillis(text: string, fps: number | null): number | null {
+  const trimmed = text.trim()
+  if (trimmed === '') return null
+  if (/^\d+$/.test(trimmed)) return Math.round(Number(trimmed))
+
+  const [timePart, framePart, extra] = trimmed.split('.')
+  if (extra !== undefined || timePart === undefined) return null
+
+  const segments = timePart.split(':')
+  if (segments.length !== 2 && segments.length !== 3) return null
+  if (!segments.every((segment) => /^\d{1,2}$/.test(segment))) return null
+
+  const [hh, mm, ss] =
+    segments.length === 3 ? [Number(segments[0]), Number(segments[1]), Number(segments[2])] : [0, Number(segments[0]), Number(segments[1])]
+  if (mm >= 60 || ss >= 60) return null
+
+  let frames = 0
+  if (framePart !== undefined) {
+    if (!/^\d{1,2}$/.test(framePart)) return null
+    if (fps === null || fps <= 0) return null
+    frames = Number(framePart)
+    if (frames >= frameCeiling(fps)) return null
+  }
+
+  const wholeMs = (hh * 3600 + mm * 60 + ss) * 1000
+  const frameMs = fps === null || fps <= 0 ? 0 : (frames / fps) * 1000
+  return Math.round(wholeMs + frameMs)
+}

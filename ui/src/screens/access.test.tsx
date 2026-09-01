@@ -177,6 +177,89 @@ describe('Access', () => {
     expect(screen.queryByText('sk-live-secret-value-shown-once')).not.toBeInTheDocument()
   })
 
+  it('keeps the issued value visible through the reload it triggers, even while the reload is still pending', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    let tokensCall = 0
+    let resolveSecondTokensRead: ((value: unknown) => void) | undefined
+    stubs.listPrincipalTokens = () => {
+      tokensCall += 1
+      if (tokensCall === 1) return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [token()] })
+      return new Promise((resolve) => {
+        resolveSecondTokensRead = resolve
+      })
+    }
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    stubs.issuePrincipalToken = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        token: token({ id: 'cred-9001', hint: 'sk...9001', lastUsedAt: null, createdAt: '2026-08-30T21:07:00Z' }),
+        value: 'sk-live-secret-value-shown-once',
+      })
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /Issue credential/ }))
+    await waitFor(() => expect(screen.getByText('sk-live-secret-value-shown-once')).toBeInTheDocument())
+
+    // The reload triggered by a successful issue is now in flight (its
+    // listPrincipalTokens read is the pending second call). The value must
+    // still be on screen while that read is outstanding, not just before
+    // and after it.
+    await waitFor(() => expect(tokensCall).toBe(2))
+    expect(screen.getByText('sk-live-secret-value-shown-once')).toBeInTheDocument()
+
+    resolveSecondTokensRead?.({
+      serverTime: '2026-08-30T21:07:00Z',
+      tokens: [token(), token({ id: 'cred-9001', hint: 'sk...9001', lastUsedAt: null, createdAt: '2026-08-30T21:07:00Z' })],
+    })
+    await waitFor(() => expect(screen.getByText('cred-9001', { exact: false })).toBeInTheDocument())
+    expect(screen.getByText('sk-live-secret-value-shown-once')).toBeInTheDocument()
+  })
+
+  it('reports a successful clipboard copy in a status line', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [token()] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    stubs.issuePrincipalToken = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        token: token({ id: 'cred-9001', hint: 'sk...9001', lastUsedAt: null, createdAt: '2026-08-30T21:07:00Z' }),
+        value: 'sk-live-secret-value-shown-once',
+      })
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.assign(navigator, { clipboard: { writeText } })
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /Issue credential/ }))
+    await waitFor(() => expect(screen.getByText('sk-live-secret-value-shown-once')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(screen.getByText('Copied.')).toBeInTheDocument())
+    expect(writeText).toHaveBeenCalledWith('sk-live-secret-value-shown-once')
+  })
+
+  it('reports a failed clipboard copy as a fact rather than pretending it worked', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
+    stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [token()] })
+    stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
+    stubs.issuePrincipalToken = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        token: token({ id: 'cred-9001', hint: 'sk...9001', lastUsedAt: null, createdAt: '2026-08-30T21:07:00Z' }),
+        value: 'sk-live-secret-value-shown-once',
+      })
+    Object.assign(navigator, { clipboard: undefined })
+    renderScreen()
+    await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /Issue credential/ }))
+    await waitFor(() => expect(screen.getByText('sk-live-secret-value-shown-once')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(screen.getByText(/Copy failed/)).toBeInTheDocument())
+  })
+
   it('sends no expiresAt key when the expiry field is left blank', async () => {
     stubs.listPrincipals = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', principals: [principal()] })
     stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [token()] })

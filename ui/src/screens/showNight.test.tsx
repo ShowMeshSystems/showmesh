@@ -300,7 +300,7 @@ describe('Show Night', () => {
       return new Promise(() => {})
     }
     renderScreen({ nightSession: session(), session: allowedSession })
-    fireEvent.click(screen.getByLabelText(/Late start/))
+    fireEvent.click(screen.getByLabelText(/Skip the enter-show lead/))
     fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
     expect(calls[0]?.[3]).toBe(true)
   })
@@ -323,7 +323,7 @@ describe('Show Night', () => {
       return new Promise(() => {})
     }
     renderScreen({ nightSession: session(), session: allowedSession })
-    fireEvent.click(screen.getByLabelText(/Late start/))
+    fireEvent.click(screen.getByLabelText(/Skip the enter-show lead/))
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     expect(calls[0]?.[3]).toBeUndefined()
   })
