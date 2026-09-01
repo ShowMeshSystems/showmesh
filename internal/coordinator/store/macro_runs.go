@@ -466,7 +466,7 @@ func stringPtrToDB(s *string) any {
 // the server answers deletes an outcome from existence" lesson) returns
 // the existing run — even a still-running one — rather than being told its
 // own run is "already in flight."
-func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord, steps []MacroRunStepRecord, now time.Time) (MacroRunRecord, []MacroRunStepRecord, error) {
+func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord, steps []MacroRunStepRecord, now time.Time, hooks commitHook) (MacroRunRecord, []MacroRunStepRecord, error) {
 	switch {
 	case run.ID == "":
 		return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run: ID is empty")
@@ -639,8 +639,12 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 	}
 
 	// Same two independent prune triggers as insertCommand (commands.go):
-	// insert volume and elapsed wall-clock time since the last pass.
-	byCount := s.macroRunInsertCount.Add(1)%pruneEveryNMacroRuns == 0
+	// insert volume and elapsed wall-clock time since the last pass. See
+	// [commitHook]'s doc comment for why the mutation itself is queued
+	// through hooks (deferred to commit via [Store.CreateMacroRun]'s own
+	// managed transaction, or [Tx.CreateMacroRun]'s caller-owned one)
+	// rather than applied here directly.
+	byCount := (s.macroRunInsertCount.Load()+1)%pruneEveryNMacroRuns == 0
 	byAge := false
 	if !byCount {
 		last := s.lastMacroRunPruneAtNanos.Load()
@@ -650,8 +654,10 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 		if err := s.pruneMacroRuns(ctx, q); err != nil {
 			return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run %q: %w", run.ID, err)
 		}
-		s.lastMacroRunPruneAtNanos.Store(s.now().UnixNano())
+		prunedAt := s.now()
+		hooks.after(func() { s.lastMacroRunPruneAtNanos.Store(prunedAt.UnixNano()) })
 	}
+	hooks.after(func() { s.macroRunInsertCount.Add(1) })
 
 	return run, recSteps, nil
 }
@@ -681,13 +687,15 @@ func (s *Store) CreateMacroRun(ctx context.Context, run MacroRunRecord, steps []
 	}
 	defer func() { _ = sqlTx.Rollback() }() // no-op once Commit succeeds
 
-	rec, recSteps, err := createMacroRun(ctx, sqlTx, s, run, steps, s.now())
+	var hooks pruneHooks
+	rec, recSteps, err := createMacroRun(ctx, sqlTx, s, run, steps, s.now(), &hooks)
 	if err != nil {
 		return MacroRunRecord{}, nil, err
 	}
 	if err := sqlTx.Commit(); err != nil {
 		return MacroRunRecord{}, nil, fmt.Errorf("store: commit create macro run: %w", err)
 	}
+	hooks.run()
 	return rec, recSteps, nil
 }
 
@@ -696,7 +704,7 @@ func (s *Store) CreateMacroRun(ctx context.Context, run MacroRunRecord, steps []
 // write (e.g. an audit entry) in one transaction, the same reason every
 // other *Tx form in this package exists.
 func (t *Tx) CreateMacroRun(ctx context.Context, run MacroRunRecord, steps []MacroRunStepRecord) (MacroRunRecord, []MacroRunStepRecord, error) {
-	return createMacroRun(ctx, t.tx, t.s, run, steps, t.s.now())
+	return createMacroRun(ctx, t.tx, t.s, run, steps, t.s.now(), t)
 }
 
 func getMacroRunByIdempotencyKey(ctx context.Context, q querier, key string) (MacroRunRecord, error) {

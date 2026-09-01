@@ -78,7 +78,7 @@ type AuditRecord struct {
 // only used for its clock and its retention counters/bounds, never for a
 // second connection — appending through s.db here (instead of q) would
 // silently defeat the whole point of a caller passing a [Tx] in.
-func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord) (int64, error) {
+func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord, hooks commitHook) (int64, error) {
 	id, err := insertAuditRow(ctx, q, s, rec)
 	if err != nil {
 		return 0, err
@@ -92,13 +92,22 @@ func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord)
 	// retention.go for why both are needed rather than either alone.
 	//
 	// auditAppendCount and lastAuditPruneAtNanos are process-wide,
-	// in-memory, and NOT part of q's transaction: a caller whose
-	// transaction later rolls back (review round 5 finding 2:
-	// [Store.ProbeAuditWrite] always does) cannot undo either one. That
-	// is exactly why the probe calls [insertAuditRow] directly instead of
-	// this function: never move this bookkeeping to run before q's
-	// caller has committed, and never let the probe reach it.
-	byCount := s.auditAppendCount.Add(1)%pruneEveryNAuditEntries == 0
+	// in-memory state, and their mutation is queued through hooks rather
+	// than applied here directly: it must land only once q's transaction
+	// has actually committed (see [commitHook]), never before, or a
+	// caller whose transaction later rolls back (identity.AuditedWrite
+	// and identity.WriteAudit on an [ErrCommitFailed] being the confirmed
+	// case, [Store.ProbeAuditWrite] always rolling back being the other)
+	// would leave both advanced for an append and a prune that never
+	// happened. byCount is therefore predicted from auditAppendCount's
+	// current, already-committed value; see [appendEvent]'s identical
+	// comment in events.go for what that trades away (nothing on the
+	// eventual count, an approximation only on prune TIMING, and only for
+	// a caller appending to this table more than once inside one
+	// still-open transaction, which no caller does today). ProbeAuditWrite
+	// itself never reaches this function at all: it calls
+	// [insertAuditRow] directly, exactly as before this fix.
+	byCount := (s.auditAppendCount.Load()+1)%pruneEveryNAuditEntries == 0
 	byAge := false
 	if !byCount {
 		last := s.lastAuditPruneAtNanos.Load()
@@ -108,8 +117,10 @@ func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord)
 		if err := s.pruneAudit(ctx, q); err != nil {
 			return 0, fmt.Errorf("store: append audit entry: %w", err)
 		}
-		s.lastAuditPruneAtNanos.Store(s.now().UnixNano())
+		prunedAt := s.now()
+		hooks.after(func() { s.lastAuditPruneAtNanos.Store(prunedAt.UnixNano()) })
 	}
+	hooks.after(func() { s.auditAppendCount.Add(1) })
 
 	return id, nil
 }
@@ -188,7 +199,8 @@ func (s *Store) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, e
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	id, err := appendAuditEntry(ctx, tx, s, rec)
+	var hooks pruneHooks
+	id, err := appendAuditEntry(ctx, tx, s, rec, &hooks)
 	if err != nil {
 		return 0, err
 	}
@@ -196,6 +208,7 @@ func (s *Store) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, e
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("store: commit append audit entry: %w", err)
 	}
+	hooks.run()
 	return id, nil
 }
 
@@ -205,7 +218,7 @@ func (s *Store) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, e
 // together with whatever state change t's caller composed it with. See
 // store/tx.go's [Tx] doc comment.
 func (t *Tx) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, error) {
-	return appendAuditEntry(ctx, t.tx, t.s, rec)
+	return appendAuditEntry(ctx, t.tx, t.s, rec, t)
 }
 
 // errAuditProbeRollback is the sentinel [Store.ProbeAuditWrite]'s own
