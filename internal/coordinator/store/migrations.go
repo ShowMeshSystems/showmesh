@@ -63,7 +63,7 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
-	{version: 21, sql: schemaV21},
+	{version: 27, sql: schemaV27},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1084,8 +1084,8 @@ CREATE TABLE node_asset_reports (
 // what it last told a session to be, not a second engine.
 //
 // id alone is this table's PRIMARY KEY only up to this migration:
-// schemaV21 re-keys it to (node_id, id), because a session id is not
-// globally unique (see schemaV21's own doc comment) — do not copy this
+// schemaV27 re-keys it to (node_id, id), because a session id is not
+// globally unique (see schemaV27's own doc comment); do not copy this
 // table's shape for a new migration without reading that one first.
 const schemaV9 = `
 CREATE TABLE audio_sessions (
@@ -1348,8 +1348,12 @@ ALTER TABLE fpp_playlist_entry_observations
     ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
 `
 
-// schemaV21 re-keys audio_sessions (schemaV9) from `id TEXT PRIMARY KEY`
-// to a composite `(node_id, id)` primary key. The defect it fixes is that
+// schemaV27 re-keys audio_sessions (schemaV9) from `id TEXT PRIMARY KEY`
+// to a composite `(node_id, id)` primary key. This migration is numbered
+// 27, not 21: migrate skips every version at or below a store's stamped
+// PRAGMA user_version, and 21 already sits at or below main's shipped
+// maximum, so a released binary would never run it under that number.
+// The defect it fixes is that
 // a session id is not globally unique — the cue and blackAndSilence
 // session ids are global constants (STEP-9-SPEC.md / TRACK-C-audio-node.md's
 // fixed session-id vocabulary), so two audio nodes each dispatching the
@@ -1373,8 +1377,8 @@ ALTER TABLE fpp_playlist_entry_observations
 // serves every "WHERE node_id = ?" lookup ListAudioSessionsByNode issues,
 // so a separate single-column index on node_id would be redundant with
 // the key itself.
-const schemaV21 = `
-CREATE TABLE audio_sessions_v21 (
+const schemaV27 = `
+CREATE TABLE audio_sessions_v27 (
     node_id      TEXT NOT NULL,
     id           TEXT NOT NULL,
     desired_json TEXT NOT NULL,
@@ -1384,12 +1388,12 @@ CREATE TABLE audio_sessions_v21 (
     PRIMARY KEY (node_id, id)
 );
 
-INSERT INTO audio_sessions_v21 (node_id, id, desired_json, revision, created_at, updated_at)
+INSERT INTO audio_sessions_v27 (node_id, id, desired_json, revision, created_at, updated_at)
     SELECT node_id, id, desired_json, revision, created_at, updated_at FROM audio_sessions;
 
 DROP TABLE audio_sessions;
 
-ALTER TABLE audio_sessions_v21 RENAME TO audio_sessions;
+ALTER TABLE audio_sessions_v27 RENAME TO audio_sessions;
 `
 
 // maxMigrationVersion is the maximum [migration.version] across
