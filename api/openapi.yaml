@@ -14221,7 +14221,13 @@ components:
         pinned against pkg/audio's vocabulary on Track C's branch
         (track-c/audio-node). crossfadeMs is required when itemTransition
         is "crossfade" and must be absent otherwise (server-side; not
-        expressible here). maxGainDb must be <= 0.
+        expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs
+        are the show-boundary fade pair: fadeOutMs fades the bed to
+        silence before it is paused or stopped for a show, fadeInMs
+        fades it back up to maxGainDb after resting returns. They must
+        be configured together, or both omitted for an instant cut
+        exactly as before this pair existed (server-side; not
+        expressible here).
       required: [items, repeat, resume, itemTransition, maxGainDb]
       properties:
         items:
@@ -14244,6 +14250,12 @@ components:
         maxGainDb:
           type: number
           maximum: 0
+        fadeOutMs:
+          type: integer
+          minimum: 1
+        fadeInMs:
+          type: integer
+          minimum: 1
     ConfigNightSessionResting:
       type: object
       description: >-
@@ -14401,7 +14413,9 @@ components:
         required - an absent repeat takes its documented default of
         "none". crossfadeMs is still required when itemTransition is
         "crossfade" and must be absent otherwise (server-side; not
-        expressible here).
+        expressible here). fadeOutMs and fadeInMs still must be
+        configured together, or both omitted for an instant cut
+        (server-side; not expressible here).
       required: [items, resume, itemTransition, maxGainDb]
       properties:
         items:
@@ -14424,6 +14438,12 @@ components:
         maxGainDb:
           type: number
           maximum: 0
+        fadeOutMs:
+          type: integer
+          minimum: 1
+        fadeInMs:
+          type: integer
+          minimum: 1
     ConfigNightSessionRestingWrite:
       type: object
       description: >-
