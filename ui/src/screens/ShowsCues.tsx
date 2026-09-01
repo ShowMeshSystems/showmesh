@@ -3,8 +3,10 @@ import { useParams } from 'react-router-dom'
 import {
   getShowCue,
   getShowCueRevisions,
+  listConfigObjects,
   putShowCue,
   type Asset,
+  type ConfigObjectSummary,
   type ConfigShowCue,
   type ConfigShowCueOutputs,
   type ShowCueConfigResponse,
@@ -298,6 +300,73 @@ function CueTable({
   )
 }
 
+type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
+
+function useAudioNodes(): AudioNodesState {
+  const [state, setState] = useState<AudioNodesState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listConfigObjects('audio.node')
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', nodes: response.objects })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+function TargetNodeField({
+  label,
+  value,
+  onChange,
+  nodesState,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  nodesState: AudioNodesState
+}) {
+  if (nodesState.kind === 'loading') return <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
+  if (nodesState.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
+  if (nodesState.nodes.length === 0) {
+    return (
+      <>
+        <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
+        {value !== '' && (
+          <p className="sm-small sm-faint">
+            Stored target: <span className="sm-data">{value}</span>
+          </p>
+        )}
+      </>
+    )
+  }
+  const notDeclared = value !== '' && !nodesState.nodes.some((node) => node.id === value)
+  return (
+    <Field
+      label={label}
+      help={notDeclared ? `${value} is not declared; readiness will report it as unbound.` : "Empty resolves to the installation's single program+ltc node."}
+    >
+      {(props) => (
+        <Select {...props} value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Resolve to the program+ltc node</option>
+          {nodesState.nodes.map((node) => (
+            <option key={node.id} value={node.id}>
+              {node.label}
+            </option>
+          ))}
+          {notDeclared && <option value={value}>{value} (not declared)</option>}
+        </Select>
+      )}
+    </Field>
+  )
+}
+
 type Kinds = Set<CueOutputKind>
 
 function initialKinds(cue: ShowCueConfigResponse | null): Kinds {
@@ -337,6 +406,10 @@ function CueEditor({
   const [announcementPolicy, setAnnouncementPolicy] = useState<'duck' | 'mix' | 'interrupt'>(cue?.payload.outputs.announcement?.policy ?? 'duck')
   const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
+  const [audioTarget, setAudioTarget] = useState(cue?.payload.outputs.audio?.target ?? '')
+  const [ltcTarget, setLtcTarget] = useState(cue?.payload.outputs.ltc?.target ?? '')
+  const [announcementTarget, setAnnouncementTarget] = useState(cue?.payload.outputs.announcement?.target ?? '')
+  const audioNodes = useAudioNodes()
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowCueConfigResponse>, { kind: 'stale' }> | null>(null)
@@ -374,14 +447,30 @@ function CueEditor({
     if (blockReason !== null) return
     const outputs: ConfigShowCueOutputs = {
       ...(kinds.has('render') ? { render: { sequence: renderSequence.trim() } } : {}),
-      ...(kinds.has('audio') ? { audio: { asset: audioAsset, startOffsetMillis: cue?.payload.outputs.audio?.startOffsetMillis ?? 0 } } : {}),
-      ...(kinds.has('ltc') ? { ltc: { startOffsetMillis: cue?.payload.outputs.ltc?.startOffsetMillis ?? 0 } } : {}),
+      ...(kinds.has('audio')
+        ? {
+            audio: {
+              asset: audioAsset,
+              startOffsetMillis: cue?.payload.outputs.audio?.startOffsetMillis ?? 0,
+              ...(audioTarget !== '' ? { target: audioTarget } : {}),
+            },
+          }
+        : {}),
+      ...(kinds.has('ltc')
+        ? {
+            ltc: {
+              startOffsetMillis: cue?.payload.outputs.ltc?.startOffsetMillis ?? 0,
+              ...(ltcTarget !== '' ? { target: ltcTarget } : {}),
+            },
+          }
+        : {}),
       ...(kinds.has('announcement')
         ? {
             announcement: {
               policy: announcementPolicy,
               fadeMillis: Number(fadeMillis),
               ...(announcementPolicy === 'duck' ? { duckGainDb: Number(duckGainDb) } : {}),
+              ...(announcementTarget !== '' ? { target: announcementTarget } : {}),
             },
           }
         : {}),
@@ -507,6 +596,13 @@ function CueEditor({
             This show's current audio assets, by logical sequence. A cue stores the sequence, never an asset id:
             the coordinator resolves it that way in <span className="sm-data">assetsync/cuecatalog.go</span>.
           </p>
+          <TargetNodeField label="Audio target node" value={audioTarget} onChange={setAudioTarget} nodesState={audioNodes} />
+        </div>
+      )}
+
+      {kinds.has('ltc') && (
+        <div className="sm-inspector__group">
+          <TargetNodeField label="LTC target node" value={ltcTarget} onChange={setLtcTarget} nodesState={audioNodes} />
         </div>
       )}
 
@@ -529,6 +625,7 @@ function CueEditor({
             </Field>
             <Field label="Fade (ms)">{(props) => <Input {...props} value={fadeMillis} onChange={(e) => setFadeMillis(e.target.value)} />}</Field>
           </div>
+          <TargetNodeField label="Announcement target node" value={announcementTarget} onChange={setAnnouncementTarget} nodesState={audioNodes} />
         </div>
       )}
 

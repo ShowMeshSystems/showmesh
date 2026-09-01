@@ -6,6 +6,7 @@ import {
   type ActionBinding,
   type ConfigObjectSummary,
   type ConfigShowAction,
+  type ConfigShowActionTarget,
   type ConfigShowMacro,
   type Model,
   type SessionResponse,
@@ -498,6 +499,131 @@ describe('Shows · Automation tab', () => {
       fireEvent.click(save)
       expect(await screen.findByText(/Stale write/)).toBeInTheDocument()
       expect(putSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('editing an audio action target', () => {
+    function nodeSummary(id: string, label: string): ConfigObjectSummary {
+      return { id, label, show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' }
+    }
+
+    function setupWithAudioAction(target: Partial<ConfigShowActionTarget>) {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => {
+        if (kind === 'audio.node') return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [nodeSummary('a', 'Node A'), nodeSummary('b', 'Node B')] })
+        return withContents(kind, [], [actionSummary()])
+      }
+      stubs.listAssets = assetsEmpty
+      stubs.getShowAction = (id: string) =>
+        Promise.resolve(
+          actionResponse(
+            id,
+            1,
+            actionPayload({ target: { integration: 'audio', audioSessionId: 's1', audioAction: 'audio.session.start', ...target } as ConfigShowActionTarget }),
+          ),
+        )
+      stubs.listActionBindings = () => Promise.resolve([binding()])
+      return renderWorkspace({ session: signedIn(['config:write']) })
+    }
+
+    it('a stored array of node ids renders every box checked and saves the array unchanged', async () => {
+      setupWithAudioAction({ audioNodeId: ['a', 'b'] })
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      const aside = screen.getByRole('complementary')
+      const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
+      const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
+      expect(boxA).toBeChecked()
+      expect(boxB).toBeChecked()
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toEqual(['a', 'b'])
+    })
+
+    it('a stored bare string renders one box checked and saves it back as a bare string', async () => {
+      setupWithAudioAction({ audioNodeId: 'a' })
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      const aside = screen.getByRole('complementary')
+      const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
+      const boxB = within(aside).getByRole('checkbox', { name: 'Node B' })
+      expect(boxA).toBeChecked()
+      expect(boxB).not.toBeChecked()
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toBe('a')
+    })
+
+    it('checking a second node on a single-node action saves an array', async () => {
+      setupWithAudioAction({ audioNodeId: 'a' })
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      const aside = screen.getByRole('complementary')
+      const boxB = await within(aside).findByRole('checkbox', { name: 'Node B' })
+      fireEvent.click(boxB)
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toEqual(['a', 'b'])
+    })
+
+    it('a stored single-element array round-trips as an array, not a bare string', async () => {
+      setupWithAudioAction({ audioNodeId: ['a'] })
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      const aside = screen.getByRole('complementary')
+      const boxA = await within(aside).findByRole('checkbox', { name: 'Node A' })
+      expect(boxA).toBeChecked()
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toEqual(['a'])
+    })
+
+    it('a node id not in the declared list renders checked and labelled not declared, and unchecking it drops it', async () => {
+      setupWithAudioAction({ audioNodeId: ['a', 'ghost-node'] })
+      let sent: ConfigShowActionTarget | null = null
+      stubs.putShowAction = (id: string, payload: { target: ConfigShowActionTarget }) => {
+        sent = payload.target
+        return Promise.resolve(actionResponse(id, 2, actionPayload({ target: payload.target })))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Start Preshow Playlist' }))
+      const aside = screen.getByRole('complementary')
+      const ghostBox = await within(aside).findByRole('checkbox', { name: 'ghost-node (not declared)' })
+      expect(ghostBox).toBeChecked()
+      fireEvent.click(ghostBox)
+
+      const save = await screen.findByRole('button', { name: 'Save action' })
+      await waitFor(() => expect(save).not.toBeDisabled())
+      fireEvent.click(save)
+      await waitFor(() => expect(sent).not.toBeNull())
+      expect((sent as unknown as ConfigShowActionTarget).audioNodeId).toEqual(['a'])
     })
   })
 })

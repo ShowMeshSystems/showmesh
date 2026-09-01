@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   getMacroRun,
@@ -870,7 +870,7 @@ type MqttTargetValue = {
   expectValue: string
 }
 type ResolumeTargetValue = { action: string; ref: Record<string, string> }
-type AudioTargetValue = { audioNodeIds: string[]; audioSessionId: string; audioAction: string; gainDb: string }
+type AudioTargetValue = { audioNodeIds: string[]; audioSessionId: string; audioAction: string; gainDb: string; audioNodeIdWasArray: boolean }
 
 function emptyFppValue(): FppTargetValue {
   return { instanceId: '', primitive: '', params: {} }
@@ -882,7 +882,7 @@ function emptyResolumeValue(): ResolumeTargetValue {
   return { action: '', ref: {} }
 }
 function emptyAudioValue(): AudioTargetValue {
-  return { audioNodeIds: [], audioSessionId: '', audioAction: '', gainDb: '' }
+  return { audioNodeIds: [], audioSessionId: '', audioAction: '', gainDb: '', audioNodeIdWasArray: false }
 }
 
 function fppValueFromTarget(target: ConfigShowActionTarget): FppTargetValue {
@@ -921,7 +921,13 @@ function audioValueFromTarget(target: ConfigShowActionTarget): AudioTargetValue 
   const gainKey = audioAction === 'audio.gain.set' ? 'gainDb' : audioAction === 'audio.gain.fade' ? 'targetGainDb' : null
   const gain = gainKey === null ? undefined : target.params?.[gainKey]
   const ids = target.audioNodeId
-  return { audioNodeIds: Array.isArray(ids) ? ids : ids === undefined || ids === '' ? [] : [ids], audioSessionId: target.audioSessionId ?? '', audioAction, gainDb: gain === undefined ? '' : String(gain) }
+  return {
+    audioNodeIds: Array.isArray(ids) ? ids : ids === undefined || ids === '' ? [] : [ids],
+    audioSessionId: target.audioSessionId ?? '',
+    audioAction,
+    gainDb: gain === undefined ? '' : String(gain),
+    audioNodeIdWasArray: Array.isArray(ids),
+  }
 }
 
 type TargetBuild = { target: ConfigShowActionTarget; blockReason: string | null }
@@ -1042,7 +1048,7 @@ function buildAudioTarget(value: AudioTargetValue): TargetBuild {
   }
   const target: ConfigShowActionTarget = {
     integration: 'audio',
-    audioNodeId: value.audioNodeIds.length === 1 ? (value.audioNodeIds[0] ?? '') : value.audioNodeIds,
+    audioNodeId: value.audioNodeIds.length === 1 && !value.audioNodeIdWasArray ? (value.audioNodeIds[0] ?? '') : value.audioNodeIds,
     audioSessionId: value.audioSessionId.trim(),
     audioAction: value.audioAction,
     ...(params !== undefined ? { params } : {}),
@@ -1259,6 +1265,9 @@ function ResolumeTarget({
 }
 
 function AudioTarget({ value, onChange, nodesState }: { value: AudioTargetValue; onChange: (value: AudioTargetValue) => void; nodesState: AudioNodesState }) {
+  const helpId = useId()
+  const declaredIds = nodesState.kind === 'loaded' ? new Set(nodesState.nodes.map((node) => node.id)) : new Set<string>()
+  const undeclaredIds = value.audioNodeIds.filter((id) => !declaredIds.has(id))
   return (
     <div className="sm-inspector__group">
       <p className="sm-eyebrow sm-flat">audio target</p>
@@ -1268,25 +1277,33 @@ function AudioTarget({ value, onChange, nodesState }: { value: AudioTargetValue;
         (nodesState.nodes.length === 0 ? (
           <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
         ) : (
-          <Field label="Audio nodes" help="Declared nodes only. A night announcement or the resting bed plays on every checked node; any other consumer dispatches to the first.">
-            {(props) => (
-              <div className="sm-choice-row" id={props.id} aria-describedby={props['aria-describedby']} role="group">
-                {nodesState.nodes.map((node) => {
-                  const checked = value.audioNodeIds.includes(node.id)
-                  return (
-                    <label key={node.id} className="sm-choice">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => onChange({ ...value, audioNodeIds: checked ? value.audioNodeIds.filter((id) => id !== node.id) : [...value.audioNodeIds, node.id] })}
-                      />
-                      <span>{node.label}</span>
-                    </label>
-                  )
-                })}
-              </div>
-            )}
-          </Field>
+          <div className="sm-field">
+            <fieldset className="sm-choice-row" style={{ border: 0, padding: 0, margin: 0 }} aria-describedby={helpId}>
+              <legend className="sm-field__label">Audio nodes</legend>
+              {nodesState.nodes.map((node) => {
+                const checked = value.audioNodeIds.includes(node.id)
+                return (
+                  <label key={node.id} className="sm-choice">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onChange({ ...value, audioNodeIds: checked ? value.audioNodeIds.filter((id) => id !== node.id) : [...value.audioNodeIds, node.id] })}
+                    />
+                    <span>{node.label}</span>
+                  </label>
+                )
+              })}
+              {undeclaredIds.map((id) => (
+                <label key={id} className="sm-choice">
+                  <input type="checkbox" checked onChange={() => onChange({ ...value, audioNodeIds: value.audioNodeIds.filter((x) => x !== id) })} />
+                  <span>{id} (not declared)</span>
+                </label>
+              ))}
+            </fieldset>
+            <span className="sm-field__help" id={helpId}>
+              Declared nodes only. A night announcement or the resting bed plays on every checked node; any other consumer dispatches to the first.
+            </span>
+          </div>
         ))}
       <Field label="Session" help="Minted by the caller, not looked up: the pkg/audio session id this operation targets.">
         {(props) => <Input {...props} className="sm-data" value={value.audioSessionId} onChange={(e) => onChange({ ...value, audioSessionId: e.target.value })} />}

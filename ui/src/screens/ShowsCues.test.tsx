@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, type ConfigObjectSummary, type ConfigShowCue, type Model, type SessionResponse } from '../api'
+import { ApiError, type ConfigObjectSummary, type ConfigShowCue, type Model, type SessionResponse, type ShowCueConfigResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 
@@ -390,5 +390,132 @@ describe('Shows · Cues tab', () => {
     const payload = sent as ConfigShowCue
     expect(payload.outputs.announcement?.policy).toBe('mix')
     expect(payload.outputs.announcement).not.toHaveProperty('duckGainDb')
+  })
+
+  describe('ADR-045 output target nodes', () => {
+    function audioNodeSummary(id: string, label: string): ConfigObjectSummary {
+      return { id, label, show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' }
+    }
+
+    function setupWithTargets(cue: ShowCueConfigResponse) {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => {
+        if (kind === 'audio.node') return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [audioNodeSummary('node-a', 'Node A'), audioNodeSummary('node-b', 'Node B')] })
+        return withContents(kind, [cueSummary()], [])
+      }
+      stubs.listAssets = assetsEmpty
+      stubs.getShowCue = () => Promise.resolve(cue)
+      return renderWorkspace({ session: signedIn(['config:write']) })
+    }
+
+    it('a loaded cue with targets round-trips them unchanged', async () => {
+      const cue = cueResponse(
+        cuePayload({
+          outputs: {
+            audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, target: 'node-a' },
+            ltc: { startOffsetMillis: 0, target: 'node-a' },
+          },
+        }),
+      )
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      const audioTarget = await screen.findByRole('combobox', { name: 'Audio target node' })
+      const ltcTarget = await screen.findByRole('combobox', { name: 'LTC target node' })
+      expect(audioTarget).toHaveValue('node-a')
+      expect(ltcTarget).toHaveValue('node-a')
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      const payload = sent as ConfigShowCue
+      expect(payload.outputs.audio?.target).toBe('node-a')
+      expect(payload.outputs.ltc?.target).toBe('node-a')
+    })
+
+    it('picking a target node sends it', async () => {
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      const audioTarget = await screen.findByRole('combobox', { name: 'Audio target node' })
+      fireEvent.change(audioTarget, { target: { value: 'node-b' } })
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      const payload = sent as ConfigShowCue
+      expect(payload.outputs.audio?.target).toBe('node-b')
+    })
+
+    it('clearing a stored target sends no target key', async () => {
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, target: 'node-a' } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      const audioTarget = await screen.findByRole('combobox', { name: 'Audio target node' })
+      expect(audioTarget).toHaveValue('node-a')
+      fireEvent.change(audioTarget, { target: { value: '' } })
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      const payload = sent as ConfigShowCue
+      expect(payload.outputs.audio).not.toHaveProperty('target')
+    })
+
+    it('a stored target naming an undeclared node renders it as an extra option and keeps saving it', async () => {
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, target: 'node-x' } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      const audioTarget = (await screen.findByRole('combobox', { name: 'Audio target node' })) as HTMLSelectElement
+      expect(audioTarget).toHaveValue('node-x')
+      expect(within(audioTarget).getByRole('option', { name: 'node-x (not declared)' })).toBeInTheDocument()
+      expect(screen.getByText(/node-x is not declared; readiness will report it as unbound/)).toBeInTheDocument()
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      const payload = sent as ConfigShowCue
+      expect(payload.outputs.audio?.target).toBe('node-x')
+    })
+
+    it('a stored announcement target round-trips unchanged', async () => {
+      const cue = cueResponse(
+        cuePayload({
+          outputs: {
+            audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 },
+            announcement: { policy: 'duck', duckGainDb: -18, fadeMillis: 400, target: 'node-b' },
+          },
+        }),
+      )
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('button', { name: 'House Preshow Loop' }))
+      const announcementTarget = await screen.findByRole('combobox', { name: 'Announcement target node' })
+      expect(announcementTarget).toHaveValue('node-b')
+
+      let sent: unknown = null
+      stubs.putShowCue = (_id: string, payload: unknown) => {
+        sent = payload
+        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
+      }
+      fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
+      await waitFor(() => expect(sent).not.toBeNull())
+      const payload = sent as ConfigShowCue
+      expect(payload.outputs.announcement?.target).toBe('node-b')
+    })
   })
 })
