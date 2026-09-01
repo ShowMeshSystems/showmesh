@@ -5142,7 +5142,7 @@ export interface components {
             sequence: string;
             target: string;
         };
-        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. */
+        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs are the show-boundary fade pair: fadeOutMs fades the bed to silence before it is paused or stopped for a show, fadeInMs fades it back up to maxGainDb after resting returns. They must be configured together, or both omitted for an instant cut exactly as before this pair existed (server-side; not expressible here). */
         ConfigNightSessionBackgroundAudio: {
             items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
             /** @enum {string} */
@@ -5153,6 +5153,8 @@ export interface components {
             itemTransition: "sequential" | "gapless" | "crossfade";
             crossfadeMs?: number;
             maxGainDb: number;
+            fadeOutMs?: number;
+            fadeInMs?: number;
         };
         /** @description night.session.resting (Track F seam F1, RESTING-MODE.md §6-8). endOfNightPlaylist defaults to playlist when absent (server-side). */
         ConfigNightSessionResting: {
@@ -5214,7 +5216,7 @@ export interface components {
             cues: components["schemas"]["ConfigNightSessionCueWrite"][];
             blackoutAfterShowMs: number;
         };
-        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required - an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). */
+        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required - an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). fadeOutMs and fadeInMs still must be configured together, or both omitted for an instant cut (server-side; not expressible here). */
         ConfigNightSessionBackgroundAudioWrite: {
             items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
             /** @enum {string} */
@@ -5225,6 +5227,8 @@ export interface components {
             itemTransition: "sequential" | "gapless" | "crossfade";
             crossfadeMs?: number;
             maxGainDb: number;
+            fadeOutMs?: number;
+            fadeInMs?: number;
         };
         /** @description The WRITE shape of night.session.resting: identical to ConfigNightSessionResting except that endOfNightPlaylist and endOfNightRepeat are not required. endOfNightPlaylist, when present, must be non-empty (an explicit "" is refused, not collapsed into "absent" - RESTING-MODE.md's absent/null/empty distinction); when absent it defaults to `playlist`. endOfNightRepeat defaults to false when absent. backgroundAudio carries the ConfigNightSessionBackgroundAudioWrite shape. */
         ConfigNightSessionRestingWrite: {

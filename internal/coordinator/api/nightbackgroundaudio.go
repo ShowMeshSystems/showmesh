@@ -11,6 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Track F seam F5's own resting.backgroundAudio lifecycle: unlike a cue,
@@ -73,7 +74,8 @@ import (
 
 // nightPhaseRestingBackground is the exact phase for every step this
 // controller commits for background audio: apply, gain, start, pause,
-// resume, and stop. It is read back through
+// resume, stop, and (when resting.backgroundAudio.fadeOutMs/fadeInMs are
+// configured) fadedown and fadeup. It is read back through
 // [NightSessionStore.ListNightCueOutboxRowsForPhasePrefix]
 // (store/nightsession.go).
 const nightPhaseRestingBackground = "restingBackground"
@@ -92,12 +94,14 @@ func nightBackgroundAudioSessionID(rec store.NightSessionRecord) string {
 // session and enforced by the node (nightannouncement.go), so no step
 // kind here exists for it.
 const (
-	nightBGStepApply  = "apply"
-	nightBGStepGain   = "gain"
-	nightBGStepStart  = "start"
-	nightBGStepPause  = "pause"
-	nightBGStepResume = "resume"
-	nightBGStepStop   = "stop"
+	nightBGStepApply    = "apply"
+	nightBGStepGain     = "gain"
+	nightBGStepStart    = "start"
+	nightBGStepPause    = "pause"
+	nightBGStepResume   = "resume"
+	nightBGStepStop     = "stop"
+	nightBGStepFadeDown = "fadedown"
+	nightBGStepFadeUp   = "fadeup"
 )
 
 // nightBackgroundAudioStep is one parsed night_cue_outbox row under this
@@ -107,12 +111,14 @@ type nightBackgroundAudioStep struct {
 	Kind string
 }
 
-func nightBackgroundAudioCueNameApply(seq int) string  { return fmt.Sprintf("bg-%04d-apply", seq) }
-func nightBackgroundAudioCueNameGain(seq int) string   { return fmt.Sprintf("bg-%04d-gain", seq) }
-func nightBackgroundAudioCueNameStart(seq int) string  { return fmt.Sprintf("bg-%04d-start", seq) }
-func nightBackgroundAudioCueNamePause(seq int) string  { return fmt.Sprintf("bg-%04d-pause", seq) }
-func nightBackgroundAudioCueNameResume(seq int) string { return fmt.Sprintf("bg-%04d-resume", seq) }
-func nightBackgroundAudioCueNameStop(seq int) string   { return fmt.Sprintf("bg-%04d-stop", seq) }
+func nightBackgroundAudioCueNameApply(seq int) string    { return fmt.Sprintf("bg-%04d-apply", seq) }
+func nightBackgroundAudioCueNameGain(seq int) string     { return fmt.Sprintf("bg-%04d-gain", seq) }
+func nightBackgroundAudioCueNameStart(seq int) string    { return fmt.Sprintf("bg-%04d-start", seq) }
+func nightBackgroundAudioCueNamePause(seq int) string    { return fmt.Sprintf("bg-%04d-pause", seq) }
+func nightBackgroundAudioCueNameResume(seq int) string   { return fmt.Sprintf("bg-%04d-resume", seq) }
+func nightBackgroundAudioCueNameStop(seq int) string     { return fmt.Sprintf("bg-%04d-stop", seq) }
+func nightBackgroundAudioCueNameFadeDown(seq int) string { return fmt.Sprintf("bg-%04d-fadedown", seq) }
+func nightBackgroundAudioCueNameFadeUp(seq int) string   { return fmt.Sprintf("bg-%04d-fadeup", seq) }
 
 // nightBackgroundAudioSeqFromCueName extracts the leading "bg-%04d-"
 // sequence number. The suffix after the second hyphen is always one of
@@ -162,6 +168,10 @@ func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (nightBackgrou
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepResume}, true
 	case strings.HasSuffix(row.CueName, "-stop"):
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStop}, true
+	case strings.HasSuffix(row.CueName, "-fadedown"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeDown}, true
+	case strings.HasSuffix(row.CueName, "-fadeup"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeUp}, true
 	}
 	return nightBackgroundAudioStep{}, false
 }
@@ -360,6 +370,56 @@ func nightBackgroundCeilingGain(maxGainDb float64) (pkgaudio.Gain, pkgaudio.Ceil
 	return pkgaudio.GainFromDb(maxGainDb), pkgaudio.CeilingFromDb(maxGainDb)
 }
 
+// nightBackgroundAudioInitialGainDb is the gain [nightBackgroundAudioGain]
+// commits immediately before every audio.session.start: maxGainDb itself
+// when no fade-in is configured (today's unchanged behavior), or silence
+// when ba.FadeInMs is set. A fade-in bed must never be audible before its
+// own fadeup step ramps it up, exactly the same "never audible for even
+// one tick at the wrong gain" rule [nightBackgroundAudioGain]'s own doc
+// comment already states for the no-fade case.
+func nightBackgroundAudioInitialGainDb(ba *config.NightSessionBackgroundAudio) float64 {
+	if ba.FadeInMs != nil {
+		return pkgaudio.SilenceFloorDb
+	}
+	return ba.MaxGainDb
+}
+
+// audioSessionFadeStateSignalID mirrors internal/coordinator/collector/
+// nodeaudio's SignalSessionFadeState literal, and
+// audioSessionFadeStateInProgress mirrors internal/agent/audio.
+// FadeStateInProgress's own wire value. This package must never import
+// the collector package that produces the signal, nor internal/agent
+// (TestPackageNeverImportsACollector, resolumeinstances_test.go;
+// audionode.go's own audioOutputLocalCapabilityID precedent one file
+// over) - copied literals here, like audioEngineStateSignalID one file
+// over (nightaudioreadiness.go), for the same reason.
+const audioSessionFadeStateSignalID observation.SignalID = "audio_session.fade.state"
+
+const audioSessionFadeStateInProgress string = "in_progress"
+
+// nightBackgroundAudioFadeSettled reports whether sessionID's own fade on
+// nodeID has genuinely finished ramping, per the node's own reported
+// audio_session.fade.state - never inferred from a fade command's own
+// dispatch outcome, which [pkgaudio.Fade]'s doc comment is explicit is
+// reported the instant the ramp starts, not when it ends. No CURRENT
+// observation for this signal (a session whose telemetry has not yet
+// reported one) is treated as NOT settled: dispatching the pause or stop
+// this fade is meant to precede before this coordinator has ever heard
+// from the session risks racing a ramp it cannot yet see, and racing it
+// is exactly the defect this function exists to prevent.
+func nightBackgroundAudioFadeSettled(audio NodeAudioLister, now time.Time, nodeID, sessionID string) bool {
+	for _, o := range audio.NodeAudioObservations(nodeID) {
+		if o.Signal != audioSessionFadeStateSignalID || o.Resource.Kind != observation.ResourceAudioSession || o.Resource.ID != sessionID {
+			continue
+		}
+		if o.StateAt(now) != observation.StateCurrent {
+			return false
+		}
+		return o.Value != audioSessionFadeStateInProgress
+	}
+	return false
+}
+
 func nightAudioTarget(nodeID, sessionID, action string, params map[string]any) config.ShowActionTarget {
 	return config.ShowActionTarget{
 		Integration: config.ShowActionIntegrationAudio,
@@ -455,11 +515,11 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 			h.logWarn("night loop: background audio: apply did not confirm; not auto-retrying", "sessionId", rec.ID, "outcome", latest.Row.Outcome)
 			return
 		}
-		h.nightBackgroundAudioGain(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, history)
+		h.nightBackgroundAudioGain(ctx, now, rec, nodeID, sessionID, nightBackgroundAudioInitialGainDb(ba), history)
 
 	case nightBGStepGain:
 		if !confirmed {
-			h.nightBackgroundAudioGain(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, history) // retry under a fresh revision: never wedge here.
+			h.nightBackgroundAudioGain(ctx, now, rec, nodeID, sessionID, nightBackgroundAudioInitialGainDb(ba), history) // retry under a fresh revision: never wedge here.
 			return
 		}
 		h.nightBackgroundAudioStart(ctx, now, rec, nodeID, sessionID, history)
@@ -467,9 +527,24 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 	case nightBGStepStart:
 		if !confirmed {
 			h.logWarn("night loop: background audio: start did not confirm; not auto-retrying", "sessionId", rec.ID, "outcome", latest.Row.Outcome)
+			return
 		}
-		// Confirmed: playing. The engine owns advancement and repeat
-		// from here; nothing more for this controller to do.
+		if ba.FadeInMs != nil {
+			h.nightBackgroundAudioFadeUp(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, *ba.FadeInMs, history)
+			return
+		}
+		// Confirmed, no fade-in configured: playing at full gain
+		// already. The engine owns advancement and repeat from here;
+		// nothing more for this controller to do.
+
+	case nightBGStepFadeUp:
+		if !confirmed {
+			h.nightBackgroundAudioFadeUp(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, *ba.FadeInMs, history) // retry under a fresh revision: never wedge here.
+			return
+		}
+		// Confirmed: ramping (or already arrived) at full gain again.
+		// Nothing downstream depends on this fade's own true completion,
+		// unlike fadedown before a suspend, so no further gate is needed.
 
 	case nightBGStepPause:
 		if !confirmed {
@@ -483,7 +558,11 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 			h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, history) // retry under a fresh revision: never wedge here.
 			return
 		}
-		// Confirmed: playing again.
+		if ba.FadeInMs != nil {
+			h.nightBackgroundAudioFadeUp(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, *ba.FadeInMs, history)
+			return
+		}
+		// Confirmed, no fade-in configured: playing again at full gain.
 
 	case nightBGStepStop:
 		if !confirmed {
@@ -523,6 +602,42 @@ func (h *handlers) nightBackgroundAudioGain(ctx context.Context, now time.Time, 
 	target := nightAudioTarget(nodeID, sessionID, "audio.gain.set", map[string]any{"gain": float64(result.Effective)})
 	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: gain failed", "sessionId", rec.ID, "error", err, "requested", float64(result.Requested), "effective", float64(result.Effective), "clamped", result.Clamped)
+	}
+}
+
+// nightBackgroundAudioFadeDown dispatches audio.gain.fade toward silence
+// over fadeOutMs - the DOWN half of the show-boundary fade pair
+// ([config.NightSessionBackgroundAudio.FadeOutMs]'s own doc comment).
+// Dispatched before pause/stop, never after; a dispatch that reports
+// confirmed only means the ramp was accepted and started, never that it
+// finished - see [nightBackgroundAudioFadeSettled], which the caller
+// checks before ever dispatching the suspend this fade precedes.
+func (h *handlers) nightBackgroundAudioFadeDown(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, fadeOutMs int, history []nightBackgroundAudioHistoryRow) {
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameFadeDown(int(revision))
+	target := nightAudioTarget(nodeID, sessionID, "audio.gain.fade", map[string]any{"targetGain": 0.0, "durationMs": float64(fadeOutMs)})
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+		h.logWarn("night loop: background audio: fade-down failed", "sessionId", rec.ID, "error", err)
+	}
+}
+
+// nightBackgroundAudioFadeUp dispatches audio.gain.fade from silence up
+// to maxGainDb (through the same ceiling clamp [nightBackgroundAudioGain]
+// applies) over fadeInMs - the UP half of the pair. Dispatched only after
+// start or resume has already landed: the bed must already be playing
+// (at near-silence) before this ramps it up, never the other way around.
+func (h *handlers) nightBackgroundAudioFadeUp(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, maxGainDb float64, fadeInMs int, history []nightBackgroundAudioHistoryRow) {
+	requested, ceiling := nightBackgroundCeilingGain(maxGainDb)
+	result, err := pkgaudio.ApplyCeiling(requested, ceiling)
+	if err != nil {
+		h.logWarn("night loop: background audio: fade-up gain computation failed", "sessionId", rec.ID, "error", err)
+		return
+	}
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameFadeUp(int(revision))
+	target := nightAudioTarget(nodeID, sessionID, "audio.gain.fade", map[string]any{"targetGain": float64(result.Effective), "durationMs": float64(fadeInMs)})
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+		h.logWarn("night loop: background audio: fade-up failed", "sessionId", rec.ID, "error", err)
 	}
 }
 
@@ -572,7 +687,7 @@ func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time,
 	case nightBGStepApply:
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(rec, ba, items))
 	case nightBGStepGain:
-		gain, ceiling := nightBackgroundCeilingGain(ba.MaxGainDb)
+		gain, ceiling := nightBackgroundCeilingGain(nightBackgroundAudioInitialGainDb(ba))
 		result, err := pkgaudio.ApplyCeiling(gain, ceiling)
 		if err != nil {
 			return
@@ -586,6 +701,21 @@ func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time,
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.pause", map[string]any{})
 	case nightBGStepStop:
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.stop", map[string]any{})
+	case nightBGStepFadeDown:
+		if ba.FadeOutMs == nil {
+			return
+		}
+		target = nightAudioTarget(nodeID, sessionID, "audio.gain.fade", map[string]any{"targetGain": 0.0, "durationMs": float64(*ba.FadeOutMs)})
+	case nightBGStepFadeUp:
+		if ba.FadeInMs == nil {
+			return
+		}
+		gain, ceiling := nightBackgroundCeilingGain(ba.MaxGainDb)
+		result, err := pkgaudio.ApplyCeiling(gain, ceiling)
+		if err != nil {
+			return
+		}
+		target = nightAudioTarget(nodeID, sessionID, "audio.gain.fade", map[string]any{"targetGain": float64(result.Effective), "durationMs": float64(*ba.FadeInMs)})
 	default:
 		return
 	}
@@ -636,8 +766,26 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 	if err != nil || payload.Resting.BackgroundAudio == nil {
 		return
 	}
-	nodeID := payload.Resting.BackgroundAudio.OutputNodeID()
-	h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, payload.Resting.BackgroundAudio.Resume, history)
+	ba := payload.Resting.BackgroundAudio
+	nodeID := ba.OutputNodeID()
+
+	if ba.FadeOutMs == nil {
+		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
+		return
+	}
+
+	confirmed := latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed
+	if latest.Step.Kind == nightBGStepFadeDown && confirmed {
+		if !nightBackgroundAudioFadeSettled(h.deps.Audio, now, nodeID, sessionID) {
+			return // the ramp is still running; never let pause/stop race it (see nightBackgroundAudioFadeSettled's own doc comment).
+		}
+		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
+		return
+	}
+	// Either the fadedown step has never been dispatched yet, or its own
+	// prior attempt did not confirm - either way, (re)dispatch it under a
+	// fresh revision rather than skipping straight to pause/stop.
+	h.nightBackgroundAudioFadeDown(ctx, now, rec, nodeID, sessionID, *ba.FadeOutMs, history)
 }
 
 // nightClearBackgroundAudioAtEndSession is end-session's own synchronous
