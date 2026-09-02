@@ -45,9 +45,12 @@ func TestSilenceNodeRejectsUnknownKeys(t *testing.T) {
 }
 
 // TestSilenceNodeReportsSessionsFoundAndConfirmed proves the required
-// report shape: Confirmed is always true (an unconditional safety
-// command), and Value carries the count of sessions found plus a
-// per-session outcome, for both an empty node and one with sessions.
+// report shape: Value carries the count of sessions found plus a
+// per-session outcome, for both an empty node and one with sessions, and
+// Confirmed is computed from those outcomes rather than assumed true.
+// An empty node has nothing to disconfirm, so Confirmed is true; against
+// FakeEngine (permanently unavailable) every session outcome is gated to
+// Unconfirmable, so Confirmed with a session present is honestly false.
 func TestSilenceNodeReportsSessionsFoundAndConfirmed(t *testing.T) {
 	dir := t.TempDir()
 	mgr := audio.NewManager(audio.NewFakeEngine(time.Now), audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
@@ -58,7 +61,7 @@ func TestSilenceNodeReportsSessionsFoundAndConfirmed(t *testing.T) {
 		t.Fatalf("silenceNode on an empty node: unexpected error %v", err)
 	}
 	if !result.Confirmed {
-		t.Error("Confirmed = false, want true (silence is unconditional)")
+		t.Error("Confirmed = false, want true (nothing to disconfirm on an empty node)")
 	}
 	val, ok := result.Value.(map[string]any)
 	if !ok {
@@ -76,8 +79,8 @@ func TestSilenceNodeReportsSessionsFoundAndConfirmed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("silenceNode with one session: unexpected error %v", err)
 	}
-	if !result.Confirmed {
-		t.Error("Confirmed = false, want true (silence is unconditional)")
+	if result.Confirmed {
+		t.Error("Confirmed = true, want false (FakeEngine is unavailable, so the session's outcome is Unconfirmable)")
 	}
 	val = result.Value.(map[string]any)
 	if val["sessionsFound"] != 1 {

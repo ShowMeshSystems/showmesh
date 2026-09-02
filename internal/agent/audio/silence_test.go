@@ -67,6 +67,132 @@ func TestSilenceAllStopsEverySessionUnaddressedByRevision(t *testing.T) {
 	}
 }
 
+// TestSilenceAllNeverResumesAnInterruptedSessionRegardlessOfOrder proves
+// SilenceAll never runs a real Engine.Resume/Start on a session it is
+// about to silence anyway. bg is Paused, interrupted by ann. SilenceAll
+// iterates a map, so a real deployment could reach ann before bg; this
+// test forces exactly that worst-case order by running ann's own
+// silence step alone first and checking bg has not moved before letting
+// a full SilenceAll finish the job. Before the fix, silencing ann first
+// called restoreInterrupted(ann), which ran a genuine Engine.Resume on
+// bg and set it Playing, audible, before bg's own turn ever arrived.
+func TestSilenceAllNeverResumesAnInterruptedSessionRegardlessOfOrder(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
+
+	bg, ok := m.get("bg")
+	if !ok {
+		t.Fatal("bg session not created")
+	}
+	bg.mu.Lock()
+	state := bg.state
+	bg.mu.Unlock()
+	if state != pkgaudio.StatePaused {
+		t.Fatalf("precondition: bg state = %q, want paused (interrupted by ann)", state)
+	}
+
+	ann, ok := m.get("ann")
+	if !ok {
+		t.Fatal("ann session not created")
+	}
+	ann.mu.Lock()
+	outcome := m.stopExecLocked(ctx, ann, boundedEngineCallContext)
+	outcome = ann.persistOrFailLocked(outcome)
+	ann.mu.Unlock()
+	if outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("silencing ann alone = %+v, want Unconfirmable (gated by the fake engine)", outcome)
+	}
+	m.dropHoldMembershipEverywhere(ann.id)
+
+	bg.mu.Lock()
+	stateAfterAnnSilenced := bg.state
+	bg.mu.Unlock()
+	if stateAfterAnnSilenced != pkgaudio.StatePaused {
+		t.Fatalf("bg state right after ann alone was silenced = %q, want still Paused: SilenceAll must never resume a session it is about to silence itself", stateAfterAnnSilenced)
+	}
+
+	if results := m.SilenceAll(ctx); len(results) != 2 {
+		t.Fatalf("SilenceAll returned %d results, want 2", len(results))
+	}
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if bg.state != pkgaudio.StateStopped {
+		t.Fatalf("bg state after the full SilenceAll = %q, want Stopped", bg.state)
+	}
+}
+
+// TestSilenceAllBoundsAWedgedSessionAndStillSilencesTheRest proves the
+// blast radius a bounded engine call closes: SilenceAll's own loop is
+// serial, so one session whose Engine.Stop wedges under an unbounded
+// context would otherwise stop every session behind it from ever being
+// silenced, and stop SilenceAll from ever returning a result at all.
+func TestSilenceAllBoundsAWedgedSessionAndStillSilencesTheRest(t *testing.T) {
+	withShrunkEngineCallTimeout(t, 200*time.Millisecond)
+
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	engine := newHangingCallEngine(c.now)
+	m := NewManager(engine, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+
+	wedgedRef := writeTestAsset(t, m.assetDir, "wedged.wav", "asset-wedged", []byte("wedged"))
+	startPlaying(t, m, ctx, "wedged", wedgedRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+	otherRef := writeTestAsset(t, m.assetDir, "other.wav", "asset-other", []byte("other"))
+	startPlaying(t, m, ctx, "other", otherRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	wedged, ok := m.get("wedged")
+	if !ok {
+		t.Fatal("wedged session not created")
+	}
+	wedged.mu.Lock()
+	handle := wedged.handle
+	wedged.mu.Unlock()
+	engine.arm(hangStop, handle)
+
+	done := make(chan []SessionSilenceOutcome, 1)
+	go func() { done <- m.SilenceAll(ctx) }()
+
+	var results []SessionSilenceOutcome
+	select {
+	case results = <-done:
+	case <-time.After(callBoundsWaitBound):
+		t.Fatal("SilenceAll did not return within a bounded time despite a wedged Engine.Stop call")
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("SilenceAll returned %d results, want 2", len(results))
+	}
+	seen := map[pkgaudio.SessionID]pkgaudio.OutcomeResult{}
+	for _, r := range results {
+		seen[r.ID] = r.Outcome
+	}
+	if outcome, ok := seen["wedged"]; !ok || outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf(`SilenceAll("wedged") = %+v, want Unconfirmable`, outcome)
+	}
+	if outcome, ok := seen["other"]; !ok || outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf(`SilenceAll("other") = %+v, want Unconfirmable (gated by the fake engine, but reached and executed)`, outcome)
+	}
+
+	other, ok := m.get("other")
+	if !ok {
+		t.Fatal("other session missing after SilenceAll")
+	}
+	other.mu.Lock()
+	state := other.state
+	other.mu.Unlock()
+	if state != pkgaudio.StateStopped {
+		t.Fatalf(`session "other" state = %q after SilenceAll, want Stopped despite the wedged sibling`, state)
+	}
+}
+
 // TestSilenceAllIsIdempotent proves silencing an already-silent node
 // succeeds rather than erroring: a session with no engine handle loaded
 // (never started, or already stopped) still reports the same outcome

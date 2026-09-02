@@ -19,6 +19,7 @@ const (
 	hangPause    hangMethod = "Pause"
 	hangResume   hangMethod = "Resume"
 	hangStart    hangMethod = "Start"
+	hangStop     hangMethod = "Stop"
 )
 
 // hangingCallEngine wraps [FakeEngine] and makes ONE armed method (against
@@ -110,6 +111,13 @@ func (e *hangingCallEngine) Start(ctx context.Context, handle EngineHandle, posi
 		return EngineObservation{}, err
 	}
 	return e.FakeEngine.Start(ctx, handle, position)
+}
+
+func (e *hangingCallEngine) Stop(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
+	if err := e.waitOrDone(ctx, hangStop, handle); err != nil {
+		return EngineObservation{}, err
+	}
+	return e.FakeEngine.Stop(ctx, handle)
 }
 
 // callBoundsWaitBound mirrors watcherfreeze_test.go's wedgedWaitBound.

@@ -8,7 +8,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 )
 
-// This file wires "audio.node.silence" — node-scoped like
+// This file wires "audio.node.silence", node-scoped like
 // audionodeops.go's "audio.node.configure": no sessionId, no revision,
 // never routed through parseAudioSessionCommon. It is the installation-
 // wide emergency stop's one-dispatch-per-node primitive: every existing
@@ -36,11 +36,12 @@ func audioNodeSilenceOperations(mgr *audio.Manager) map[string]OperationFunc {
 	}
 }
 
-// silenceNode returns the OperationFunc for "audio.node.silence".
-// Confirmed is always true: this is an unconditional safety command,
-// never refused, and idempotent — silencing an already-silent node is a
+// silenceNode returns the OperationFunc for "audio.node.silence": never
+// refused, and idempotent, silencing an already-silent node is a
 // success reporting zero or more already-stopped sessions, not an
-// error.
+// error. Confirmed is computed from each session's own outcome exactly
+// as [sessionOp] computes it for audio.session.stop, true only when
+// every session genuinely stopped.
 func silenceNode(mgr *audio.Manager) OperationFunc {
 	return func(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
 		if mgr == nil {
@@ -54,8 +55,12 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 		results := mgr.SilenceAll(ctx)
 		observedAt := now()
 
+		confirmed := true
 		sessions := make([]map[string]any, 0, len(results))
 		for _, r := range results {
+			if !outcomeConfirmed(r.Outcome) {
+				confirmed = false
+			}
 			sessions = append(sessions, map[string]any{
 				"sessionId": string(r.ID),
 				"outcome":   string(r.Outcome.Outcome),
@@ -64,8 +69,8 @@ func silenceNode(mgr *audio.Manager) OperationFunc {
 		}
 
 		return OperationResult{
-			Confirmed: true,
-			Signal:    "node.audio.node_silence",
+			Confirmed: confirmed,
+			Signal:    "node.audio.silence",
 			Value: map[string]any{
 				"sessionsFound": len(results),
 				"sessions":      sessions,

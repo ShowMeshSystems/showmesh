@@ -827,64 +827,7 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 	s.mu.Lock()
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
-		if !s.handleLoaded {
-			// A fade can be left pending here too: invalidateActiveSessions
-			// (an engine rebind after a route change) clears handleLoaded
-			// without resolving one. Same hazard as the loaded branch
-			// below, reached a different way.
-			s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
-			s.state = pkgaudio.StateStopped
-			s.bookmark = nil
-			s.setGapUnknownLocked("session is stopped")
-			m.stopLTCLocked(ctx, s)
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
-		}
-		s.state = pkgaudio.StateStopping
-		// Stopped on the attempt, not on confirmation — the same
-		// "declared, not refused, not fabricated" rule this method's own
-		// doc comment states for the ducks it releases.
-		m.stopLTCLocked(ctx, s)
-		_, stopErr := s.mgr.engine.Stop(ctx, s.handle)
-		var releaseErr error
-		if stopErr == nil {
-			releaseErr = s.mgr.engine.Release(ctx, s.handle)
-		}
-		err := stopErr
-		if err == nil {
-			err = releaseErr
-		}
-		if err != nil {
-			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
-			if releaseErr != nil {
-				// Release already discarded the handle at the engine
-				// before attempting teardown, success or not (see
-				// [gstengine.Engine.Release]), so no later Observe will
-				// ever find it again: resolving here is the only way
-				// out, since leaving state at StateStopping would strand
-				// the session behind [Session.checkStopCompletionLocked],
-				// which requires handleLoaded and can never re-confirm a
-				// handle the engine has already forgotten.
-				s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
-				s.handleLoaded = false
-				s.loadedIdentity = ""
-				s.state = pkgaudio.StateStopped
-				s.bookmark = nil
-				s.setGapUnknownLocked("session is stopped")
-			}
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
-		}
-		// A fade this Stop interrupted has no engine handle left to
-		// report its own completion against (checkFadeCompletionLocked
-		// requires handleLoaded), so it must resolve here or it never
-		// resolves at all: fadePending would stay true and the
-		// invocation that dispatched it would never receive an outcome.
-		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
-		s.handleLoaded = false
-		s.loadedIdentity = ""
-		s.state = pkgaudio.StateStopped
-		s.bookmark = nil
-		s.setGapUnknownLocked("session is stopped")
-		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
+		return m.stopExecLocked(ctx, s, noEngineCallBound)
 	})
 	// Released on the attempt, not on confirmation: a stuck duck is
 	// audible all night, and the outcome carries the engine evidence.
@@ -896,6 +839,92 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		m.restoreInterrupted(ctx, id)
 	}
 	return res.outcome
+}
+
+// engineCallBound wraps one engine call's context, matching
+// [boundedEngineCallContext]'s own per-call shape: a fresh derived
+// context and its cancel, called immediately before that one call.
+type engineCallBound func(context.Context) (context.Context, context.CancelFunc)
+
+// noEngineCallBound is [Manager.Stop]'s own bound: ctx passed through
+// unmodified, preserving its long-standing unbounded behavior exactly.
+// [Manager.Stop] is out of scope for a wedge fix; only [Manager.
+// SilenceAll] passes [boundedEngineCallContext] instead.
+func noEngineCallBound(ctx context.Context) (context.Context, context.CancelFunc) {
+	return ctx, func() {}
+}
+
+// stopExecLocked is the engine teardown and state transition a commanded
+// stop performs: the exec closure [Manager.Stop] runs through its
+// revision ledger, and the one [Manager.SilenceAll] runs directly and
+// unconditionally, kept in exactly one place instead of two hand-synced
+// copies. bound wraps the Engine.Stop and Engine.Release calls
+// individually, called fresh before each: see [noEngineCallBound] and
+// [Manager.SilenceAll] for the two callers' differing choices. Caller
+// holds s.mu.
+func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCallBound) pkgaudio.OutcomeResult {
+	if !s.handleLoaded {
+		// A fade can be left pending here too: invalidateActiveSessions
+		// (an engine rebind after a route change) clears handleLoaded
+		// without resolving one. Same hazard as the loaded branch below,
+		// reached a different way.
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+		s.state = pkgaudio.StateStopped
+		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
+		m.stopLTCLocked(ctx, s)
+		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
+	}
+	s.state = pkgaudio.StateStopping
+	// Stopped on the attempt, not on confirmation: the same "declared,
+	// not refused, not fabricated" rule this method's own doc comment
+	// states for the ducks it releases.
+	m.stopLTCLocked(ctx, s)
+	stopCtx, stopCancel := bound(ctx)
+	_, stopErr := s.mgr.engine.Stop(stopCtx, s.handle)
+	stopCancel()
+	var releaseErr error
+	if stopErr == nil {
+		relCtx, relCancel := bound(ctx)
+		releaseErr = s.mgr.engine.Release(relCtx, s.handle)
+		relCancel()
+	}
+	err := stopErr
+	if err == nil {
+		err = releaseErr
+	}
+	if err != nil {
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		if releaseErr != nil {
+			// Release already discarded the handle at the engine before
+			// attempting teardown, success or not (see [gstengine.Engine.
+			// Release]), so no later Observe will ever find it again:
+			// resolving here is the only way out, since leaving state at
+			// StateStopping would strand the session behind [Session.
+			// checkStopCompletionLocked], which requires handleLoaded and
+			// can never re-confirm a handle the engine has already
+			// forgotten.
+			s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+			s.handleLoaded = false
+			s.loadedIdentity = ""
+			s.state = pkgaudio.StateStopped
+			s.bookmark = nil
+			s.setGapUnknownLocked("session is stopped")
+		}
+		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
+	}
+	// A fade this Stop interrupted has no engine handle left to report
+	// its own completion against (checkFadeCompletionLocked requires
+	// handleLoaded), so it must resolve here or it never resolves at
+	// all: fadePending would stay true and the invocation that
+	// dispatched it would never receive an outcome.
+	s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+	s.handleLoaded = false
+	s.loadedIdentity = ""
+	s.state = pkgaudio.StateStopped
+	s.bookmark = nil
+	s.setGapUnknownLocked("session is stopped")
+	return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 }
 
 // Clear releases the session entirely: engine resources, desired state,

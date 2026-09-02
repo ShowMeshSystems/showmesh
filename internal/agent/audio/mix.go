@@ -636,6 +636,16 @@ func (m *Manager) restoreDucked(ctx context.Context, duckerID pkgaudio.SessionID
 // never make a muted session audible, and mute's own eventual unmute
 // reads the configured gain fresh rather than a value this function
 // would otherwise have to hand it. Caller holds t.mu.
+// dropDuckerMembershipLocked removes duckerID from t's ducking set with
+// no gain fade, unlike [Manager.removeDuckerLocked]. Used only by
+// [Manager.SilenceAll]: every session in that call, t included, is
+// being silenced too, so fading t back up here would make the emergency
+// stop audibly louder, if only for the round trip until the loop
+// reaches t itself. Caller holds t.mu.
+func (m *Manager) dropDuckerMembershipLocked(t *Session, duckerID pkgaudio.SessionID) {
+	delete(t.duckedByAll, duckerID)
+}
+
 func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID pkgaudio.SessionID) {
 	if _, ok := t.duckedByAll[duckerID]; !ok {
 		return

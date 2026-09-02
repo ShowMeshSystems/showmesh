@@ -105,12 +105,8 @@ func sessionOp(mgr *audio.Manager, exec sessionExec) OperationFunc {
 			return OperationResult{}, fmt.Errorf("audio session operation produced an invalid outcome: %w", err)
 		}
 
-		confirmed := outcome.Outcome != pkgaudio.OutcomeRefused &&
-			outcome.Outcome != pkgaudio.OutcomeFailed &&
-			outcome.Outcome != pkgaudio.OutcomeUnconfirmable
-
 		return OperationResult{
-			Confirmed: confirmed,
+			Confirmed: outcomeConfirmed(outcome),
 			Signal:    signal,
 			Value: map[string]any{
 				"sessionId": string(id),
@@ -121,6 +117,18 @@ func sessionOp(mgr *audio.Manager, exec sessionExec) OperationFunc {
 			ObservedAt: now(),
 		}, nil
 	}
+}
+
+// outcomeConfirmed reports whether outcome is a genuine success:
+// Unconfirmable, Refused, and Failed are all Confirmed:false, matching
+// OperationResult's own "read-back evidence corroborates the request"
+// contract. Shared by every audio.session.* operation and by
+// audio.node.silence, which reports its own Confirmed as true only when
+// every session it touched individually confirms this way.
+func outcomeConfirmed(outcome pkgaudio.OutcomeResult) bool {
+	return outcome.Outcome != pkgaudio.OutcomeRefused &&
+		outcome.Outcome != pkgaudio.OutcomeFailed &&
+		outcome.Outcome != pkgaudio.OutcomeUnconfirmable
 }
 
 func applySession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, error) {
