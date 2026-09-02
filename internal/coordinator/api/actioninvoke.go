@@ -82,6 +82,14 @@ const actionInvokeOutcomePendingReason = "this invocation has not yet resolved, 
 // could observe.
 const actionInvokePendingOutcomeReason = "this invocation has not yet resolved: it is still being dispatched or is awaiting confirmation evidence"
 
+// actionInvokeResolvedNoStoredReason is the canned, non-blank OutcomeReason
+// substituted for a resolved invocation whose stored reason is empty.
+// api/openapi.yaml requires OutcomeReason to be always non-empty in both
+// states, so this states the true, narrower fact rather than
+// actionInvokePendingOutcomeReason's claim that the invocation has not yet
+// resolved.
+const actionInvokeResolvedNoStoredReason = "this invocation has resolved, and no reason was recorded for its outcome"
+
 // actionInvokeOutcomeNotPersistedReason covers the case where the outward
 // effect ran and its outcome is known to THIS request, but the write
 // recording that outcome in the command journal failed. Reporting
@@ -678,7 +686,11 @@ func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time,
 	}
 	outcomeReason := existing.OutcomeReason
 	if outcomeReason == "" {
-		outcomeReason = actionInvokePendingOutcomeReason
+		if state == actionInvokeStateResolved {
+			outcomeReason = actionInvokeResolvedNoStoredReason
+		} else {
+			outcomeReason = actionInvokePendingOutcomeReason
+		}
 	}
 
 	dispatchAttribution, dispatchAttributionReason := payload.DispatchAttribution, payload.DispatchAttributionReason

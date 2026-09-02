@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -754,5 +755,97 @@ func TestActionInvokeHTTPWriteDeadlineExceedsMQTTMaxDeadline(t *testing.T) {
 			"an mqtt action whose expect.deadlineSeconds is set to the maximum could have its own write deadline "+
 			"expire first, aborting a healthy, still-working conversation.",
 			actionInvokeHTTPWriteDeadline, broker.MaxResponseDeadline, margin)
+	}
+}
+
+// resolveActionInvokeReplayTestRecord builds a store.CommandRecord shaped
+// the way resolveActionInvokeReplay's own callers already guarantee
+// (matching TargetKind/TargetID, a tagged revision CallerIntent), with
+// the given state and stored outcome reason. Driving
+// h.resolveActionInvokeReplay directly with a hand-built record, rather
+// than through a full HTTP dispatch, exercises the substitution logic at
+// unit level without needing a client to actually race a replay against
+// an in-flight dispatch.
+func resolveActionInvokeReplayTestRecord(state, outcomeReason string) store.CommandRecord {
+	resultJSON, _ := json.Marshal(actionInvokeResultPayload{Label: "Blackout everything", Outcome: outcomeWordConfirmed})
+	return store.CommandRecord{
+		ID: "cmd-1", IdempotencyKey: "replay-key", Action: "show.action.invoke",
+		TargetKind: actionInvokeTargetKind, TargetID: "blackout-now",
+		CallerIntent: store.FormatCallerIntent(store.CallerIntentRevision, "1"),
+		State:        state, OutcomeReason: outcomeReason, ResultJSON: string(resultJSON),
+	}
+}
+
+// TestActionInvokeReplayResolvedWithEmptyStoredReasonReportsResolvedText
+// proves the defect this package closed: a resolved invocation whose
+// stored reason is empty must report a reason that agrees with the
+// resolved state
+// reported beside it, never actionInvokePendingOutcomeReason's claim that
+// the invocation has not resolved. Both the state and the reason are
+// asserted, and the reason is asserted as the exact string: an assertion
+// on non-emptiness alone would pass for text that still contradicted the
+// state, which is the whole defect this closes.
+func TestActionInvokeReplayResolvedWithEmptyStoredReasonReportsResolvedText(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	deps := showConfigTestDeps(svc, st).withDefaults()
+	h := &handlers{deps: deps, clock: fixedClock(testNow)}
+	ac := authContext{ok: true, result: identity.Authenticated{Principal: admin, Form: identity.FormToken}}
+
+	existing := resolveActionInvokeReplayTestRecord(actionInvokeStateResolved, "")
+	result, problem := h.resolveActionInvokeReplay(context.Background(), testNow, ac, existing, "blackout-now")
+	if problem != nil {
+		t.Fatalf("problem = %+v, want nil", problem)
+	}
+	if result.State != actionInvokeStateResolved || result.OutcomeReason != actionInvokeResolvedNoStoredReason {
+		t.Errorf("state = %q, outcomeReason = %q; want state %q, outcomeReason %q",
+			result.State, result.OutcomeReason, actionInvokeStateResolved, actionInvokeResolvedNoStoredReason)
+	}
+}
+
+// TestActionInvokeReplayPendingWithEmptyStoredReasonReportsPendingText
+// proves the genuinely pending case is unchanged: an invocation that has
+// not resolved yet still gets actionInvokePendingOutcomeReason's text,
+// paired with the pending state, exactly as before this fix.
+func TestActionInvokeReplayPendingWithEmptyStoredReasonReportsPendingText(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	deps := showConfigTestDeps(svc, st).withDefaults()
+	h := &handlers{deps: deps, clock: fixedClock(testNow)}
+	ac := authContext{ok: true, result: identity.Authenticated{Principal: admin, Form: identity.FormToken}}
+
+	existing := resolveActionInvokeReplayTestRecord("pending", "")
+	result, problem := h.resolveActionInvokeReplay(context.Background(), testNow, ac, existing, "blackout-now")
+	if problem != nil {
+		t.Fatalf("problem = %+v, want nil", problem)
+	}
+	if result.State != actionInvokeStatePending || result.OutcomeReason != actionInvokePendingOutcomeReason {
+		t.Errorf("state = %q, outcomeReason = %q; want state %q, outcomeReason %q",
+			result.State, result.OutcomeReason, actionInvokeStatePending, actionInvokePendingOutcomeReason)
+	}
+}
+
+// TestActionInvokeReplayResolvedWithStoredReasonPassesThroughUnchanged
+// proves the fix does not rewrite a reason that was actually recorded: a
+// resolved invocation whose stored reason is non-empty must come back
+// byte for byte, since an over-eager fix that substitutes for a real
+// reason as well as an empty one is a worse defect than the one being
+// closed here.
+func TestActionInvokeReplayResolvedWithStoredReasonPassesThroughUnchanged(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	deps := showConfigTestDeps(svc, st).withDefaults()
+	h := &handlers{deps: deps, clock: fixedClock(testNow)}
+	ac := authContext{ok: true, result: identity.Authenticated{Principal: admin, Form: identity.FormToken}}
+
+	const storedReason = "every layer went dark"
+	existing := resolveActionInvokeReplayTestRecord(actionInvokeStateResolved, storedReason)
+	result, problem := h.resolveActionInvokeReplay(context.Background(), testNow, ac, existing, "blackout-now")
+	if problem != nil {
+		t.Fatalf("problem = %+v, want nil", problem)
+	}
+	if result.State != actionInvokeStateResolved || result.OutcomeReason != storedReason {
+		t.Errorf("state = %q, outcomeReason = %q; want state %q, outcomeReason %q",
+			result.State, result.OutcomeReason, actionInvokeStateResolved, storedReason)
 	}
 }
