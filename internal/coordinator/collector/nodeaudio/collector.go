@@ -89,20 +89,11 @@ func (s *Store) NodeAudioObservations(nodeID string) []observation.Observation {
 
 func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc ClockDomainSource) []observation.Observation {
 	p := rep.payload
-	// discoveredAt is the one-shot startup probe's evidence time and
-	// backs device/outputs/program/ltc-availability, which the agent
-	// truly never re-checks after boot (see runAudioReport's doc
-	// comment). observedAt is this report tick's own live evidence time
-	// and backs every signal the agent re-derives on every tick: the
-	// engine's own state/reason (applyEngineAvailability calls
-	// engine.Available() fresh on every publish, never cached, so its
-	// verdict is a NOW observation even when engine.Available() reports
-	// unavailable) and the LTC generator's four signals below. Stamping
-	// the engine with discoveredAt instead used to pin it to the agent's
-	// startup probe forever: a node whose engine kept reporting fresh
-	// evidence every tick still aged past DefaultValidFor and read
-	// permanently stale even while the node kept reporting.
-	discoveredAt := p.DiscoveredAt
+	// observedAt backs every signal this function builds. [Store] keeps
+	// only a node's most recent report and nothing evicts it, so ValidFor
+	// is the only thing that ever ages a dark node's signals: stamping a
+	// signal with anything but this tick's own evidence time leaves it
+	// reading current forever, even off a node that stopped reporting.
 	observedAt := p.ObservedAt
 
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
@@ -141,22 +132,18 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 		if p.ProgramAvailable {
 			programState = StateUsable
 		}
-		ltcState := StateUnavailable
-		if p.LTCAvailable {
-			ltcState = StateUsable
-		}
 		obs = append(obs,
-			buildValue(nodeID, SignalDeviceState, deviceState, discoveredAt, rep),
-			buildValue(nodeID, SignalDeviceReason, deviceReason, discoveredAt, rep),
-			buildValue(nodeID, SignalOutputsCount, p.OutputsCount, discoveredAt, rep),
-			buildValue(nodeID, SignalProgramState, programState, discoveredAt, rep),
-			buildValue(nodeID, SignalLTCState, ltcState, discoveredAt, rep),
+			buildValue(nodeID, SignalDeviceState, deviceState, observedAt, rep),
+			buildValue(nodeID, SignalDeviceReason, deviceReason, observedAt, rep),
+			buildValue(nodeID, SignalOutputsCount, p.OutputsCount, observedAt, rep),
+			buildValue(nodeID, SignalProgramState, programState, observedAt, rep),
+			ltcStateObservation(nodeID, p, observedAt, rep),
 		)
 	}
 
 	obs = append(obs,
-		buildValue(nodeID, SignalOutputsEnumerated, int64(p.EnumeratedCount), discoveredAt, rep),
-		buildValue(nodeID, SignalOutputsTruncated, p.Truncated, discoveredAt, rep),
+		buildValue(nodeID, SignalOutputsEnumerated, int64(p.EnumeratedCount), observedAt, rep),
+		buildValue(nodeID, SignalOutputsTruncated, p.Truncated, observedAt, rep),
 	)
 
 	domain, provenance, declaredAt, reason := lookupClockDomain(ctx, clockSrc, nodeID)
@@ -198,6 +185,20 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
 
 	return obs
+}
+
+// ltcStateObservation derives node.audio.ltc.state from live
+// LTCGeneratorState, not the startup-probed LTCAvailable (finding 2).
+// "stopped" counts as usable: an unbound channel reports unsupported, not
+// stopped, so stopped already proves the node can drive LTC. Do not
+// tighten this to running-only: LTC is idle before a show starts on
+// every capable node, and that would reintroduce the pre-show wrong answer.
+func ltcStateObservation(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) observation.Observation {
+	state := StateUnavailable
+	if p.LTCGeneratorState == "running" || p.LTCGeneratorState == "stopped" {
+		state = StateUsable
+	}
+	return buildValue(nodeID, SignalLTCState, state, observedAt, rep)
 }
 
 // engineGlitchObservations renders the five node.audio.engine.* glitch
@@ -502,14 +503,12 @@ func lookupClockDomain(ctx context.Context, src ClockDomainSource, nodeID string
 	return payload.ClockDomain, payload.ClockDomainProvenance, rev.CreatedAt, ""
 }
 
-// buildValue stamps ObservedAt from whichever evidence timestamp the
-// caller passes as observedAt — [mqttproto.AudioPayload.DiscoveredAt] for
-// the one-shot discovery signals, [mqttproto.AudioPayload.ObservedAt] for
-// the engine and per-tick LTC generator signals, never rep.receivedAt, the
-// coordinator's own bookkeeping time, which stays CollectedAt. Matches
-// noderender.buildValue's identical rule (ADR-011, generalized a fourth
-// time in this project). observedAt nil means genuinely unknown, matching
-// those fields' own convention.
+// buildValue stamps ObservedAt from the caller-supplied observedAt:
+// [mqttproto.AudioPayload.ObservedAt] at every call site in this package,
+// never rep.receivedAt, the coordinator's own bookkeeping time, which
+// stays CollectedAt. Matches noderender.buildValue's identical rule
+// (ADR-011). observedAt nil means genuinely unknown, matching that
+// field's own convention.
 func buildValue(nodeID string, sig observation.SignalID, value any, observedAt *time.Time, rep report) observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
