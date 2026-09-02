@@ -296,6 +296,19 @@ func nightRefusalIsTerminal(problem *v1.Problem) bool {
 // misfire once the clock catches back up.
 const nightClockBackstepTolerance = 5 * time.Second
 
+// nightDerivationInvalidRetryLimit bounds how many consecutive ticks a
+// derivation-kind invalid boundary (nightBoundaryKindDerivation) may be
+// retried from fresh observation before this coordinator gives up and
+// degrades for real. A count, not a time window: nightContentAnchor
+// already tracks an unrelated retry count this same way (Attempts, for
+// shutdown-stop dispatch), and each retry here is already paced one full
+// night-loop tick apart, so a count already implies a rough wall-clock
+// bound without a second timing concept on the struct. Three attempts
+// gives ordinary collector noise a few real chances to clear on its own;
+// a duration that is genuinely wrong must not spin past that before
+// telling the operator. A var so a test can drive it down.
+var nightDerivationInvalidRetryLimit = 3
+
 // nightAdvanceRestingIntershow is rule 3's own load-bearing invalidation:
 // an anchor already flagged invalid (BoundaryJSON's own persisted state)
 // is never recomputed from - it was invalidated by
@@ -317,7 +330,17 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		} else {
 			res := nightResolveFSEQDuration(ctx, h.deps, h.deps.Assets, payload.Show, payload.Resting.TimelineAsset)
 			if res.Reason != "" {
-				h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateInvalid, Reason: res.Reason})
+				// Neither a contradiction nor a derivation - the asset this
+				// derivation would need is itself unresolvable, so nothing has
+				// been committed yet for this cycle to retry from. Stamped for
+				// the record's own self-description; nightBoundaryRetryEligible
+				// already reads this as not-eligible like every other
+				// non-derivation kind, and in practice this branch is retried
+				// unconditionally every tick anyway (no anchor is committed
+				// here for the ObservedAt.IsZero() check above to ever find
+				// non-zero), so the classification never actually reaches the
+				// retry gate below.
+				h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateInvalid, Reason: res.Reason, Kind: nightBoundaryKindUnresolvedAsset})
 				return
 			}
 			durationMS = res.DurationMS
@@ -329,27 +352,68 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		boundary := nightBoundary{State: nightBoundaryStateUnknown, Reason: newAnchor.Source}
 		if ready {
 			boundary = deriveNightBoundary(newAnchor)
+			if boundary.State == nightBoundaryStateInvalid {
+				// The only site that can produce this exact pairing (an
+				// anchor whose ObservedAt is set, alongside an invalid
+				// boundary): nightInvalidateAnchor always clears ObservedAt in
+				// the same commit as an invalid boundary, so a contradiction
+				// can never leave this pairing behind. newAnchor.DerivationInvalidAttempts
+				// already carries forward whatever a prior retry left it at
+				// (nightFillAnchorFromObservation only ever touches the
+				// observed-evidence fields), so it is deliberately left
+				// untouched here - the persisted-invalid check below is what
+				// increments it, once, per retry.
+				boundary.Kind = nightBoundaryKindDerivation
+			} else {
+				// A fresh armed derivation ends any retry streak this anchor
+				// was on; a LATER, unrelated invalid derivation must not
+				// inherit a resolved problem's own attempt count.
+				newAnchor.DerivationInvalidAttempts = 0
+			}
 		}
 		h.nightCommitAnchor(ctx, now, rec, newAnchor, boundary)
 		return
 	}
 
 	// The anchor carries observed evidence, but a PRIOR tick may already
-	// have invalidated the boundary derived from it (contradiction found
-	// then, evidence agreeing again now) - that invalidation is
-	// load-bearing and must not be silently recomputed past. That silence
-	// must not be invisible, though: mark the session degraded (once -
-	// nightDegradeSession is one-shot) naming the invalid boundary, since
-	// today the ONLY recovery is end-session then prepare-site and the
-	// operator is never told that is what is needed.
+	// have invalidated the boundary derived from it. nightBoundaryRetryEligible
+	// draws the line the ruling requires: a CONTRADICTION (rule 3's own
+	// load-bearing invalidation - fresh evidence disagreed with playback
+	// that was already armed) is never recomputed past, on purpose, and an
+	// unclassified boundary (Kind empty - every boundary persisted before
+	// this field existed, or one this coordinator declined to classify)
+	// reads exactly the same way, conservatively. Only a DERIVATION
+	// invalidation (an arithmetic check on this coordinator's own gathered
+	// evidence came back invalid; nothing contradicted anything) is
+	// eligible for a bounded number of retries from fresh observation
+	// before this gives up and degrades for real.
+	//
+	// This is safe by construction, not just by convention: every
+	// contradiction site below (and nightAdvanceTransitionToShow's own
+	// early-idle case) calls nightInvalidateAnchor in the SAME commit as
+	// the invalid boundary, which clears ObservedAt - so a contradiction-kind
+	// boundary can never reach this branch at all; the ObservedAt.IsZero()
+	// check above routes it back to the re-derive branch instead. Only a
+	// derivation-kind pairing (ObservedAt set, boundary invalid) can ever
+	// be read here.
 	if persisted, hasBoundary := decodeNightBoundary(rec.BoundaryJSON); hasBoundary && persisted.State == nightBoundaryStateInvalid {
-		h.nightDegradeSession(ctx, now, rec, "resting-intershow's content boundary was invalidated ("+persisted.Reason+") and is never recomputed; run end-session, then prepare-site, to recover")
+		if nightBoundaryRetryEligible(persisted) && anchor.DerivationInvalidAttempts < nightDerivationInvalidRetryLimit {
+			anchor.DerivationInvalidAttempts++
+			reason := fmt.Sprintf("retrying an automatically-derived boundary that came back invalid (%s); attempt %d of %d", persisted.Reason, anchor.DerivationInvalidAttempts, nightDerivationInvalidRetryLimit)
+			h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateUnknown, Reason: reason})
+			return
+		}
+		reason := "resting-intershow's content boundary was invalidated (" + persisted.Reason + ") and is never recomputed; run end-session, then prepare-site, to recover"
+		if nightBoundaryRetryEligible(persisted) {
+			reason = fmt.Sprintf("resting-intershow's content boundary stayed invalid (%s) after %d automatic re-derive attempts; run end-session, then prepare-site, to recover", persisted.Reason, nightDerivationInvalidRetryLimit)
+		}
+		h.nightDegradeSession(ctx, now, rec, reason)
 		return
 	}
 
 	obsNow := nightObservePlayback(ctx, h.deps.Observations, anchor.FPPInstanceID, time.Time{}, now)
 	if bad, reason := nightBoundaryContradicted(anchor, obsNow, now); bad {
-		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 		// Every other contradiction can resolve itself, because something
 		// is still playing to re-observe. A stop cannot: re-observation
 		// waits for playback that is gone, so this would otherwise hold
@@ -366,7 +430,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 	}
 	if now.Before(anchor.ObservedAt.Add(-nightClockBackstepTolerance)) {
 		reason := "the local clock now reads earlier than this boundary's own anchoring observation; treating as a clock correction"
-		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 		return
 	}
 	// §7.1: the transition begins at E minus the largest enterShow lead,
@@ -467,7 +531,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 					cur.StateEnteredAt = now
 					cur.ArmedShowID = ""
 					cur.ContentAnchorJSON = encodeNightContentAnchor(nightInvalidateAnchor(anchor, reason))
-					cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: reason})
+					cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 					if obsNow.Status == fppStatusValueIdle {
 						cur.Degraded = true
 						cur.DegradedReason = "resting playback stopped during the transition into a show and nothing is playing to re-derive a boundary from (" + reason + "); run end-session, then prepare-site, to recover"
