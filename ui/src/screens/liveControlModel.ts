@@ -1,8 +1,88 @@
 import { PROBLEM_TYPE } from '../api'
-import type { AudioSessionCommandResult, CurrentRun, Evidence, FPPCommandResult, FPPInstance, Model, Node, ObservationEntry } from '../api'
-import type { Tone } from '../kit'
+import type {
+  AudioSessionCommandResult,
+  CurrentRun,
+  Evidence,
+  FPPCommandResult,
+  FPPInstance,
+  FPPPlaylistDefinitionMetadata,
+  Model,
+  NightCommandName,
+  Node,
+  ObservationEntry,
+} from '../api'
+import type { LifecycleCommandGroup, LifecycleCommandSpec, Tone } from '../kit'
 import { EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
+
+/** Gate shape shared by every night-lifecycle command surface. */
+export type NightGate = { allowed: true } | { allowed: false; reason: string }
+
+type NightCommandTuple = readonly [NightCommandName, string, string]
+
+/**
+ * The night lifecycle's one canonical group layout: Prepare, Start, End the
+ * night. Show Night and Live Control both build their `LifecycleCommands`
+ * groups from this so the two screens render one identical element.
+ */
+export const NIGHT_LIFECYCLE_GROUPS: readonly { id: string; title: string; commands: readonly NightCommandTuple[] }[] = [
+  {
+    id: 'lc-prep',
+    title: 'Prepare',
+    commands: [
+      ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
+      ['run-readiness', 'Run readiness', 'Re-runs every readiness check against this epoch.'],
+    ],
+  },
+  {
+    id: 'lc-start',
+    title: 'Start',
+    commands: [
+      ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
+      ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
+    ],
+  },
+  {
+    id: 'lc-end',
+    title: 'End the night',
+    commands: [
+      ['request-final-show', 'Request final show', 'Closes admission. The next normally timed show becomes the last.'],
+      ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
+      ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
+      ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock; prepare-site then starts a fresh one.'],
+    ],
+  },
+]
+
+/** Turns a `[command, label, detail]` tuple into a `LifecycleCommands` spec, gated the same way every night command is. */
+export function nightCommandSpec(gate: NightGate, onRun: (command: NightCommandName) => void) {
+  return ([command, label, detail]: NightCommandTuple): LifecycleCommandSpec => ({
+    command,
+    label,
+    detail,
+    disabled: !gate.allowed,
+    disabledReason: gate.allowed ? undefined : gate.reason,
+    onRun: () => onRun(command),
+  })
+}
+
+/** Builds the shared `LifecycleCommands` groups; `startNightOptions` renders
+ *  only in the start-night cell (the late-start checkbox). */
+export function nightLifecycleGroups(
+  gate: NightGate,
+  onRun: (command: NightCommandName) => void,
+  startNightOptions?: LifecycleCommandSpec['options'],
+): LifecycleCommandGroup[] {
+  const spec = nightCommandSpec(gate, onRun)
+  return NIGHT_LIFECYCLE_GROUPS.map((group) => ({
+    id: group.id,
+    title: group.title,
+    commands: group.commands.map((tuple) => {
+      const built = spec(tuple)
+      return tuple[0] === 'start-night' && startNightOptions !== undefined ? { ...built, options: startNightOptions } : built
+    }),
+  }))
+}
 
 export function findSignal(observations: readonly Evidence[], signal: string): Evidence | undefined {
   return observations.find((entry) => entry.signal === signal)
@@ -35,6 +115,20 @@ export type TransportState = {
   elapsedSeconds: number | null
   totalSeconds: number | null
   volume: number | null
+}
+
+/** The playlist name FPP reports playing, or null when none is reported or it reported empty. */
+export function reportedPlaylistName(state: TransportState): string | null {
+  return state.playlist === null || state.playlist === '' ? null : state.playlist
+}
+
+/** The names FPP has ever imported for one instance, deduplicated and sorted. Empty when the coordinator has stored none. */
+export function fppPlaylistNames(definitions: readonly FPPPlaylistDefinitionMetadata[], instanceUuid: string): string[] {
+  const names = new Set<string>()
+  for (const definition of definitions) {
+    if (definition.instanceUuid === instanceUuid) names.add(definition.playlistName)
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b))
 }
 
 export function transportState(instance: FPPInstance): TransportState {

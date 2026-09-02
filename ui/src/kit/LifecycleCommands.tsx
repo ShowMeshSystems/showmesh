@@ -2,8 +2,7 @@ import type { ReactNode } from 'react'
 import { Button } from './Button'
 
 export type LifecycleCommandSpec = {
-  /** Stable identifier. Also selects any per-command styling already keyed
-   *  to it (fade-out-night's warn button, the flat grid's fixed order). */
+  /** Stable identifier; also selects fade-out-night's warn-button styling. */
   command: string
   label: string
   /** One-line consequence. Replaced by `disabledReason` while disabled. */
@@ -22,8 +21,7 @@ export type LifecycleCommandSpec = {
 
 export type LifecycleCommandGroup = {
   id: string
-  /** Omit for one flat, ungrouped grid (Show Night's layout). Set it for a
-   *  titled subsection (Live Control's layout). */
+  /** Omit for one flat, ungrouped grid. Set it for a titled subsection. */
   title?: string
   commands: readonly LifecycleCommandSpec[]
 }
@@ -41,10 +39,9 @@ function LifecycleCommandCell({ command, label, detail, disabled = false, disabl
 }
 
 /**
- * The night lifecycle commands, one element for both Show Night (one
- * untitled group, the flat 12-column grid) and Live Control (several titled
- * groups, the auto-fit control grid). A command's `options` render inside
- * its own cell, under its consequence line, never beside the button.
+ * The night lifecycle commands, one shared element. A command's `options`
+ * render inside its own cell, under its consequence line, never beside
+ * the button.
  */
 export function LifecycleCommands({ groups }: { groups: readonly LifecycleCommandGroup[] }) {
   return (
