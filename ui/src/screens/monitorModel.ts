@@ -183,6 +183,55 @@ export type InspectorRow = {
 }
 
 /**
+ * A node's own Render/Audio evidence rows, restored for the drawer's
+ * Signals section (Identity/Capabilities cover the rest of `nodeInspector`,
+ * which this replaces). A group with no observations says the capability
+ * was never advertised, not that its path is failing.
+ */
+export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow[]; absent: string | null }[] {
+  const observationRows = (entries: Node['render'], prefix: string): InspectorRow[] =>
+    entries.slice(0, 6).map((entry, index) => ({
+      key: `${prefix}:${entry.signal}:${index}`,
+      label: entry.signal,
+      value: entry.value === null ? 'no value' : String(entry.value),
+      state:
+        entry.state === 'current'
+          ? null
+          : `${entry.state.replace('_', ' ')}${entry.observedAt === null ? '' : ` · ${formatClock(entry.observedAt) ?? ''}`}`,
+      detail: entry.state === 'current' ? null : entry.reason,
+      tone:
+        entry.state === 'current'
+          ? 'good'
+          : entry.state === 'stale'
+            ? 'warn'
+            : entry.state === 'collection_failed'
+              ? 'bad'
+              : entry.state === 'not_collected'
+                ? 'unknown'
+                : 'pending',
+    }))
+
+  return [
+    {
+      name: 'Render',
+      rows: observationRows(node.render, 'render'),
+      absent:
+        node.render.length === 0
+          ? 'This node has never published a render observation. That is not the same as a render path that is failing.'
+          : null,
+    },
+    {
+      name: 'Audio',
+      rows: observationRows(node.audio, 'audio'),
+      absent:
+        node.audio.length === 0
+          ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'
+          : null,
+    },
+  ]
+}
+
+/**
  * FPP remains a row in Fleet, not a separate Monitor destination. Its
  * inspector deliberately reports coordinator-held evidence without deriving
  * an FPP verdict or moving transport controls out of Live Control.

@@ -40,7 +40,7 @@ import {
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDuration } from '../domain/time'
-import { signalRows, signalSummary } from './monitorModel'
+import { nodeSignalGroups, signalRows, signalSummary } from './monitorModel'
 import { formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
 import type { Node } from '../api'
 
@@ -422,6 +422,38 @@ export function NodeDetail() {
             },
           ]}
         />
+      </Section>
+
+      <Section
+        id="nd-signals"
+        title="Signals"
+        aside={<Link to="/monitor/signals">{nodeSignalRows.length} signals</Link>}
+      >
+        {nodeSignalGroups(node).map((group) => (
+          <section key={group.name} aria-labelledby={`nd-signals-${group.name}`} className="sm-inspector__group">
+            <h3 id={`nd-signals-${group.name}`} className="sm-subsection__title">
+              {group.name}
+            </h3>
+            {group.absent !== null ? (
+              <RuledStrip absence="unobserved" label="Never advertised" fact="Nothing to observe" detail={group.absent} />
+            ) : (
+              group.rows.map((row) => (
+                <div key={row.key} className="sm-inspector__row">
+                  <span className="sm-inspector__label sm-data">{row.label}</span>
+                  <div>
+                    <p className="sm-inspector__value sm-data">{row.value}</p>
+                    {row.state !== null && (
+                      <p className="sm-inspector__state">
+                        <StatusPair tone={row.tone} label={row.state} />
+                      </p>
+                    )}
+                    {row.detail !== null && <p className="sm-inspector__detail">{row.detail}</p>}
+                  </div>
+                </div>
+              ))
+            )}
+          </section>
+        ))}
       </Section>
 
       <Section

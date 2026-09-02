@@ -168,7 +168,45 @@ describe('Node detail', () => {
   it('renders the drawer title and the mock’s section labels in order', () => {
     renderScreen([node()])
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Garage bay projector host', 'Identity', 'Capabilities', 'Surfaces on this node', 'Assets held locally', 'Remove this node'])
+    expect(headings).toEqual([
+      'Garage bay projector host',
+      'Identity',
+      'Signals',
+      'Capabilities',
+      'Surfaces on this node',
+      'Assets held locally',
+      'Remove this node',
+    ])
+  })
+
+  it('says a node never advertised audio rather than showing it as failing, in the Signals section', () => {
+    renderScreen([node({ audio: [] })])
+    expect(screen.getByText(/never claimed an audio capability/)).toBeInTheDocument()
+    expect(screen.getByText(/Distinct from an audio path that is failing/)).toBeInTheDocument()
+  })
+
+  it('never wraps a Signals row value in a status chip', () => {
+    renderScreen([
+      node({
+        render: [
+          {
+            resource: { kind: 'surface', id: 'front' },
+            signal: 'surface.frames.rate',
+            value: 'x',
+            unit: null,
+            state: 'stale',
+            reason: 'value has not been reconfirmed within its 45s validity window',
+            observedAt: '2026-08-30T20:15:00Z',
+            collectedAt: '2026-08-30T20:15:00Z',
+            source: 'agent',
+            quality: 'reported',
+          },
+        ] as unknown as Node['render'],
+      }),
+    ])
+    expect(screen.getByText('x')).toBeInTheDocument()
+    expect(screen.getByText(/^stale/)).toBeInTheDocument()
+    expect(screen.getByText(/value has not been reconfirmed within its 45s validity window/)).toBeInTheDocument()
   })
 
   it('says the agent went away when a last will was received', () => {

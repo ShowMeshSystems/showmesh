@@ -116,11 +116,8 @@ export function Monitor() {
   const items = attentionItems(model, nowIso)
   const activity = activityRows(model.events, 5)
 
-  /**
-   * A node's own drawer is the route `/monitor/fleet/node/:nodeId`
-   * (D-021/D-022), so it deep-links and survives a reload. FPP still opens
-   * from the `?resource=` query param the compact inspector has always used.
-   */
+  /** A node's drawer is the route `/monitor/fleet/node/:nodeId` (D-021/D-022);
+   * FPP still opens from `?resource=`. */
   const selected = routeNodeId !== undefined ? `node:${routeNodeId}` : resourceParam
   const selectedFpp = model.fpp.find((instance) => `fpp:${instance.instanceId}` === selected)
   const select = (key: string) => {
