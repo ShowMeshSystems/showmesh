@@ -230,7 +230,7 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 	var out cuecatalog.Outputs
 
 	if payload.Outputs.Render != nil && nodeHasSurface {
-		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Render.Sequence)
+		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Render.Sequence, "fseq")
 		out.Render = &cuecatalog.RenderOutput{
 			Sequence:    payload.Outputs.Render.Sequence,
 			Filename:    filename,
@@ -247,7 +247,7 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 		// same identity space a render Cue output's Sequence does —
 		// only ShowCueAudioOutput's own field is called "asset" rather
 		// than "sequence".
-		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Audio.Asset)
+		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Audio.Asset, "audio")
 		out.Audio = &cuecatalog.AudioOutput{
 			Asset:             payload.Outputs.Audio.Asset,
 			Filename:          filename,
@@ -486,29 +486,44 @@ func cueReferencingPlaylistIDs(ctx context.Context, st *store.Store, showID stri
 	return out, nil
 }
 
-// resolveAssetFor returns the sorted, de-duplicated content hashes of
-// every asset assetsBySequence holds for sequenceID (never nil, so two
-// callers resolving an output with no matching asset yet — nothing
-// uploaded — agree on an empty array rather than one producing null and
-// the other []: [cuecatalog.RevisionInput]'s own determinism requirement),
-// plus the ONE runtime filename a node must actually open: the filename
-// paired with hashes[0] (the alphabetically-first content hash), the same
-// hash [firstAssetHash] in internal/agent/cueactivationrender.go picks
-// when it later verifies that file. Pairing filename and hash from the
-// SAME underlying [ExpectedAsset] row is what a node's own "open by
-// filename, then verify the opened file's hash" convention
-// (renderApplyParamsPayload's own established shape) requires — a
-// filename resolved independently of which hash it is meant to
-// corroborate would let the two silently drift apart. The ordinary case
-// is exactly one asset per sequence per node; a sequence with more than
-// one current asset (a node-targeted upload alongside a show-wide one)
-// still resolves deterministically, picking whichever asset's hash sorts
-// first.
-func resolveAssetFor(assetsBySequence map[string][]ExpectedAsset, sequenceID string) (filename string, hashes []string) {
+// resolveAssetFor returns the sorted, de-duplicated content hashes of every
+// CURRENT ASSET OF THE STATED mediaType assetsBySequence holds for
+// sequenceID (never nil, so two callers resolving an output with no
+// matching asset yet, whether nothing was uploaded or nothing of that
+// media type was, agree on an empty array rather than one producing null
+// and the other []:
+// [cuecatalog.RevisionInput]'s own determinism requirement), plus the ONE
+// runtime filename a node must actually open: the filename paired with
+// hashes[0] (the alphabetically-first content hash), the same hash
+// [firstAssetHash] in internal/agent/cueactivationrender.go picks when it
+// later verifies that file. Pairing filename and hash from the SAME
+// underlying [ExpectedAsset] row is what a node's own "open by filename,
+// then verify the opened file's hash" convention (renderApplyParamsPayload's
+// own established shape) requires: a filename resolved independently of
+// which hash it is meant to corroborate would let the two silently drift
+// apart. The ordinary case is exactly one asset per sequence per node; a
+// sequence with more than one current asset of the stated media type (a
+// node-targeted upload alongside a show-wide one) still resolves
+// deterministically, picking whichever asset's hash sorts first.
+//
+// mediaType is a caller-stated filter, never read off stored data: ADR-028
+// decision 1's amendment makes media type part of an asset's identity, so
+// an FSEQ and an audio asset may both be current for one sequence at once,
+// and this function's whole reason for existing after that change is to
+// pick the one the caller actually meant: resolveCueOutputs states "fseq"
+// for a render output and "audio" for an audio output. A caller that has no
+// media type of its own to state (a future media-playlist item whose type
+// implies audio) supplies the constant it already knows rather than one
+// stored in caller-authored data, keeping this the resolver's own contract
+// rather than something an operator must name explicitly.
+func resolveAssetFor(assetsBySequence map[string][]ExpectedAsset, sequenceID, mediaType string) (filename string, hashes []string) {
 	assets := assetsBySequence[sequenceID]
 	filenameByHash := make(map[string]string, len(assets))
 	hashes = make([]string, 0, len(assets))
 	for _, a := range assets {
+		if a.MediaType != mediaType {
+			continue
+		}
 		if _, seen := filenameByHash[a.ContentHash]; seen {
 			continue
 		}

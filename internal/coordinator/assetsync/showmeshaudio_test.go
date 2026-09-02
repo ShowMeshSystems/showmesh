@@ -45,8 +45,8 @@ func TestResolveShowmeshAudioPlaylistRefBuildsOneOrderedRepeatingRef(t *testing.
 	})
 	hashA := "sha256:" + strings.Repeat("a", 64)
 	hashB := "sha256:" + strings.Repeat("b", 64)
-	createAsset(t, st, "halloween-2026", "bed-a-audio", store.AssetTargetKindShow, "", hashA, "bed-a.wav")
-	createAsset(t, st, "halloween-2026", "bed-b-audio", store.AssetTargetKindShow, "", hashB, "bed-b.wav")
+	createAssetWithMediaType(t, st, "halloween-2026", "bed-a-audio", store.AssetTargetKindShow, "", "audio", hashA, "bed-a.wav")
+	createAssetWithMediaType(t, st, "halloween-2026", "bed-b-audio", store.AssetTargetKindShow, "", "audio", hashB, "bed-b.wav")
 
 	payload := showmeshAudioPlaylist("halloween-2026", []string{"bed-a", "bed-b"}, config.ShowPlaylistShowmeshAudioRepeatAll)
 	putPlaylist(t, st, "background", payload)
@@ -85,7 +85,7 @@ func TestResolveShowmeshAudioPlaylistRefMapsRepeatNone(t *testing.T) {
 		Name: "Bed A", Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "bed-a-audio"}},
 	})
 	hashA := "sha256:" + strings.Repeat("a", 64)
-	createAsset(t, st, "halloween-2026", "bed-a-audio", store.AssetTargetKindShow, "", hashA, "bed-a.wav")
+	createAssetWithMediaType(t, st, "halloween-2026", "bed-a-audio", store.AssetTargetKindShow, "", "audio", hashA, "bed-a.wav")
 
 	payload := showmeshAudioPlaylist("halloween-2026", []string{"bed-a"}, config.ShowPlaylistShowmeshAudioRepeatNone)
 
@@ -115,6 +115,42 @@ func TestResolveShowmeshAudioPlaylistRefFailsVisiblyOnMissingAsset(t *testing.T)
 	}
 }
 
+// TestResolveShowmeshAudioPlaylistRefRefusesWrongMediaTypeAsset proves the
+// resolver names the absence rather than handing over the wrong file when
+// the only asset current for the audio output's sequence id is of the
+// WRONG media type. Before ADR-028 decision 1's amendment, resolveAssetFor
+// (via resolveAssetForWithSize) consulted no media type, so this exact
+// setup would have resolved the fseq's filename as if it were the audio
+// bed. The current behavior is the same visible refusal as no asset
+// uploaded at all (showmeshaudio.go's own "no matching asset uploaded"
+// wording), never a wrong filename.
+func TestResolveShowmeshAudioPlaylistRefRefusesWrongMediaTypeAsset(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "audio-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putAudioNode(t, st, "audio-01")
+	putCue(t, st, "bed-a", "halloween-2026", config.ShowCuePayload{
+		Name: "Bed A", Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "bed-a-audio"}},
+	})
+	// Only an FSEQ-media-type asset is current for "bed-a-audio": no audio
+	// asset was ever uploaded under that sequence id.
+	hashA := "sha256:" + strings.Repeat("a", 64)
+	createAssetWithMediaType(t, st, "halloween-2026", "bed-a-audio", store.AssetTargetKindShow, "", "fseq", hashA, "bed-a.fseq")
+	payload := showmeshAudioPlaylist("halloween-2026", []string{"bed-a"}, config.ShowPlaylistShowmeshAudioRepeatNone)
+
+	_, err := ResolveShowmeshAudioPlaylistRef(ctx, st, "halloween-2026", "audio-01", "background", 1, payload)
+	if err == nil {
+		t.Fatal("ResolveShowmeshAudioPlaylistRef with only a wrong-media-type asset current: err = nil, want a refusal naming the absence")
+	}
+	if !strings.Contains(err.Error(), "no matching asset uploaded") {
+		t.Fatalf("refusal %q does not name the absence of a matching asset", err.Error())
+	}
+	if strings.Contains(err.Error(), "bed-a.fseq") {
+		t.Fatalf("refusal %q must never name the wrong-media-type file as if it were usable", err.Error())
+	}
+}
+
 // TestResolveShowmeshAudioPlaylistRefRefusesCueDeclaringLTC proves TRACK-
 // H-cues-and-playlists.md section H5 build item 5's own ruling: a
 // background-Playlist entry whose Cue declares an ltc output is refused
@@ -138,7 +174,7 @@ func TestResolveShowmeshAudioPlaylistRefRefusesCueDeclaringLTC(t *testing.T) {
 		},
 	})
 	hashA := "sha256:" + strings.Repeat("a", 64)
-	createAsset(t, st, "halloween-2026", "bed-a-audio", store.AssetTargetKindShow, "", hashA, "bed-a.wav")
+	createAssetWithMediaType(t, st, "halloween-2026", "bed-a-audio", store.AssetTargetKindShow, "", "audio", hashA, "bed-a.wav")
 
 	payload := showmeshAudioPlaylist("halloween-2026", []string{"bed-a"}, config.ShowPlaylistShowmeshAudioRepeatNone)
 
