@@ -141,6 +141,13 @@ describe('Show Night', () => {
     expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
   })
 
+  it('offers Run readiness only from the lifecycle cell and the Evidence link, not a page-header button', () => {
+    renderScreen({ nightSession: session(), session: allowedSession })
+    expect(screen.getAllByRole('button', { name: 'Run readiness' })).toHaveLength(1)
+    const pageHead = screen.getByRole('link', { name: 'Edit definition' }).closest('.sm-page__head') as HTMLElement
+    expect(within(pageHead).queryByRole('button', { name: 'Run readiness' })).not.toBeInTheDocument()
+  })
+
   it('titles the page with the cycle the session reports', () => {
     renderScreen({ nightSession: session({ cycle: 3 }) })
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Cycle 3 of the night')
@@ -275,6 +282,15 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session(), session: allowedSession })
     const region = screen.getByRole('region', { name: 'Lifecycle commands' })
     expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
+  })
+
+  it('renders Prepare as Prepare site, Run readiness and Start as Start preshow, Start night: the group spec order, not blocks.css’s unscoped per-command order', () => {
+    renderScreen({ nightSession: session(), session: allowedSession })
+    const region = screen.getByRole('region', { name: 'Lifecycle commands' })
+    const prepareSection = within(region).getByRole('heading', { name: 'Prepare', level: 3 }).closest('section') as HTMLElement
+    expect(within(prepareSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prepare site', 'Run readiness'])
+    const startSection = within(region).getByRole('heading', { name: 'Start', level: 3 }).closest('section') as HTMLElement
+    expect(within(startSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Start preshow', 'Start night'])
   })
 
   it('leaves a command enabled regardless of session.state: the contract publishes no valid-from-state table for any command', () => {

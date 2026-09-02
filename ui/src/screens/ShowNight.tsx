@@ -249,9 +249,6 @@ export function ShowNight() {
           ) : (
             <Link className="sm-btn" to="/shows">Edit definition</Link>
           )}
-          <Button disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={() => send('run-readiness')}>
-            Run readiness
-          </Button>
         </ButtonRow>
       </div>
 

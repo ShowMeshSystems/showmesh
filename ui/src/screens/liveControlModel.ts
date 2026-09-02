@@ -66,11 +66,8 @@ export function nightCommandSpec(gate: NightGate, onRun: (command: NightCommandN
   })
 }
 
-/**
- * Builds the shared `LifecycleCommands` groups. `startNightOptions` renders
- * inside the start-night cell only (the late-start checkbox); every other
- * cell gets no options, matching `LifecycleCommandSpec.options`'s contract.
- */
+/** Builds the shared `LifecycleCommands` groups; `startNightOptions` renders
+ *  only in the start-night cell (the late-start checkbox). */
 export function nightLifecycleGroups(
   gate: NightGate,
   onRun: (command: NightCommandName) => void,

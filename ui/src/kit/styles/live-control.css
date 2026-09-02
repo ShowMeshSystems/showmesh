@@ -1,7 +1,5 @@
-/* Live Control and Show Night's own layout rules. Everything reusable
-   across screens belongs in blocks.css, controls.css or status.css instead;
-   this file only holds what is specific to the transport and audio-session
-   surfaces built out of those shared parts. */
+/* Live Control and Show Night layout rules only; anything reusable belongs
+   in blocks.css, controls.css or status.css instead. */
 
 .sm-lc-transport {
   margin-top: 14px;
@@ -53,10 +51,12 @@
   white-space: nowrap;
 }
 
-/* A volume field only needs to hold three digits; Apply sits on its baseline. */
+/* A volume field only needs to hold three digits. Apply's margin-top matches
+   the field's label row (21px) plus its gap (6px) so it aligns with the
+   input, not with the field's own bottom once its help line is counted. */
 .sm-lc-transport__volume-row {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: var(--s-3);
 }
 
@@ -67,6 +67,7 @@
 
 .sm-lc-transport__volume-row > .sm-btn {
   flex: 0 0 auto;
+  margin-top: 27px;
   white-space: nowrap;
 }
 
@@ -91,4 +92,11 @@
 
 .sm-lc-transport__controls .sm-btn-row {
   justify-content: center;
+}
+
+/* blocks.css's per-command `order` values are scoped by class name only, not
+   by container, so they also reorder these titled-group cells. Reset it here
+   so Prepare and Start render in the DOM order the group spec declares. */
+.sm-control-grid > .sm-lifecycle-command {
+  order: 0;
 }

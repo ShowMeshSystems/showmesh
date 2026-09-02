@@ -233,6 +233,11 @@ export function LiveControl() {
       ? []
       : fppPlaylistNames(playlistDefinitions.definitions, instance.instanceUuid)
   const reportedPlaylistNow = state === null ? null : reportedPlaylistName(state)
+  const reportedPlaylistMissing = reportedPlaylistNow !== null && !playlistNames.includes(reportedPlaylistNow)
+  // The select must always be able to show what state holds: when FPP reports a
+  // playlist the coordinator never imported, add it rather than leave the select
+  // blank while the (non-empty) state still enables Start playlist.
+  const selectablePlaylistNames = reportedPlaylistMissing ? [reportedPlaylistNow, ...playlistNames] : playlistNames
   useEffect(() => {
     if (reportedPlaylistNow !== null) setStartPlaylistName((current) => (current === '' ? reportedPlaylistNow : current))
   }, [reportedPlaylistNow])
@@ -295,14 +300,14 @@ export function LiveControl() {
             </div>
             <div className="sm-lc-transport__body">
               <div className="sm-lc-transport__playlist-row">
-                {playlistNames.length > 0 ? (
-                  <Field label="Playlist">
+                {selectablePlaylistNames.length > 0 ? (
+                  <Field label="Playlist" help="Imported FPP playlist definitions.">
                     {(field) => (
                       <Select {...field} value={startPlaylistName} onChange={(event) => setStartPlaylistName(event.target.value)}>
                         <option value="">Choose a playlist</option>
-                        {playlistNames.map((name) => (
+                        {selectablePlaylistNames.map((name) => (
                           <option key={name} value={name}>
-                            {name}
+                            {reportedPlaylistMissing && name === reportedPlaylistNow ? `${name} (reported by FPP)` : name}
                           </option>
                         ))}
                       </Select>
@@ -855,11 +860,7 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
   const gainEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.gain.effective')
 
   const audioSummary =
-    options.length === 0
-      ? 'No sessions known.'
-      : `${options.length} known session${options.length === 1 ? '' : 's'}.${
-          sessionOpen && trimmedSessionId !== '' ? ` ${trimmedSessionId} open.` : ''
-        }`
+    options.length === 0 ? 'No sessions known.' : `${options.length} known session${options.length === 1 ? '' : 's'}.`
 
   return (
     <Section
@@ -883,17 +884,11 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
           detail="Settings › Node routing is where an audio.node object is declared."
         />
       ) : (
-        <>
-          <p className="sm-small sm-muted">
-            Loading media into a session is authoring, not live control. A session gets its content from its cue, its playlist, or an audio
-            action.
-          </p>
-          <ButtonRow>
-            <Button variant="primary" onClick={() => setDrawerOpen(true)}>
-              Audio sessions…
-            </Button>
-          </ButtonRow>
-        </>
+        <ButtonRow>
+          <Button variant="primary" onClick={() => setDrawerOpen(true)}>
+            Audio sessions…
+          </Button>
+        </ButtonRow>
       )}
 
       <Drawer
@@ -1017,120 +1012,120 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
 
           {sessionOpen && trimmedSessionId !== '' && (
             <>
-          <div className="sm-panel">
-            <h3 className="sm-subsection__title">Transport</h3>
-            <ButtonRow>
-              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Prepare', () => prepareAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
-                Prepare
-              </Button>
-              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Start', () => startAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
-                Start
-              </Button>
-              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Pause', () => pauseAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
-                Pause
-              </Button>
-              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Resume', () => resumeAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
-                Resume
-              </Button>
-              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Advance', () => advanceAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
-                Advance
-              </Button>
-              <Button variant="danger" size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Stop', () => stopAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
-                Stop
-              </Button>
-            </ButtonRow>
-            <div className="sm-volume">
-              <Field
-                label="Position"
-                help={
-                  frameRateState.kind === 'loaded'
-                    ? `hh:mm:ss.ff at ${frameRateState.fps} fps, or a bare millisecond count.`
-                    : 'hh:mm:ss, or a bare millisecond count. Frame rate unavailable.'
-                }
-              >
-                {(props) => <Input {...props} value={position} onChange={(event) => setPosition(event.target.value)} placeholder="00:01:30" />}
-              </Field>
-              <Button
-                disabled={!canDispatch || positionMs === null}
-                title={!canDispatch ? dispatchTitle : positionMs === null ? 'Not a recognized timecode.' : undefined}
-                onClick={() => positionMs !== null && run('Seek', () => seekAudioSession(nodeId, trimmedSessionId, effectiveRevision, positionMs))}
-              >
-                Seek
-              </Button>
-            </div>
-          </div>
+              <div className="sm-panel">
+                <h3 className="sm-subsection__title">Transport</h3>
+                <ButtonRow>
+                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Prepare', () => prepareAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Prepare
+                  </Button>
+                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Start', () => startAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Start
+                  </Button>
+                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Pause', () => pauseAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Pause
+                  </Button>
+                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Resume', () => resumeAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Resume
+                  </Button>
+                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Advance', () => advanceAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Advance
+                  </Button>
+                  <Button variant="danger" size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Stop', () => stopAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Stop
+                  </Button>
+                </ButtonRow>
+                <div className="sm-volume">
+                  <Field
+                    label="Position"
+                    help={
+                      frameRateState.kind === 'loaded'
+                        ? `hh:mm:ss.ff at ${frameRateState.fps} fps, or a bare millisecond count.`
+                        : 'hh:mm:ss, or a bare millisecond count. Frame rate unavailable.'
+                    }
+                  >
+                    {(props) => <Input {...props} value={position} onChange={(event) => setPosition(event.target.value)} placeholder="00:01:30" />}
+                  </Field>
+                  <Button
+                    disabled={!canDispatch || positionMs === null}
+                    title={!canDispatch ? dispatchTitle : positionMs === null ? 'Not a recognized timecode.' : undefined}
+                    onClick={() => positionMs !== null && run('Seek', () => seekAudioSession(nodeId, trimmedSessionId, effectiveRevision, positionMs))}
+                  >
+                    Seek
+                  </Button>
+                </div>
+              </div>
 
-          <div className="sm-panel">
-            <h3 className="sm-subsection__title">Gain</h3>
-            <div className="sm-volume">
-              <Field label="Gain" help="Decibels. 0 dB is unity; +12 dB is the refused ceiling.">
-                {(props) => <Input {...props} type="number" max={12} value={gainDb} onChange={(event) => setGainDb(event.target.value)} />}
-              </Field>
-              <Button
-                disabled={!canDispatch || gainDb.trim() === ''}
-                title={dispatchTitle}
-                onClick={() => run('Set gain', () => setAudioSessionGain(nodeId, trimmedSessionId, effectiveRevision, Number(gainDb)))}
-              >
-                Set
-              </Button>
-            </div>
-            <div className="sm-volume">
-              <Field label="Fade to" help="Decibels.">
-                {(props) => (
-                  <Input {...props} type="number" max={12} value={fadeTargetDb} onChange={(event) => setFadeTargetDb(event.target.value)} />
-                )}
-              </Field>
-              <Field label="Over" help="Milliseconds. Leave empty for this node's own fade duration.">
-                {(props) => (
-                  <Input {...props} type="number" min={1} value={fadeDurationMs} onChange={(event) => setFadeDurationMs(event.target.value)} />
-                )}
-              </Field>
-              <Button
-                disabled={!canDispatch || fadeTargetDb.trim() === ''}
-                title={dispatchTitle}
-                onClick={() =>
-                  run('Fade gain', () =>
-                    fadeAudioSessionGain(
-                      nodeId,
-                      trimmedSessionId,
-                      effectiveRevision,
-                      Number(fadeTargetDb),
-                      fadeDurationMs.trim() === '' ? undefined : Number(fadeDurationMs),
-                    ),
-                  )
-                }
-              >
-                Fade
-              </Button>
-            </div>
-            <p className="sm-small sm-faint">Curve: linear. The only curve this build ships.</p>
-            <ButtonRow>
-              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Mute', () => muteAudioSessionOutput(nodeId, trimmedSessionId, effectiveRevision))}>
-                Mute
-              </Button>
-              <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Unmute', () => unmuteAudioSessionOutput(nodeId, trimmedSessionId, effectiveRevision))}>
-                Unmute
-              </Button>
-            </ButtonRow>
-          </div>
+              <div className="sm-panel">
+                <h3 className="sm-subsection__title">Gain</h3>
+                <div className="sm-volume">
+                  <Field label="Gain" help="Decibels. 0 dB is unity; +12 dB is the refused ceiling.">
+                    {(props) => <Input {...props} type="number" max={12} value={gainDb} onChange={(event) => setGainDb(event.target.value)} />}
+                  </Field>
+                  <Button
+                    disabled={!canDispatch || gainDb.trim() === ''}
+                    title={dispatchTitle}
+                    onClick={() => run('Set gain', () => setAudioSessionGain(nodeId, trimmedSessionId, effectiveRevision, Number(gainDb)))}
+                  >
+                    Set
+                  </Button>
+                </div>
+                <div className="sm-volume">
+                  <Field label="Fade to" help="Decibels.">
+                    {(props) => (
+                      <Input {...props} type="number" max={12} value={fadeTargetDb} onChange={(event) => setFadeTargetDb(event.target.value)} />
+                    )}
+                  </Field>
+                  <Field label="Over" help="Milliseconds. Leave empty for this node's own fade duration.">
+                    {(props) => (
+                      <Input {...props} type="number" min={1} value={fadeDurationMs} onChange={(event) => setFadeDurationMs(event.target.value)} />
+                    )}
+                  </Field>
+                  <Button
+                    disabled={!canDispatch || fadeTargetDb.trim() === ''}
+                    title={dispatchTitle}
+                    onClick={() =>
+                      run('Fade gain', () =>
+                        fadeAudioSessionGain(
+                          nodeId,
+                          trimmedSessionId,
+                          effectiveRevision,
+                          Number(fadeTargetDb),
+                          fadeDurationMs.trim() === '' ? undefined : Number(fadeDurationMs),
+                        ),
+                      )
+                    }
+                  >
+                    Fade
+                  </Button>
+                </div>
+                <p className="sm-small sm-faint">Curve: linear. The only curve this build ships.</p>
+                <ButtonRow>
+                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Mute', () => muteAudioSessionOutput(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Mute
+                  </Button>
+                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Unmute', () => unmuteAudioSessionOutput(nodeId, trimmedSessionId, effectiveRevision))}>
+                    Unmute
+                  </Button>
+                </ButtonRow>
+              </div>
 
-          <div className="sm-panel">
-            <h3 className="sm-subsection__title">Clear this session</h3>
-            <p className="sm-small sm-muted">Releases the session entirely on the node. Discards a loaded session mid-show.</p>
-            <Field label={trimmedSessionId === '' ? 'Type the session id to confirm' : `Type ${trimmedSessionId} to confirm`}>
-              {(props) => <Input {...props} value={clearConfirm} onChange={(event) => setClearConfirm(event.target.value)} />}
-            </Field>
-            <ButtonRow>
-              <Button
-                variant="danger"
-                disabled={!canDispatch || clearConfirm !== trimmedSessionId}
-                title={!canDispatch ? dispatchTitle : clearConfirm !== trimmedSessionId ? 'Type the session id exactly to enable this.' : undefined}
-                onClick={() => run('Clear', () => clearAudioSession(nodeId, trimmedSessionId, effectiveRevision))}
-              >
-                Clear
-              </Button>
-            </ButtonRow>
-          </div>
+              <div className="sm-panel">
+                <h3 className="sm-subsection__title">Clear this session</h3>
+                <p className="sm-small sm-muted">Releases the session entirely on the node. Discards a loaded session mid-show.</p>
+                <Field label={trimmedSessionId === '' ? 'Type the session id to confirm' : `Type ${trimmedSessionId} to confirm`}>
+                  {(props) => <Input {...props} value={clearConfirm} onChange={(event) => setClearConfirm(event.target.value)} />}
+                </Field>
+                <ButtonRow>
+                  <Button
+                    variant="danger"
+                    disabled={!canDispatch || clearConfirm !== trimmedSessionId}
+                    title={!canDispatch ? dispatchTitle : clearConfirm !== trimmedSessionId ? 'Type the session id exactly to enable this.' : undefined}
+                    onClick={() => run('Clear', () => clearAudioSession(nodeId, trimmedSessionId, effectiveRevision))}
+                  >
+                    Clear
+                  </Button>
+                </ButtonRow>
+              </div>
             </>
           )}
 

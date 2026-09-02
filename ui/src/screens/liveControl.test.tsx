@@ -313,6 +313,15 @@ describe('Live Control', () => {
     expect(within(region).getByLabelText(/Skip the enter-show lead/)).toBeInTheDocument()
   })
 
+  it('renders Prepare as Prepare site, Run readiness and Start as Start preshow, Start night: the group spec order, not blocks.css’s unscoped per-command order', () => {
+    renderScreen({})
+    const region = screen.getByRole('region', { name: 'Night lifecycle' })
+    const prepareSection = within(region).getByRole('heading', { name: 'Prepare', level: 3 }).closest('section') as HTMLElement
+    expect(within(prepareSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prepare site', 'Run readiness'])
+    const startSection = within(region).getByRole('heading', { name: 'Start', level: 3 }).closest('section') as HTMLElement
+    expect(within(startSection).getAllByRole('button').map((b) => b.textContent)).toEqual(['Start preshow', 'Start night'])
+  })
+
   it('says an unconfirmed command was not confirmed', () => {
     const result = {
       outcome: 'unconfirmed',
@@ -419,6 +428,36 @@ describe('Live Control', () => {
     const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent)
     expect(optionLabels).toEqual(['Choose a playlist', 'Holiday Show', 'Standard Show'])
     expect(select).toHaveValue('Holiday Show')
+  })
+
+  it('adds the reported-but-unimported playlist as its own option, so the select never shows blank while the state is non-empty', async () => {
+    stubs.listFPPPlaylistDefinitions = () =>
+      Promise.resolve({
+        definitions: [
+          { instanceUuid: 'uuid-1', playlistName: 'Standard Show', playlistHash: 'h1', capturedAt: '', receivedAt: '', entryCount: 1, referenced: true },
+        ],
+      })
+    renderScreen({
+      fpp: [
+        {
+          instanceId: 'main-player',
+          instanceUuid: 'uuid-1',
+          health: 'healthy',
+          observations: [
+            observation('fpp.status.player_state', 'playing', 'current', 'fpp', 'main-player'),
+            observation('fpp.playlist.name', 'Mystery Show', 'current', 'fpp', 'main-player'),
+          ],
+          instanceUuidChange: null,
+        } as never,
+      ],
+      session: commandAllowedSession,
+    })
+
+    const select = await screen.findByLabelText('Playlist')
+    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent)
+    expect(optionLabels).toEqual(['Choose a playlist', 'Mystery Show (reported by FPP)', 'Standard Show'])
+    expect(select).toHaveValue('Mystery Show')
+    expect(screen.getByRole('button', { name: 'Start playlist' })).not.toBeDisabled()
   })
 
   it('falls back to a typed playlist name when the coordinator has reported none for this instance', () => {
@@ -692,7 +731,8 @@ describe('Live Control', () => {
     renderScreen({ session: audioAllowedSession })
 
     const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    expect(await within(region).findByText(/1 known session\./)).toBeInTheDocument()
+    expect(await within(region).findByText('1 known session.')).toBeInTheDocument()
+    expect(within(region).queryByText(/Loading media into a session/)).not.toBeInTheDocument()
     expect(within(region).queryByLabelText('Session id')).not.toBeInTheDocument()
 
     fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
@@ -705,5 +745,7 @@ describe('Live Control', () => {
     fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
     expect(within(dialog).getByRole('button', { name: 'Prepare' })).toBeInTheDocument()
+    // The caption states a count only; it never grows an "open" clause, reachable or not.
+    expect(within(region).getByText('1 known session.')).toBeInTheDocument()
   })
 })
