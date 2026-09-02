@@ -218,6 +218,40 @@ above. The plugin must adopt them before the two are byte-identical on
 malformed input. Well-formed definitions, which is every definition FPP itself
 produces, are unaffected and are covered by the shared fixtures.
 
+**2026-09-01 correction to the depth divergence's stated cause.** The
+paragraph above is wrong about *why* the two sides disagree at the depth
+boundary. Both implementations count only containers; neither ever counted
+per value. `pkg/fppidentity/canonical.go`'s depth check has counted only
+containers since the file's own introduction (commit `73f3f07`, 2026-08-21,
+"Freeze the FPP playlist-entry observation and brightness contracts", #38)
+and has not been changed since: there is no earlier coordinator draft that
+counted per value to find in this repository's history.
+
+The real difference is **where** the bound is read. The coordinator's Go
+parser (`parseArray`/`parseObject` in `pkg/fppidentity/canonical.go`) checks
+`depth > maxDepth` immediately after incrementing, on the container's own
+entry, before it looks at what the container holds. The plugin's C++ parser
+(`native/src/json.cpp`) checks `depth_ > kMaxDepth` at the top of
+`parseValue`, which runs once per element about to be parsed, not once per
+container entered; `parseArray`/`parseObject` increment `depth_` themselves
+without checking it. So a container's depth is only evaluated by the
+`parseValue` call that parses its *first element*; a container with no
+elements is never checked at all, at any depth.
+
+As of this correction: the coordinator refuses 201 nested containers for
+every document, whether the innermost container is empty or holds a value
+(`test/fixtures/fpp/canonicalization.json`'s `depth-201-nested-arrays-empty-innermost`
+and `depth-201-nested-arrays-scalar-innermost`). The plugin's C++, read
+directly from `native/src/json.cpp` for this correction, accepts 201 nested
+containers when the innermost container is empty and refuses when it is not,
+matching the mechanism above. Invalid UTF-8 remains unrefused on the plugin
+side; the coordinator refuses it, pinned by
+`test/fixtures/fpp/canonicalization.json`'s `invalid-utf8-string-value` and
+`invalid-utf8-member-name` cases, carried via that file's `inputHex` field
+because a JSON string cannot hold a byte that is not valid UTF-8. Neither
+divergence is closed by this correction or its fixtures alone: the plugin fix
+for both is a separate, later change.
+
 ### 1.4 Unavailable observations
 
 Identity never silently degrades to filename matching. When the plugin cannot

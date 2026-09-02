@@ -84,48 +84,14 @@ var getResponseTypeOverrides = map[string]string{
 // mutation-proof notes in the PR for a one-off demonstration against a live
 // mutation.
 //
-// Every entry below is a gap found by this test's first run, not a design
-// choice: the CLI was already failing to decode these before this test
-// existed, discovered by running this test the day it was written. Each is
-// a known, existing gap between api/openapi.yaml and cmd/showmeshctl,
-// awaiting its own fix on its own branch with its own evidence -- this
-// test's job is detection, not repair, so none of these are fixed here. A
-// future PR that closes one removes its entry as part of that fix, the
-// same way exemptWritePaths entries come out when their gap closes.
-var getResponseFieldExemptions = map[string]string{
-	"node.audio": "Node.audio is required (api/openapi.yaml's Node schema) -- whatever node.audio.* " +
-		"observations this coordinator holds for a node, one ObservationEntry per signal, the same shape " +
-		"Node.render and Node.fppConnect already use. The `node` struct (types.go) decodes Render and " +
-		"FPPConnect but has no Audio field at all: GET /nodes, GET /nodes/{nodeId}, and GET /snapshot all " +
-		"silently drop it. Known existing gap, found by this test; not fixed here.",
-	"snapshot.macroRuns": "Snapshot.macroRuns is required (api/openapi.yaml's Snapshot schema), and its own " +
-		"doc comment there calls it fatal to omit per ADR-020 decision 3: the change stream emits no id, so " +
-		"a client connecting for the first time during an in-flight macro run has no other way to learn the " +
-		"run exists. The `snapshot` struct (types.go) has no MacroRuns field. Known existing gap, found by " +
-		"this test; not fixed here.",
-	"snapshot.auditStore": "Snapshot.auditStore is required (api/openapi.yaml's Snapshot schema): whether " +
-		"this coordinator can currently write to its audit store, probed fresh on every request. The " +
-		"`snapshot` struct (types.go) has no AuditStore field. Known existing gap, found by this test; not " +
-		"fixed here.",
-	"nightSessionStateWire.authorization": "NightSessionState.authorization is required (api/openapi.yaml's " +
-		"NightSessionState schema): who authorized this night session, for provenance across a coordinator " +
-		"restart. The `nightSessionStateWire` struct (types_night_lifecycle.go) has no Authorization field, " +
-		"so GET /night/session silently drops it. Known existing gap, found by this test; not fixed here.",
-	"resolumeRecoveryResponse.resolumeConfigured": "ResolumeRecoveryResponse.resolumeConfigured is required " +
-		"(api/openapi.yaml): whether this coordinator has any Resolume instance configured at all, distinct " +
-		"from autoRestoreConfigured -- the schema's own doc comment says a client should render 'not " +
-		"configured' rather than the toggle's default-ON value when this is false, since an operator who " +
-		"believes recovery is armed and is wrong is worse off than one who knows it is unavailable. The " +
-		"`resolumeRecoveryResponse` struct (cmd_resolume_recovery.go) has no ResolumeConfigured field, so " +
-		"GET /resolume/recovery silently drops a safety-relevant signal. Known existing gap, found by this " +
-		"test; not fixed here.",
-	"evidence.resource": "ObservationEntry.resource is required (api/openapi.yaml's ObservationEntry schema, " +
-		"the item type of GET /observations): which resource (kind + id) an entry concerns, since a flat " +
-		"list spanning every resource can't rely on an enclosing object to imply the subject the way " +
-		"Node.evidence.* can. observationsResponse.Observations (cmd_render_transport.go) decodes each item " +
-		"as a bare `evidence`, which has no Resource field at all -- every observation GET /observations " +
-		"returns loses which resource it's about. Known existing gap, found by this test; not fixed here.",
-}
+// Every entry that has ever lived here was a gap found by this test's
+// first run, not a design choice: the CLI was already failing to decode it
+// before this test existed. A future PR that closes one removes its entry
+// as part of that fix, the same way exemptWritePaths entries come out when
+// their gap closes. Empty is the table's steady state -- it exists to hold
+// a gap only for the span between this test finding it and that gap's own
+// fix landing.
+var getResponseFieldExemptions = map[string]string{}
 
 // isExemptResponseField is getResponseFieldExemptions' only reader: a
 // required property missing from typeName's decoded fields is exempt only
@@ -143,31 +109,39 @@ func isExemptResponseField(typeName, propName string) (exempted bool, reason str
 // TestFieldExemptionsAreScopedToOneProperty is the standing regression
 // check for getResponseFieldExemptions' own critical property (see its doc
 // comment above): an exemption must name a specific type AND a specific
-// property, never just a type. It asserts that against the real table
-// (snapshot.macroRuns and snapshot.auditStore are both real entries today)
-// rather than a fixture, so the moment either real entry is removed (its
-// gap fixed) this test is updated along with it -- it cannot go stale
-// pointing at an exemption nobody maintains any more. The critical
-// assertion is the third one: a made-up property on the SAME already-
-// exempted "snapshot" type must NOT be swept in by the type name alone. If
-// this test ever fails there, the exemption mechanism has regressed from
-// per-property to per-type and every required field snapshot grows from
-// here on is silently unchecked.
+// property, never just a type. getResponseFieldExemptions itself is empty
+// in its steady state (every gap this test found has since been fixed), so
+// this test installs two temporary entries on a probe type name of its own
+// -- never a real type this package declares -- rather than asserting
+// against real table contents, and removes them again once done. The
+// critical assertion is the third one: a made-up property on the SAME
+// already-exempted probe type must NOT be swept in by the type name alone.
+// If this test ever fails there, the exemption mechanism has regressed
+// from per-property to per-type and every required field a real type grows
+// from here on is silently unchecked.
 func TestFieldExemptionsAreScopedToOneProperty(t *testing.T) {
-	for _, known := range []string{"macroRuns", "auditStore"} {
-		exempted, reason := isExemptResponseField("snapshot", known)
-		if !exempted || reason == "" {
-			t.Fatalf("expected snapshot.%s to be a known, reasoned entry in getResponseFieldExemptions; "+
-				"got exempted=%v reason=%q -- update this test if that gap has been fixed and its entry removed",
-				known, exempted, reason)
+	const probeType = "exemptionScopeProbeType"
+	const knownProp = "exemptionScopeKnownProperty"
+	const probeProp = "exemptionScopeProbeProperty"
+
+	for _, key := range []string{probeType + "." + knownProp, probeType + "." + probeProp} {
+		if _, exists := getResponseFieldExemptions[key]; exists {
+			t.Fatalf("probe key %q is already present in getResponseFieldExemptions; pick a different probe name", key)
 		}
 	}
+	getResponseFieldExemptions[probeType+"."+knownProp] = "test-only exemption installed by TestFieldExemptionsAreScopedToOneProperty"
+	t.Cleanup(func() { delete(getResponseFieldExemptions, probeType+"."+knownProp) })
 
-	const probeProp = "exemptionScopeProbeProperty"
-	if exempted, reason := isExemptResponseField("snapshot", probeProp); exempted {
+	exempted, reason := isExemptResponseField(probeType, knownProp)
+	if !exempted || reason == "" {
+		t.Fatalf("expected %s.%s to be exempted once installed in getResponseFieldExemptions; got exempted=%v reason=%q",
+			probeType, knownProp, exempted, reason)
+	}
+
+	if exempted, reason := isExemptResponseField(probeType, probeProp); exempted {
 		t.Fatalf("a required property (%q) with no entry of its own must not be exempted just because "+
-			"\"snapshot\" has OTHER exemptions -- got exempted=true reason=%q; exemption granularity has "+
-			"regressed from per-property to per-type", probeProp, reason)
+			"%q has OTHER exemptions -- got exempted=true reason=%q; exemption granularity has "+
+			"regressed from per-property to per-type", probeProp, probeType, reason)
 	}
 }
 

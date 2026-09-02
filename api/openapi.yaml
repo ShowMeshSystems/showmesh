@@ -9255,6 +9255,13 @@ components:
             fourth member of this vocabulary, but it names a capability
             an adapter can report, never a policy a caller may request:
             the node unconditionally refuses it here.
+        expiresInMs:
+          type: number
+          exclusiveMinimum: 0
+          description: >-
+            The coordinator stamps this on its own applies to keep a
+            session's retirement deadline current; an operator need not
+            send it.
     AudioSessionSeekParams:
       type: object
       additionalProperties: false

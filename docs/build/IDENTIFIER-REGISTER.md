@@ -1227,7 +1227,8 @@ The store schema version, bumped by migrations in
 | v25 | shipped | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, `fallback_programs` and `fallback_program_acknowledgements` (ADR-048, TRACK-J-fpp-fallback.md J1). Renumbered from v23 |
 | v26 | shipped | Lane 17a SM-111: renaming `commands.requested_revision` and formalizing its per-family discriminator (owner, 2026-08-19). Renumbered from v22, which was renumbered from v13 |
 | v27 | shipped | re-key `audio_sessions` from `id TEXT PRIMARY KEY` to a composite `(node_id, id)` primary key, so two nodes dispatching the same session id no longer share one row and one node's revision guard silently drops the other's write. Renumbered from v21: a number at or below main's shipped maximum can never run |
-| v28+ | unallocated | free |
+| v28 | shipped | widens both `assets_current` and `assets_identity` to key on `media_type` as well as show/sequence/target, so an FSEQ and an audio asset may both be current for one sequence at once instead of the second upload superseding the first, and identical bytes registered under two different media types are a new identity rather than a raw constraint violation (ADR-028 decision 1's amendment). A pure widening for both indexes: every pre-v28 row already holds exactly one media type per tuple, so no data fix runs |
+| v29+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

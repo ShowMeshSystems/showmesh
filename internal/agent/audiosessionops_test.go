@@ -2,6 +2,7 @@ package agent
 
 import (
 	"testing"
+	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
@@ -58,6 +59,53 @@ func TestParseApplyRequestRejectsEmptyLTCStartOffset(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("parseApplyRequest(empty ltcStartOffset) = nil error, want one")
+	}
+}
+
+// TestParseApplyRequestAcceptsExpiresInMs is the load-bearing case for
+// the night controller's periodic re-affirm: a refresh carrying only
+// expiresInMs must be accepted, not refused as an unknown key, or the
+// expiry mechanism goes stale silently (see nightbackgroundaudio.go's
+// own re-affirm doc comment).
+func TestParseApplyRequestAcceptsExpiresInMs(t *testing.T) {
+	before := time.Now()
+	req, err := parseApplyRequest("audio.session.apply", map[string]any{
+		"expiresInMs": float64(60_000),
+	})
+	if err != nil {
+		t.Fatalf("parseApplyRequest: %v", err)
+	}
+	after := time.Now()
+	v, ok := req.Expiry.Value()
+	if !ok {
+		t.Fatal("Expiry state = unset, want set")
+	}
+	if v.Before(before.Add(60*time.Second)) || v.After(after.Add(60*time.Second)) {
+		t.Errorf("Expiry = %v, want between %v and %v", v, before.Add(60*time.Second), after.Add(60*time.Second))
+	}
+}
+
+func TestParseApplyRequestOmittedExpiresInMsStaysUnset(t *testing.T) {
+	req, err := parseApplyRequest("audio.session.apply", map[string]any{})
+	if err != nil {
+		t.Fatalf("parseApplyRequest: %v", err)
+	}
+	if !req.Expiry.IsUnset() {
+		t.Errorf("Expiry state = %v, want unset", req.Expiry.State())
+	}
+}
+
+func TestParseApplyRequestRejectsNonPositiveExpiresInMs(t *testing.T) {
+	for _, ms := range []float64{0, -1} {
+		if _, err := parseApplyRequest("audio.session.apply", map[string]any{"expiresInMs": ms}); err == nil {
+			t.Errorf("parseApplyRequest(expiresInMs=%v) = nil error, want one", ms)
+		}
+	}
+}
+
+func TestParseApplyRequestRejectsNonNumericExpiresInMs(t *testing.T) {
+	if _, err := parseApplyRequest("audio.session.apply", map[string]any{"expiresInMs": "60000"}); err == nil {
+		t.Error("parseApplyRequest(string expiresInMs) = nil error, want one")
 	}
 }
 

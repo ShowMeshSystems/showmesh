@@ -90,3 +90,19 @@ func TestDecodeParamsRejectsUnmarshalableValue(t *testing.T) {
 		t.Fatalf("DecodeParams accepted a value json.Marshal cannot encode")
 	}
 }
+
+// TestPrepareStagingSessionIDIsNeverTheShowSessionID guards the identity
+// [audio.Manager.Promote]'s whole design depends on: a coordinator-scheduled
+// prepare-ahead must load media under a genuinely separate session from the
+// one currently playing the preceding Cue, never the same one — staging
+// under [AudioSessionID] itself would mean the "prepare ahead" call tears
+// down whatever is already playing, the exact audible cutoff this feature
+// exists to prevent (see [PrepareStagingSessionID]'s own doc comment).
+func TestPrepareStagingSessionIDIsNeverTheShowSessionID(t *testing.T) {
+	if PrepareStagingSessionID == AudioSessionID {
+		t.Fatalf("PrepareStagingSessionID (%q) must never equal AudioSessionID (%q)", PrepareStagingSessionID, AudioSessionID)
+	}
+	if PrepareStagingSessionID == AnnouncementSessionID {
+		t.Fatalf("PrepareStagingSessionID (%q) must never equal AnnouncementSessionID (%q)", PrepareStagingSessionID, AnnouncementSessionID)
+	}
+}

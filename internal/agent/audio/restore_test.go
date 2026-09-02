@@ -69,6 +69,84 @@ func TestRestorePausedRestartPolicyIgnoresBookmark(t *testing.T) {
 	}
 }
 
+// TestRestoreAllRetiresExpiredBedSession is the acceptance case for a
+// session whose owning night session ended while its node was
+// unreachable: a session whose Expiry has already passed by the time
+// this agent restarts is never restarted, and its persisted record is
+// removed rather than left to be retried forever.
+func TestRestoreAllRetiresExpiredBedSession(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("night-bg-orphan")
+
+	ref := writeTestAsset(t, m.assetDir, "bed.wav", "asset-bed", []byte("content-bed"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	rec, ok, err := m.store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("Load precondition: ok=%v err=%v", ok, err)
+	}
+	expired := c.now().Add(-time.Minute)
+	rec.Desired.Expiry = &expired
+	if err := m.store.Save(id, rec); err != nil {
+		t.Fatalf("seed expired record: %v", err)
+	}
+
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	if _, ok := m2.get(id); ok {
+		t.Fatal("expired session was restored into memory, want retired")
+	}
+	if _, ok, err := m2.store.Load(id); err != nil || ok {
+		t.Fatalf("expired session's persisted record survived retirement: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestRestoreAllNeverRetiresALegacyRecordWithNoExpirySet is ruling 2's
+// own required test: a record persisted before Expiry existed decodes
+// with it nil, and restore must treat that exactly like "no deadline",
+// never like "already expired".
+func TestRestoreAllNeverRetiresALegacyRecordWithNoExpirySet(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("night-bg-legacy")
+
+	ref := writeTestAsset(t, m.assetDir, "bed.wav", "asset-bed", []byte("content-bed"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	rec, ok, err := m.store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("Load precondition: ok=%v err=%v", ok, err)
+	}
+	if rec.Desired.Expiry != nil {
+		t.Fatalf("precondition: Expiry = %v, want nil (never set)", rec.Desired.Expiry)
+	}
+
+	c.advance(24 * time.Hour) // however much real time passes, absent means never expire.
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("legacy session with no Expiry ever set was retired, want restored")
+	}
+	s2.mu.Lock()
+	state := s2.state
+	s2.mu.Unlock()
+	if state != pkgaudio.StatePlaying {
+		t.Fatalf("restored state = %q, want playing", state)
+	}
+}
+
 // TestStartRefusesBookmarkFromADifferentMediaAsset verifies that pausing
 // media A, replacing it with media B via a second Apply on the same
 // (media, non-playlist) session, and then Start must not resume B from

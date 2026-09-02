@@ -14,6 +14,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
@@ -724,6 +725,237 @@ func (h *handlers) dispatchBlackAndSilenceAudioStopSession(ctx context.Context, 
 		// above — a suppressed dispatch is logged, never silent.
 		h.logDebug("cue activation loop: blackAndSilence audio stop suppressed as a replay of an unchanged episode", "nodeId", nodeID, "sessionId", sessionID, "episode", episode)
 	}
+}
+
+// nextPlaylistEntryCueID looks up the entry immediately after entryID in
+// playlistID's own entries, at playlistRevision — the ordered knowledge a
+// node's own flat, unordered catalog cannot derive itself (see
+// [cueactivation.PrepareStagingSessionID]'s own doc comment for why the
+// coordinator, not the node, is what schedules a prepare-ahead). ok is
+// false, with no error, whenever there is genuinely nothing to prepare
+// ahead: playlistID or entryID is empty (a directly-activated
+// announcement, or a safeCue mismatch fallback — neither advances through
+// an ordered Playlist), the named revision no longer exists, entryID is
+// not one of its entries, or entryID is that revision's own last entry.
+//
+// The last-entry case is a KNOWN, deliberate gap, not an oversight: an FPP
+// playlist that loops (its last entry restarting its first, rather than
+// ending) is still a real cue start with the same video-leads-audio lead
+// this whole mechanism exists to close, but this coordinator has nothing
+// to prepare ahead with at that transition, because it cannot currently
+// tell whether a given FPP-runner show.playlist loops at all.
+// config.ShowPlaylistPayload's own Repeat field (ShowPlaylistShowmeshAudio)
+// is gated to Runner=="showmesh-audio" and does not exist for an
+// FPP-runner binding; FPP's own raw playlist definition JSON DOES carry a
+// "repeat" key (confirmed against real FPP fixtures), but
+// fppidentity.ParseDefinitionEntries — the coordinator's one reader of
+// that JSON — does not extract it, and nothing else in this codebase
+// surfaces it. Wiring that through would be new plumbing in a different
+// package, not a reversible detail of this function; guessing wrong here
+// (wrapping to the first entry when the playlist does not actually loop)
+// would stage a Cue that never activates, so skipping is the correct,
+// evidence-bounded choice until that data is actually available here.
+//
+// Reads the persisted revision directly, mirroring fppreconcile's own
+// decodeStoredShowPlaylistPayload one seam over (internal/coordinator/
+// fppreconcile/reconcile.go): a stored revision is already valid, and
+// re-running config.DecodeShowPlaylistPayload's own authoring-time
+// cross-reference validation (show exists, cue resolves) here would need
+// callbacks this read-only lookup has no use for.
+func nextPlaylistEntryCueID(ctx context.Context, cfg ConfigStore, playlistID string, playlistRevision int64, entryID string) (cueID string, ok bool, err error) {
+	if playlistID == "" || entryID == "" {
+		return "", false, nil
+	}
+	rev, err := cfg.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, playlistID, playlistRevision)
+	if err != nil {
+		if errors.Is(err, store.ErrConfigRevisionNotFound) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("get show.playlist %q revision %d: %w", playlistID, playlistRevision, err)
+	}
+	var payload config.ShowPlaylistPayload
+	if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
+		return "", false, fmt.Errorf("decode show.playlist %q revision %d: %w", playlistID, playlistRevision, err)
+	}
+	for i, entry := range payload.Entries {
+		if entry.ID != entryID {
+			continue
+		}
+		if i+1 >= len(payload.Entries) {
+			return "", false, nil
+		}
+		return payload.Entries[i+1].Cue, true, nil
+	}
+	return "", false, nil
+}
+
+// prepareAheadCatalogEntry mirrors cueactivate's own unexported
+// catalogEntry exactly — independently reproduced rather than imported,
+// matching this file's own established convention (see
+// activeShowFPPBinding's doc comment one package over, cueactivate/
+// decide.go) for a small, self-contained lookup neither side's own
+// internals need to share.
+func prepareAheadCatalogEntry(catalog assetsync.Catalog, cueID string) (cuecatalog.Entry, bool) {
+	for _, e := range catalog.Entries {
+		if e.CueID == cueID {
+			return e, true
+		}
+	}
+	return cuecatalog.Entry{}, false
+}
+
+// dispatchPrepareAheadAudio best-effort stages cue N+1's audio content
+// under [cueactivation.PrepareStagingSessionID] while cue N (act) is still
+// activating on nodeID — the coordinator's own half of closing the
+// video-leads-audio gap [audio.Manager.Promote] exists for (see that
+// method's own doc comment, internal/agent/audio/manager.go, for the
+// node-side mechanism this feeds).
+//
+// Deliberately NOT an authorization decision: it never calls
+// [cueauth.Check] or [cueactivate.Authorize] against the guessed next Cue.
+// [audio.Manager.Promote]'s own identity check, run at cue N+1's REAL
+// activation, is what actually gates whether this staged content is ever
+// used — a wrong or stale guess here costs nothing beyond one wasted
+// prepare; activateAudio's ordinary Apply+Prepare+Start fallback still
+// runs exactly as it would have if nothing had ever been staged. Every
+// failure here is logged and swallowed for the identical reason: this must
+// never fail, delay, or retry cue N's own activation, which has already
+// been dispatched (or refused) by the time this runs.
+//
+// Runs synchronously, not in its own goroutine, unlike
+// dispatchAssetMissingFailToBlack: that goroutine exists because an
+// asset-missing refusal recurs on EVERY tick for as long as the bad node/
+// cue stays active, which would otherwise stall every other FPP
+// instance's tick repeatedly. This dispatch's idempotency key is
+// act.ActivationID-derived, the identical key scope cue N's own
+// dispatchOneCueActivation already uses — so a repeat tick over an
+// unchanged act (the ordinary case between one entry-start and the next)
+// answers from the replay path with no publish and no await, exactly as
+// dispatchOneCueActivation's own repeat-tick cost already does today,
+// unguarded by a goroutine.
+func (h *handlers) dispatchPrepareAheadAudio(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) {
+	if h.deps.Config == nil || h.deps.AssetManifests == nil {
+		return
+	}
+	nextCueID, ok, err := nextPlaylistEntryCueID(ctx, h.deps.Config, act.Playlist, act.PlaylistRevision, act.EntryID)
+	if err != nil {
+		h.logWarn("cue activation loop: resolve next playlist entry for prepare-ahead failed", "nodeId", nodeID, "playlistId", act.Playlist, "error", err)
+		return
+	}
+	if !ok {
+		return
+	}
+
+	// act.Show/act.Generation are already this activation's own pinned or
+	// freshly-resolved identity (cueactivate.Decide's own job) — reused
+	// directly rather than re-resolving assetsync.ResolveActiveShow (or
+	// threading the tick's own *cueactivate.ShowPin through another layer)
+	// a second time for the identical answer.
+	active := assetsync.ActiveShow{Configured: true, ShowID: act.Show, Generation: act.Generation}
+	catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
+	if err != nil {
+		h.logWarn("cue activation loop: resolve cue catalog for prepare-ahead failed", "nodeId", nodeID, "cueId", nextCueID, "error", err)
+		return
+	}
+	entry, participates := prepareAheadCatalogEntry(catalog, nextCueID)
+	if !participates || entry.Outputs.Audio == nil || entry.Outputs.Audio.Filename == "" {
+		// Nothing to stage: the next Cue has no audio output on this node,
+		// or — cueAssetsPresent's own "never uploaded" rule (cueactivate/
+		// decide.go), mirrored here — no asset has ever been uploaded for
+		// it. Not an error: the ordinary Apply+Prepare+Start path at real
+		// activation time covers this exactly as it always has.
+		return
+	}
+	contentHash := ""
+	if len(entry.Outputs.Audio.AssetHashes) > 0 {
+		contentHash = entry.Outputs.Audio.AssetHashes[0]
+	}
+
+	// t is THIS coordinator's own now — deliberately never act.EvidenceAt,
+	// unlike dispatchBlackAndSilenceAudioStopSession one function up. That
+	// function reads back the NODE's own clock as a floor because its stop
+	// writes to a session the NODE already wrote to first, using that same
+	// clock. Here the order is reversed: THIS dispatch writes to the
+	// staging session FIRST, and act itself is cue N's own activation,
+	// which the node's own activateAudio has (by the time this runs,
+	// synchronously after dispatchOneCueActivation's own await, see this
+	// function's own doc comment) already processed — including its own
+	// Promote/Clear call against THIS SAME staging session, at
+	// activationRevision(act, activationStepStart), i.e. act.EvidenceAt
+	// itself with a HIGHER step than [PrepareStagingSessionStepApply]/
+	// [PrepareStagingSessionStepPrepare]. Reusing act.EvidenceAt as t here
+	// would collide with that already-recorded revision on nearly every
+	// tick and refuse this dispatch as stale; now, a genuinely later,
+	// distinct wall-clock reading taken after that processing completed,
+	// does not. The residual risk this leaves unaddressed — this
+	// coordinator's own clock lagging the FPP host's by more than the
+	// observation's own ingest latency — is the same "SHOWMESH HYPOTHESIS,
+	// NOT MEASURED" class of clock-skew risk already accepted elsewhere in
+	// this seam, and here it is bounded: a refusal from it costs nothing
+	// beyond one wasted prepare (this function's own doc comment above).
+	t := now
+
+	staging := cueactivation.PrepareStagingSessionID
+	applyInvocation := act.ActivationID + ":prepare-ahead-apply"
+	prepareInvocation := act.ActivationID + ":prepare-ahead-prepare"
+	applyRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepApply)
+	prepareRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepPrepare)
+
+	applyResult, applyProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.apply", NodeID: nodeID, SessionID: staging,
+		Params: map[string]any{
+			"sessionId": staging, "invocationId": applyInvocation, "revision": applyRevision,
+			"sourceRole": string(pkgaudio.SourceRoleShow),
+			"media": map[string]any{
+				"assetId": entry.Outputs.Audio.Asset, "contentHash": contentHash, "filename": entry.Outputs.Audio.Filename,
+			},
+		},
+		Revision: applyRevision, IdempotencyKey: applyInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	switch {
+	case err != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio apply dispatch failed", "nodeId", nodeID, "cueId", nextCueID, "error", err)
+		return
+	case applyProblem != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio apply dispatch refused", "nodeId", nodeID, "cueId", nextCueID, "detail", applyProblem.Detail)
+		return
+	case applyResult.Outcome == "refused" || applyResult.Outcome == "failed":
+		h.logWarn("cue activation loop: prepare-ahead audio apply outcome", "nodeId", nodeID, "cueId", nextCueID, "outcome", applyResult.Outcome, "reason", applyResult.Reason)
+		return
+	}
+
+	_, prepareProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.prepare", NodeID: nodeID, SessionID: staging,
+		Params:   map[string]any{"sessionId": staging, "invocationId": prepareInvocation, "revision": prepareRevision},
+		Revision: prepareRevision, IdempotencyKey: prepareInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	switch {
+	case err != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio prepare dispatch failed", "nodeId", nodeID, "cueId", nextCueID, "error", err)
+	case prepareProblem != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio prepare dispatch refused", "nodeId", nodeID, "cueId", nextCueID, "detail", prepareProblem.Detail)
+	}
+}
+
+// safeDispatchPrepareAheadAudio wraps [handlers.dispatchPrepareAheadAudio]
+// with a recover, so best-effort means genuinely total: this runs on
+// runTick's own detached goroutine (this file's own Run), with no caller
+// left to recover a panic before it reaches the Go runtime and takes down
+// the entire process — cue N's own activation, dispatched by this same
+// caller (cueactivationdispatch.go's dispatchCueActivations) immediately
+// before this call, must never be put at that kind of risk by a wrong or
+// unanticipated guess about cue N+1.
+func (h *handlers) safeDispatchPrepareAheadAudio(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logWarn("cue activation loop: prepare-ahead audio dispatch panicked; recovered", "nodeId", nodeID, "cueId", act.CueID, "panic", fmt.Sprintf("%v", r))
+		}
+	}()
+	h.dispatchPrepareAheadAudio(ctx, now, nodeID, act, issuer)
 }
 
 // nodeHasAudioNodeObject reports whether nodeID has a current audio.node

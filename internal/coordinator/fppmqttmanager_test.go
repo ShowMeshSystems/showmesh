@@ -282,3 +282,35 @@ func TestFPPMQTTManagerRunAppliesConfigurationOnATicker(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// TestFPPMQTTCollectorStateMapsSilentToConnectedNoData is the silent=true
+// direction of fppMQTTCollectorState, independent of any live connection:
+// SilentSinceConnect's own threshold and message-tracking behavior are
+// covered exhaustively by the fppmqtt package's own tests; this only checks
+// the mapping onto api.CollectorState is correct.
+func TestFPPMQTTCollectorStateMapsSilentToConnectedNoData(t *testing.T) {
+	got := fppMQTTCollectorState(true, "connected to the broker since 2026-08-31T00:00:00Z but has received no message on any subscribed topic since")
+	if got.ID != fppMQTTCollectorSourceID {
+		t.Errorf("ID = %q, want %q", got.ID, fppMQTTCollectorSourceID)
+	}
+	if got.State != "connected_no_data" {
+		t.Errorf("State = %q, want %q", got.State, "connected_no_data")
+	}
+	if got.Reason == nil || *got.Reason == "" {
+		t.Errorf("Reason = %v, want the silence reason set", got.Reason)
+	}
+}
+
+// TestFPPMQTTCollectorStateMapsNotSilentToRunning is the mirror case: a
+// collector that has received evidence (or was never silent) reports
+// running, with no reason: the same shape this endpoint has always used
+// for a healthy collector.
+func TestFPPMQTTCollectorStateMapsNotSilentToRunning(t *testing.T) {
+	got := fppMQTTCollectorState(false, "")
+	if got.State != "running" {
+		t.Errorf("State = %q, want %q", got.State, "running")
+	}
+	if got.Reason != nil {
+		t.Errorf("Reason = %v, want nil for running", got.Reason)
+	}
+}

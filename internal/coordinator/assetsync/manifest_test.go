@@ -79,9 +79,19 @@ func declareNode(t *testing.T, st *store.Store, nodeID string) {
 
 func createAsset(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, contentHash, filename string) store.AssetRecord {
 	t.Helper()
+	return createAssetWithMediaType(t, st, showID, sequenceID, targetKind, targetID, "fseq", contentHash, filename)
+}
+
+// createAssetWithMediaType is [createAsset] with a caller-stated media
+// type, for a fixture that must be resolvable through the "fseq"/"audio"
+// media-type filter [resolveAssetFor] applies since ADR-028 decision 1's
+// amendment. createAsset's own "fseq" default stands in for the ordinary
+// render-asset fixture the great majority of this package's tests need.
+func createAssetWithMediaType(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, mediaType, contentHash, filename string) store.AssetRecord {
+	t.Helper()
 	rec, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: contentHash + "-" + targetKind + "-" + targetID, ShowID: showID, SequenceID: sequenceID,
-		TargetKind: targetKind, TargetID: targetID, MediaType: "fseq", ContentHash: contentHash,
+		TargetKind: targetKind, TargetID: targetID, MediaType: mediaType, ContentHash: contentHash,
 		RuntimeFilename: filename, SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
 	})
 	if err != nil {

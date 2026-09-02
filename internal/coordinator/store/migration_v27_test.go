@@ -186,8 +186,12 @@ func TestMigrateV27AppliesToAStoreStampedAtMainsShippedMaximum(t *testing.T) {
 	if err := db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 27 {
-		t.Fatalf("user_version after migrating a store stamped at 26 = %d, want 27", version)
+	// maxMigrationVersion(), not a literal 27: this test proves v27 itself
+	// applies from a store stamped at 26, not that 27 is the last migration
+	// ever added. A later migration (schemaV28) legitimately advances the
+	// target past 27, and this assertion must track that rather than pin it.
+	if version != maxMigrationVersion() {
+		t.Fatalf("user_version after migrating a store stamped at 26 = %d, want %d", version, maxMigrationVersion())
 	}
 
 	type row struct {

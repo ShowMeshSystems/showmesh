@@ -37,20 +37,20 @@ func showmeshAudioRepeat(repeat string) pkgaudio.RepeatMode {
 }
 
 // resolveAssetForWithSize is [resolveAssetFor] plus the one field it does
-// not resolve (SizeBytes) — that function's own signature is unchanged
-// because internal/agent/cueactivationrender.go's ExpectedAsset consumer
-// (and ResolveCueCatalog's own resolveCueOutputs) never needed size, but
-// [pkgaudio.MediaRef] is a real field a node's engine may use, so this
-// seam's own PlaylistItem is not built with it silently left zero when a
-// real value is available.
-func resolveAssetForWithSize(assetsBySequence map[string][]ExpectedAsset, sequenceID string) (filename, contentHash string, sizeBytes int64) {
-	filename, hashes := resolveAssetFor(assetsBySequence, sequenceID)
+// not resolve (SizeBytes); that function's own signature carries the same
+// mediaType filter because internal/agent/cueactivationrender.go's
+// ExpectedAsset consumer (and ResolveCueCatalog's own resolveCueOutputs)
+// never needed size, but [pkgaudio.MediaRef] is a real field a node's
+// engine may use, so this seam's own PlaylistItem is not built with it
+// silently left zero when a real value is available.
+func resolveAssetForWithSize(assetsBySequence map[string][]ExpectedAsset, sequenceID, mediaType string) (filename, contentHash string, sizeBytes int64) {
+	filename, hashes := resolveAssetFor(assetsBySequence, sequenceID, mediaType)
 	if len(hashes) == 0 {
 		return "", "", 0
 	}
 	contentHash = hashes[0]
 	for _, a := range assetsBySequence[sequenceID] {
-		if a.ContentHash == contentHash {
+		if a.ContentHash == contentHash && a.MediaType == mediaType {
 			return filename, contentHash, a.SizeBytes
 		}
 	}
@@ -111,7 +111,7 @@ func ResolveShowmeshAudioPlaylistRef(ctx context.Context, st *store.Store, showI
 			// discard the declared ltc output.
 			return pkgaudio.PlaylistRef{}, fmt.Errorf("assetsync: resolve showmesh-audio playlist %q: entry %q: cue %q declares an ltc output, but a showmesh-audio background session has no LTC generator (ADR-018); refusing rather than silently dropping it", ownerID, entry.ID, entry.Cue)
 		}
-		filename, contentHash, sizeBytes := resolveAssetForWithSize(assetsBySequence, cue.Outputs.Audio.Asset)
+		filename, contentHash, sizeBytes := resolveAssetForWithSize(assetsBySequence, cue.Outputs.Audio.Asset, "audio")
 		if filename == "" || contentHash == "" {
 			return pkgaudio.PlaylistRef{}, fmt.Errorf("assetsync: resolve showmesh-audio playlist %q: entry %q: cue %q resolves asset %q to no runtime filename (no matching asset uploaded)", ownerID, entry.ID, entry.Cue, cue.Outputs.Audio.Asset)
 		}

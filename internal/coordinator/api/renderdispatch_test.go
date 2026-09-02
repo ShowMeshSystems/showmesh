@@ -354,25 +354,28 @@ func TestRenderApplyRefusesOnAmbiguousAsset(t *testing.T) {
 	}
 }
 
-// TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio reproduces
-// the rehearsal-rig failure of 2026-08-30: an FSEQ is uploaded and current
-// for the sequence, then the show's audio is uploaded for the SAME
-// sequence and target, which (per assets.go's createAsset) supersedes the
-// FSEQ on the same (show, sequence, target) tuple. The only current asset
-// left for the sequence is the audio file. Before this fix,
-// resolveRenderApplyParams treated media type as irrelevant and handed the
-// MP3 to the node as fseqFilename, which the node correctly refused with
-// "fseq: not an FSEQ file (bad magic)", a media-file-shaped failure the
-// coordinator should never have let leave it. The refusal must name the
-// missing FSEQ, and must never dispatch anything.
+// TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio is the
+// refusal case this file has always needed: a sequence for which the ONLY
+// asset ever uploaded, current or otherwise, is audio, no FSEQ was ever
+// registered at all. render.surface.apply must refuse, naming the missing
+// FSEQ, and must never dispatch the audio file as fseqFilename.
+//
+// This name previously covered a DIFFERENT scenario, which a lane-manager
+// review caught as encoding the pre-fix identity rule rather than this
+// one: an FSEQ uploaded and current, then audio uploaded for the SAME
+// (show, sequence, target), with the test's own premise asserting the
+// audio upload superseded the FSEQ (assets.go's createAsset, before
+// ADR-028 decision 1's amendment, superseded whatever held the tuple
+// regardless of media type). That premise no longer holds: audio no
+// longer displaces a current FSEQ. That scenario, both assets current, is
+// now its own test, TestRenderApplyFindsTheFSEQWhenAudioIsAlsoCurrentForTheSameSequence,
+// which keeps this test's original fixture shape and its own history note.
 func TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio(t *testing.T) {
 	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
 	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
 	renderPutActiveShow(t, setup.st, "halloween-2026")
 	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
-	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "fseq", "hash-a", "opener.fseq")
-	// Superseding upload for the SAME (show, sequence, target): the fseq
-	// row above stops being current, exactly as createAsset documents.
+	// No FSEQ was ever registered for "opener": only audio.
 	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "audio", "hash-b", "opener.mp3")
 
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
@@ -397,6 +400,83 @@ func TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio(t *testing.T) 
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0: an audio file must never be dispatched downstream as fseqFilename", setup.pub.count())
+	}
+}
+
+// TestRenderApplyFindsTheFSEQWhenAudioIsAlsoCurrentForTheSameSequence
+// reproduces the rehearsal-rig failure of 2026-08-30, and its outcome
+// changed with ADR-028 decision 1's amendment (media type joins asset
+// identity): an FSEQ is uploaded and current for the sequence, then the
+// show's audio is uploaded for the SAME sequence and target. Before that
+// amendment, assets.go's createAsset superseded any current row for the
+// (show, sequence, target) tuple regardless of media type, so the audio
+// upload silently displaced the FSEQ, the only current asset left for the
+// sequence was the audio file, and resolveRenderApplyParams handed the MP3
+// to the node as fseqFilename, which the node correctly refused with
+// "fseq: not an FSEQ file (bad magic)", a media-file-shaped failure the
+// coordinator should never have let leave it. This test's own fixture used
+// to be the previous name's, TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio,
+// which asserted exactly that 400 refusal, back when superseding the FSEQ
+// was this package's own documented, expected behavior. That name now
+// covers the genuine "only audio was ever uploaded" refusal case instead,
+// and this test proves the fix for the fixture it inherited: createAsset
+// scopes supersession to (show, sequence, target, media type), so the
+// audio upload supersedes nothing, both the FSEQ and the audio asset stay
+// current, and render.surface.apply still resolves and dispatches the
+// FSEQ exactly as if the audio had never been uploaded.
+func TestRenderApplyFindsTheFSEQWhenAudioIsAlsoCurrentForTheSameSequence(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	fseq := renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "fseq", "hash-a", "opener.fseq")
+	// Same (show, sequence, target) as fseq above, different media type: no
+	// longer a superseding upload since the fix, both rows stay current.
+	audio := renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "audio", "hash-b", "opener.mp3")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: the fseq must still be found and dispatched after the audio upload; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	env := setup.pub.payload[0]
+	if got := env.Payload.Params["fseqFilename"]; got != "opener.fseq" {
+		t.Errorf("fseqFilename = %v, want opener.fseq (the audio upload must never displace the fseq)", got)
+	}
+
+	stillCurrent, err := setup.st.GetAsset(context.Background(), fseq.ID)
+	if err != nil {
+		t.Fatalf("GetAsset fseq: %v", err)
+	}
+	if stillCurrent.SupersededAt != nil {
+		t.Fatalf("fseq asset SupersededAt = %v, want nil: uploading audio for the same sequence must not supersede it", stillCurrent.SupersededAt)
+	}
+	audioCurrent, err := setup.st.GetAsset(context.Background(), audio.ID)
+	if err != nil {
+		t.Fatalf("GetAsset audio: %v", err)
+	}
+	if audioCurrent.SupersededAt != nil {
+		t.Fatalf("audio asset SupersededAt = %v, want nil: it is the current audio asset for the sequence", audioCurrent.SupersededAt)
 	}
 }
 

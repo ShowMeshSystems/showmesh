@@ -56,18 +56,22 @@ an object:
 |---|---|---|
 | `name` | string | Unique within the file. |
 | `description` | string | What the case exercises. |
-| `input` | string | The raw JSON text to canonicalize, carried as a JSON string so a case can hold deliberately malformed input. |
-| `expectedCanonical` | string | Present on a success case: the RFC 8785 canonicalization of `input`, byte for byte. |
+| `input` | string | The raw JSON text to canonicalize, carried as a JSON string so a case can hold deliberately malformed input. Mutually exclusive with `inputHex`; a case supplies exactly one of the two. |
+| `inputHex` | string | The raw input bytes as lowercase hex, used only when the input cannot be expressed as a JSON string: a JSON string is defined over Unicode scalar values, so it cannot carry a byte sequence that is not valid UTF-8 (any RFC 8259-compliant decoder, including this repository's own fixture loader, silently replaces such a byte with U+FFFD before a case's bytes ever reach a canonicalizer). Mutually exclusive with `input`. |
+| `expectedCanonical` | string | Present on a success case: the RFC 8785 canonicalization of the input (from `input` or decoded `inputHex`), byte for byte. |
 | `expectedSha256` | string | Present on a success case: the lowercase-hex SHA-256 of the UTF-8 bytes of `expectedCanonical`. |
 | `expectError` | boolean | Present and `true` on a case that must be rejected. `expectedCanonical`/`expectedSha256` are omitted for such a case. |
 | `errorKind` | string | Present alongside `expectError`: a short, human-readable label for what kind of error (for example `"malformed-json"`, `"duplicate-member-name"`), not a wire error code. |
 
-A consumer reads `input`, runs its own canonicalizer over it, and compares
-the result against `expectedCanonical` byte for byte (not just semantically
-equal JSON: insignificant whitespace, member order, and number formatting
-are exactly what is under test). It then hashes those canonical bytes with
-SHA-256 and compares against `expectedSha256`. For an `expectError` case, the
-consumer's canonicalizer must fail; no output comparison applies.
+A consumer reads `input` or decodes `inputHex` (a case supplies exactly one;
+a case supplying neither or both is malformed and must not be silently
+treated as an empty input), runs its own canonicalizer over the resulting
+bytes, and compares the result against `expectedCanonical` byte for byte
+(not just semantically equal JSON: insignificant whitespace, member order,
+and number formatting are exactly what is under test). It then hashes those
+canonical bytes with SHA-256 and compares against `expectedSha256`. For an
+`expectError` case, the consumer's canonicalizer must fail; no output
+comparison applies.
 
 ## `entry-key.json` schema
 
