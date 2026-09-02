@@ -101,6 +101,20 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		previous.mu.Unlock()
 	}
 
+	// Checked only here, at restore, never as live teardown: a
+	// coordinator outage also stops refreshes, and a playing bed must
+	// survive that outage rather than be retired for it.
+	if rec.Desired.Expiry != nil && !rec.Desired.Expiry.After(m.now()) {
+		if err := m.store.Delete(id); err != nil {
+			m.logf("audio session %s: expired at restore, but could not be deleted from the persisted store: %v", id, err)
+		}
+		m.mu.Lock()
+		delete(m.sessions, id)
+		delete(m.pendingEngineRestore, id)
+		m.mu.Unlock()
+		return nil
+	}
+
 	s := newSession(id, m)
 	s.desired = rec.Desired
 	s.revState = pkgaudio.RestoreRevisionState(id, rec.Revision, rec.Decisions)

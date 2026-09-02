@@ -442,6 +442,146 @@ func TestNightAdvanceBackgroundAudio_NoFurtherActionOncePlaying(t *testing.T) {
 	}
 }
 
+// TestNightAdvanceBackgroundAudio_InitialApplyCarriesExpiry proves the
+// very first apply already carries an expiry, so a session that dies
+// before its first steady-state refresh is not left with no deadline at
+// all.
+func TestNightAdvanceBackgroundAudio_InitialApplyCarriesExpiry(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action = %q, want audio.session.apply", pub.lastAction)
+	}
+	ms, ok := pub.lastParams["expiresInMs"].(float64)
+	if !ok || ms != float64(nightBackgroundAudioExpiryTTL.Milliseconds()) {
+		t.Fatalf("params.expiresInMs = %v, want %v", pub.lastParams["expiresInMs"], nightBackgroundAudioExpiryTTL.Milliseconds())
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_RefreshesExpiryWhenDue proves the
+// steady-playback re-affirm: once nightBackgroundAudioExpiryRefreshInterval
+// has genuinely elapsed since the last confirmed step, one further tick
+// dispatches audio.session.apply carrying ONLY expiresInMs (and the three
+// common fields) - never a playlist or media reference, so this can never
+// reload the engine or perturb playback (Manager.Apply merges rather than
+// replaces; see nightBackgroundAudioRefreshExpiry's own doc comment).
+func TestNightAdvanceBackgroundAudio_RefreshesExpiryWhenDue(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	countAfterStart := pub.count()
+	notYetDue := testNow.Add(nightBackgroundAudioExpiryRefreshInterval - time.Second)
+	h.nightAdvanceBackgroundAudio(context.Background(), notYetDue, rec)
+	if pub.count() != countAfterStart {
+		t.Fatalf("publish count before the refresh interval elapsed = %d, want unchanged at %d", pub.count(), countAfterStart)
+	}
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
+	due := testNow.Add(nightBackgroundAudioExpiryRefreshInterval + time.Second)
+	h.nightAdvanceBackgroundAudio(context.Background(), due, rec)
+
+	if pub.count() != countAfterStart+1 {
+		t.Fatalf("publish count once due = %d, want %d", pub.count(), countAfterStart+1)
+	}
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("refresh action = %q, want audio.session.apply", pub.lastAction)
+	}
+	for _, forbidden := range []string{"playlist", "media", "sourceRole", "mixPolicy"} {
+		if _, present := pub.lastParams[forbidden]; present {
+			t.Fatalf("refresh params carried %q; want expiresInMs only, so a refresh can never reload the engine - params=%v", forbidden, pub.lastParams)
+		}
+	}
+	if _, ok := pub.lastParams["expiresInMs"]; !ok {
+		t.Fatalf("refresh params missing expiresInMs, params=%v", pub.lastParams)
+	}
+}
+
+// TestNightBackgroundAudioExpiryRefreshDue covers
+// nightBackgroundAudioExpiryRefreshDue's own two clauses directly: an
+// unresolved latest is never due (its own retry path handles that
+// separately), and a resolved latest is due only once the interval has
+// genuinely elapsed.
+func TestNightBackgroundAudioExpiryRefreshDue(t *testing.T) {
+	resolvedAt := testNow
+	cases := []struct {
+		name     string
+		now      time.Time
+		resolved *time.Time
+		wantDue  bool
+	}{
+		{"unresolved is never due", testNow.Add(time.Hour), nil, false},
+		{"just under the interval is not due", testNow.Add(nightBackgroundAudioExpiryRefreshInterval - time.Millisecond), &resolvedAt, false},
+		{"at or past the interval is due", testNow.Add(nightBackgroundAudioExpiryRefreshInterval), &resolvedAt, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			latest := nightBackgroundAudioHistoryRow{Row: store.NightCueOutboxRecord{ResolvedAt: tc.resolved}}
+			if got := nightBackgroundAudioExpiryRefreshDue(tc.now, latest); got != tc.wantDue {
+				t.Fatalf("nightBackgroundAudioExpiryRefreshDue = %v, want %v", got, tc.wantDue)
+			}
+		})
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSessionForNode_AbandonPathsDoNotTouchExpiry
+// covers two of the three abandon paths nightClearBackgroundAudioAtEndSessionForNode
+// itself distinguishes (a dispatch error, and a resolved-but-not-confirmed
+// outcome) and proves both are inert with respect to the expiry
+// mechanism: neither dispatches an apply/refresh, so a clear failure can
+// never accidentally extend a session's deadline. The third path, a
+// structural refusal (problem != nil from executeAudioSessionDispatch),
+// is not independently exercised here - its own source is the same
+// logWarn-then-return shape as the other two with no branch that could
+// diverge, so this file records that as read, not as a fourth reproduced
+// case; the property "an end-session clear failure never dispatches
+// anything except the clear itself" is the actual guarantee under test.
+func TestNightClearBackgroundAudioAtEndSessionForNode_AbandonPathsDoNotTouchExpiry(t *testing.T) {
+	t.Run("dispatch error", func(t *testing.T) {
+		h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+		putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+		putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+		ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+		rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+		playThroughApplyGainStart(t, h, pub, rec)
+
+		rec.State = nightStateStopped
+		pub.beforePublishErr = errors.New("dial tcp: no route to host")
+		h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+		if got := countActionDispatches(pub, "audio.session.apply"); got != 1 {
+			t.Fatalf("audio.session.apply dispatch count after a clear dispatch error = %d, want unchanged at 1", got)
+		}
+	})
+
+	t.Run("unconfirmed outcome", func(t *testing.T) {
+		h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+		putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+		putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+		ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+		rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+		playThroughApplyGainStart(t, h, pub, rec)
+
+		rec.State = nightStateStopped
+		pub.result = refusedResultForAction("clear", "node refused")
+		h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+		if got := countActionDispatches(pub, "audio.session.apply"); got != 1 {
+			t.Fatalf("audio.session.apply dispatch count after an unconfirmed clear = %d, want unchanged at 1", got)
+		}
+	})
+}
+
 // TestNightStopBackgroundAudioIfRunning_ResumePolicyPauses proves resume
 // policy "resume" pauses (not stops) on the way out, and a refused pause
 // is retried rather than accepted as done - HIGH 4's fix.

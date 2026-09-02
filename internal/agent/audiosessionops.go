@@ -184,9 +184,13 @@ func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // belong to the separate audio.gain.set/audio.gain.fade surface,
 // and a bookmark is session-internal state this package manages itself
 // (Pause writes one; nothing here accepts one from a caller).
+// expiresInMs additionally refreshes the session's retirement deadline
+// ([pkgaudio.SessionDesiredState.Expiry]) to this agent's own now() plus
+// the given duration: a coordinator-stamped field an operator need not
+// send.
 var audioSessionApplyKnownKeys = map[string]bool{
 	"sourceRole": true, "media": true, "playlist": true, "outputs": true,
-	"ltcStartOffset": true, "mixPolicy": true,
+	"ltcStartOffset": true, "mixPolicy": true, "expiresInMs": true,
 }
 
 func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequest, error) {
@@ -279,6 +283,19 @@ func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequ
 			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ltcStartOffset: %w", action, err)
 		}
 		req.LTCStartOffset = pkgaudio.SetField(tc)
+	}
+
+	if raw, ok := body["expiresInMs"]; ok {
+		ms, ok := raw.(float64)
+		if !ok || ms <= 0 {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.expiresInMs must be a positive number, got %T", action, raw)
+		}
+		// The deadline is computed HERE, on the agent's own clock, and
+		// carried onward as an absolute value: the coordinator sends a
+		// relative TTL so neither side's clock has to agree with the
+		// other's, but nothing downstream (Merge included) touches a
+		// clock again once this line has run.
+		req.Expiry = pkgaudio.SetField(time.Now().Add(time.Duration(ms) * time.Millisecond))
 	}
 
 	return req, nil
