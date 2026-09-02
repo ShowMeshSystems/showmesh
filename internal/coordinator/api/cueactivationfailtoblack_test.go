@@ -469,3 +469,149 @@ func TestCueActivationTickOneAssetMissingFailToBlackDoesNotBlockTick(t *testing.
 	// own reads of those same package vars.
 	h.cueActivationFailToBlackWG.Wait()
 }
+
+// --- StateEvidenceBroken: owner ruling 2026-09-02, cue-deactivate-on-jump ---
+
+// TestCueActivationTickOneEvidenceBrokenStopsOnlyThisCuesOwnAudio proves
+// the composed path for the new marker: a real accepted observation
+// resolves normally, [store.Store.MarkFPPPlaylistEntryObservationEvidenceBroken]
+// then records the sequence-regression discontinuity §1.5 describes,
+// and re-running the SAME tick over the now-marked row stops exactly the
+// audio session this Cue's own audio output runs in — never a render
+// clear (this Cue declares none), never the background bed or
+// announcement session, mirroring
+// TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface's
+// own per-cue-scoping proof one mechanism over.
+func TestCueActivationTickOneEvidenceBrokenStopsOnlyThisCuesOwnAudio(t *testing.T) {
+	now := testNow
+	setup := newFailToBlackComposedSetup(t, fixedClock(now))
+	const showID, cueID, playlistID, instanceUUID, entryID, nodeID = "halloween-2026", "cue-1", "playlist-1", "inst-1", "entry-1", "audio-01"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putShowModeForTest(t, setup.st, config.ShowModeShow)
+	putAudioNodeForTest(t, setup.st, nodeID)
+	renderPutSurface(t, setup.st, "surface-1", showID, nodeID) // same node also renders for other cues.
+	declareNodeForTest(t, setup.st, nodeID)
+	putFreshReportForTest(t, setup.st, nodeID, now)
+	putAudioOnlyCueForTest(t, setup.st, cueID, showID)
+
+	playlist := config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: entryID, Cue: cueID,
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	putPlaylistForTest(t, setup.st, playlistID, playlist)
+	putActiveShowForTest(t, setup.st, showID)
+
+	// Asset presence is deliberately not staged here: the evidence-broken
+	// dispatch never calls Authorize (stopping requires no reauthorization,
+	// matching dispatchBlackAndSilence's own existing posture) — it only
+	// resolves the previously-activated Cue's own declared Outputs from a
+	// live catalog lookup, so whether its asset is present or missing has
+	// no bearing on this path at all.
+	putFailToBlackObservation(t, setup.st, failToBlackFixture{
+		showID: showID, cueID: cueID, playlistID: playlistID, instanceUUID: instanceUUID, entryID: entryID, nodeID: nodeID,
+	}, playlist, 1, 1, now)
+
+	// The sequence-regression discontinuity: recorded exactly the way
+	// fppobservations.go's own ingestion handler records it on a 409
+	// refusal, against the SAME row the tick below reads.
+	brokenAt := now.Add(time.Second)
+	if err := setup.st.MarkFPPPlaylistEntryObservationEvidenceBroken(context.Background(), instanceUUID, brokenAt); err != nil {
+		t.Fatalf("mark evidence broken: %v", err)
+	}
+
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	obs, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), instanceUUID)
+	if err != nil {
+		t.Fatalf("get fpp playlist entry observation: %v", err)
+	}
+	if obs.EvidenceBrokenAt == nil {
+		t.Fatal("precondition failed: EvidenceBrokenAt not set on the row the tick will read")
+	}
+
+	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationFailToBlackWG.Wait()
+
+	setup.audioPub.mu.Lock()
+	gotSessions := map[string]bool{}
+	for _, d := range setup.audioPub.dispatched {
+		if d.Action != "audio.session.stop" {
+			continue
+		}
+		sessionID, _ := d.Params["sessionId"].(string)
+		gotSessions[sessionID] = true
+	}
+	setup.audioPub.mu.Unlock()
+	if len(gotSessions) != 1 || !gotSessions[blackAndSilenceAudioSessionID] {
+		t.Fatalf("audio.session.stop dispatched to %v, want exactly [%q] (never background/announcement — this Cue declares neither)", gotSessions, blackAndSilenceAudioSessionID)
+	}
+
+	if got := setup.renderPub.count(); got != 0 {
+		t.Fatalf("render.surface.clear was dispatched %d time(s), want 0: an audio-only Cue's evidence-broken stop must never touch a render surface", got)
+	}
+}
+
+// TestCueActivationTickOneEvidenceBrokenReplaysIdempotentlyOnAnUnchangedBreak
+// proves evidenceBrokenEpisode's own idempotency contract: two ticks over
+// the SAME obs.EvidenceBrokenAt value dispatch the stop exactly once, the
+// second tick answering from the replay path with no second publish —
+// mirroring TestDispatchBlackAndSilenceRedispatchesOnANewEpisode's own
+// proof one policy over, for the opposite (unchanged-episode) case.
+func TestCueActivationTickOneEvidenceBrokenReplaysIdempotentlyOnAnUnchangedBreak(t *testing.T) {
+	now := testNow
+	setup := newFailToBlackComposedSetup(t, fixedClock(now))
+	const showID, cueID, playlistID, instanceUUID, entryID, nodeID = "halloween-2026", "cue-1", "playlist-1", "inst-1", "entry-1", "audio-01"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putShowModeForTest(t, setup.st, config.ShowModeShow)
+	putAudioNodeForTest(t, setup.st, nodeID)
+	declareNodeForTest(t, setup.st, nodeID)
+	putFreshReportForTest(t, setup.st, nodeID, now)
+	putAudioOnlyCueForTest(t, setup.st, cueID, showID)
+
+	playlist := config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: entryID, Cue: cueID,
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	putPlaylistForTest(t, setup.st, playlistID, playlist)
+	putActiveShowForTest(t, setup.st, showID)
+	putFailToBlackObservation(t, setup.st, failToBlackFixture{
+		showID: showID, cueID: cueID, playlistID: playlistID, instanceUUID: instanceUUID, entryID: entryID, nodeID: nodeID,
+	}, playlist, 1, 1, now)
+	if err := setup.st.MarkFPPPlaylistEntryObservationEvidenceBroken(context.Background(), instanceUUID, now.Add(time.Second)); err != nil {
+		t.Fatalf("mark evidence broken: %v", err)
+	}
+
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	obs, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), instanceUUID)
+	if err != nil {
+		t.Fatalf("get fpp playlist entry observation: %v", err)
+	}
+
+	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationFailToBlackWG.Wait()
+	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationFailToBlackWG.Wait()
+
+	setup.audioPub.mu.Lock()
+	stops := 0
+	for _, d := range setup.audioPub.dispatched {
+		if d.Action == "audio.session.stop" {
+			stops++
+		}
+	}
+	setup.audioPub.mu.Unlock()
+	if stops != 1 {
+		t.Fatalf("audio.session.stop dispatched %d time(s) across two ticks over an unchanged break, want exactly 1 (the second must replay, not re-dispatch)", stops)
+	}
+}

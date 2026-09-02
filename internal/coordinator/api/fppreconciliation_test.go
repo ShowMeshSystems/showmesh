@@ -334,6 +334,80 @@ func TestGetFPPPlaylistEntryReconciliationRendersResolved(t *testing.T) {
 	}
 }
 
+// TestGetFPPPlaylistEntryReconciliationRendersEvidenceBrokenAdditively is
+// owner ruling 2026-09-02's own diagnostic-route decision
+// (cue-deactivate-on-jump proposal §0a): unlike GET /current-runs, this
+// per-instance route reports evidenceBrokenAt ADDITIVELY, alongside the
+// raw, un-collapsed outcome/reason fppreconcile.Reconcile itself computed
+// from the same row — never collapsing one into the other, since a caller
+// drilling into one instance benefits from seeing both facts distinctly.
+func TestGetFPPPlaylistEntryReconciliationRendersEvidenceBrokenAdditively(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.depsWithStore(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	putShowForTest(t, setup.st, "show-1", "Show One")
+	putActiveShowForTest(t, setup.st, "show-1")
+	putAudioOnlyCueForTest(t, setup.st, "cue-1", "show-1")
+
+	playlistPayload := config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "instance-1", PlaylistName: "Main", PlaylistHash: playlistHash64},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: "cue-1",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	entryKey, err := config.DerivePlaylistEntryKey(playlistPayload, "entry-1")
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	playlistJSON, err := config.EncodeShowPlaylistPayload(playlistPayload)
+	if err != nil {
+		t.Fatalf("encode show.playlist payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowPlaylistConfigKind, "playlist-1", playlistJSON)
+
+	if err := setup.st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "instance-1", SchemaVersion: 1, Sequence: 1, Action: "playing",
+		PlaylistName: "Main", PlaylistHash: playlistHash64, Section: "mainPlaylist", Position: 0,
+		EntryKey: entryKey, ObservedAt: testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/fpp/playlist-entry-observations/instance-1/reconciliation", nil)
+	resp, raw := doRawRequest(t, api.Handler, req)
+	body := decodeMap(t, raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, body)
+	}
+	if _, present := body["evidenceBrokenAt"]; present {
+		t.Fatalf("evidenceBrokenAt present before marking evidence broken; body: %v", body)
+	}
+	if outcome, _ := body["outcome"].(string); outcome != "resolved" {
+		t.Fatalf("outcome = %q, want resolved (unaffected by the marker being absent); body: %v", outcome, body)
+	}
+
+	brokenAt := testNow.Add(time.Second)
+	if err := setup.st.MarkFPPPlaylistEntryObservationEvidenceBroken(context.Background(), "instance-1", brokenAt); err != nil {
+		t.Fatalf("mark evidence broken: %v", err)
+	}
+
+	resp, raw = doRawRequest(t, api.Handler, req)
+	body = decodeMap(t, raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, body)
+	}
+	if outcome, _ := body["outcome"].(string); outcome != "resolved" {
+		t.Fatalf("outcome = %q, want resolved (never collapsed into evidence-broken on THIS route); body: %v", outcome, body)
+	}
+	got, _ := body["evidenceBrokenAt"].(string)
+	if got == "" {
+		t.Fatalf("evidenceBrokenAt missing after marking evidence broken; body: %v", body)
+	}
+}
+
 // TestGetFPPPlaylistEntryReconciliationRendersEmptyStringSection proves
 // review fix item 6: FPP's own common default section IS the empty
 // string, so a resolved observation reporting it must render

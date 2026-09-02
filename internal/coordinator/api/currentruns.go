@@ -114,11 +114,22 @@ func (r currentRunsReader) appendFPPRuns(ctx context.Context, now time.Time, out
 	for _, rec := range obs {
 		view := byUUID[rec.InstanceUUID]
 		var reconciliation currentrun.Reconciliation
-		result, reconcileErr := r.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, rec)
-		if reconcileErr != nil {
-			reconciliation = currentrun.Reconciliation{State: "unknown", Reason: reconcileErr.Error()}
+		if rec.EvidenceBrokenAt != nil {
+			// Owner ruling 2026-09-02 (cue-deactivate-on-jump): the marker
+			// outranks whatever Reconcile would say about this same,
+			// now-possibly-stale row — the identical precedence rule
+			// cueactivate.Decide applies, restated here for the primary
+			// Show Night surface #301's operator UI is built against
+			// (fppreconciliation.go's own per-instance route carries the
+			// diagnostic, un-collapsed form of the same fact).
+			reconciliation = fppEvidenceBrokenReconciliation(*rec.EvidenceBrokenAt)
 		} else {
-			reconciliation = currentrun.Reconciliation{State: string(result.Outcome), Reason: result.Reason}
+			result, reconcileErr := r.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, rec)
+			if reconcileErr != nil {
+				reconciliation = currentrun.Reconciliation{State: "unknown", Reason: reconcileErr.Error()}
+			} else {
+				reconciliation = currentrun.Reconciliation{State: string(result.Outcome), Reason: result.Reason}
+			}
 		}
 		pl := findFPPPlaylist(playlists, rec.InstanceUUID, rec.PlaylistHash, rec.PlaylistName)
 		show, gen, playlistID, playlistRev := "", int64(0), "", int64(0)

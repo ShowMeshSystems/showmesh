@@ -98,6 +98,11 @@ var migrations = []migration{
 	// v28 (ADR-028 decision 1's amendment, 2026-09-01): widens assets_current
 	// to include media_type (schemaV28's own doc comment).
 	{version: 28, sql: schemaV28},
+	// v29 (owner ruling 2026-09-02): records a persisted sequence-regression
+	// discontinuity directly on the instance's own row
+	// (migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn's own
+	// doc comment).
+	{version: 29, fn: migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1617,6 +1622,84 @@ DROP INDEX assets_identity;
 CREATE UNIQUE INDEX assets_identity
     ON assets (show_id, sequence_id, target_kind, target_id, media_type, content_hash);
 `
+
+// migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn (owner ruling
+// 2026-09-02, cue-deactivate-on-jump) adds a marker column to
+// fpp_playlist_entry_observations recording a persisted sequence-regression
+// discontinuity for one instance.
+//
+// evidence_broken_at_millis is NULL whenever this instance's stored
+// observation is believed to still be corroborated, and the epoch
+// milliseconds at which a sequence-regression refusal was recorded
+// (fppobservations.go's handlePostFPPPlaylistEntryObservation, contract
+// §1.5) otherwise. It is deliberately a column on THIS row, never a read of
+// the audit_log entry that same refusal also writes: the audit write is
+// best-effort (WriteAudit's own error is logged and swallowed, correct for
+// a forensic record), so treating it as a control input would let a database
+// write failure silently degrade a real discontinuity back into looking
+// like ordinary silence, exactly when the store is already unhealthy. This
+// column's own write goes through identity.AuditedWrite instead, in the
+// same transaction as its own audit entry, so the two commit or fail
+// together and a failure is never swallowed.
+//
+// cueactivate.Decide reads this field directly off the
+// store.FPPPlaylistEntryObservationRecord it already takes, before routing
+// on whatever fppreconcile.Reconcile computed from this same (now
+// possibly-stale) row: a broken marker outranks that classification,
+// because there is no outcome a discontinuity-broken row can report that is
+// still safe to trust once its continuity is known to be broken.
+//
+// Cleared on this instance's next ACCEPTED observation, unconditionally
+// (putFPPPlaylistEntryObservation's own ON CONFLICT DO UPDATE SET, and
+// implicitly on a fresh INSERT) — never exclusively by the existing
+// DELETE .../playlist-entry-observations/{instanceUuid} operator reset
+// route. That route still works: deleting the whole row removes this column
+// with it, so the very next post (nothing left to compare its sequence
+// against) is unconditionally accepted and starts clean. But an operator
+// reset is not the only way this instance's evidence can genuinely recover:
+// if the plugin's own sequence counter climbs back past the pre-restart
+// high-water mark on its own, that later post is accepted on its own
+// merits, and the same evidentiary bar this coordinator already trusts
+// enough to ACTIVATE a Cue from is more than enough to clear a strictly
+// weaker distrust flag. Gating clearance on the operator action alone would
+// leave this coordinator reporting "evidence broken" after FPP has already
+// demonstrated positive, accepted evidence to the contrary — silence-shaped
+// caution applied to a case that is no longer silent.
+//
+// Nullable rather than defaulted to a sentinel epoch (schemaV14's own
+// identity columns use 0-as-absent; this one does not): 0 is itself a real,
+// reachable epoch-millis value in principle, and this table is never seeded
+// outside a live coordinator, so there is no pre-migration row whose absent
+// value needs a safe non-NULL default the way schemaV18's
+// entry_occurrence_sequence did.
+//
+// A Go function, unlike schemaV18's identical single-ALTER-TABLE-on-this-
+// table shape, for the same reason migrateV26RenameRequestedRevisionTo
+// CallerIntent is one: internal/coordinator/audioconfigpush's own tests
+// rewind PRAGMA user_version to 18 and reopen the store to force every
+// later migration to run again, and a bare ALTER TABLE ... ADD COLUMN fails
+// outright on that second pass ("duplicate column name") once the column
+// already exists. Checking first and no-opping when it is already present
+// is what makes replay safe, the same property CREATE TABLE IF NOT EXISTS
+// gives schemaV25's own tables and the explicit column-presence check gives
+// v26's rename.
+func migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn(ctx context.Context, tx *sql.Tx) error {
+	var hasColumn int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('fpp_playlist_entry_observations') WHERE name = 'evidence_broken_at_millis'`,
+	).Scan(&hasColumn); err != nil {
+		return fmt.Errorf("check fpp_playlist_entry_observations.evidence_broken_at_millis exists: %w", err)
+	}
+	if hasColumn > 0 {
+		// Already added: the one replay shape this function exists to
+		// tolerate.
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE fpp_playlist_entry_observations ADD COLUMN evidence_broken_at_millis INTEGER`); err != nil {
+		return fmt.Errorf("add fpp_playlist_entry_observations.evidence_broken_at_millis: %w", err)
+	}
+	return nil
+}
 
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):

@@ -4940,6 +4940,11 @@ export interface components {
             cueRevision?: number;
             /** @description Whether a definition is stored for the hash this result matched against. Populated only for outcomes that reach entry-key derivation (`unknown-entry`, `evidence-mismatch`, `cross-show`, `resolved`); `false` and not meaningful for `identity-unavailable`, `unbound`, and `stale-import`. */
             definitionAvailable: boolean;
+            /**
+             * Format: date-time
+             * @description Absent whenever this instance's stored observation is believed to still be corroborated, and the moment a sequence-regression refusal was recorded for it otherwise. Reported additively alongside outcome/reason, never collapsed into them: this route states both what was computed from the row's own content and that the row's continuity separately broke. GET /current-runs reports the collapsed, one-word-per-run form of this same fact (`reconciliation.state` = `evidence-broken`) for the glanceable Show Night surface.
+             */
+            evidenceBrokenAt?: string;
             /** Format: date-time */
             serverTime: string;
         };

@@ -594,3 +594,16 @@ func (h *handlers) logDebug(msg string, args ...any) {
 		h.logger.Debug("api: "+msg, args...)
 	}
 }
+
+// logError is [handlers.logWarn]'s identical nil-safe wrapper at Error
+// level, for a failure that is deliberately louder than an ordinary
+// best-effort warn: fppobservations.go's sequence-regression marker write
+// is the one call site today (see that file's own doc comment on the
+// regression branch) — a control input's own write failing must not read,
+// in the logs, the same as a forensic audit write's ordinary best-effort
+// swallow.
+func (h *handlers) logError(msg string, args ...any) {
+	if h.logger != nil {
+		h.logger.Error("api: "+msg, args...)
+	}
+}

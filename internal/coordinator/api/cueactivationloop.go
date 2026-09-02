@@ -381,10 +381,92 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 				h.dispatchAssetMissingFailToBlack(ctx, now, obs.InstanceUUID, targets, issuer, episode)
 			}()
 		}
+	case cueactivate.StateEvidenceBroken:
+		// Owner ruling 2026-09-02 (cue-deactivate-on-jump): a persisted
+		// sequence-regression marker outranks whatever else this tick would
+		// otherwise have decided (StateEvidenceBroken's own doc comment,
+		// cueactivate/decide.go) — stop exactly what dec.EvidenceBroken
+		// names, the same per-cue-scoped effect the asset-missing
+		// fail-to-black path already uses, and touch nothing else: never
+		// the background bed, never the prepare-staging session.
+		if len(dec.EvidenceBroken) == 0 {
+			return
+		}
+		targets, err := h.evidenceBrokenFailToBlackTargets(ctx, dec.EvidenceBroken)
+		if err != nil {
+			h.logWarn("cue activation loop: resolve evidence-broken fail-to-black targets failed", "instanceUuid", obs.InstanceUUID, "error", err)
+			return
+		}
+		if len(targets) == 0 {
+			return
+		}
+		// Detached, in its own goroutine, for the identical reason
+		// dispatchAssetMissingFailToBlack is (that function's own doc
+		// comment, immediately above): dispatchCueScopedBlackAndSilence
+		// awaits real per-surface/session node confirmation, and this
+		// method runs once per FPP instance from cueActivationTick's own
+		// sequential loop over every instance. h.cueActivationFailToBlackWG
+		// is reused rather than a second WaitGroup: it already exists to
+		// own exactly this shape of detached scoped-clear dispatch, and
+		// [CueActivationLoop.Run]'s own shutdown path already waits on it.
+		episode := evidenceBrokenEpisode(obs)
+		h.cueActivationFailToBlackWG.Add(1)
+		go func() {
+			defer h.cueActivationFailToBlackWG.Done()
+			h.dispatchCueScopedBlackAndSilence(ctx, now, targets, issuer, episode)
+		}()
 	case cueactivate.StateUnbound, cueactivate.StateIdentityUnavailable:
 		// Nothing to dispatch or hold — see [cueactivate.State]'s own doc
 		// comment.
 	}
+}
+
+// evidenceBrokenFailToBlackTargets resolves evidenceBroken's own per-node
+// Activations (cueactivate.Decision.EvidenceBroken) into
+// cueScopedFailToBlackTarget{NodeID, Outputs} pairs, mirroring
+// dispatchPrepareAheadAudio's own reasoning for reusing act.Show/
+// act.Generation directly rather than re-resolving the active show live a
+// second time: cueactivate.Decide already resolved them, live, at decide
+// time. A node whose Cue no longer resolves in that catalog — the active
+// show changed, or the Cue itself was deleted, between when the now-broken
+// evidence was last resolved and this tick — is skipped: there is nothing
+// left to scope a stop to for that node.
+func (h *handlers) evidenceBrokenFailToBlackTargets(ctx context.Context, evidenceBroken map[string]cueactivation.Activation) ([]cueScopedFailToBlackTarget, error) {
+	if h.deps.AssetManifests == nil || len(evidenceBroken) == 0 {
+		return nil, nil
+	}
+	var out []cueScopedFailToBlackTarget
+	for nodeID, act := range evidenceBroken {
+		active := assetsync.ActiveShow{Configured: true, ShowID: act.Show, Generation: act.Generation}
+		catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve cue catalog for node %q: %w", nodeID, err)
+		}
+		entry, participates := prepareAheadCatalogEntry(catalog, act.CueID)
+		if !participates {
+			continue
+		}
+		out = append(out, cueScopedFailToBlackTarget{NodeID: nodeID, Outputs: entry.Outputs})
+	}
+	return out, nil
+}
+
+// evidenceBrokenEpisode is StateEvidenceBroken's own idempotency-key
+// dimension, mirroring blackAndSilenceEpisode's identical role for the H0.2
+// mismatch effect: obs.InstanceUUID and obs.EvidenceBrokenAt, never
+// obs.EntryOccurrenceSequence, which is frozen at whatever it was before
+// evidence broke and does not advance again until a fresh accepted
+// observation clears the marker (schemaV29's own doc comment). Stable
+// across repeat ticks of the SAME unresolved break, so a repeat tick
+// replays idempotently rather than re-dispatching; changes the moment the
+// marker clears and later sets again, so a later, distinct break gets a
+// fresh episode.
+func evidenceBrokenEpisode(obs store.FPPPlaylistEntryObservationRecord) string {
+	brokenAt := ""
+	if obs.EvidenceBrokenAt != nil {
+		brokenAt = obs.EvidenceBrokenAt.UTC().Format(time.RFC3339Nano)
+	}
+	return obs.InstanceUUID + "-" + brokenAt
 }
 
 // cueScopedFailToBlackTarget is one node this tick must fail to black,
