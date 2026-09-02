@@ -763,15 +763,8 @@ func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac au
 			return identity.AuditEntry{}, gerr
 		}
 
-		switch precondition.Mode {
-		case revisionPreconditionIfMatch:
-			if currentRevision != precondition.Revision {
-				return identity.AuditEntry{}, &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
-			}
-		case revisionPreconditionIfNoneMatchCreate:
-			if currentRevision != 0 {
-				return identity.AuditEntry{}, &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
-			}
+		if err := checkRevisionPrecondition(kind, id, precondition, currentRevision); err != nil {
+			return identity.AuditEntry{}, err
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
