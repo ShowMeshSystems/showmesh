@@ -2,6 +2,7 @@ package macro
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -181,5 +182,59 @@ func TestMacroRunAudioStepDispatchesOnlyTheFirstOfMultipleTargetNodes(t *testing
 	}
 	if len(gotNodeIDs) != 1 || gotNodeIDs[0] != "porch-node" {
 		t.Fatalf("dispatched nodeId(s) = %v, want exactly [%q] (the first configured target node)", gotNodeIDs, "porch-node")
+	}
+}
+
+// TestMapAudioSessionCommandResult mirrors TestMapResolumeActionResult
+// (step_resolume_test.go) one integration over: every outcome word
+// mapAudioSessionCommandResult can receive, asserted directly.
+func TestMapAudioSessionCommandResult(t *testing.T) {
+	cases := []struct {
+		name        string
+		in          string
+		wantOutcome string
+	}{
+		{"started", "started", outcomeConfirmed},
+		{"completed", "completed", outcomeConfirmed},
+		{"unconfirmable", "unconfirmable", outcomeUnconfirmable},
+		{"refused", "refused", outcomeFailed},
+		{"failed", "failed", outcomeFailed},
+		{"unrecognized", "bogus", outcomeFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := mapAudioSessionCommandResult(v1.AudioSessionCommandResult{Outcome: tc.in, Reason: "test reason"})
+			if res.outcome != tc.wantOutcome {
+				t.Fatalf("outcome = %q, want %q", res.outcome, tc.wantOutcome)
+			}
+			if res.outcomeState != tc.in {
+				t.Fatalf("outcomeState = %q, want the raw wire word %q", res.outcomeState, tc.in)
+			}
+			if res.outcomeReason != "test reason" {
+				t.Fatalf("outcomeReason = %q, want %q (result.Reason must survive the mapping unchanged)", res.outcomeReason, "test reason")
+			}
+		})
+	}
+}
+
+// TestMapAudioSessionCommandResultRefusalReasonSurvives mirrors
+// TestMapResolumeActionResultRefusalReasonSurvives (step_resolume_test.go)
+// for audio: a refusal collapses to outcomeFailed for run continuation, but
+// still reaches a human in outcomeReason, given a downstream that populated
+// its own reason. A node that omits its reason is a separate, tracked gap
+// (see pkg/audio's own OutcomeResult.Validate) this test does not assert away.
+func TestMapAudioSessionCommandResultRefusalReasonSurvives(t *testing.T) {
+	res := mapAudioSessionCommandResult(v1.AudioSessionCommandResult{
+		Outcome: "refused",
+		Reason:  "revision 4 is not strictly greater than the session's current revision 7",
+	})
+	if res.outcome != outcomeFailed {
+		t.Fatalf("outcome = %q, want %q", res.outcome, outcomeFailed)
+	}
+	if res.outcomeReason == "" {
+		t.Fatal("outcomeReason is empty; a refusal must still explain itself to a human")
+	}
+	if !strings.Contains(res.outcomeReason, "revision") {
+		t.Fatalf("outcomeReason = %q, want it to name the refusal", res.outcomeReason)
 	}
 }
