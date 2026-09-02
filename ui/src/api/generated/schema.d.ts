@@ -916,6 +916,7 @@ export interface paths {
          * @description Requires `config:write` (admin only). The request body's `endpoints` field is required and must not be `null` - a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero endpoints is an explicit empty array (`"endpoints": []`). No other top-level field is accepted; an unrecognized one (e.g. a typo'd `endpoint`) is rejected rather than silently ignored, unlike a response body, where an unknown field must be ignored (this is a request a client is asking this coordinator to ACT on, not a response whose shape this coordinator already promised - see `ConfigFPPEndpointsPayload`'s own description).
          *     Validates the body (instance id syntax, URL scheme/host, no userinfo, no duplicate ids - the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is checked against at coordinator startup) BEFORE activation (ADR-009): a rejected write appends no revision. Also refused before activation: an endpoint list that would drop an instance id `SHOWMESH_FPP_MQTT_HOSTS` still references, which this coordinator's own startup already enforces fatally - refusing it here means the mistake is refused at write time, not discovered as a refusal to boot on the next restart.
          *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_ENDPOINTS` is still set in this coordinator's own process environment: a write accepted in that state cannot survive this coordinator's own env/store disagreement rule on its very next restart, so the refusal happens now, while this coordinator is up and the reason is readable, rather than after a restart that never completes. That `409` carries one of two REMEDIES and they are not interchangeable, so `detail` is the part to read rather than the status: normally, remove the variable and restart once. But if this coordinator's startup migration of that variable was deferred because it could not be persisted, the store holds no endpoint list at all and removing the variable would resolve this coordinator to zero endpoints; `detail` then says so explicitly and the fix is to repair the data volume and restart.
+         *     This operation's `409` has a SECOND, unrelated cause: the optional `If-Match`/`If-None-Match` revision precondition every config PUT supports (opt-in; see those parameters), refused when the precondition names a revision that is no longer current. The two causes never compete for which fires first - the `SHOWMESH_FPP_ENDPOINTS` refusal above is checked unconditionally, before the precondition and before the body are read, exactly as it always has been; the revision precondition is only evaluated once that check has already let the request through. `detail` always names which of the two caused a given `409`.
          *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) - with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putFPPEndpointsConfig"];
@@ -943,6 +944,7 @@ export interface paths {
          * @description Requires `config:write` (admin only). The request body's `instances` field is required and must not be `null` - a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero instances is an explicit empty array (`"instances": []`). No other top-level field is accepted.
          *     At most one instance is accepted today; a second is refused with `400` naming the limit - the schema itself stays a list (this surface may grow past one instance later without a breaking change), the limit is enforced by validation. Each instance's id and URL are validated (node-id syntax, http/https scheme, non-empty host, no userinfo) and cross-checked against every currently configured `fpp.endpoints` id, read live at write time - a collision is refused with `400` naming both ids, because both collectors are registered on one shared runner keyed by id.
          *     Refused with `409` outright, before the body is even read, while `SHOWMESH_RESOLUME_URL` is still set in this coordinator's own process environment - mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction: the standard remedy (remove the variable, restart once) is unsafe if the startup migration could not be persisted, and `detail` says so explicitly in that case.
+         *     This operation's `409` has a SECOND, unrelated cause, mirroring `PUT /config/fpp.endpoints`'s identical two causes: the optional `If-Match`/`If-None-Match` revision precondition every config PUT supports (opt-in; see those parameters). The `SHOWMESH_RESOLUME_URL` refusal above is checked unconditionally, before the precondition and before the body are read; the revision precondition is only evaluated once that check has already let the request through. `detail` always names which of the two caused a given `409`.
          *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putResolumeInstancesConfig"];
@@ -990,6 +992,7 @@ export interface paths {
          * @description Requires `config:write` (admin only). Unlike `PUT /config/fpp.endpoints` and `PUT /config/resolume.instances`, this is a PARTIAL UPDATE: every top-level field (`brokerURL`, `username`, `topicPrefix`, `hosts`, `password`) is independently optional. A key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5) - this is what makes the credential rule (decision 7) usable at all, since `GET` never returns the password and a PUT requiring every field present would erase a credential the operator never saw. A `null` `brokerURL`, `username`, or `topicPrefix` is rejected (pass `""` to explicitly clear that field); a `null` `hosts` is rejected (pass `{}` to explicitly configure zero hosts); a `null` or `""` `password` explicitly clears the stored credential.
          *     Once merged with the current stored configuration, the result is validated (broker URL scheme/host, no userinfo, host id syntax, no duplicate `HostName` across two ids, and every host id cross-checked against the current `fpp.endpoints` configuration, read live at write time) BEFORE activation (ADR-009): a rejected write appends no revision.
          *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_MQTT_BROKER_URL` is still set in this coordinator's own process environment - mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         *     This operation's `409` has a SECOND, unrelated cause, mirroring `PUT /config/fpp.endpoints`'s identical two causes: the optional `If-Match`/`If-None-Match` revision precondition every config PUT supports (opt-in; see those parameters). The `SHOWMESH_FPP_MQTT_BROKER_URL` refusal above is checked unconditionally, before the precondition and before the body are read; the revision precondition is only evaluated once that check has already let the request through. `detail` always names which of the two caused a given `409`.
          *     On success, the broker password (if a `password` key was present) is written to a dedicated secret file BEFORE the config revision - never into `config_revisions.payload_json`, which is immutable by design (ADR-009) and would otherwise leave a permanent copy of a rotatable secret (ADR-039 decision 7) - then a new immutable revision is appended and activated in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putFPPMQTTConfig"];
@@ -1036,6 +1039,7 @@ export interface paths {
          * Write a new assets.settings configuration revision (Track G seam G-4, ADR-039)
          * @description Requires `config:write` (admin only). Unlike `PUT /config/resolume.instances`'s whole-array replace, every one of the four fields (`contentBaseUrl`, `maxUploadBytes`, `syncIntervalSeconds`, `inventoryIntervalSeconds`) is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or, on the very first write, default) value alone. A field that IS present must not be JSON `null` - `null` is refused with `400` naming the field; pass `""` for `contentBaseUrl` to deliberately disable asset sync. Any other top-level field is refused. The merged result is validated as a whole before activation (ADR-009): `maxUploadBytes`, `syncIntervalSeconds`, and `inventoryIntervalSeconds` must all be positive, and a non-empty `contentBaseUrl` must be an http/https URL with a host and no userinfo.
          *     Refused with `409` outright, before the body is even read, while any of the four `SHOWMESH_ASSET_*` settings variables is still set in this coordinator's own process environment - mirroring `PUT /config/resolume.instances`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         *     This operation's `409` has a SECOND, unrelated cause, mirroring `PUT /config/fpp.endpoints`'s identical two causes: the optional `If-Match`/`If-None-Match` revision precondition every config PUT supports (opt-in; see those parameters). The `SHOWMESH_ASSET_*` refusal above is checked unconditionally, before the precondition and before the body are read; the revision precondition is only evaluated once that check has already let the request through. `detail` always names which of the two caused a given `409`.
          *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putAssetsSettingsConfig"];
@@ -1107,6 +1111,8 @@ export interface paths {
         /**
          * Write a new resolume.recovery auto-restore toggle revision (Track D seam D-3a)
          * @description Requires `config:write` (admin only). The body's `autoRestoreEnabled` field is required and must be a JSON boolean, never absent and never null. No other top-level field is accepted. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) - with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putResolumeRecoveryConfig"];
         post?: never;
@@ -1151,6 +1157,8 @@ export interface paths {
         /**
          * Write a new render.settings revision (Track B seam B2c, ADR-039)
          * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write - `idleOutput` and the three members of `restartPolicy` - never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) - with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putRenderSettingsConfig"];
         post?: never;
@@ -1203,6 +1211,8 @@ export interface paths {
          *     The mode changes what the system DOES, never who may do it (ADR-033 decision 6), and it gates no command path anywhere: no mode may refuse, delay, or degrade blackout, stop, or power-off (ADR-033 decision 4).
          *
          *     Applies without a restart, in both directions (ADR-036): entering `show` closes the Resolume WebSocket wake-up channel and returning to `program` reopens it.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putShowModeConfig"];
         post?: never;
@@ -1247,6 +1257,8 @@ export interface paths {
         /**
          * Write a new audio.settings revision (ADR-039)
          * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write - never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only `"linear"` ships today). On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putAudioSettingsConfig"];
         post?: never;
@@ -1291,6 +1303,8 @@ export interface paths {
         /**
          * Write a new fppconnect.settings revision (ADR-044 decision 5)
          * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write - never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. `maxFileBytes` and `maxAssetDirBytes` must each be at least 1 byte, and `maxAssetDirBytes` must be at least `maxFileBytes` - a total cap smaller than the per-file cap would refuse every upload unconditionally. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putFPPConnectSettingsConfig"];
         post?: never;
@@ -1704,6 +1718,8 @@ export interface paths {
         /**
          * Set the three emergency-stop levels' own optional follow-up action lists
          * @description Requires `config:write` (admin only). A full replacement: `stop`, `stopPowerDown` and `hardStop` are all required, each with its own required (possibly empty) `actions` array of existing `show.action` ids - an absent level key, or an absent/null `actions` key inside one, is refused by name rather than silently defaulted; an empty array is how "no follow-up actions" is deliberately configured for a level. Every referenced `show.action` id must already exist, of ANY show - this kind is installation-wide and is never scoped to one show's own namespace. The SAME action id may appear in more than one level's own list; the same id twice within ONE level's own list is refused. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putEmergencyStopConfig"];
         post?: never;
@@ -7869,7 +7885,12 @@ export interface operations {
     putFPPEndpointsConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -7935,7 +7956,12 @@ export interface operations {
     putResolumeInstancesConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8026,7 +8052,12 @@ export interface operations {
     putFPPMQTTConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8117,7 +8148,12 @@ export interface operations {
     putAssetsSettingsConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8285,7 +8321,12 @@ export interface operations {
     putResolumeRecoveryConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8318,6 +8359,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -8374,7 +8416,12 @@ export interface operations {
     putRenderSettingsConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8407,6 +8454,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -8463,7 +8511,12 @@ export interface operations {
     putShowModeConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8496,6 +8549,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -8552,7 +8606,12 @@ export interface operations {
     putAudioSettingsConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8585,6 +8644,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -8641,7 +8701,12 @@ export interface operations {
     putFPPConnectSettingsConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -8674,6 +8739,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -9385,7 +9451,12 @@ export interface operations {
     putEmergencyStopConfig: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -9418,6 +9489,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
