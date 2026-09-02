@@ -547,3 +547,132 @@ func TestDispatchOneCueActivationAssetMissingNamesTheSequenceAndAsset(t *testing
 		t.Fatal("no refused cue.activate audit entry was written")
 	}
 }
+
+// --- nextPlaylistEntryCueID ---
+
+func putThreeEntryPlaylistForNextEntryTest(t *testing.T, st *store.Store) {
+	t.Helper()
+	putPlaylistForTest(t, st, "playlist-1", config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-1", Cue: "cue-1"},
+			{ID: "entry-2", Cue: "cue-2"},
+			{ID: "entry-3", Cue: "cue-3"},
+		},
+	})
+}
+
+// TestNextPlaylistEntryCueIDFindsTheNextEntry proves the coordinator's own
+// ordered lookup a node's flat, unordered catalog cannot derive itself:
+// given the entry a Cue is currently activating from, it returns the
+// CueID of the entry immediately after it, in Playlist order.
+func TestNextPlaylistEntryCueIDFindsTheNextEntry(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "entry-2")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if !ok || cueID != "cue-3" {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, %v), want (\"cue-3\", true)", cueID, ok)
+	}
+}
+
+// TestNextPlaylistEntryCueIDNoNextOnLastEntry proves the last entry in a
+// Playlist reports ok=false, not an error: there is genuinely nothing to
+// prepare ahead when the show is about to end.
+func TestNextPlaylistEntryCueIDNoNextOnLastEntry(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "entry-3")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if ok {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, true), want ok=false (entry-3 is this Playlist's own last entry)", cueID)
+	}
+}
+
+// TestNextPlaylistEntryCueIDSkipsWhenEntryIDEmpty proves an empty entryID
+// — a directly-activated announcement, or a safeCue mismatch fallback,
+// neither of which advances through an ordered Playlist (cueactivate/
+// decide.go's own resolveActivationsForCue) — never looks anything up and
+// never errors.
+func TestNextPlaylistEntryCueIDSkipsWhenEntryIDEmpty(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if ok {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, true), want ok=false for an empty entryID", cueID)
+	}
+}
+
+// TestNextPlaylistEntryCueIDUnknownEntryID proves an entryID this
+// Playlist revision does not contain reports ok=false, not an error —
+// mirrors TestNextPlaylistEntryCueIDNoNextOnLastEntry one case over.
+func TestNextPlaylistEntryCueIDUnknownEntryID(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "entry-does-not-exist")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if ok {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, true), want ok=false for an entryID this Playlist revision does not contain", cueID)
+	}
+}
+
+// TestPrepareAheadAudioRevisionNeverCollidesWithSameActivationConsume
+// proves dispatchPrepareAheadAudio's own t derivation (cueactivationloop.go)
+// is safe. By the time that dispatch runs, the node's own activateAudio has
+// already processed THIS SAME cue's own activation — including its own
+// Promote or Clear call against the SAME staging session, both at
+// activationRevision(act, activationStepStart): act.EvidenceAt itself, at a
+// HIGHER step than [cueactivation.PrepareStagingSessionStepApply]/
+// [PrepareStagingSessionStepPrepare]. Reusing act.EvidenceAt as t here
+// would collide with that already-recorded revision on nearly every tick
+// and refuse this dispatch as stale before it ever reached the wire; a
+// genuinely later, distinct wall-clock reading (this coordinator's own
+// now) does not. This is the exact defect a naive "later of now and
+// act.EvidenceAt" derivation would reintroduce whenever act.EvidenceAt
+// ends up being the later of the two — proven here directly against a
+// real [pkgaudio.RevisionState], mirroring simulateNodeAudioSessionRevision's
+// own proof-at-the-level-that-matters pattern one function up.
+func TestPrepareAheadAudioRevisionNeverCollidesWithSameActivationConsume(t *testing.T) {
+	evidenceAt := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	rs := pkgaudio.NewRevisionState(pkgaudio.SessionID(cueactivation.PrepareStagingSessionID))
+
+	consumeRevision := pkgaudio.Revision(cueactivation.AudioSessionRevision(evidenceAt, cueactivation.AudioSessionStepStart))
+	if d := rs.Apply("consume", consumeRevision); !d.Accepted {
+		t.Fatalf("simulated node consume step not accepted: %+v", d)
+	}
+
+	// A prepare-ahead dispatch using act.EvidenceAt itself as t would be
+	// refused here — proving why it must not.
+	staleApply := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(evidenceAt, cueactivation.PrepareStagingSessionStepApply))
+	if d := rs.Apply("would-be-stale", staleApply); d.Accepted {
+		t.Fatal("a revision derived from act.EvidenceAt itself was accepted; the collision this test exists to demonstrate did not reproduce, so it no longer proves t must be a distinct reading")
+	}
+
+	// A genuinely later, distinct wall-clock reading — this coordinator's
+	// own now, captured after that consume step already ran — is what
+	// dispatchPrepareAheadAudio actually uses, and it must be accepted.
+	now := evidenceAt.Add(50 * time.Millisecond)
+	applyRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(now, cueactivation.PrepareStagingSessionStepApply))
+	if d := rs.Apply("prepare-ahead-apply", applyRevision); !d.Accepted {
+		t.Fatalf("prepare-ahead apply revision (from coordinator now) refused: %+v", d)
+	}
+	prepareRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(now, cueactivation.PrepareStagingSessionStepPrepare))
+	if d := rs.Apply("prepare-ahead-prepare", prepareRevision); !d.Accepted {
+		t.Fatalf("prepare-ahead prepare revision (from coordinator now) refused: %+v", d)
+	}
+}

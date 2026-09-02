@@ -160,6 +160,40 @@ const BackgroundSessionID = "cue-activation:background"
 // recently activated into it.
 const AnnouncementSessionID = "cue-activation:announcement"
 
+// PrepareStagingSessionID is the one audio session a coordinator-scheduled
+// prepare-ahead dispatch loads media into before the Cue it belongs to has
+// actually activated. It is a genuinely separate session from
+// [AudioSessionID]: staging a session while [AudioSessionID] is still
+// Playing the PRECEDING Cue must never touch that Cue's own engine handle
+// or LTC claim — see internal/agent/audio.Manager.Promote's own doc
+// comment for why a second, temporary session id is what makes that safe.
+// Once the staged Cue is confirmed to be the one actually activating, its
+// loaded handle is moved onto [AudioSessionID] by Promote; this id itself
+// never plays anything.
+const PrepareStagingSessionID = "cue-activation:prepare-staging"
+
+// PrepareStagingSessionStepApply and PrepareStagingSessionStepPrepare are
+// [PrepareStagingSessionID]'s own two steps — Apply then Prepare, never
+// Start or Seek: a staged session is loaded and left Ready, never started
+// under this id (see that constant's own doc comment).
+const (
+	PrepareStagingSessionStepApply = iota
+	PrepareStagingSessionStepPrepare
+)
+
+// PrepareStagingSessionRevision derives [PrepareStagingSessionID]'s own
+// pkg/audio.Revision-shaped uint64 from t and step — the identical
+// "timestamp plus a small additive step" rule [AudioSessionRevision] uses
+// for [AudioSessionID] (see that function's own doc comment for why
+// additive, not multiplicative, and why t must be a real wall-clock
+// reading). Nothing about that derivation is specific to AudioSessionID;
+// this is kept as its own named function anyway so a reader searching for
+// "what derives PrepareStagingSessionID's revision" finds one name, not a
+// comment explaining a reused one now belongs to two sessions.
+func PrepareStagingSessionRevision(t time.Time, step int) uint64 {
+	return AudioSessionRevision(t, step)
+}
+
 // Ordered steps a Cue activation's audio session moves through on the node
 // (Apply, Prepare, Start, Seek — internal/agent/cueactivationaudio.go's
 // activateAudio, in that order), plus the one step the coordinator itself

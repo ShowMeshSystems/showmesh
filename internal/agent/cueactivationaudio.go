@@ -215,14 +215,56 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		return fmt.Errorf("cue.activate: audio.session.apply for Cue %q: %s: %s", act.CueID, applyOutcome.Outcome, applyOutcome.Reason)
 	}
 
-	prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
-	if audioOutcomeFailed(prepOutcome) {
-		return fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
+	started := false
+	if announcement == nil {
+		// A coordinator-scheduled prepare-ahead may already have this Cue's
+		// content loaded under the staging session (see [audio.Manager.
+		// Promote] and [cueactivation.PrepareStagingSessionID]'s own doc
+		// comments). Promote's own identity check is the single source of
+		// truth for whether that staged content still matches what this
+		// activation now wants; this call never guesses. Promote uses the
+		// Start step's own invocation and revision: on success it occupies
+		// that step exactly as an ordinary Start would have, so the Start
+		// call below is skipped rather than repeated. On any refusal — no
+		// session was staged, it wasn't ready, or its content no longer
+		// matches — [Manager.Promote] has touched nothing on id, so falling
+		// through to the ordinary Prepare+Start pair below runs exactly as
+		// it does when nothing was ever staged.
+		promoteOutcome := mgr.Promote(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), id, activationInvocation(act, "start"), activationRevision(act, activationStepStart))
+		if promoteOutcome.Outcome == pkgaudio.OutcomeStarted {
+			started = true
+		} else {
+			// Discard a stale or no-longer-useful stage rather than leave it
+			// holding a loaded branch until the next prepare-ahead cycle
+			// overwrites it. Best-effort: Clear on a staging session that
+			// was never created (the common case — nothing was staged yet)
+			// reports Stopped, not a failure, and this Cue's own activation
+			// must not fail because cleanup of a session it does not itself
+			// own had nothing to do.
+			//
+			// Session.dispatchExemptFromStaleRevision's own THE TRADE
+			// paragraph (session.go) describes a delayed clear tearing down
+			// a newer session established in the meantime; that danger does
+			// not reach this call for two reasons. The staging session id
+			// is single purpose, so no newer session ever exists under it
+			// for a late clear to tear down, and this Clear is a
+			// synchronous in-process call inside one activation, not a
+			// dispatched command that can be delayed between broker and
+			// agent.
+			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(act, activationStepStart))
+		}
 	}
 
-	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart))
-	if audioOutcomeFailed(startOutcome) {
-		return fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+	if !started {
+		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
+		if audioOutcomeFailed(prepOutcome) {
+			return fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
+		}
+
+		startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart))
+		if audioOutcomeFailed(startOutcome) {
+			return fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+		}
 	}
 
 	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek"), activationRevision(act, activationStepSeek), time.Duration(act.PositionMS)*time.Millisecond)

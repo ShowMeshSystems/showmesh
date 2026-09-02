@@ -143,6 +143,17 @@ func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, ac
 	for nodeID, act := range activations {
 		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, pin)
 		out = append(out, outcome)
+		// Best-effort, independent of cue N's own outcome above — see
+		// dispatchPrepareAheadAudio's own doc comment (cueactivationloop.go)
+		// for why a wrong or stale guess here costs nothing. Cue N's own
+		// activation, above, has already been dispatched (or refused) by
+		// the time this runs, so nothing past this point may affect it —
+		// including a panic: this whole method runs on runTick's own
+		// detached goroutine (cueactivationloop.go's Run), so an unrecovered
+		// panic here would not just skip a prepare-ahead cycle, it would
+		// crash this entire coordinator process. h.safeDispatchPrepareAheadAudio
+		// makes best-effort mean genuinely total.
+		h.safeDispatchPrepareAheadAudio(ctx, now, nodeID, act, issuer)
 	}
 	return out
 }
