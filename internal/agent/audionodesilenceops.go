@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
 // This file wires "audio.node.silence", node-scoped like
@@ -32,7 +33,7 @@ func audioNodeSilenceOperations(mgr *audio.Manager) map[string]OperationFunc {
 		return nil
 	}
 	return map[string]OperationFunc{
-		"audio.node.silence": silenceNode(mgr),
+		string(pkgaudio.OperationNodeSilence): silenceNode(mgr),
 	}
 }
 

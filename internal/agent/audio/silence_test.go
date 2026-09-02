@@ -2,11 +2,49 @@ package audio
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
+
+// resumeCountingEngine wraps [FakeEngine] and counts calls to Resume and
+// Start, so a test can assert SilenceAll issues neither across a whole
+// call, the actual guarantee [Manager.SilenceAll] makes, instead of
+// inferring it from a session's final state, which the original,
+// defective code could also reach in some map-iteration orders.
+type resumeCountingEngine struct {
+	*FakeEngine
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *resumeCountingEngine) reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls = 0
+}
+
+func (e *resumeCountingEngine) resumeStartCalls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+func (e *resumeCountingEngine) Resume(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+	return e.FakeEngine.Resume(ctx, handle)
+}
+
+func (e *resumeCountingEngine) Start(ctx context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+	return e.FakeEngine.Start(ctx, handle, position)
+}
 
 // TestSilenceAllStopsEverySessionUnaddressedByRevision proves the reason
 // SilenceAll exists: it reaches a session even though the
@@ -69,63 +107,70 @@ func TestSilenceAllStopsEverySessionUnaddressedByRevision(t *testing.T) {
 
 // TestSilenceAllNeverResumesAnInterruptedSessionRegardlessOfOrder proves
 // SilenceAll never runs a real Engine.Resume/Start on a session it is
-// about to silence anyway. bg is Paused, interrupted by ann. SilenceAll
-// iterates a map, so a real deployment could reach ann before bg; this
-// test forces exactly that worst-case order by running ann's own
-// silence step alone first and checking bg has not moved before letting
-// a full SilenceAll finish the job. Before the fix, silencing ann first
-// called restoreInterrupted(ann), which ran a genuine Engine.Resume on
-// bg and set it Playing, audible, before bg's own turn ever arrived.
+// about to silence anyway. One announcement, ann, interrupts many bg
+// targets, all sharing ann as their only interrupter. SilenceAll iterates
+// a map, so a real deployment could reach ann before any given target or
+// after it; the regression this guards (silencing ann before a target
+// still Paused resumes that target with a genuine Engine.Resume, then
+// stops it again on the target's own later turn) fires for every target
+// SilenceAll had not yet reached at the moment ann's own turn came up,
+// and still ends with every session Stopped either way, so asserting
+// only final state (as an earlier version of this test did) cannot catch
+// it. Using many targets sharing one interrupter makes it overwhelmingly
+// likely, on every run, that ann is not the very last session
+// SilenceAll's map iteration reaches, the one order that would produce
+// zero Resume calls even under the regression, so counting Resume/Start
+// calls across the whole call catches it reliably without hand-composing
+// SilenceAll's own steps or forcing one specific order.
 func TestSilenceAllNeverResumesAnInterruptedSessionRegardlessOfOrder(t *testing.T) {
 	c := newClock(time.Now())
-	m := newTestManager(t, c)
+	dir := t.TempDir()
+	engine := &resumeCountingEngine{FakeEngine: NewFakeEngine(c.now)}
+	m := NewManager(engine, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
 	ctx := context.Background()
 
-	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
-	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+	const targets = 24
+	var bgSessions []*Session
+	for i := 0; i < targets; i++ {
+		bgID := pkgaudio.SessionID("bg" + string(rune('a'+i)))
+		bgRef := writeTestAsset(t, m.assetDir, string(bgID)+".wav", "asset-"+string(bgID), []byte(bgID))
+		startPlaying(t, m, ctx, bgID, bgRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+		bg, ok := m.get(bgID)
+		if !ok {
+			t.Fatalf("%s session not created", bgID)
+		}
+		bgSessions = append(bgSessions, bg)
+	}
 
 	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
 	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
 
-	bg, ok := m.get("bg")
-	if !ok {
-		t.Fatal("bg session not created")
-	}
-	bg.mu.Lock()
-	state := bg.state
-	bg.mu.Unlock()
-	if state != pkgaudio.StatePaused {
-		t.Fatalf("precondition: bg state = %q, want paused (interrupted by ann)", state)
+	for _, bg := range bgSessions {
+		bg.mu.Lock()
+		state := bg.state
+		bg.mu.Unlock()
+		if state != pkgaudio.StatePaused {
+			t.Fatalf("precondition: %s state = %q, want paused (interrupted by ann)", bg.id, state)
+		}
 	}
 
-	ann, ok := m.get("ann")
-	if !ok {
-		t.Fatal("ann session not created")
-	}
-	ann.mu.Lock()
-	outcome := m.stopExecLocked(ctx, ann, boundedEngineCallContext)
-	outcome = ann.persistOrFailLocked(outcome)
-	ann.mu.Unlock()
-	if outcome.Outcome != pkgaudio.OutcomeUnconfirmable {
-		t.Fatalf("silencing ann alone = %+v, want Unconfirmable (gated by the fake engine)", outcome)
-	}
-	m.dropHoldMembershipEverywhere(ann.id)
+	engine.reset()
 
-	bg.mu.Lock()
-	stateAfterAnnSilenced := bg.state
-	bg.mu.Unlock()
-	if stateAfterAnnSilenced != pkgaudio.StatePaused {
-		t.Fatalf("bg state right after ann alone was silenced = %q, want still Paused: SilenceAll must never resume a session it is about to silence itself", stateAfterAnnSilenced)
+	if results := m.SilenceAll(ctx); len(results) != targets+1 {
+		t.Fatalf("SilenceAll returned %d results, want %d", len(results), targets+1)
 	}
 
-	if results := m.SilenceAll(ctx); len(results) != 2 {
-		t.Fatalf("SilenceAll returned %d results, want 2", len(results))
+	if n := engine.resumeStartCalls(); n != 0 {
+		t.Fatalf("SilenceAll made %d Resume/Start engine call(s); want 0. It must never restore a session it is about to silence", n)
 	}
 
-	bg.mu.Lock()
-	defer bg.mu.Unlock()
-	if bg.state != pkgaudio.StateStopped {
-		t.Fatalf("bg state after the full SilenceAll = %q, want Stopped", bg.state)
+	for _, bg := range bgSessions {
+		bg.mu.Lock()
+		state := bg.state
+		bg.mu.Unlock()
+		if state != pkgaudio.StateStopped {
+			t.Fatalf("%s state after the full SilenceAll = %q, want Stopped", bg.id, state)
+		}
 	}
 }
 
@@ -267,5 +312,43 @@ func TestSilenceAllLeavesRevisionLedgerUsableForTheNextCommand(t *testing.T) {
 	}
 	if r := m.Apply(ctx, id, "inv-4", 3, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome != pkgaudio.OutcomeUnconfirmable {
 		t.Fatalf("apply at revision 3 after SilenceAll = %+v, want an accepted (Unconfirmable, gated by the fake engine) outcome", r)
+	}
+}
+
+// TestSilenceAllReportsFailedWhenPersistFails proves that a session whose
+// state was genuinely silenced but could not be durably persisted
+// reports Failed, not the stop's own optimistic outcome, via
+// [Session.persistOrFailLocked]. This matters beyond the general
+// dispatch-path rule ([TestDispatchReportsFailureWhenPersistFails]):
+// [Manager.retryDeferredRestores] re-reads a session's record from the
+// store for any session left in pendingEngineRestore, so a best-effort
+// persist here could let a later audio.node binding restart audio the
+// operator believed this emergency stop had already silenced.
+func TestSilenceAllReportsFailedWhenPersistFails(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	store := &failingSessionStore{SessionStore: NewFileSessionStore(dir)}
+	m := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	if r := m.Apply(ctx, id, "inv-1", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)}); r.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("apply = %+v", r)
+	}
+	if r := m.Start(ctx, id, "inv-2", 2); r.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("start = %+v", r)
+	}
+
+	store.armSaveFailures(1, nil)
+	results := m.SilenceAll(ctx)
+	if len(results) != 1 {
+		t.Fatalf("SilenceAll returned %d results, want 1", len(results))
+	}
+	if results[0].Outcome.Outcome != pkgaudio.OutcomeFailed {
+		t.Fatalf("SilenceAll(%q) outcome = %+v, want Failed when persist fails", id, results[0].Outcome)
+	}
+	if results[0].Outcome.Reason == "" {
+		t.Fatal("a persist-failure outcome must carry a reason")
 	}
 }
