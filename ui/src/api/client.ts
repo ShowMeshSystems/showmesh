@@ -8,6 +8,7 @@ import {
 } from './errors'
 import { PROBLEM_TYPE, type Problem } from './problem'
 import { getStoredToken } from './token'
+import { parseJsonPreservingBigInts, stringifyJsonPreservingBigInts } from './bigint'
 import { SYSTEM_CLOCK, type Clock, type TimerHandle } from './clock'
 
 /**
@@ -21,6 +22,17 @@ export const REQUIRED_API_VERSION = 1
 const API_VERSION_HEADER = 'ShowMesh-API-Version'
 
 export type FetchLike = typeof fetch
+
+/**
+ * `response.json()`, except an int64 field beyond Number.MAX_SAFE_INTEGER
+ * (an audio session's `desired_revision`, minted UnixNano-scale by
+ * cue-activation) arrives as an exact decimal string instead of a
+ * silently rounded number; see bigint.ts. Every field within the safe
+ * range is unaffected.
+ */
+async function parseJsonResponse<T>(response: Response): Promise<T> {
+  return parseJsonPreservingBigInts(await response.text()) as T
+}
 
 /**
  * The subset of `RequestInit` this client's callers actually need:
@@ -332,7 +344,10 @@ export class ApiClient {
     let body: string | null = null
     if (init.body !== undefined) {
       headers['Content-Type'] = 'application/json'
-      body = JSON.stringify(init.body)
+      // A bigint anywhere in the body (an audio session command's exact
+      // int64 revision) must reach the wire as a bare number, never a
+      // rounded float or a quoted string; see bigint.ts.
+      body = stringifyJsonPreservingBigInts(init.body)
     }
 
     // Combine the caller's signal (deliberate interruption: dispose(),
@@ -395,7 +410,7 @@ export class ApiClient {
 
   async getJson<T>(path: string, signal: AbortSignal): Promise<T> {
     const response = await this.request(path, signal)
-    return (await response.json()) as T
+    return parseJsonResponse<T>(response)
   }
 
   /**
@@ -406,7 +421,7 @@ export class ApiClient {
    */
   async postJson<T>(path: string, body: unknown, signal: AbortSignal, timeoutMs?: number): Promise<T> {
     const response = await this.request(path, signal, { method: 'POST', body }, timeoutMs)
-    return (await response.json()) as T
+    return parseJsonResponse<T>(response)
   }
 
   /**
@@ -420,7 +435,7 @@ export class ApiClient {
    */
   async putJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
     const response = await this.request(path, signal, { method: 'PUT', body })
-    return (await response.json()) as T
+    return parseJsonResponse<T>(response)
   }
 
   /**
@@ -434,7 +449,7 @@ export class ApiClient {
   async deleteJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T | undefined> {
     const response = await this.request(path, signal, { method: 'DELETE', body })
     if (response.status === 204) return undefined
-    return (await response.json()) as T
+    return parseJsonResponse<T>(response)
   }
 
   private checkVersionHeader(response: Response): void {

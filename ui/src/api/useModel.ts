@@ -452,22 +452,22 @@ export function restartRenderPipeline(nodeId: string, surfaceId: string): Promis
 
 // The first audio-dispatch slice. Same thin pass-through pattern.
 
-export function pauseAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function pauseAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.pauseAudioSession(nodeId, sessionId, revision)
 }
 
-export function resumeAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function resumeAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.resumeAudioSession(nodeId, sessionId, revision)
 }
 
-export function stopAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function stopAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.stopAudioSession(nodeId, sessionId, revision)
 }
 
 export function muteAudioSessionOutput(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
 ): Promise<AudioSessionCommandResult> {
   return store.muteAudioSessionOutput(nodeId, sessionId, revision)
 }
@@ -475,33 +475,33 @@ export function muteAudioSessionOutput(
 export function unmuteAudioSessionOutput(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
 ): Promise<AudioSessionCommandResult> {
   return store.unmuteAudioSessionOutput(nodeId, sessionId, revision)
 }
 
 // Second audio-dispatch slice. Same thin pass-through pattern.
 
-export function prepareAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function prepareAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.prepareAudioSession(nodeId, sessionId, revision)
 }
 
-export function startAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function startAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.startAudioSession(nodeId, sessionId, revision)
 }
 
-export function advanceAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function advanceAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.advanceAudioSession(nodeId, sessionId, revision)
 }
 
-export function clearAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function clearAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.clearAudioSession(nodeId, sessionId, revision)
 }
 
 export function seekAudioSession(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   positionMs: number,
 ): Promise<AudioSessionCommandResult> {
   return store.seekAudioSession(nodeId, sessionId, revision, positionMs)
@@ -510,7 +510,7 @@ export function seekAudioSession(
 export function setAudioSessionGain(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   gainDb: number,
 ): Promise<AudioSessionCommandResult> {
   return store.setAudioSessionGain(nodeId, sessionId, revision, gainDb)
@@ -519,7 +519,7 @@ export function setAudioSessionGain(
 export function applyAudioSession(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   params?: Record<string, unknown>,
 ): Promise<AudioSessionCommandResult> {
   return store.applyAudioSession(nodeId, sessionId, revision, params)
@@ -528,7 +528,7 @@ export function applyAudioSession(
 export function fadeAudioSessionGain(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   targetGainDb: number,
   durationMs?: number,
 ): Promise<AudioSessionCommandResult> {
