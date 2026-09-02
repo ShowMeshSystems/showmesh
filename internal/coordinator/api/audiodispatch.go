@@ -73,6 +73,28 @@ var audioSafetyExemptActions = map[string]bool{
 	"audio.output.mute":   true,
 }
 
+// audioCommandDeadlineActions is a POSITIVE list: only an action named here
+// gets CmdPayload.Deadline populated. An action not on this list (including
+// one that does not exist yet, such as a future steady-playback re-affirm
+// riding through the same executeAudioSessionDispatch) gets no deadline and
+// behaves exactly as it did before this change: unclassified is safe by
+// default, not safe by someone remembering an exemption. Today's nine
+// audio.session.* actions are all in scope: advance, apply, clear, pause,
+// prepare, resume, seek, start, stop. audio.gain.* and audio.output.* are
+// deliberately excluded for now: they were not part of the staleness defect
+// this change closes, and adding them is a separate decision.
+var audioCommandDeadlineActions = map[string]bool{
+	"audio.session.advance": true,
+	"audio.session.apply":   true,
+	"audio.session.clear":   true,
+	"audio.session.pause":   true,
+	"audio.session.prepare": true,
+	"audio.session.resume":  true,
+	"audio.session.seek":    true,
+	"audio.session.start":   true,
+	"audio.session.stop":    true,
+}
+
 const (
 	// audioCommandConfirmDeadline bounds how long a dispatch waits, via
 	// [broker.BrokerManager.AwaitResponse], for the dispatched command's
@@ -80,6 +102,22 @@ const (
 	// MEASURED, matching renderCommandConfirmDeadline's identical
 	// posture one file over — no bench data exists yet for this path.
 	audioCommandConfirmDeadline = 15 * time.Second
+
+	// audioCommandWireDeadline bounds how stale a wire command in
+	// audioCommandDeadlineActions may be before the agent refuses it (see
+	// CmdPayload.Deadline and internal/agent/command.go's guard). It is
+	// deliberately generous, not tight: commands publish QoS 1 with
+	// Retain false, and the agent's autopaho config sets neither
+	// CleanStartOnInitialConnection nor SessionExpiryInterval, so a
+	// disconnected agent's MQTT session, and its subscriptions, end with
+	// the connection (an absent Session Expiry Interval is zero under
+	// MQTT 5). A queued, hours-old redelivery to an offline node does not
+	// happen today; the only real staleness this can catch is a command
+	// sitting behind other work on an already-connected agent, which is a
+	// scheduling-sized delay, not a network one. Sized to fire only on
+	// genuine pathology (e.g. a wedged agent goroutine), never to refuse a
+	// command whose only fault was arriving on a loaded machine.
+	audioCommandWireDeadline = 60 * time.Second
 
 	audioHandlerWriteDeadlineMargin = 10 * time.Second
 	maxAudioCommandRequestBodyBytes = 16 << 10
@@ -377,6 +415,10 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		Target: mqttproto.CmdTarget{Kind: "node", ID: in.NodeID}, Params: in.Params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: in.IssuerID, PrincipalName: in.IssuerName},
 		ConfirmationMethod: "evidence",
+	}
+	if audioCommandDeadlineActions[in.Action] {
+		deadline := now.Add(audioCommandWireDeadline)
+		payload.Deadline = &deadline
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, in.NodeID, payload)
 	if err != nil {

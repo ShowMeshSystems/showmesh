@@ -90,9 +90,10 @@ type fakeAudioPublisher struct {
 // dispatchedAudioCommand is one recorded publish: the action string, the
 // target node id, and the params it carried.
 type dispatchedAudioCommand struct {
-	Action string
-	NodeID string
-	Params map[string]any
+	Action   string
+	NodeID   string
+	Params   map[string]any
+	Deadline *time.Time
 }
 
 func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool, payload []byte) error {
@@ -102,14 +103,18 @@ func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool
 	var env struct {
 		NodeID  string `json:"nodeId"`
 		Payload struct {
-			Action string         `json:"action"`
-			Params map[string]any `json:"params"`
+			Action   string         `json:"action"`
+			Params   map[string]any `json:"params"`
+			Deadline *time.Time     `json:"deadline"`
 		} `json:"payload"`
 	}
 	_ = json.Unmarshal(payload, &env)
 	f.lastAction = env.Payload.Action
 	f.lastParams = env.Payload.Params
-	f.dispatched = append(f.dispatched, dispatchedAudioCommand{Action: env.Payload.Action, NodeID: env.NodeID, Params: env.Payload.Params})
+	f.dispatched = append(f.dispatched, dispatchedAudioCommand{
+		Action: env.Payload.Action, NodeID: env.NodeID, Params: env.Payload.Params,
+		Deadline: env.Payload.Deadline,
+	})
 	return f.publishErr
 }
 
@@ -308,6 +313,79 @@ func TestAudioSessionDispatchConfirmsFromNodeEvidence(t *testing.T) {
 	}
 	if rec.NodeID != "node-a" || rec.Revision != 1 {
 		t.Fatalf("persisted record = %+v", rec)
+	}
+}
+
+// TestAudioSessionDispatchSetsWireDeadlineForListedAction proves the half
+// of audioCommandDeadlineActions's boolean check that a mutation to
+// "always true" cannot fake: a listed action (audio.session.stop) must
+// carry a wire CmdPayload.Deadline, generous (audioCommandWireDeadline)
+// and anchored to the dispatch clock, not merely non-nil.
+func TestAudioSessionDispatchSetsWireDeadlineForListedAction(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.audio_session.stop",
+			Value:  map[string]any{"sessionId": "night-session", "outcome": "stopped", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if len(setup.pub.dispatched) != 1 {
+		t.Fatalf("dispatched count = %d, want 1", len(setup.pub.dispatched))
+	}
+	got := setup.pub.dispatched[0].Deadline
+	if got == nil {
+		t.Fatalf("Deadline = nil, want set for listed action audio.session.stop")
+	}
+	want := testNow.Add(audioCommandWireDeadline)
+	if !got.Equal(want) {
+		t.Fatalf("Deadline = %v, want %v (testNow + audioCommandWireDeadline)", got, want)
+	}
+}
+
+// TestAudioSessionDispatchLeavesUnlistedActionWithoutDeadline proves the
+// other half of audioCommandDeadlineActions's boolean check that a
+// mutation to "always false" cannot fake, and is the entire point of the
+// positive-list design: an action not on the list (audio.gain.set, which
+// dispatches through the SAME executeAudioSessionDispatch) must carry a
+// nil wire Deadline, exactly as it did before this change, so an
+// unclassified future action (e.g. a steady-playback re-affirm) is safe
+// by default rather than safe by someone remembering an exemption.
+func TestAudioSessionDispatchLeavesUnlistedActionWithoutDeadline(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.audio_session.gain",
+			Value:  map[string]any{"sessionId": "night-session", "gainDb": -6.0},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/gain", `{"revision":1,"params":{"gainDb":-6.0}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if len(setup.pub.dispatched) != 1 {
+		t.Fatalf("dispatched count = %d, want 1", len(setup.pub.dispatched))
+	}
+	if setup.pub.dispatched[0].Action != "audio.gain.set" {
+		t.Fatalf("dispatched action = %q, want audio.gain.set", setup.pub.dispatched[0].Action)
+	}
+	if got := setup.pub.dispatched[0].Deadline; got != nil {
+		t.Fatalf("Deadline = %v, want nil for unlisted action audio.gain.set", *got)
 	}
 }
 
