@@ -23,8 +23,51 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Both sides of the fact strip are the same role and size: sm-data marks
+   the values, this just keeps the surrounding line at one consistent size. */
 .sm-lc-transport__head p {
   margin: 0;
+  font: var(--t-small);
+}
+
+/* The select gets a real width; Repeat sits beside it; Start playlist never wraps. */
+.sm-lc-transport__playlist-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.sm-lc-transport__playlist-row > .sm-field {
+  flex: 1 1 320px;
+  min-width: 320px;
+  max-width: 480px;
+}
+
+.sm-lc-transport__playlist-row > .sm-choice {
+  flex: 0 0 auto;
+}
+
+.sm-lc-transport__nowrap {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* A volume field only needs to hold three digits; Apply sits on its baseline. */
+.sm-lc-transport__volume-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+}
+
+.sm-lc-transport__volume-row > .sm-field {
+  flex: 0 0 auto;
+  width: 96px;
+}
+
+.sm-lc-transport__volume-row > .sm-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .sm-lc-transport__body {

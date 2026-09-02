@@ -252,9 +252,9 @@ describe('Live Control', () => {
     expect(stubs.blackoutResolume).toHaveBeenCalledTimes(1)
   })
 
-  it('distinguishes player stop from the separately gated installation-wide emergency workflow', () => {
+  it('explains Stop now as a helper line under the transport, not a callout, and offers no emergency-stop control', () => {
     renderScreen({})
-    expect(screen.getByText(/separate, deliberately gated API workflow/)).toBeInTheDocument()
+    expect(screen.getByText(/halts this player only/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /emergency/i })).not.toBeInTheDocument()
   })
 

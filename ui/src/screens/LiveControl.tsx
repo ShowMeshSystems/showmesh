@@ -51,7 +51,6 @@ import {
   Field,
   Input,
   LifecycleCommands,
-  Notice,
   NotWired,
   NotWiredBanner,
   RuledStrip,
@@ -266,7 +265,7 @@ export function LiveControl() {
         ) : (
           <div className="sm-panel sm-lc-transport">
             <div className="sm-lc-transport__head">
-              <p className="sm-lc-transport__now">
+              <p>
                 <span className="sm-data">{reportedPlaylistName(state) ?? 'No playlist reported'}</span>
                 {state.itemIndex !== null && (
                   <>
@@ -278,14 +277,24 @@ export function LiveControl() {
                   </>
                 )}
               </p>
-              <p className="sm-small sm-muted">
-                {state.playerState ?? 'Player state not reported'}
-                {state.elapsedSeconds !== null && ` · ${formatPosition(state.elapsedSeconds) ?? ''}`}
-                {state.totalSeconds !== null && ` / ${formatPosition(state.totalSeconds) ?? ''}`}
+              <p>
+                <span className="sm-data">{state.playerState ?? 'Player state not reported'}</span>
+                {state.elapsedSeconds !== null && (
+                  <>
+                    {' · '}
+                    <span className="sm-data">{formatPosition(state.elapsedSeconds) ?? ''}</span>
+                  </>
+                )}
+                {state.totalSeconds !== null && (
+                  <>
+                    {' / '}
+                    <span className="sm-data">{formatPosition(state.totalSeconds) ?? ''}</span>
+                  </>
+                )}
               </p>
             </div>
             <div className="sm-lc-transport__body">
-              <div className="sm-volume">
+              <div className="sm-lc-transport__playlist-row">
                 {playlistNames.length > 0 ? (
                   <Field label="Playlist">
                     {(field) => (
@@ -322,6 +331,8 @@ export function LiveControl() {
                 />
                 <Button
                   variant="primary"
+                  size="gloved"
+                  className="sm-lc-transport__nowrap"
                   disabled={!commandGate.allowed || startPlaylistName.trim() === ''}
                   title={commandGate.allowed ? undefined : commandGate.reason}
                   onClick={() => dispatchStartPlaylist(instance.instanceId, startPlaylistName.trim(), startRepeat, 'refuse')}
@@ -376,8 +387,8 @@ export function LiveControl() {
                   </Button>
                 </ButtonRow>
               </div>
-              <div className="sm-volume">
-                <Field label="Volume" {...(state.volume === null ? { help: 'This instance does not report its volume.' } : {})}>
+              <div className="sm-lc-transport__volume-row">
+                <Field label="Volume" help={state.volume === null ? 'This instance does not report its volume.' : '0-100.'}>
                   {(field) => (
                     <Input
                       {...field}
@@ -402,16 +413,10 @@ export function LiveControl() {
             </div>
           </div>
         )}
-        <Notice
-          tone="warn"
-          live="status"
-          headline={
-            <>
-              <strong>Stop now</strong> halts this player only.
-            </>
-          }
-          explanation="Projection and audio hold their last state until their own cues run. Installation-wide emergency stop is a separate, deliberately gated API workflow; it is not represented by this transport control."
-        />
+        <p className="sm-small sm-muted">
+          <strong>Stop now</strong> halts this player only; projection and audio hold their last state until their own
+          cues run.
+        </p>
       </Section>
 
       <Section
@@ -912,7 +917,7 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
                   {nodesState.kind === 'loaded' &&
                     nodesState.nodes.map((node) => (
                       <option key={node.id} value={node.id}>
-                        {node.label}
+                        {node.label !== '' && node.label !== node.id ? `${node.id} · ${node.label}` : node.id}
                       </option>
                     ))}
                 </Select>
