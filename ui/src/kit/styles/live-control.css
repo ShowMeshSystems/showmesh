@@ -100,3 +100,21 @@
 .sm-control-grid > .sm-lifecycle-command {
   order: 0;
 }
+
+.sm-lc-emergency {
+  display: grid;
+  gap: var(--s-3);
+}
+
+/* Separates the deliberate-intent gate from Stop/Stop and power down above it. */
+.sm-lc-emergency__hardstop {
+  display: grid;
+  gap: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.sm-lc-emergency__outcome {
+  display: grid;
+  gap: var(--s-3);
+}
