@@ -1,0 +1,73 @@
+/*
+ * The not-wired treatment. A control drawn from a mock that has no endpoint
+ * behind it is built to its final shape, rendered inert, and marked here.
+ * It is deliberately the loudest non-error surface in the kit: an operator
+ * must never find out on a show night by pressing.
+ */
+.sm-nowire {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  margin-block: var(--s-3);
+  border: 2px solid var(--warn-border);
+  background: var(--surface);
+}
+
+.sm-nowire__gutter {
+  display: grid;
+  place-items: center;
+  border-right: 2px solid var(--warn-border);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--warn-bg) 6px 12px);
+}
+
+.sm-nowire__stamp {
+  padding: 3px 6px;
+  border: 1px solid var(--warn-fg);
+  background: var(--surface);
+  color: var(--warn-fg);
+  font: var(--t-meta);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.sm-nowire__body {
+  padding: var(--s-3) var(--s-4);
+}
+
+.sm-nowire__title {
+  margin: 0;
+  font: var(--t-subhead);
+  color: var(--warn-fg);
+}
+
+.sm-nowire__detail {
+  margin: var(--s-1) 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* The in-place tag. It rides on the control so the warning cannot be
+   scrolled away from the button it describes. */
+.sm-nowire-tag {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.sm-nowire-tag > .sm-btn {
+  background-image: repeating-linear-gradient(135deg, transparent 0 5px, var(--warn-bg) 5px 10px);
+  border-color: var(--warn-border);
+}
+
+.sm-nowire-tag__chip {
+  padding: 2px 5px;
+  border: 1px solid var(--warn-fg);
+  color: var(--warn-fg);
+  font: var(--t-meta);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}

@@ -365,7 +365,13 @@ func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *s
 				// six audit rows in a few seconds).
 				source := loginSource(r)
 				if limiter != nil {
-					limiter.delay(r.Context(), source)
+					// delayOnce, not delay: the handler this request is
+					// on its way to may throttle the same source again
+					// (POST /api/v1/session, POST /api/v1/bootstrap), and
+					// paying maxDelay twice on one request overruns the
+					// HTTP server's WriteTimeout — see delayOnce's own
+					// doc comment for the 502 that produced.
+					r = r.WithContext(limiter.delayOnce(r.Context(), source))
 				}
 
 				entry := identity.AuditEntry{

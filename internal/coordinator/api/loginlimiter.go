@@ -132,6 +132,39 @@ func (l *loginLimiter) delay(ctx context.Context, source string) {
 	}
 }
 
+// loginDelayAppliedKey marks a request context whose per-source delay has
+// already been paid, so [loginLimiter.delayOnce] never charges the same
+// request twice.
+type loginDelayAppliedKey struct{}
+
+// delayOnce applies source's accumulated delay unless this request has
+// already paid it, and returns a context recording that it now has.
+//
+// One request must never be charged the delay twice, because two
+// independent places apply it: withIdentity delays EVERY request whose
+// credential fails to resolve (auth.go), and POST /api/v1/session and
+// POST /api/v1/bootstrap delay again before verifying a password. A
+// sign-in carrying a stale showmesh_session cookie — the ordinary case
+// under ADR-024 decision 5, where the cookie rides along until sign-in or
+// its 90-day expiry — hits both, and maxDelay twice plus queueWait
+// exceeds net/http.Server's WriteTimeout (httpapi.NewServer). The server
+// then closes the connection with no response at all, so the operator
+// sees a proxy 502 on the sign-in form instead of being signed in, with
+// nothing in the coordinator log to explain it. Reproduced against the
+// running stack: a POST /api/v1/session carrying an invalid cookie
+// returned 502 after exactly 10s, the WriteTimeout to the millisecond.
+//
+// Charging once per request keeps the throttle's actual property — each
+// additional failure from a source slows that source's next attempt —
+// while bounding one request's total added latency to maxDelay.
+func (l *loginLimiter) delayOnce(ctx context.Context, source string) context.Context {
+	if applied, _ := ctx.Value(loginDelayAppliedKey{}).(bool); applied {
+		return ctx
+	}
+	l.delay(ctx, source)
+	return context.WithValue(ctx, loginDelayAppliedKey{}, true)
+}
+
 // currentDelay computes, without mutating, how long source's next attempt
 // should be delayed: linear in its recent failure count, capped at
 // maxDelay, and reset to zero once decayAfter has passed since the last

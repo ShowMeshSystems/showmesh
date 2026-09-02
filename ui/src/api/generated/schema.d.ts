@@ -49,6 +49,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/current-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current runner playback
+         * @description Full runner-neutral projection of the current zero-to-many runs. FPP is optional; FPP and showmesh-audio can be present concurrently. The server computes active Show/generation context, runner status, playback and freshness, reconciliation, activation, and per-target evidence. `next` is null unless a runner provided an authoritative next item, so clients must not infer one from local playlist order. After reconnect, refetch this endpoint; `currentRuns.changed` is an optional full-frame prompt, not a resumable cursor.
+         */
+        get: operations["getCurrentRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes": {
         parameters: {
             query?: never;
@@ -612,6 +632,7 @@ export interface paths {
          *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
          *       | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
          *       | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
+         *       | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
          *     `data:` is always exactly one line of compact (no embedded newlines) JSON - never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
@@ -3326,6 +3347,80 @@ export interface components {
             gap: boolean;
             oldestRetainedSeq: number | null;
         };
+        CurrentRunsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            activeShow: components["schemas"]["CurrentShowContext"];
+            runs: components["schemas"]["CurrentRun"][];
+        };
+        CurrentShowContext: {
+            configured: boolean;
+            show: string | null;
+            generation: number | null;
+        };
+        CurrentRun: {
+            id: string;
+            /** @enum {string} */
+            runner: "fpp" | "showmesh-audio";
+            show: string;
+            generation: number;
+            playlistId: string;
+            playlistRevision: number;
+            status: string;
+            statusReason: string;
+            playback: components["schemas"]["CurrentPlayback"];
+            freshness: components["schemas"]["CurrentRunFreshness"];
+            reconciliation: components["schemas"]["CurrentReconciliation"];
+            activation: components["schemas"]["CurrentRunActivation"];
+            targets: components["schemas"]["CurrentRunTarget"][];
+            next: components["schemas"]["CurrentRunNext"] | null;
+        };
+        CurrentPlayback: {
+            state: string;
+            reason: string;
+            itemId: string;
+            itemIndex: number | null;
+            positionMs: number | null;
+            media: string;
+            evidence: components["schemas"]["Evidence"][];
+        };
+        CurrentRunFreshness: {
+            state: string;
+            reason: string;
+            /** Format: date-time */
+            observedAt: string | null;
+            /** Format: date-time */
+            collectedAt: string | null;
+        };
+        CurrentReconciliation: {
+            state: string;
+            reason: string;
+        };
+        CurrentRunActivation: {
+            show: string;
+            generation: number;
+            playlistId: string;
+            revision: number;
+            runner: string;
+        };
+        CurrentRunTarget: {
+            kind: string;
+            id: string;
+            evidence: components["schemas"]["Evidence"][];
+        };
+        CurrentRunNext: {
+            itemId: string;
+            itemIndex: number;
+            media: string;
+            source: string;
+        };
+        CurrentRunsChangedEvent: {
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            activeShow: components["schemas"]["CurrentShowContext"];
+            runs: components["schemas"]["CurrentRun"][];
+        };
         Snapshot: {
             /** Format: date-time */
             serverTime: string;
@@ -4286,7 +4381,7 @@ export interface components {
          *
          *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) - a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision - the macro was edited between two submissions under one key, 409) - minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** an unavailable audit store no longer blocks a command dispatch on ANY request path this coordinator has - the amendment covers every one of them, not a named subset - so `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable"; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own former ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface), is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing in this coordinator's audit-write posture treats Resolume actions differently from FPP commands, so this type is no longer produced either. **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (programRoute and ltcRoute naming the same device route). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** an unavailable audit store no longer blocks a command dispatch on ANY request path this coordinator has - the amendment covers every one of them, not a named subset - so `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable"; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own former ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface), is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing in this coordinator's audit-write posture treats Resolume actions differently from FPP commands, so this type is no longer produced either. **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (a non-empty ltcRoute naming a DIFFERENT device route from programRoute: program and LTC leave through one interface in one clock domain, ADR-018, so the two must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
          */
         Problem: {
             /**
@@ -5606,7 +5701,7 @@ export interface components {
             /** @description Required, and must name a declared node, when targetKind is "node". */
             target?: string;
         };
-        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. */
+        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. verdicts is additive (D-016 item 2): a client that predates it keeps working unchanged reading every other field exactly as before. */
         NodeAssetManifest: {
             node: string;
             /** @enum {string} */
@@ -5617,6 +5712,8 @@ export interface components {
             extra: components["schemas"]["ExtraAsset"][];
             /** Format: date-time */
             observedAt: string | null;
+            /** @description One entry per asset this node was expected to hold, naming what its own reported inventory says about that asset's bytes. Absent, or an empty array, whenever no fresh inventory report exists for this node - the identical condition extra is populated under, for the identical reason: a stale report is not evidence of what a node currently holds. When present, this array has exactly one entry per asset the node was expected to hold, keyed by assetId - never by runtimeFilename, which Asset's own description already says is not identity. state is "held" (the node's inventory holds this asset's own content hash), "superseded" (the node does not hold that hash, but holds the content hash of a row that used to be current for this exact asset's (show, sequence, targetKind, target) identity before being superseded), or "absent" (the node holds nothing recognizable for this identity at all). */
+            verdicts?: components["schemas"]["AssetSyncVerdict"][];
         };
         /** @description One expected asset a manifest found the node does not currently hold. */
         MissingAsset: {
@@ -5636,6 +5733,16 @@ export interface components {
             contentHash: string;
             filename: string;
             sizeBytes: number;
+        };
+        /** @description One expected asset's per-node sync verdict (D-016 item 2): exists only for an asset this node was expected to hold, keyed by assetId, and derived only from facts the manifest already computes for missing/extra - never a filename join and never a timestamp. */
+        AssetSyncVerdict: {
+            assetId: string;
+            sequence: string;
+            filename: string;
+            contentHash: string;
+            sizeBytes: number;
+            /** @enum {string} */
+            state: "held" | "superseded" | "absent";
         };
         /** @description The body of GET /nodes/{nodeId}/assets. */
         NodeAssetManifestResponse: {
@@ -6043,6 +6150,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Snapshot"];
+                };
+            };
+            400: components["responses"]["UnsupportedAPIVersion"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCurrentRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentRunsResponse"];
                 };
             };
             400: components["responses"]["UnsupportedAPIVersion"];

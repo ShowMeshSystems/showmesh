@@ -56,6 +56,7 @@ docs/private/
 # Vite build output (dist/, already covered above) are not.
 ui/node_modules/
 ui/.vite/
+ui/visual-artifacts/
 
 # Agent worktrees created by Claude Code isolation runs. Transient, and
 # never part of the repository: without this, a git add -A in the main

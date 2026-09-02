@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf;
+  --accent: #66d9ff; --accent-hover: #9ae7ff;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+select, input[type='text'], input[type='number'], textarea { width: 100%; min-width: 0; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body);padding:30px 28px 80px">
+  <div style="max-width:1180px;margin:0 auto;display:grid;gap:34px">
+
+    <header style="display:grid;gap:10px;max-width:82ch">
+      <p style="margin:0;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--accent)">Pattern &middot; D-011 and D-017</p>
+      <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Creating and editing config objects</h1>
+      <p style="margin:0;font:var(--t-body);color:var(--text-muted);text-wrap:pretty">Ruling on both entries is <strong style="color:var(--text)">B</strong>, so the forms are drawn here. Five instances of one pattern: new show, new playlist, new action, editing an action, new macro. Nothing new in the kit &mdash; every control is one the shipped mocks already use.</p>
+    </header>
+
+    <section aria-labelledby="oc-rule" style="border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+      <div style="padding:13px 16px;border-bottom:1px solid var(--border);background:var(--raised)">
+        <h2 id="oc-rule" style="margin:0;font:var(--t-subhead)">The rule</h2>
+      </div>
+      <div style="padding:16px;display:grid;gap:14px;max-width:84ch">
+        <p style="margin:0;font:var(--t-body);color:var(--text);text-wrap:pretty"><strong>Creation is the object's own edit surface, opened empty.</strong> There is no create-modal in this UI. Whatever surface edits the object &mdash; a full-width form on Shows, the right-hand aside on Automation &mdash; is the surface that creates it.</p>
+        <ol style="margin:0;padding-left:20px;display:grid;gap:9px;font:var(--t-small);color:var(--text-muted)">
+          <li><strong style="color:var(--text)">The id is the only field creation has that editing does not.</strong> It seeds from the name, stays editable until the first save, and is locked with the object's own immutability copy afterwards. A modal that collects an immutable id and then hands off teaches the operator the id was a throwaway.</li>
+          <li><strong style="color:var(--text)">One gate field first when the rest of the form depends on it.</strong> A playlist's runner and an action's integration each decide which fields are even legal. The gate is a segmented control, and nothing below it renders until it is answered &mdash; not disabled, absent.</li>
+          <li><strong style="color:var(--text)">Draft is stated, not implied.</strong> The pane header reads <span style="font:var(--t-data)">Draft</span> where an existing object reads <span style="font:var(--t-data)">Editing</span>, and the footer says what the save writes: <em>Creates</em> for a draft, <em>Creates revision n</em> for an edit.</li>
+          <li><strong style="color:var(--text)">Nothing is written before the save.</strong> No optimistic row in the table behind it. A refused <span style="font:var(--t-data)">PUT</span> leaves the draft open with the coordinator's reason above the footer, in the pattern Live Control already uses for refusals.</li>
+          <li><strong style="color:var(--text)">Never defaulted stays never defaulted.</strong> An action's <span style="font:var(--t-data)">safetyClass</span> and a step's <span style="font:var(--t-data)">localFallback.reason</span> have no schema default, so the draft opens with them unanswered and the save is withheld until they are &mdash; the one legitimate disabled save in the pattern.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section aria-labelledby="oc-show" style="display:grid;gap:12px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:9px;border-bottom:1px solid var(--border-strong)">
+        <h2 id="oc-show" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">1 &middot; New show</h2>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Shows &rsaquo; New show &middot; PUT /config/show/{id}</span>
+      </div>
+      <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:80ch">The Shows detail Identity section, opened empty. Same two fields, same notes box, same max width &mdash; the id input is live instead of locked, and the footer creates instead of saving.</p>
+
+      <div style="max-width:660px;border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+        <div style="padding:13px 16px;border-bottom:1px solid var(--border);background:var(--raised)">
+          <h3 style="margin:0;display:flex;align-items:center;gap:7px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)"><span aria-hidden="true">&#9656;</span>Draft &middot; new show</h3>
+        </div>
+        <div style="padding:16px;display:grid;gap:16px">
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Name</span>
+            <input type="text" value="Winter Ridge 2027" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+            <span style="font:var(--t-small);color:var(--text-faint)">What the show picker and every heading shows. Editable forever.</span>
+          </label>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Id</span>
+            <input type="text" value="winter-ridge-2027" style="height:34px;padding:0 10px;border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+            <span style="font:var(--t-small);color:var(--warn-fg)">Immutable once created. Its cues, playlists, surfaces, assets and macros are keyed by it, and nothing outside the show can reference them.</span>
+          </label>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Notes <span style="font-weight:400;color:var(--text-faint)">&middot; optional</span></span>
+            <textarea rows="3" style="padding:8px 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);resize:vertical"></textarea>
+          </label>
+          <p style="margin:0;font:var(--t-small);color:var(--text-faint)">Nothing else. A show is a namespace &mdash; playlists, cues and macros are authored in its workspace tabs once it exists.</p>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--raised)">
+          <span style="font:var(--t-small);color:var(--text-muted)">Creates <span style="font:var(--t-data);color:var(--text)">winter-ridge-2027</span> at revision <span style="font:var(--t-data);color:var(--text)">1</span></span>
+          <div style="display:flex;gap:8px">
+            <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Discard</button>
+            <button type="button" style="height:32px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Create show</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="oc-pl" style="display:grid;gap:12px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:9px;border-bottom:1px solid var(--border-strong)">
+        <h2 id="oc-pl" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">2 &middot; New playlist</h2>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Shows &rsaquo; Authoring &middot; PUT /config/show.playlist/{id}</span>
+      </div>
+      <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:80ch">The gate case. Runner is asked first because it decides which policy field exists: <span style="font:var(--t-data)">mismatchPolicy</span> is fpp-only, <span style="font:var(--t-data)">repeat</span> is showmesh-audio-only, and neither is legal on the other runner. Entries are not authored here &mdash; the playlist's own page does that, with the binding checks already drawn on Show Authoring.</p>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start;max-width:1000px">
+
+        <div style="border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);overflow:hidden">
+          <div style="padding:13px 16px;border-bottom:1px solid var(--border);background:var(--raised)">
+            <h3 style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Draft &middot; gate unanswered</h3>
+          </div>
+          <div style="padding:16px;display:grid;gap:16px">
+            <div>
+              <h4 style="margin:0;font:var(--t-body);font-weight:500">Runner</h4>
+              <div style="display:flex;gap:1px;padding:1px;margin-top:6px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+                <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">fpp</button>
+                <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">showmesh-audio</button>
+              </div>
+              <p style="margin:7px 0 0;font:var(--t-small);color:var(--text-faint)">Immutable once created, like the id: an fpp playlist and an audio playlist are different objects with different bindings.</p>
+            </div>
+            <p style="margin:0;padding:11px 12px;border-left:3px solid var(--border-strong);background:var(--raised);font:var(--t-small);color:var(--text-muted)">The rest of the form appears once a runner is picked. It is not shown disabled &mdash; half of it would be fields this playlist can never have.</p>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-faint)">Runner required</span>
+            <button type="button" disabled="{{ true }}" style="height:32px;padding:0 14px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);color:var(--text-faint);font:var(--t-body);font-weight:600;cursor:not-allowed">Create playlist</button>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+          <div style="padding:13px 16px;border-bottom:1px solid var(--border);background:var(--raised)">
+            <h3 style="margin:0;display:flex;align-items:center;gap:7px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)"><span aria-hidden="true">&#9656;</span>Draft &middot; fpp</h3>
+          </div>
+          <div style="padding:16px;display:grid;gap:16px">
+            <div>
+              <h4 style="margin:0;font:var(--t-body);font-weight:500">Runner</h4>
+              <div style="display:flex;gap:1px;padding:1px;margin-top:6px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+                <button type="button" aria-pressed="{{ true }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">fpp</button>
+                <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">showmesh-audio</button>
+              </div>
+            </div>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Name</span>
+              <input type="text" value="Late Cycle" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Id</span>
+              <input type="text" value="late-cycle" style="height:34px;padding:0 10px;border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+              <span style="font:var(--t-small);color:var(--text-faint)">From the name, editable until created. Night session definitions bind playlists by id.</span>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">If the FPP playlist does not match</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>hold</option>
+                <option>blackAndSilence</option>
+                <option>safeCue</option>
+              </select>
+              <span style="font:var(--t-small);color:var(--text-muted)">fpp only. What the coordinator does when the captured definition's hash is not the one this playlist binds.</span>
+            </label>
+            <p style="margin:0;padding:11px 12px;border-left:3px solid var(--accent);background:var(--raised);font:var(--t-small);color:var(--text-muted)">No entries yet. Created empty, then bound on its own page &mdash; a playlist with no entries is a valid object and reads as <span style="font:var(--t-meta);color:var(--unk-fg)">UNBOUND</span> in the list.</p>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Creates <span style="font:var(--t-data);color:var(--text)">late-cycle</span></span>
+            <div style="display:flex;gap:8px">
+              <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Discard</button>
+              <button type="button" style="height:32px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Create playlist</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <p style="margin:0;font:var(--t-small);color:var(--text-faint);max-width:80ch">Picking <span style="font:var(--t-data)">showmesh-audio</span> swaps one field: the mismatch select is replaced by <span style="font:var(--t-data)">repeat</span> (<span style="font:var(--t-data)">none</span> / <span style="font:var(--t-data)">all</span>), and the note reads that an audio playlist carries its own order rather than binding an FPP capture.</p>
+    </section>
+
+    <section aria-labelledby="oc-action" style="display:grid;gap:12px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:9px;border-bottom:1px solid var(--border-strong)">
+        <h2 id="oc-action" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">3 &middot; New action</h2>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Shows &rsaquo; Automation, right aside &middot; PUT /config/show.action/{id}</span>
+      </div>
+      <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:80ch">Fills the same aside the step editor uses, at the same 420px. Integration is the gate; the target block below it is that integration's own required shape and nothing else. Two of the four are drawn &mdash; <span style="font:var(--t-data)">mqtt</span> because it is the only one with an <span style="font:var(--t-data)">expect</span> block, <span style="font:var(--t-data)">audio</span> because it is the integration with no authoring UI in the checked-out form.</p>
+
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:start">
+
+        <div style="width:420px;max-width:100%;border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+          <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+            <h3 style="margin:0;display:flex;align-items:center;gap:7px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)"><span aria-hidden="true">&#9656;</span>Draft &middot; new action</h3>
+          </div>
+
+          <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:14px">
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Label</span>
+              <input type="text" value="Weather Sign Message" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+              <span style="font:var(--t-small);color:var(--text-faint)">What a step row and a run row read. Id <span style="font:var(--t-data)">weather-sign-message</span> &mdash; from the label, editable until created.</span>
+            </label>
+            <div>
+              <h4 style="margin:0;font:var(--t-body);font-weight:500">Integration</h4>
+              <div style="display:flex;gap:1px;padding:1px;margin-top:6px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+                <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">fpp</button>
+                <button type="button" aria-pressed="{{ true }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">mqtt</button>
+                <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">resolume</button>
+                <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">audio</button>
+              </div>
+              <p style="margin:7px 0 0;font:var(--t-small);color:var(--text-faint)">Immutable once created. Changing where an action points is a new action, not an edit.</p>
+            </div>
+          </div>
+
+          <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:13px">
+            <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">mqtt target</p>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Topic</span>
+              <input type="text" value="sign/rooftop/set" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Payload</span>
+              <textarea rows="2" style="padding:8px 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);resize:vertical">{"text":"Show paused &mdash; weather hold"}</textarea>
+              <span style="font:var(--t-small);color:var(--text-faint)">Passed through undecoded.</span>
+            </label>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:10px;align-items:end">
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Confirmation</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <option>match</option>
+                  <option>none</option>
+                  <option>boolean</option>
+                  <option>number</option>
+                  <option>text</option>
+                </select>
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Deadline</span>
+                <input type="text" value="8 s" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+              </label>
+            </div>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Match value</span>
+              <input type="text" value="" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+              <span style="font:var(--t-small);color:var(--text-muted)">Must be present, and the empty string is a legal value &mdash; an empty box here is answered, not blank. Deadline is 1&ndash;120 s.</span>
+            </label>
+          </div>
+
+          <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:9px">
+            <h4 style="margin:0;font:var(--t-body);font-weight:500">Safety class</h4>
+            <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+              <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">none</button>
+              <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">blackout</button>
+              <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">stop</button>
+              <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">powerOff</button>
+            </div>
+            <p style="margin:0;font:var(--t-small);color:var(--warn-fg)">No default in the schema, so no default here. It decides which permission invoking this action needs and whether an interlock can withhold it.</p>
+          </div>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-faint)">Safety class required</span>
+            <div style="display:flex;gap:8px">
+              <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Discard</button>
+              <button type="button" disabled="{{ true }}" style="height:32px;padding:0 14px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);color:var(--text-faint);font:var(--t-body);font-weight:600;cursor:not-allowed">Create action</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="width:420px;max-width:100%;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);overflow:hidden">
+          <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+            <h3 style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Same draft &middot; audio picked instead</h3>
+          </div>
+          <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:13px">
+            <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">audio target</p>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Audio node</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>media-garage</option>
+                <option>barn-player</option>
+                <option>porch-pi</option>
+              </select>
+              <span style="font:var(--t-small);color:var(--text-faint)">Declared nodes only. Undeclared ones are listed in Settings &rsaquo; Node routing.</span>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Operation</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>audio.gain.set</option>
+                <option>audio.gain.fade</option>
+                <option>audio.session.start</option>
+                <option>audio.session.stop</option>
+                <option>audio.output.select</option>
+              </select>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Gain</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="text" value="-60" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <span style="font:var(--t-data);color:var(--text-muted);white-space:nowrap">dB</span>
+              </div>
+              <span style="font:var(--t-small);color:var(--text-muted)">Decibels only. 0 dB unity, &minus;60 dB silence, +12 dB ceiling. The pre-decibel <span style="font:var(--t-data)">params.gain</span> is refused at authoring time, so there is no linear input anywhere in this UI.</span>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Session <span style="font-weight:400;color:var(--text-faint)">&middot; optional</span></span>
+              <input type="text" value="" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+            </label>
+            <p style="margin:0;font:var(--t-small);color:var(--text-faint)">No <span style="font:var(--t-data)">expect</span> block: confirmation for audio is the node's own reply, not an authored match.</p>
+          </div>
+          <div style="padding:12px 14px;background:var(--raised);font:var(--t-small);color:var(--text-muted)">Label, id and safety class above are unchanged &mdash; only the target block swaps.</div>
+        </div>
+
+      </div>
+    </section>
+
+    <section aria-labelledby="oc-edit" style="display:grid;gap:12px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:9px;border-bottom:1px solid var(--border-strong)">
+        <h2 id="oc-edit" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">4 &middot; Editing an action</h2>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">What an action row's click opens</span>
+      </div>
+      <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:80ch">The Automation copy already promises this: <em>&ldquo;An action's row edits the action itself &mdash; its target, its safety class, and what counts as confirmation.&rdquo;</em> Same pane as the draft, with four differences: header reads Editing, id and integration are locked, used-by is stated, and the footer counts a revision.</p>
+
+      <div style="width:420px;max-width:100%;border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+        <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+          <h3 style="margin:0;display:flex;align-items:center;gap:7px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)"><span aria-hidden="true">&#9656;</span>Editing &middot; Garage Speakers Mute</h3>
+        </div>
+
+        <div style="padding:12px 14px;border-bottom:1px solid var(--border);border-left:3px solid var(--unk-border);background:var(--unk-bg)">
+          <p style="margin:0;font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--unk-fg)">Binding unknown</p>
+          <p style="margin:5px 0 0;font:var(--t-small);color:var(--text)"><span style="font:var(--t-data)">media-garage</span> has not reported since <span style="font:var(--t-data)">20:41:07</span>, so the sweep could not resolve this target. Editing is not blocked; invoke stays closed until the node answers.</p>
+        </div>
+
+        <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:14px">
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Label</span>
+            <input type="text" value="Garage Speakers Mute" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+          </label>
+          <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">
+            <div style="display:grid;gap:4px;min-width:0">
+              <span style="font:var(--t-small);color:var(--text-faint)">Id</span>
+              <span style="font:var(--t-data);color:var(--text);overflow-wrap:anywhere">garage-speakers-mute</span>
+            </div>
+            <div style="display:grid;gap:4px;min-width:0">
+              <span style="font:var(--t-small);color:var(--text-faint)">Integration</span>
+              <span style="font:var(--t-data);color:var(--text)">audio</span>
+            </div>
+          </div>
+          <p style="margin:0;font:var(--t-small);color:var(--text-faint)">Both immutable. Pointing this somewhere else means a new action and a step change.</p>
+        </div>
+
+        <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:13px">
+          <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">audio target</p>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Operation</span>
+            <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+              <option>audio.gain.set</option>
+              <option>audio.gain.fade</option>
+            </select>
+          </label>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Gain</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="text" value="-60" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+              <span style="font:var(--t-data);color:var(--text-muted);white-space:nowrap">dB</span>
+            </div>
+          </label>
+        </div>
+
+        <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:9px">
+          <h4 style="margin:0;font:var(--t-body);font-weight:500">Safety class</h4>
+          <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+            <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">none</button>
+            <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">blackout</button>
+            <button type="button" aria-pressed="{{ true }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">stop</button>
+            <button type="button" aria-pressed="{{ false }}" style="padding:6px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">powerOff</button>
+          </div>
+        </div>
+
+        <div style="padding:13px 14px;border-bottom:1px solid var(--border);border-left:3px solid var(--warn-border);background:var(--warn-bg)">
+          <p style="margin:0;font:var(--t-small);color:var(--text)">Used by <span style="font:var(--t-data)">Weather Hold</span> step 4. Saving changes what that macro does tonight; it does not change the macro's own revision.</p>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+          <span style="font:var(--t-small);color:var(--text-muted)">Creates revision <span style="font:var(--t-data);color:var(--text)">3</span></span>
+          <div style="display:flex;gap:8px">
+            <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Discard</button>
+            <button type="button" style="height:32px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save action</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="oc-macro" style="display:grid;gap:12px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:9px;border-bottom:1px solid var(--border-strong)">
+        <h2 id="oc-macro" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">5 &middot; New macro</h2>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Shows &rsaquo; Automation, right aside &middot; PUT /config/show.macro/{id}</span>
+      </div>
+      <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:80ch">No gate &mdash; a macro's shape does not vary. It asks for a label, an id and a first step, then hands straight to the drawn step editor. A macro with no steps is refused, so step 1 is part of creation rather than something to add afterwards.</p>
+
+      <div style="width:420px;max-width:100%;border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+        <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+          <h3 style="margin:0;display:flex;align-items:center;gap:7px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)"><span aria-hidden="true">&#9656;</span>Draft &middot; new macro</h3>
+        </div>
+
+        <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:14px">
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Label</span>
+            <input type="text" value="Wind Hold" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+          </label>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Id</span>
+            <input type="text" value="wind-hold" style="height:34px;padding:0 10px;border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+            <span style="font:var(--t-small);color:var(--text-faint)">Immutable once created. Interlocks and night session cues name macros by id.</span>
+          </label>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Description <span style="font-weight:400;color:var(--text-faint)">&middot; optional</span></span>
+            <textarea rows="2" style="padding:8px 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);resize:vertical"></textarea>
+            <span style="font:var(--t-small);color:var(--text-faint)">One line, read above the step list. The shipped macros use it to say what the whole sequence achieves.</span>
+          </label>
+        </div>
+
+        <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:13px">
+          <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Step 1</p>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Action</span>
+            <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+              <option>Stop Playlist Gracefully &mdash; fpp</option>
+              <option>Launch Weather Hold Card &mdash; resolume</option>
+              <option>Background Bed Down &mdash; audio</option>
+            </select>
+            <span style="font:var(--t-small);color:var(--text-faint)">Winter Ridge 2026 only. <a href="#">New action</a> if the one you need does not exist yet &mdash; the draft is kept.</span>
+          </label>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Step id</span>
+            <input type="text" value="stop-playlist" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+            <span style="font:var(--t-small);color:var(--text-faint)">Unique within this macro. Run rows are keyed by it.</span>
+          </label>
+          <label style="display:grid;gap:5px">
+            <span style="font:var(--t-body);font-weight:500">Fallback reason</span>
+            <input type="text" value="" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+            <span style="font:var(--t-small);color:var(--warn-fg)">Required and non-empty even when the fallback class is <span style="font:var(--t-data)">none</span>. It is what an operator reads while the coordinator is unreachable.</span>
+          </label>
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)">On-failure and on-unconfirmed both start at <span style="font:var(--t-data)">continue</span> and are not asked here &mdash; a macro run always runs every step. Change them in the step editor when a step needs to deviate.</p>
+        </div>
+
+        <div style="padding:13px 14px;border-bottom:1px solid var(--border);border-left:3px solid var(--accent);background:var(--raised)">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Creates the macro with 1 step and opens it in the step editor. Up to <span style="font:var(--t-data);color:var(--text)">32</span> steps.</p>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+          <span style="font:var(--t-small);color:var(--text-faint)">Fallback reason required</span>
+          <div style="display:flex;gap:8px">
+            <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Discard</button>
+            <button type="button" disabled="{{ true }}" style="height:32px;padding:0 14px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);color:var(--text-faint);font:var(--t-body);font-weight:600;cursor:not-allowed">Create macro</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="oc-notes" style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden;max-width:1000px">
+      <div style="padding:13px 16px;border-bottom:1px solid var(--border);background:var(--raised)">
+        <h2 id="oc-notes" style="margin:0;font:var(--t-subhead)">Reuse</h2>
+      </div>
+      <div style="padding:16px;display:grid;gap:11px;font:var(--t-small);color:var(--text-muted);max-width:84ch">
+        <p style="margin:0">Settings and Access create objects too, and they get the same pattern rather than a variant: their own detail surface opened empty, id unlocked, one gate where the shape varies (an audio node's transport, a role's scope). Nothing here is Automation-specific.</p>
+        <p style="margin:0">A refused save keeps the draft open and renders the coordinator's reason above the footer &mdash; the same treatment Live Control uses when a lifecycle command is refused. There is no toast.</p>
+        <p style="margin:0">Cue creation is already drawn: the Show Cues two-pane composer predates this and stays as it is. It is the same rule &mdash; the composer <em>is</em> the cue's edit surface.</p>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;,&quot;contrast&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark' | 'light' | 'contrast'&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'dark' };
+  }
+}
+
+</script>
+</body>
+</html>

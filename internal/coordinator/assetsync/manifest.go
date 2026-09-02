@@ -90,6 +90,15 @@ type SurfaceGap struct {
 type ExpectedSet struct {
 	Assets []ExpectedAsset
 	Gaps   []SurfaceGap
+
+	// SupersededHashes maps a current expected asset's AssetID to every
+	// content hash a NOW-SUPERSEDED row of that asset's identical (show,
+	// sequence, targetKind, target) identity (ADR-028 decision 4) has ever
+	// held. nil, or missing an entry, when that identity has never been
+	// superseded. This is [ComputeNodeManifest]'s only way to tell "the
+	// node holds older bytes for this identity" apart from "the node holds
+	// nothing for it" — see [supersededHashesByAssetID].
+	SupersededHashes map[string]map[string]bool
 }
 
 // ExpectedAssetsForNode computes what nodeID should hold for showID (which
@@ -105,14 +114,20 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: list show-wide assets: %w", nodeID, err)
 	}
 
-	assets := make([]ExpectedAsset, 0, len(nodeAssets)+len(showAssets))
-	coveredSequences := make(map[string]bool, len(nodeAssets)+len(showAssets))
-	for _, rec := range append(append([]store.AssetRecord{}, nodeAssets...), showAssets...) {
+	combined := append(append([]store.AssetRecord{}, nodeAssets...), showAssets...)
+	assets := make([]ExpectedAsset, 0, len(combined))
+	coveredSequences := make(map[string]bool, len(combined))
+	for _, rec := range combined {
 		assets = append(assets, ExpectedAsset{
 			AssetID: rec.ID, SequenceID: rec.SequenceID, MediaType: rec.MediaType, ContentHash: rec.ContentHash,
 			Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes,
 		})
 		coveredSequences[rec.SequenceID] = true
+	}
+
+	supersededHashes, err := supersededHashesByAssetID(ctx, st, showID, combined)
+	if err != nil {
+		return ExpectedSet{}, err
 	}
 
 	surfaceIDs, err := surfaceIDsForNode(ctx, st, showID, nodeID)
@@ -138,7 +153,56 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 		}
 	}
 
-	return ExpectedSet{Assets: assets, Gaps: gaps}, nil
+	return ExpectedSet{Assets: assets, Gaps: gaps, SupersededHashes: supersededHashes}, nil
+}
+
+// assetIdentity is the (sequence, targetKind, target) tuple that,
+// together with a show already fixed by the caller, ADR-028 decision 4
+// makes an asset's identity — one current row plus zero or more
+// superseded ones.
+type assetIdentity struct {
+	sequenceID string
+	targetKind string
+	targetID   string
+}
+
+// supersededHashesByAssetID returns, for each row in currentAssets, the
+// set of content hashes any NOW-SUPERSEDED row sharing its identity has
+// ever held, keyed by the CURRENT row's AssetID (never by filename or
+// timestamp — ADR-028 decision 1). It reads every asset row for showID
+// (current and superseded alike, per [store.Store.ListAssets]) exactly
+// once, regardless of how many currentAssets there are. Returns nil, nil
+// when currentAssets is empty — nothing to key the result by.
+func supersededHashesByAssetID(ctx context.Context, st *store.Store, showID string, currentAssets []store.AssetRecord) (map[string]map[string]bool, error) {
+	if len(currentAssets) == 0 {
+		return nil, nil
+	}
+
+	all, err := st.ListAssets(ctx, store.AssetFilter{ShowID: showID})
+	if err != nil {
+		return nil, fmt.Errorf("assetsync: superseded hashes for show %q: list assets: %w", showID, err)
+	}
+
+	bySequenceTarget := make(map[assetIdentity]map[string]bool)
+	for _, rec := range all {
+		if rec.SupersededAt == nil {
+			continue
+		}
+		key := assetIdentity{rec.SequenceID, rec.TargetKind, rec.TargetID}
+		if bySequenceTarget[key] == nil {
+			bySequenceTarget[key] = make(map[string]bool)
+		}
+		bySequenceTarget[key][rec.ContentHash] = true
+	}
+
+	out := make(map[string]map[string]bool, len(currentAssets))
+	for _, rec := range currentAssets {
+		key := assetIdentity{rec.SequenceID, rec.TargetKind, rec.TargetID}
+		if hashes := bySequenceTarget[key]; len(hashes) > 0 {
+			out[rec.ID] = hashes
+		}
+	}
+	return out, nil
 }
 
 // NodeCueSequenceIDs returns the set of sequence ids referenced by every
@@ -297,6 +361,43 @@ type ExtraAsset struct {
 	SizeBytes   int64
 }
 
+// AssetVerdictState is one expected asset's per-node sync verdict (D-016
+// item 2): what the node's own fresh inventory report says about the
+// bytes it holds for that asset's identity, derived from facts
+// [ComputeNodeManifest] already computes for Missing/Extra and nothing
+// else — never a filename join (ADR-028 decision 1) and never a
+// timestamp.
+type AssetVerdictState string
+
+const (
+	// AssetVerdictHeld: the node's inventory holds the expected asset's
+	// own content hash.
+	AssetVerdictHeld AssetVerdictState = "held"
+	// AssetVerdictSuperseded: the node does not hold the expected content
+	// hash, but its inventory holds the content hash of a row that USED TO
+	// be current for this exact (show, sequence, targetKind, target)
+	// identity before being superseded — the node has not caught up to the
+	// latest upload, but it has not lost the asset either.
+	AssetVerdictSuperseded AssetVerdictState = "superseded"
+	// AssetVerdictAbsent: the node's inventory holds nothing recognizable
+	// for this identity at all — neither the expected hash nor any hash
+	// this identity has ever superseded.
+	AssetVerdictAbsent AssetVerdictState = "absent"
+)
+
+// AssetVerdict is one expected asset's [AssetVerdictState], named by
+// asset id, sequence, filename, and expected content hash — the same
+// naming [MissingAsset] uses, so a caller already reading Missing needs
+// no new join to read this too.
+type AssetVerdict struct {
+	AssetID     string
+	SequenceID  string
+	Filename    string
+	ContentHash string
+	SizeBytes   int64
+	State       AssetVerdictState
+}
+
 // NodeManifest is [ComputeNodeManifest]'s result for one node.
 type NodeManifest struct {
 	NodeID string
@@ -315,6 +416,14 @@ type NodeManifest struct {
 	// Extra is populated whenever a fresh report exists, regardless of
 	// State — see ComputeNodeManifest's doc comment.
 	Extra []ExtraAsset
+
+	// Verdicts carries one [AssetVerdict] per expected asset, populated
+	// under the identical condition as Extra: only once report.Complete is
+	// known true for a fresh report. nil in every other case, including a
+	// stale report — a stale report is not evidence of what a node
+	// currently holds, and that rule applies here exactly as it does to
+	// Missing and Extra.
+	Verdicts []AssetVerdict
 
 	// ObservedAt is the report's own ReportedAt when State is Ready or
 	// NotReady, and the zero time when State is Unknown: there is no
@@ -364,11 +473,16 @@ func StalenessWindow(inventoryInterval time.Duration) time.Duration {
 //     Ready/NotReady branches at all.
 //  4. !report.Complete -> Unknown/ReportIncomplete, carrying report.Reason.
 //  5. Otherwise: Ready if every expected asset is held and there is no
-//     gap, NotReady (naming every miss) otherwise.
+//     gap, NotReady (naming every miss) otherwise. Every expected asset
+//     also gets an [AssetVerdict] here: [AssetVerdictHeld] if its own
+//     content hash is held, else [AssetVerdictSuperseded] if the node
+//     holds any hash expected.SupersededHashes names as once-current for
+//     that same asset's identity, else [AssetVerdictAbsent].
 //
-// Extra is populated only in cases 4 and 5 — i.e. only once a report is
-// known to exist and be fresh, even if it is incomplete. A report that is
-// stale (case 3) never populates Extra: what a stale report says a node
+// Extra, and Verdicts alongside it, are populated only once report.Complete
+// is known true for a fresh report (i.e. only in case 5's body — case 4
+// returns before either is computed). A report that is stale (case 3)
+// never populates Extra or Verdicts: what a stale report says a node
 // holds is exactly as unreliable as what it says a node lacks.
 func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet, report *store.NodeAssetReportRecord, reportFresh bool, inventory []store.NodeAssetInventoryRecord) NodeManifest {
 	m := NodeManifest{NodeID: nodeID}
@@ -405,14 +519,32 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 	}
 
 	var missing []MissingAsset
+	var verdicts []AssetVerdict
 	for _, a := range expected.Assets {
-		if !held[a.ContentHash] {
-			missing = append(missing, MissingAsset{
+		if held[a.ContentHash] {
+			verdicts = append(verdicts, AssetVerdict{
 				AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
-				ContentHash: a.ContentHash, SizeBytes: a.SizeBytes,
+				ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: AssetVerdictHeld,
 			})
+			continue
 		}
+		missing = append(missing, MissingAsset{
+			AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
+			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes,
+		})
+		state := AssetVerdictAbsent
+		for oldHash := range expected.SupersededHashes[a.AssetID] {
+			if held[oldHash] {
+				state = AssetVerdictSuperseded
+				break
+			}
+		}
+		verdicts = append(verdicts, AssetVerdict{
+			AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
+			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: state,
+		})
 	}
+	m.Verdicts = verdicts
 
 	expectedHashes := make(map[string]bool, len(expected.Assets))
 	for _, a := range expected.Assets {

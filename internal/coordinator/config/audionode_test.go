@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -477,6 +479,35 @@ func TestDecodeAudioNodePayloadRejectsRouteMismatch(t *testing.T) {
 	_, verr := DecodeAudioNodePayload(raw)
 	if verr == nil || verr.Code != ValidationCodeAudioNodeRouteMismatch || verr.Field != "ltcRoute" {
 		t.Fatalf("verr = %v, want ValidationCodeAudioNodeRouteMismatch on ltcRoute", verr)
+	}
+}
+
+// TestRouteMismatchDescriptionMatchesTheRuleEnforced pins api/openapi.yaml's
+// own description of "audio-node-route-mismatch" against the rule this file
+// actually enforces. The published text said the opposite for a while (that
+// the two routes naming the SAME device is what gets refused), so a client
+// author reading the contract would have built exactly inverted validation.
+func TestRouteMismatchDescriptionMatchesTheRuleEnforced(t *testing.T) {
+	// The rule, restated from the code below it rather than from prose.
+	same := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"d","clockDomainProvenance":"p"}`
+	if _, verr := DecodeAudioNodePayload(same); verr != nil {
+		t.Fatalf("two routes naming the SAME device must be accepted, got %v", verr)
+	}
+	differing := `{"programRoute":"hw:0,0","ltcRoute":"hw:1,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"d","clockDomainProvenance":"p"}`
+	if _, verr := DecodeAudioNodePayload(differing); verr == nil || verr.Code != ValidationCodeAudioNodeRouteMismatch {
+		t.Fatalf("two routes naming DIFFERENT devices must be refused, got %v", verr)
+	}
+
+	spec, err := os.ReadFile(filepath.Join("..", "..", "..", "api", "openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read api/openapi.yaml: %v", err)
+	}
+	const described = `"audio-node-route-mismatch" (a non-empty ltcRoute naming a`
+	if !strings.Contains(string(spec), described) {
+		t.Fatal("api/openapi.yaml no longer describes audio-node-route-mismatch as refusing a DIFFERING ltcRoute; the published contract and this validation have drifted apart again")
+	}
+	if strings.Contains(string(spec), `"audio-node-route-mismatch" (programRoute and ltcRoute naming the`) {
+		t.Fatal("api/openapi.yaml has returned to describing audio-node-route-mismatch backwards")
 	}
 }
 

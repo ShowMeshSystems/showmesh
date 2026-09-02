@@ -1,0 +1,315 @@
+/* Layout for the specimen page only. Nothing here is part of the kit. */
+
+.sm-spec {
+  min-height: 100vh;
+}
+
+.sm-spec-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+  flex-wrap: wrap;
+  padding: 14px var(--s-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-spec-head__left {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.sm-spec-head__right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.sm-spec-body {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 var(--s-6) 96px;
+}
+
+.sm-spec-section {
+  padding: 40px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sm-spec-section--lead {
+  padding: var(--s-7) 0 40px;
+  border-top: 0;
+}
+
+.sm-spec-section--lead .sm-page__title {
+  max-width: 22ch;
+}
+
+.sm-spec-lead {
+  margin: var(--s-4) 0 var(--s-6);
+  font: var(--t-body);
+  color: var(--text-muted);
+  max-width: 64ch;
+  text-wrap: pretty;
+}
+
+.sm-spec-accent-value {
+  color: var(--accent);
+}
+
+.sm-spec-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--s-4);
+  margin-top: var(--s-5);
+}
+
+.sm-spec-swatch {
+  display: grid;
+  gap: 10px;
+}
+
+.sm-spec-swatch__chip {
+  height: 56px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+}
+
+.sm-spec-swatch__chip--rules {
+  background: var(--surface);
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.sm-spec-ramp {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  margin-top: var(--s-5);
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+
+.sm-spec-ramp__cell {
+  background: var(--surface);
+  padding: 14px;
+}
+
+.sm-spec-ramp__chip {
+  height: 40px;
+  border: 1px solid transparent;
+  border-radius: var(--r-panel);
+}
+
+.sm-spec-ramp__name {
+  margin-top: 10px;
+}
+
+.sm-spec-tones {
+  margin-top: var(--s-5);
+}
+
+.sm-spec-tone__token {
+  margin-top: var(--s-3);
+}
+
+.sm-spec-tone__token--good { color: var(--good-fg); }
+.sm-spec-tone__token--warn { color: var(--warn-fg); }
+.sm-spec-tone__token--bad { color: var(--bad-fg); }
+.sm-spec-tone__token--unknown { color: var(--unk-fg); }
+
+.sm-spec-tone__use {
+  margin-top: var(--s-1);
+}
+
+.sm-spec-type {
+  margin-top: var(--s-5);
+  border-top: 1px solid var(--border);
+}
+
+.sm-spec-type__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  gap: var(--s-5);
+  align-items: baseline;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-spec-gloved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+  margin: var(--s-5) 0;
+}
+
+.sm-spec-section .sm-btn-row {
+  margin-top: var(--s-5);
+}
+
+.sm-spec-section .sm-field-grid {
+  margin-top: var(--s-6);
+}
+
+.sm-spec-section .sm-choice-row {
+  margin-top: var(--s-5);
+}
+
+.sm-spec-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-chip);
+  color: var(--accent);
+  font: var(--t-meta);
+}
+
+.sm-spec-section .sm-strips__title {
+  margin-top: 28px;
+}
+
+.sm-spec-plate-title {
+  margin-top: var(--s-6);
+}
+
+.sm-spec-plates {
+  display: grid;
+  gap: 14px;
+  margin-top: var(--s-4);
+}
+
+.sm-spec-plate-scope {
+  font-size: 18px;
+}
+
+.sm-spec-shell {
+  margin-top: var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* The chrome bar and progress bar are sticky in a real page; inside the
+   specimen frame they are static so the frame does not trap them. */
+.sm-spec-shell .sm-chrome,
+.sm-spec-shell .sm-progress {
+  position: static;
+}
+
+.sm-spec-shell__body {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+}
+
+.sm-spec-rail {
+  padding: 10px 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* Inert copies of the rail links: the specimen must not offer navigation. */
+.sm-spec-rail__link {
+  cursor: default;
+}
+
+.sm-spec-shell__pane {
+  padding: 18px;
+  background: var(--bg);
+}
+
+.sm-spec-rail-states {
+  display: grid;
+  gap: 1px;
+  margin-top: var(--s-3);
+  max-width: 340px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+
+.sm-spec-rail__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+}
+
+.sm-spec-rail__row--current {
+  border-left: 2px solid var(--accent);
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sm-spec-rail__row--hover {
+  border-left: 2px solid var(--border-strong);
+  background: var(--raised);
+}
+
+.sm-spec-rail__row--focus {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.sm-spec-rail__row--off {
+  color: var(--text-faint);
+}
+
+.sm-spec-rail-note {
+  margin: 20px 0 0;
+  max-width: 46ch;
+}
+
+.sm-spec-section .sm-table-wrap {
+  margin-top: var(--s-5);
+}
+
+.sm-spec-copy {
+  margin-top: var(--s-5);
+}
+
+.sm-spec-copy__card {
+  display: grid;
+  gap: 10px;
+}
+
+.sm-spec-copy__card p {
+  margin: 0;
+}
+
+.sm-spec-copy__card--bad { border-color: var(--bad-border); }
+.sm-spec-copy__card--good { border-color: var(--good-border); }
+.sm-spec-copy__tag--bad { color: var(--bad-fg); }
+.sm-spec-copy__tag--good { color: var(--good-fg); }
+.sm-spec-copy__unknown { color: var(--unk-fg); }
+
+.sm-spec-rules {
+  margin: var(--s-5) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.sm-spec-rules li {
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--border);
+  font: var(--t-body);
+}

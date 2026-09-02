@@ -1,0 +1,466 @@
+/*
+ * Shell chrome. The rail owns intent; the top bar owns the installation.
+ *
+ * The bar must not wrap. If its height changes, the rail's sticky offset
+ * puts the first nav group behind it: fix the wrap, never the offset.
+ */
+
+.sm-shell {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--t-body);
+}
+
+.sm-chrome {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  height: var(--chrome-h);
+  padding: var(--s-2) 18px;
+  background: var(--surface);
+}
+
+.sm-chrome__left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* Truncates so the bar keeps its height under a long title. */
+.sm-chrome__now {
+  display: flex;
+  align-items: baseline;
+  gap: 11px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sm-chrome__now > .sm-meta:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.sm-chrome__now > .sm-meta:first-child::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+  content: '';
+}
+
+.sm-chrome__right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+.sm-brand {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-panel);
+  color: var(--accent);
+  font: var(--t-meta);
+  flex: 0 0 auto;
+}
+
+.sm-chrome__divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex: 0 0 auto;
+}
+
+.sm-signout-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.sm-chrome__picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.sm-showpicker {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--ctrl-h-compact);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sm-showpicker__eyebrow {
+  color: var(--text-faint);
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sm-showpicker__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sm-showpicker__chevron {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.sm-showpicker:hover {
+  border-color: var(--accent);
+}
+
+.sm-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--ctrl-h-compact);
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-card);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: var(--t-meta);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sm-mode-badge--setup {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.sm-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--t-meta);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sm-conn__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.sm-conn--live {
+  color: var(--good-fg);
+}
+
+.sm-conn--degraded {
+  color: var(--warn-fg);
+}
+
+.sm-conn--lost {
+  color: var(--bad-fg);
+}
+
+.sm-conn--unknown {
+  color: var(--unk-fg);
+}
+
+/* Full-width position bar for the current item, under the chrome. */
+.sm-progress {
+  position: sticky;
+  top: var(--chrome-h);
+  z-index: 29;
+  height: 3px;
+  background: var(--sunken);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-progress__fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* Full-width warning strip under the chrome, shown only past the skew threshold. */
+.sm-skewstrip {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-5);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
+  color: var(--warn-fg);
+  font: var(--t-small);
+}
+
+.sm-skewstrip__word {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Rail and page spine. */
+.sm-shell-body {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  min-height: calc(100vh - var(--chrome-h));
+}
+
+.sm-rail {
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: calc(var(--chrome-h) + 1px);
+  align-self: start;
+  /* The divider runs the height of the page, not the height of the links. */
+  min-height: calc(100vh - var(--chrome-h));
+  padding: 12px 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sm-rail__group {
+  margin: 0 0 6px;
+  padding: 0 14px;
+  font: var(--t-meta);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-rail__group + .sm-rail__group,
+.sm-rail__link + .sm-rail__group {
+  margin-top: var(--s-4);
+}
+
+.sm-rail__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: 0 14px;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  font: var(--t-body);
+  text-decoration: none;
+}
+
+.sm-rail__link:hover {
+  background: var(--raised);
+  border-left-color: var(--border-strong);
+  color: var(--text);
+}
+
+.sm-rail__link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.sm-rail__link[aria-current='page'] {
+  border-left-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sm-rail__link--sub {
+  min-height: 30px;
+  padding-left: 26px;
+  font: var(--t-small);
+}
+
+.sm-rail__link[aria-disabled='true'] {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+/* Attention counts, never inventory counts. A badge means an operator has
+   something to do; no read means no badge at all. */
+.sm-rail__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid;
+  border-radius: var(--r-chip);
+  font: var(--t-meta);
+  font-size: 10px;
+}
+
+.sm-rail__badge--bad {
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+}
+
+.sm-rail__badge--warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.sm-rail__badge--live {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+/* Coordinator version/commit, pinned below the nav links. Empty while
+   loading: an unstaffed line here would read as a fact. */
+.sm-rail__footer {
+  margin-top: auto;
+  padding: 10px 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sm-main {
+  min-width: 0;
+  padding: 22px 28px 80px;
+  max-width: var(--page-max);
+}
+
+/* Two-pane screens: list plus inspector. */
+.sm-panes {
+  display: block;
+}
+
+/*
+ * Signed out and bootstrap are bands in the document flow, not a wall. The
+ * chrome and rail stay; the band pushes the page down.
+ */
+.sm-band {
+  padding: var(--s-4) var(--s-5);
+  background: var(--raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-band--alert {
+  border-left: 3px solid var(--bad-fg);
+}
+
+.sm-band__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
+.sm-band__eyebrow {
+  margin: 0;
+  font: var(--t-meta);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bad-fg);
+}
+
+.sm-band__title {
+  margin: 0;
+  font: var(--t-heading);
+  letter-spacing: -0.015em;
+}
+
+.sm-band__lede {
+  margin: 6px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+  max-width: 74ch;
+}
+
+.sm-band__actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.sm-band__form-title {
+  margin: var(--s-4) 0 0;
+  font: var(--t-meta);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.sm-band__form {
+  display: grid;
+  gap: var(--s-3);
+  max-width: 420px;
+}
+
+.sm-band__form + .sm-band__form {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.sm-band__error {
+  margin: var(--s-3) 0 0;
+  color: var(--bad-fg);
+  font: var(--t-small);
+}
+
+.sm-band__footnote {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--text-faint);
+}
+
+.sm-connecting {
+  display: grid;
+  gap: 0;
+  margin: var(--s-4) 0 0;
+  max-width: 74ch;
+}
+
+.sm-connecting > div {
+  display: grid;
+  grid-template-columns: 154px minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: baseline;
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--border);
+}
+
+.sm-connecting > div:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-connecting dt {
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-connecting dd {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}

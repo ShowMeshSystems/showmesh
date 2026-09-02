@@ -1,0 +1,287 @@
+# Operator UI rebuild plan
+
+Status: built. Started 2026-08-29 on `feature/operator-ui-overhaul-2`. Phase 0
+(the element kit), Phase 1 (every screen) and Phase 2 (deleting the old system)
+are on the branch, and three owner review rounds were applied on 2026-09-01.
+`main` was merged into the branch the same day at `a257ad8`. The branch waits on
+a pull request to `main`, which the owner opens. `HANDOFF.md` holds the state.
+
+Normative sources, in this order:
+
+1. `docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md` (the rules)
+2. `docs/design_handoff_operator_ui_overhaul/design/ShowMesh Design System.dc.html` (the element vocabulary)
+3. `docs/design_handoff_operator_ui_overhaul/design/*.dc.html` (the screen
+   mocks, sixteen as of 2026-08-30)
+   `Object Creation.dc.html` is the newest and is normative for every creation
+   and edit surface, Settings and Access included.
+4. `docs/design_handoff_operator_ui_overhaul/DESIGN-DECISIONS-AND-API-FACTS.md` (verified identifiers)
+5. `OPEN-DECISIONS.md` in this directory (Eric's rulings; they amend the guide)
+
+## Why this is a rebuild and not a fix
+
+The first pass lifted the token values correctly and then kept the old design
+alive underneath them. Two things prove it:
+
+- `ui/src/styles/tokens.css` carried an alias block mapping every old token name
+  (`--color-bg`, `--font-size-body`, `--space-1`, `--radius-sm`, and about forty
+  more) onto a new value, so the old stylesheets kept painting.
+- `ui/src/styles/global.css` (1443 lines) was the pre-overhaul base stylesheet,
+  still imported from `index.css`, mobile-first with 768px and 1024px
+  breakpoints. The guide specifies a 1280 spine with a single break at 1100px.
+
+On top of that, screens kept their old sections and had the mock's sections
+added around them. Dashboard rendered ten blocks where the mock has three, with
+"Needs you" demoted from full width into a third of a grid. Live Control matched
+the mock for six sections and then appended four more from the old page.
+
+A restyle cannot fix that. This is a wholesale rebuild. The old design is thrown
+away, not aliased and not partially kept.
+
+## What "fresh start" means here
+
+Everything under `ui/src` is rebuilt from the kit, with one exception:
+`ui/src/api` is generated from `api/openapi.yaml` and is not design. It stays.
+
+Everything else goes: every file under `ui/src/views`, every file under
+`ui/src/components`, every stylesheet under `ui/src/styles`, and the app shell
+in `ui/src/app`. `kit/styles` becomes the only stylesheet tree in the codebase.
+
+A rebuilt screen is written from the mock and the API contract. It is not
+written by reading the old screen and restyling it. The old page is consulted
+once, for the control inventory in step 2 below, and then deleted.
+
+`ui/src/domain` holds the non-visual rules a screen needs: sign-in state, the
+scope gate and its wording, freshness and age, signal grouping. It started with
+`session.ts` only. A module returns to it one at a time, reviewed as it is
+restored, when the screen that needs it is rebuilt. Nothing comes back because
+it happened to be there before.
+
+**The risk I am carrying, stated once.** Some behaviour lives only in old code:
+freshness and absence classification, FPP signal lookup, the derived numbers the
+guide's §7 lists, the exact wording of scope-denial reasons. Where the rule is
+in `api/openapi.yaml`, `pkg/capability/id.go`, or
+`DESIGN-DECISIONS-AND-API-FACTS.md`, I re-derive it from there. Where a rule
+exists only in a deleted file and I cannot source it, it goes on the
+`OPEN-DECISIONS.md` list rather than being reinvented quietly.
+
+## Ground rules
+
+- Base on `feature/operator-ui-overhaul-2`. The rule that held `main` out of this
+  branch ended on 2026-09-01, when `main` was merged in at `a257ad8`; the branch
+  is now ahead of `main` and not behind it. Never rebase it.
+- One PR per screen, run in order, sequentially in this worktree. You can reject
+  one screen without unwinding the rest.
+- No old design element survives. If a rebuilt screen imports a `ui/src/styles`
+  stylesheet or an old component, it is not done.
+- An element the mocks missed is composed from kit parts so it lands in the
+  language. If it cannot be composed, the kit gains the element, with a specimen
+  entry, in that PR.
+
+## Phase 0: the element kit (done)
+
+`ui/src/kit` holds every element the design-system specimen demonstrates as a
+real component plus a real CSS class, with `/_specimen` rendering the whole kit
+in three themes and both densities. That page is the acceptance gate for the
+visual language.
+
+## Where the rebuild is
+
+| Screen | State | PR |
+|---|---|---|
+| Clear the old UI, shell, session bands, not-found | Done | on the branch, `1a1eed1` |
+| Dashboard | Done | #196 |
+| Live Control | Done | #197 |
+| Show Night | Done | #198 |
+| Monitor · Fleet, facet tabs, inspector | Done | #199 |
+| Apply the D-005 to D-010 rulings | Done | #199 |
+| Session states: signed out, bootstrap, connecting, not found | Done | #200 |
+| Monitor · Signals, Activity, Capabilities, Manifest | Done | #201 |
+| Shows workspace: shell, show list, Identity, Playlists | Done | #202 |
+| Shows workspace: Cues, Assets | Done | #203 |
+| Shows workspace: Presentation, Automation | Done | #204 |
+| Creation pattern: new show, new playlist (D-011) | Done | #207 |
+| Creation pattern: new action, edit action, new macro (D-017) | Done | #211 |
+| Node detail | Done | #212 |
+| Settings, seven tabs | Done | #213 |
+| Access | Done | #214 |
+| Resolume Config | Done | #215 |
+| Assets library (`/assets`) | Done | #216 |
+| Stale-write guard retrofit (D-014 B) | Done | #217 |
+| Phase 2: delete the old system and lock it out | Done | #217 |
+| Track C: the per-asset sync verdict (D-016 item 2) | Done | #218 |
+| Track C: the FPP-sequence staleness signal (D-016 item 1) | Waiting on Eric | SM-383 |
+| Owner review round one | Done | `3734b72` |
+| Owner review round two | Done | `1e03010` to `208c82e` |
+| Owner review round three (D-023 to D-029) | Done | `d5d5d6e` to `ec3991a` |
+| Merge `main` into the branch | Done | `a257ad8` |
+| Pull request to `main` | Waiting on Eric | none open |
+
+Each per-screen PR is stacked on the one before it, so its diff is only its own
+screen. The review rounds are commits on the branch, not PRs.
+
+## Phase 1: rebuild screens, one screen at a time
+
+Fixed procedure. No deviation.
+
+1. Extract the mock's blocks and their order. That becomes the page's blocks and
+   order, exactly. No prepended header, no appended section.
+2. Inventory every control on the current built page and assign each one to a
+   mock block.
+3. Anything with no home in a mock block goes on `OPEN-DECISIONS.md` before the
+   page is written. Eric rules: fold into an existing block, add a new block in
+   the kit language, or drop it. I do not decide this and I do not stall the
+   rest of the screen for it: the ruled items land in a follow-up PR for that
+   screen.
+4. Write the page as a new file composed from the kit. Delete the old view, its
+   stylesheet, and its now-invalid tests.
+5. Verify by screenshot against the mock at 1280 in dark, light and contrast.
+
+Order, as agreed. Steps 0 to 5 are done; 5a onward is what remains.
+
+0. Clear the old UI and stand up the shell (chrome bar, rail, theme and density
+   root, session bands, not-found map, a blanking plate on every route the
+   rebuild has not reached)
+1. Dashboard
+2. Live Control
+3. Show Night, including the night-session list and detail
+4. Monitor and its facets: Fleet, Signals, Activity, Capabilities, Manifest
+5. Shows workspace, five tabs: Playlists, Cues, Assets, Presentation, Automation
+5a. The creation pattern from `Object Creation.dc.html`: new show and new
+    playlist (D-011 B), then new action, action editing and new macro (D-017 B)
+6. Node detail
+7. Settings, seven tabs
+8. Access
+9. Resolume Config
+9a. Assets library at `/assets`, from `Show Assets.dc.html` (D-003)
+9b. The stale-write guard (D-014 B) retrofitted onto every shipped editor
+10. Session states: signed out, bootstrap, not found, connecting (done, #200)
+
+The creation pattern comes before Settings and Access deliberately: the mock's
+own Reuse note says both screens create objects with the same pattern rather
+than a variant, so the pattern has to exist before they are written.
+
+The chrome bar's show picker, mode badge, cycle and time to next transition
+arrive with the screens that own their data: Shows, Settings › Mode, and Show
+Night. The bar renders what the model already carries until then.
+
+`OperatorPageHeader` dies at the first screen. No mock has an eyebrow or a header
+button cluster; every mock is `h1` plus one muted subtitle line.
+
+### Routes with no mock
+
+Ruled 2026-08-29 in `OPEN-DECISIONS.md` D-003. Each folds into a mocked screen
+rather than getting invented layout.
+
+- **Playlist readiness** folds into the playlist configuration page, not Show
+  Night. It is an authoring-time verdict about a playlist.
+- **FPP playlist definitions** fold into the same playlist configuration page.
+- **Night sessions** are Show Night.
+- **Asset manifest** becomes a Monitor facet, amending the guide's four-facet
+  list in §3.
+- **Top-level `/assets`** stays a rail destination per the guide's §3 Author
+  group, rebuilt from the `Show Assets` mock.
+
+## The creation pattern (D-011 B and D-017 B)
+
+`Object Creation.dc.html` draws five instances of one pattern and states the
+rule: **creation is the object's own edit surface, opened empty.** There is no
+create-modal anywhere in this UI. Its five rules are normative:
+
+1. The id is the only field creation has that editing does not. It seeds from
+   the name, stays editable until the first save, then locks with the object's
+   own immutability copy.
+2. One gate field first where the rest of the form depends on it (a playlist's
+   runner, an action's integration). Below the gate, nothing renders until it is
+   answered: absent, not disabled.
+3. The pane header reads `Draft` where an existing object reads `Editing`, and
+   the footer says what the save writes: *Creates* for a draft,
+   *Creates revision n* for an edit.
+4. Nothing is written before the save. No optimistic row. A refused `PUT` leaves
+   the draft open with the coordinator's reason above the footer, in Live
+   Control's refusal pattern. No toast.
+5. Never-defaulted stays never-defaulted. An action's `safetyClass` and a step's
+   `localFallback.reason` have no schema default, so the draft opens with them
+   unanswered and the save is withheld until they are answered. That is the one
+   legitimate disabled save in the pattern.
+
+Settings and Access inherit it. Cue creation already has its own drawn surface,
+the Show Cues two-pane composer, and does not change.
+
+## Ruled follow-ups folded in on 2026-08-30
+
+- **D-012.** Delete the "Resume where it left off" checkbox
+  (`ShowsPlaylists.tsx:628`) and its test, rather than shipping it inert.
+- **D-015.** The "On mismatch" control stays inert and gains a note beside it
+  saying it is not settable yet. It is a plain disabled control with its
+  reason, not the `NotWired` treatment: D-010's own limit says only a missing
+  endpoint earns that, and `mismatchPolicy` has an endpoint. The playlist
+  draft renders the same control the same way and writes no policy at all.
+- **D-014 B.** A config editor re-reads the object immediately before its write
+  and refuses the save when `currentRevision` moved since load, showing what
+  changed. Build it once in a shared save path with the creation pattern, then
+  retrofit the shipped editors. C, the `409` precondition on the API, is its own
+  issue and is not this rebuild's work.
+- **D-013, D-007, D-008, D-009, D-014 C, D-016.** Issues, not rebuild work.
+  Filed 2026-08-30. D-008 was already covered by an existing issue and was not
+  duplicated.
+- **D-018.** A playlist draft asks for the first entry, and for the fpp runner
+  the instance and imported playlist, because `PUT /config/show.playlist/{id}`
+  requires them. Raised and ruled during the build.
+
+## Track C: the API facts D-016 asks for
+
+This is the one ruling that leaves the UI-only scope: an FPP-sequence staleness
+signal for cues, and a per-asset sync verdict plus a rollback flag for the asset
+store. It runs last, after Phase 2, as its own branches, and it touches
+`api/openapi.yaml` and the coordinator, so it carries the code gates the
+documentation-only path does not. Where the rule cannot be derived from
+`api/openapi.yaml`, an accepted ADR, or a research record, write the question
+down and stop rather than inventing a staleness rule.
+
+## Phase 2: delete the old system and make it unreturnable
+
+Remove the alias block, delete `global.css` and every orphaned old stylesheet
+and component, then add a check that fails the build if any file under `ui/src`
+references an old token name or imports a stylesheet outside `kit/styles`.
+Nothing proves the old design is gone except the old design being deleted and
+unreachable.
+
+## Done, per screen
+
+- Blocks and order match the mock.
+- Every old control is placed, or listed in `OPEN-DECISIONS.md` for a ruling.
+- No `ui/src/styles` import and no old component import remains.
+- `document.querySelectorAll('main h2, main h3')` returns the section labels the
+  mock names, and they are real headings, not styled spans.
+- Every status is a labelled pair. The dashed edge appears only for
+  never-collected.
+- Every control the principal may not use renders `disabled={true}` with a
+  stated reason, and is actually inert.
+- Night commands report *accepted*, never *done*.
+- New tests cover the screen's absence branches, its scope-denied controls and
+  their reasons, the headings assertion, and any 202-wording path. Old view
+  tests are deleted with their view.
+- `npm run build` and the ui test suite pass.
+- Screenshot check at 1280 in dark, light and contrast. When the dev server is
+  not available in the session, the PR records it as unverified rather than
+  claiming it.
+
+## Standing rules carried from the design guide
+
+- The four absences stay distinct. The dashed edge means never-collected, only.
+- Every status is a labelled pair, a state word plus a colour, never colour alone.
+- Anything in `--t-data` or `--t-meta` is a literal identifier and needs a file
+  behind it. Check `DESIGN-DECISIONS-AND-API-FACTS.md` before typing a mono string.
+- A control the principal may not use renders disabled with a stated reason,
+  never hidden.
+- A control the API cannot serve is still built, to the shape the mock draws,
+  inert, and marked with the kit's `NotWiredBanner` and `NotWired` (D-010).
+  Data the coordinator never reported is still never invented: the element is
+  drawn and its unknown entries are marked unreported.
+- Night commands answer 202. The UI says accepted, never done.
+- Rail badges are attention counts. Tab counts are inventory counts.
+- Signed-out and bootstrap are bands in the document flow, not a full-screen
+  login page.
+- A poll or refresh failure retains the last known state and says when it was
+  read. It never blanks the region it was refreshing.
+- No responsive pass below 1100px. Do not solve it by re-enabling bar wrap.

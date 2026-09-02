@@ -825,6 +825,10 @@ func Run() int {
 		// values is safe.
 		MQTTBrokers: integrationBrokers,
 	}
+	// Build the current-runs reader only after every store and collector read
+	// adapter is present. The reader remains read-only and is shared by the
+	// REST handler and the stream hub through api.Dependencies.
+	apiDeps.CurrentRuns = api.NewCurrentRunsReader(apiDeps)
 
 	// apiOpts is named (not inlined into api.New's own call, as it used to
 	// be) because Step 9's macro executor needs the IDENTICAL Dependencies

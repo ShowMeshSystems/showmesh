@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+[data-panes] { display: grid; grid-template-columns: minmax(0,1fr) minmax(320px,420px); align-items: start; min-width: 0; }
+[data-panes] > aside { position: sticky; top: 0; padding: 20px 28px 0 0; }
+@media (max-width: 1100px) {
+  [data-panes] { grid-template-columns: minmax(0,1fr); }
+  [data-panes] > aside { position: static; padding: 20px 28px 0 28px; }
+}
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">&#9662;</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 &middot; next in 1:06</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:0 0 80px">
+
+      <div style="padding:20px 28px 0">
+        <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Shows</a> <span style="color:var(--text-faint)">/</span> Winter Ridge 2026</p>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:8px">
+          <div style="min-width:0">
+            <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Winter Ridge 2026</h1>
+            <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">Revision <span style="font:var(--t-data);color:var(--text)">47</span> · saved by erbartos at 18:22</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Show details</button>
+            <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Check readiness</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:18px;padding:0 28px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:2px;flex-wrap:wrap">
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Playlists<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">2</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Cues<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">14</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Assets<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">22</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Presentation<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">3</span></a>
+          <span style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid var(--accent);color:var(--accent);font:var(--t-body);font-weight:600">Automation<span style="font:var(--t-data);font-size:11px;color:var(--accent)">2</span></span>
+        </div>
+      </div>
+
+      <div data-panes>
+
+        <section style="min-width:0;padding:20px 24px 0 28px">
+
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;min-width:0;max-width:220px">
+                <input type="text" value="" placeholder="Filter macros and actions…" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small)">
+              </label>
+              <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px">
+                <span style="padding:5px 10px;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600">All</span>
+                <span style="padding:5px 10px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">FPP</span>
+                <span style="padding:5px 10px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">MQTT</span>
+                <span style="padding:5px 10px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">Resolume</span>
+                <span style="padding:5px 10px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">Audio</span>
+              </div>
+            </div>
+            <sc-if value="{{ canAuthor }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;gap:8px">
+                <button type="button" style="height:32px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">New action</button>
+                <button type="button" style="height:32px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">New macro</button>
+              </div>
+            </sc-if>
+          </div>
+
+          <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">A macro is what an operator fires. Actions are its steps, in order, and never run on their own in a show — except by direct invoke or a cue that names one.</p>
+
+          <sc-if value="{{ viewOnly }}">
+            <div style="margin-top:14px;padding:11px 14px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);display:grid;grid-template-columns:154px minmax(0,1fr);gap:14px;align-items:baseline">
+              <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Run only</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">You hold <span style="font:var(--t-data)">show:macro:run</span>, not <span style="font:var(--t-data)">config:write</span>. You can fire these and read every run; authoring is closed to you.</p>
+            </div>
+          </sc-if>
+
+          <section aria-labelledby="au-attn" style="margin-top:18px">
+            <h2 id="au-attn" style="margin:0 0 8px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Needs you <span style="color:var(--warn-fg)">· 1</span></h2>
+            <div style="padding:12px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);display:grid;grid-template-columns:154px minmax(0,1fr);gap:14px;align-items:start">
+              <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--bad-fg)">Binding broken</span>
+              <div style="min-width:0">
+                <p style="margin:0;font:var(--t-body)"><strong style="font-weight:600">Weather Hold</strong> step 2 cannot resolve its clip. Two clips are named <span style="font:var(--t-data)">Hold Card</span> on deck <span style="font:var(--t-data)">Winter Ridge</span> — clip <span style="font:var(--t-data)">4114</span> on layer Rooftop and clip <span style="font:var(--t-data)">4193</span> on layer Yard.</p>
+                <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">This macro has never been run, so nothing has failed yet. The binding sweep found it without running it. Rename one clip in Resolume, then re-check.</p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+                  <button type="button" style="height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">Open step 2</button>
+                  <button type="button" style="height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">Resolume composition</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section aria-labelledby="au-macros" style="margin-top:24px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <h2 id="au-macros" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Macros <span style="color:var(--text-muted)">· 2</span></h2>
+              <span style="font:var(--t-small);color:var(--text-faint)">Bindings swept <span style="font:var(--t-data)">21:06:41</span> · no credential required</span>
+            </div>
+            <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Select a step to edit how it runs, or an action to edit what it does. Either opens in the panel on the right.</p>
+
+            <article style="margin-top:10px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:13px 14px;background:var(--raised);border-bottom:1px solid var(--border)">
+                <div style="min-width:0">
+                  <h3 style="margin:0;font:var(--t-subhead)"><a href="#" style="color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Preshow Lights Up</a></h3>
+                  <p style="margin:4px 0 0;font:var(--t-data);font-size:11px;color:var(--text-faint)">preshow-lights-up · revision 3 · 4 steps</p>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                  <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid var(--good-border);border-radius:3px;background:var(--good-bg);color:var(--good-fg);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase">4 of 4 bindings ok</span>
+                  <button type="button" style="height:44px;padding:0 18px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Run</button>
+                </div>
+              </div>
+
+              <p style="margin:0;padding:11px 14px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Starts the preshow playlist, points Resolume at the show deck, kills the house lights and brings the bed to <span style="font:var(--t-data);color:var(--text)">−12 dB</span>. Safety class of every step is <span style="font:var(--t-data);color:var(--text)">none</span>.</p>
+
+              <ol style="margin:0;padding:0;list-style:none">
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 1</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Start Preshow Playlist</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">start-preshow</span><br><span style="font:var(--t-small);color:var(--text-muted)">Aborts the rest if it fails</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">FPP</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 2</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Select Show Deck</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">show-deck</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Resolume</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 3</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">House Lights Off</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">house-lights</span><br><span style="font:var(--t-small);color:var(--text-faint)">Expects no response, so it never confirms — by design</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">MQTT</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 4</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Background Bed Up</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">bed-up</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Audio</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+              </ol>
+
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;background:var(--raised)">
+                <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Last run <span style="font:var(--t-data);color:var(--text)">20:31:14</span> tonight by erbartos <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">ui</span> · <span style="color:var(--good-fg)">completed</span>, <span style="color:var(--warn-fg)">not confirmed</span> — step 3 expects no response</p>
+                <a href="#" style="font:var(--t-small);white-space:nowrap">Run detail</a>
+              </div>
+            </article>
+
+            <article style="margin-top:14px;border:1px solid var(--bad-border);border-radius:5px;background:var(--surface);overflow:hidden">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:13px 14px;background:var(--raised);border-bottom:1px solid var(--border)">
+                <div style="min-width:0">
+                  <h3 style="margin:0;font:var(--t-subhead)"><a href="#" style="color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Weather Hold</a></h3>
+                  <p style="margin:4px 0 0;font:var(--t-data);font-size:11px;color:var(--text-faint)">weather-hold · revision 5 · 5 steps</p>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                  <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid var(--bad-border);border-radius:3px;background:var(--bad-bg);color:var(--bad-fg);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase">Step 2 broken</span>
+                  <button type="button" style="height:44px;padding:0 18px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Run</button>
+                </div>
+              </div>
+
+              <p style="margin:0;padding:11px 14px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Stops the show gracefully, puts the hold card up, drops the bed to <span style="font:var(--t-data);color:var(--text)">−40 dB</span>, messages the sign and raises the house lights. Step 1 is safety class <span style="font:var(--t-data);color:var(--text)">stop</span> — running this ends the current playlist.</p>
+
+              <ol style="margin:0;padding:0;list-style:none">
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 1</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Stop Playlist Gracefully</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">stop-show</span><br><span style="font:var(--t-small);color:var(--text-muted)">Safety class <span style="font:var(--t-data)">stop</span> · aborts the rest if it fails</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">FPP</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+                <li aria-current="true" style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px 9px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--bad-fg);background:var(--accent-bg)">
+                  <span style="font:var(--t-data);color:var(--bad-fg);cursor:grab">&#10303; 2</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Launch Weather Hold Card</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">launch-hold-card</span><br><span style="font:var(--t-small);color:var(--bad-fg)">Clip name <span style="font:var(--t-data)">Hold Card</span> matches two clips on this deck</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="display:inline-flex;align-items:center;gap:5px;padding:1px 6px;border:1px solid var(--accent);border-radius:2px;font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--accent)"><span aria-hidden="true">&#9656;</span>Editing</span><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Resolume</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--bad-fg)">broken</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 3</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Background Bed Down</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">bed-down</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Audio</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 4</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Weather Sign Message</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">sign-message</span><br><span style="font:var(--t-small);color:var(--text-muted)">Confirms on a matching reply within <span style="font:var(--t-data)">10 s</span></span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">MQTT</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 5</span>
+                  <span style="min-width:0"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">House Lights Up</a> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">house-lights-up</span><br><span style="font:var(--t-small);color:var(--text-faint)">Expects no response, so it never confirms — by design</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;justify-self:end"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">MQTT</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></span>
+                </li>
+              </ol>
+
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;background:var(--raised)">
+                <p style="margin:0;font:var(--t-small);color:var(--text-faint)">Never run. There is no run history to read — that is a settled fact, not missing evidence.</p>
+              </div>
+            </article>
+          </section>
+
+          <section aria-labelledby="au-actions" style="margin-top:26px">
+            <h2 id="au-actions" style="margin:0 0 8px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Actions <span style="color:var(--text-muted)">· 10</span></h2>
+            <p style="margin:0 0 10px;font:var(--t-small);color:var(--text-muted);max-width:74ch">An action's row edits the action itself — its target, its safety class, and what counts as confirmation. Editing one changes every macro that uses it.</p>
+            <h3 style="margin:0 0 8px;font:var(--t-small);font-weight:400;color:var(--text-muted)">In a macro <span style="color:var(--text-faint)">· 9</span></h3>
+
+            <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+              <table style="width:100%;min-width:596px;border-collapse:collapse;font:var(--t-body)">
+                <thead>
+                  <tr>
+                    <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Action</th>
+                    <th style="width:88px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Kind</th>
+                    <th style="width:132px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Used by</th>
+                    <th style="width:96px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Binding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Start Preshow Playlist</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">startPlaylist · barn-player · WR26 Preshow</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">FPP</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Preshow Lights Up</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Select Show Deck</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">selectDeck · deck Winter Ridge</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Resolume</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Preshow Lights Up</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">House Lights Off</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">barn/house-lights/set · qos 1 · expect none</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">MQTT</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Preshow Lights Up</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span><br><span style="font:var(--t-small);color:var(--text-faint)">Never confirms</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Background Bed Up</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">audio.gain.fade · barn-player · −12 dB</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Audio</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Preshow Lights Up</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Stop Playlist Gracefully</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">stopPlaylistGracefully · barn-player · safety stop</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">FPP</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Weather Hold</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--bad-fg)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Launch Weather Hold Card</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">launchClip · deck Winter Ridge · clip Hold Card</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Resolume</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Weather Hold</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--bad-fg)">broken</span><br><span style="font:var(--t-small);color:var(--text-muted)">Two clips share the name</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Background Bed Down</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">audio.gain.fade · barn-player · −40 dB</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Audio</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Weather Hold</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Weather Sign Message</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">barn/sign/text · qos 1 · expect match · 10 s</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border)"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">MQTT</span></td>
+                    <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Weather Hold</td>
+                    <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span></td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:10px 10px 10px 14px"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">House Lights Up</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">barn/house-lights/set · qos 1 · expect none</span></td>
+                    <td style="padding:10px"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">MQTT</span></td>
+                    <td style="padding:10px;font:var(--t-small);color:var(--text-muted)">Weather Hold</td>
+                    <td style="padding:10px 14px 10px 10px"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">ok</span><br><span style="font:var(--t-small);color:var(--text-faint)">Never confirms</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 style="margin:20px 0 6px;font:var(--t-small);font-weight:400;color:var(--text-muted)">Not in a macro <span style="color:var(--text-faint)">· 1</span></h3>
+            <p style="margin:0 0 10px;font:var(--t-small);color:var(--text-muted);max-width:74ch">Reachable only by direct invoke, or by a cue that names it and pins a revision. No macro will ever fire it.</p>
+
+            <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+              <table style="width:100%;min-width:596px;border-collapse:collapse;font:var(--t-body)">
+                <thead>
+                  <tr>
+                    <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Action</th>
+                    <th style="width:88px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Kind</th>
+                    <th style="width:132px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Invoke</th>
+                    <th style="width:96px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Binding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding:10px 10px 10px 14px"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Garage Speakers Mute</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">audio.gain.set · media-garage · −60 dB</span></td>
+                    <td style="padding:10px"><span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Audio</span></td>
+                    <td style="padding:10px"><button type="button" disabled="{{ true }}" style="height:30px;padding:0 12px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);color:var(--text-faint);font:var(--t-small);font-weight:600;cursor:not-allowed">Invoke</button></td>
+                    <td style="padding:10px 14px 10px 10px"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--unk-fg)">unknown</span></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="padding:11px 14px;border-top:1px solid var(--border);background:var(--raised);display:grid;grid-template-columns:154px minmax(0,1fr);gap:14px;align-items:baseline">
+                <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Check not run</span>
+                <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><span style="font:var(--t-data);color:var(--text)">media-garage</span> has not reported since <span style="font:var(--t-data);color:var(--text)">20:41:07</span>, so the sweep could not resolve this target. That is not evidence the action is broken, and invoke stays closed until the node answers.</p>
+              </div>
+            </div>
+          </section>
+
+        </section>
+
+        <aside style="min-width:0">
+          <sc-if value="{{ showStep }}" hint-placeholder-val="{{ true }}">
+          <div style="border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+              <h2 style="margin:0;display:flex;align-items:center;gap:7px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)"><span aria-hidden="true">&#9656;</span>Editing · Weather Hold step 2 of 5</h2>
+            </div>
+
+            <div style="padding:12px 14px;border-bottom:1px solid var(--border);border-left:3px solid var(--bad-fg);background:var(--bad-bg)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--bad-fg)">Binding broken</p>
+              <p style="margin:5px 0 0;font:var(--t-small);color:var(--text)">Clip <span style="font:var(--t-data)">Hold Card</span> matches clip <span style="font:var(--t-data)">4114</span> (layer Rooftop) and clip <span style="font:var(--t-data)">4193</span> (layer Yard). The coordinator will not guess which one.</p>
+              <p style="margin:8px 0 0;font:var(--t-small)"><a href="#">Rename one in the Resolume composition</a></p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:14px">
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Action</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                  <option>Launch Weather Hold Card — resolume</option>
+                  <option>Stop Playlist Gracefully — fpp</option>
+                  <option>Background Bed Down — audio</option>
+                  <option>Weather Sign Message — mqtt</option>
+                  <option>House Lights Up — mqtt</option>
+                  <option>Garage Speakers Mute — audio</option>
+                </select>
+                <span style="font:var(--t-small);color:var(--text-faint)">Winter Ridge 2026 only. A step cannot reference another show's action.</span>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Step id</span>
+                <input type="text" value="launch-hold-card" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <span style="font:var(--t-small);color:var(--text-faint)">Unique within this macro. It is what a run's step rows are keyed by.</span>
+              </label>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:16px">
+              <div>
+                <h3 style="margin:0;font:var(--t-body);font-weight:500">If this step fails</h3>
+                <div style="display:flex;gap:1px;padding:1px;margin-top:6px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+                  <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Abort the rest</button>
+                  <button type="button" aria-pressed="{{ true }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">Continue</button>
+                </div>
+              </div>
+              <div>
+                <h3 style="margin:0;font:var(--t-body);font-weight:500">If it cannot be confirmed</h3>
+                <div style="display:flex;gap:1px;padding:1px;margin-top:6px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+                  <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Abort the rest</button>
+                  <button type="button" aria-pressed="{{ true }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">Continue</button>
+                </div>
+                <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-faint)">Unconfirmed means no evidence arrived, not that the wrong thing happened.</p>
+              </div>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:12px">
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">If the coordinator refuses or is unreachable</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <option>coordinator-required</option>
+                </select>
+                <span style="font:var(--t-small);color:var(--text-muted)">Forced: Resolume runs through a coordinator-hosted adapter, so <span style="font:var(--t-data)">none</span> and <span style="font:var(--t-data)">silence</span> are refused for this step.</span>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Reason</span>
+                <input type="text" value="Rooftop stays dark until an operator restores it by hand." style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                <span style="font:var(--t-small);color:var(--text-faint)">Required, in your own words. This is what an operator reads while the coordinator is unreachable.</span>
+              </label>
+              <p style="margin:0;font:var(--t-small);color:var(--text-faint)">A <span style="font:var(--t-data)">reduced</span> fallback is not offered: no delivery path exists for it in this deployment.</p>
+            </div>
+
+            <div style="padding:13px 14px;border-bottom:1px solid var(--border);border-left:3px solid var(--accent);background:var(--raised)">
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">On run tonight: <span style="color:var(--text)">5 steps dispatch in order</span>. Step 2 fails on its binding and continues, so steps 3–5 still run — the show stops, the bed drops, the sign changes and the house lights come up with <span style="color:var(--text)">no hold card on the rooftop</span>. Steps 1 and 4 confirm; 3 reports its own outcome; 5 never confirms.</p>
+            </div>
+
+            <sc-if value="{{ canAuthor }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+                <span style="font:var(--t-small);color:var(--text-muted)">Creates revision <span style="font:var(--t-data);color:var(--text)">6</span></span>
+                <div style="display:flex;gap:8px">
+                  <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Discard</button>
+                  <button type="button" style="height:32px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save macro</button>
+                </div>
+              </div>
+            </sc-if>
+
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ showRun }}">
+          <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+              <h2 style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)">Preshow Lights Up · run</h2>
+              <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">Started <span style="font:var(--t-data);color:var(--text)">20:31:14</span>, finished <span style="font:var(--t-data);color:var(--text)">20:31:19</span> · revision <span style="font:var(--t-data);color:var(--text)">3</span> · by erbartos <span style="font:var(--t-data)">ui</span></p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:9px">
+              <div style="display:flex;align-items:baseline;gap:10px"><span style="width:78px;flex:0 0 auto;font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">Completed</span><span style="font:var(--t-body);font-weight:600;color:var(--good-fg)">Yes — all 4 steps ran</span></div>
+              <div style="display:flex;align-items:baseline;gap:10px"><span style="width:78px;flex:0 0 auto;font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">Confirmed</span><span style="min-width:0"><span style="font:var(--t-body);font-weight:600;color:var(--warn-fg)">No</span><br><span style="font:var(--t-small);color:var(--text-muted)">Step 3 expects no response, so this run can never report confirmed. That is the authored design, not a fault tonight.</span></span></div>
+            </div>
+
+            <ol style="margin:0;padding:0;list-style:none">
+              <li style="padding:11px 14px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap"><span style="font:var(--t-data);color:var(--text-faint)">1</span><span style="font:var(--t-data);color:var(--text)">start-preshow</span><span style="margin-left:auto;font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">confirmed</span></div>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-faint)">Dispatched <span style="font:var(--t-data)">20:31:14</span> · resolved <span style="font:var(--t-data)">20:31:15</span></p>
+              </li>
+              <li style="padding:11px 14px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap"><span style="font:var(--t-data);color:var(--text-faint)">2</span><span style="font:var(--t-data);color:var(--text)">show-deck</span><span style="margin-left:auto;font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">confirmed</span></div>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-faint)">Dispatched <span style="font:var(--t-data)">20:31:15</span> · resolved <span style="font:var(--t-data)">20:31:16</span></p>
+              </li>
+              <li style="padding:11px 14px 11px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--border-strong)">
+                <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap"><span style="font:var(--t-data);color:var(--text-faint)">3</span><span style="font:var(--t-data);color:var(--text)">house-lights</span><span style="margin-left:auto;font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">unconfirmable</span></div>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Published to <span style="font:var(--t-data)">barn/house-lights/set</span>. No response was ever expected, so there is nothing to wait for — this step reports the same on every run.</p>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-faint)">Dispatched <span style="font:var(--t-data)">20:31:16</span> · resolved <span style="font:var(--t-data)">20:31:16</span></p>
+              </li>
+              <li style="padding:11px 14px">
+                <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap"><span style="font:var(--t-data);color:var(--text-faint)">4</span><span style="font:var(--t-data);color:var(--text)">bed-up</span><span style="margin-left:auto;font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--good-fg)">confirmed</span></div>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-faint)">Faded <span style="font:var(--t-data)">barn-player</span> to <span style="font:var(--t-data)">−12 dB</span> · dispatched <span style="font:var(--t-data)">20:31:17</span> · resolved <span style="font:var(--t-data)">20:31:19</span></p>
+              </li>
+            </ol>
+
+            <div style="padding:11px 14px;background:var(--raised)">
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Attribution recorded for every step. A run whose audit write failed says so on the step itself.</p>
+            </div>
+
+          </div>
+          </sc-if>
+        </aside>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot; },
+  &quot;pane&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;step&quot;, &quot;run&quot;], &quot;default&quot;: &quot;step&quot;, &quot;tsType&quot;: &quot;'step' | 'run'&quot;, &quot;section&quot;: &quot;Inspector&quot; },
+  &quot;canAuthor&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Session&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const pane = this.props.pane ?? 'step';
+    const canAuthor = this.props.canAuthor ?? true;
+    return {
+      theme: this.props.theme ?? 'dark',
+      showStep: pane === 'step',
+      showRun: pane === 'run',
+      canAuthor,
+      viewOnly: !canAuthor,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+/* Live Control and Show Night layout rules only; anything reusable belongs
+   in blocks.css, controls.css or status.css instead. */
+
+.sm-lc-transport {
+  margin-top: 14px;
+  overflow: hidden;
+  padding: 0;
+  border-color: var(--accent-border);
+  display: grid;
+  gap: var(--s-4);
+}
+
+.sm-lc-transport__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  padding: 12px var(--s-4);
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Both sides of the fact strip are the same role and size: sm-data marks
+   the values, this just keeps the surrounding line at one consistent size. */
+.sm-lc-transport__head p {
+  margin: 0;
+  font: var(--t-small);
+}
+
+/* The select gets a real width; Repeat sits beside it; Start playlist never wraps. */
+.sm-lc-transport__playlist-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.sm-lc-transport__playlist-row > .sm-field {
+  flex: 1 1 320px;
+  min-width: 320px;
+  max-width: 480px;
+}
+
+.sm-lc-transport__playlist-row > .sm-choice {
+  flex: 0 0 auto;
+}
+
+.sm-lc-transport__nowrap {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* A volume field only needs to hold three digits. Apply's margin-top matches
+   the field's label row (21px) plus its gap (6px) so it aligns with the
+   input, not with the field's own bottom once its help line is counted. */
+.sm-lc-transport__volume-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+
+.sm-lc-transport__volume-row > .sm-field {
+  flex: 0 0 auto;
+  width: 96px;
+}
+
+.sm-lc-transport__volume-row > .sm-btn {
+  flex: 0 0 auto;
+  margin-top: 27px;
+  white-space: nowrap;
+}
+
+.sm-lc-transport__body {
+  display: grid;
+  gap: var(--s-4);
+  padding: 0 var(--s-4) var(--s-4);
+}
+
+.sm-lc-transport__body > .sm-outcome {
+  margin: 0 calc(var(--s-4) * -1) calc(var(--s-4) * -1);
+  padding: 12px var(--s-4);
+  border-top: 1px solid var(--border);
+  background: var(--raised);
+}
+
+/* Centers the transport row without widening it to the panel's full width. */
+.sm-lc-transport__controls {
+  display: flex;
+  justify-content: center;
+}
+
+.sm-lc-transport__controls .sm-btn-row {
+  justify-content: center;
+}
+
+/* blocks.css's per-command `order` values are scoped by class name only, not
+   by container, so they also reorder these titled-group cells. Reset it here
+   so Prepare and Start render in the DOM order the group spec declares. */
+.sm-control-grid > .sm-lifecycle-command {
+  order: 0;
+}
