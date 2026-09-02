@@ -444,3 +444,46 @@ func TestPutAssetsSettingsConfigRejectsNullBody(t *testing.T) {
 		t.Fatalf("status = %d, want 400 (a null body is not an object); body: %s", resp.StatusCode, body)
 	}
 }
+
+// TestPutAssetsSettingsConfigRevisionPreconditionWiring is a smoke test
+// proving handlePutAssetsSettingsConfig actually threads the shared
+// revision precondition through to its own call site - checked AFTER the
+// still-set-env-var refusal above and BEFORE the body is read, exactly
+// like every other singleton kind. The full behavioural matrix lives
+// once, on the representative kind fpp.endpoints (config_test.go).
+func TestPutAssetsSettingsConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(contentBaseURL string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		body := fmt.Sprintf(`{"contentBaseUrl":%q}`, contentBaseURL)
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/assets.settings", body, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := put("https://coordinator-v1.example", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put("https://coordinator-v2.example", map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put("https://coordinator-v3-refused.example", map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/assets.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["contentBaseUrl"] != "https://coordinator-v2.example" {
+		t.Errorf("payload.contentBaseUrl = %v, want the matching-If-Match writer's value, which must have survived the refused stale write; body: %s", payload["contentBaseUrl"], getBody)
+	}
+}

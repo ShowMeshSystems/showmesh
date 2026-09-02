@@ -281,6 +281,12 @@ func (h *handlers) handlePutResolumeRecoveryConfig(w http.ResponseWriter, r *htt
 	ctx := r.Context()
 	ac := authFromContext(ctx)
 
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
+
 	enabled, err := decodeResolumeRecoveryConfigPutBody(io.LimitReader(r.Body, maxResolumeRecoveryConfigRequestBodyBytes+1))
 	if err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
@@ -298,11 +304,16 @@ func (h *handlers) handlePutResolumeRecoveryConfig(w http.ResponseWriter, r *htt
 		nextRevisionNo int64
 	)
 	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		currentRevision := int64(0)
 		nextRevisionNo = 1
 		if obj, gerr := tx.GetConfigObject(ctx, config.ResolumeRecoveryConfigKind, config.ResolumeRecoveryConfigObjectID); gerr == nil {
+			currentRevision = obj.CurrentRevision
 			nextRevisionNo = obj.CurrentRevision + 1
 		} else if !errors.Is(gerr, store.ErrConfigObjectNotFound) {
 			return identity.AuditEntry{}, gerr
+		}
+		if err := checkRevisionPrecondition(config.ResolumeRecoveryConfigKind, config.ResolumeRecoveryConfigObjectID, precondition, currentRevision); err != nil {
+			return identity.AuditEntry{}, err
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
@@ -327,6 +338,11 @@ func (h *handlers) handlePutResolumeRecoveryConfig(w http.ResponseWriter, r *htt
 		}, nil
 	})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write resolume.recovery config revision", writeErr)
 		return
 	}

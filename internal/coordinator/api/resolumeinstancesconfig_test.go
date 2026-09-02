@@ -437,3 +437,48 @@ func TestGetResolumeInstancesConfigRevisionsListsNewestFirst(t *testing.T) {
 		t.Errorf("newest revision = %v, want revision 2, active", first)
 	}
 }
+
+// TestPutResolumeInstancesConfigRevisionPreconditionWiring is a smoke test
+// proving handlePutResolumeInstancesConfig actually threads the shared
+// revision precondition through to its own call site - checked AFTER the
+// still-set-env-var refusal and BEFORE the body is read, exactly like
+// every other singleton kind. The full behavioural matrix lives once, on
+// the representative kind fpp.endpoints (config_test.go).
+func TestPutResolumeInstancesConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(port string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		body := fmt.Sprintf(`{"instances":[{"id":"arena-1","url":"http://10.0.1.30:%s"}]}`, port)
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/resolume.instances", body, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := put("8080", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put("8081", map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put("8082", map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/resolume.instances", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	if !containsAll(string(getBody), `:8081"`) {
+		t.Errorf("the matching-If-Match writer's port (8081) should have survived the refused stale write; body: %s", getBody)
+	}
+	if containsAll(string(getBody), ":8082") {
+		t.Errorf("the refused write's port (8082) must never have been persisted; body: %s", getBody)
+	}
+}
