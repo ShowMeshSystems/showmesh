@@ -95,6 +95,9 @@ var migrations = []migration{
 	// were renumbered: a reservation at or below the shipped maximum can
 	// never run.
 	{version: 27, sql: schemaV27},
+	// v28 (ADR-028 decision 1's amendment, 2026-09-01): widens assets_current
+	// to include media_type (schemaV28's own doc comment).
+	{version: 28, sql: schemaV28},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1079,7 +1082,9 @@ CREATE UNIQUE INDEX assets_identity
     ON assets (show_id, sequence_id, target_kind, target_id, content_hash);
 
 -- Exactly one CURRENT asset per (show, sequence, target), enforced structurally
--- rather than by a convention a later query could forget.
+-- rather than by a convention a later query could forget. Widened by
+-- schemaV28 to also key on media_type; this original shape is left as
+-- documentation of what a pre-v28 database carries.
 CREATE UNIQUE INDEX assets_current
     ON assets (show_id, sequence_id, target_kind, target_id)
     WHERE superseded_at IS NULL;
@@ -1546,6 +1551,37 @@ INSERT INTO audio_sessions_v27 (node_id, id, desired_json, revision, created_at,
 DROP TABLE audio_sessions;
 
 ALTER TABLE audio_sessions_v27 RENAME TO audio_sessions;
+`
+
+// schemaV28 widens assets_current (schemaV8) to include media_type: at most
+// one CURRENT row per (show_id, sequence_id, target_kind, target_id,
+// media_type), rather than per (show_id, sequence_id, target_kind,
+// target_id) alone. ADR-028 decision 1's original text named identity as
+// "show plus logical sequence plus target plus content hash" and never
+// mentioned media type, so an FSEQ and an audio asset uploaded under the
+// same sequence id competed for the one assets_current slot the old index
+// allowed: the second upload superseded the first regardless of media type,
+// and a later render or audio resolution (assetsync/cuecatalog.go's
+// resolveAssetFor, sorting every current asset for the sequence by content
+// hash with no media-type filter) could then hand a cue's render output the
+// audio file's name, or vice versa, decided by hash sort order rather than
+// by what the output actually needed. ADR-028 decision 1 is amended
+// alongside this migration: media type joins identity.
+//
+// This is a pure widening, not a data fix. Every row the old assets_current
+// index already accepted has exactly one media type per (show, sequence,
+// target) tuple by construction, since the old index allowed nothing else
+// to stay current, so every existing current row still satisfies the new,
+// more permissive index unchanged; SQLite rebuilds the index against the
+// existing table in place, no ALTER TABLE and no data migration is needed,
+// and TestMigrateV28FromPreV28DatabaseWithExistingRows proves it against a
+// seeded pre-v28 database.
+const schemaV28 = `
+DROP INDEX assets_current;
+
+CREATE UNIQUE INDEX assets_current
+    ON assets (show_id, sequence_id, target_kind, target_id, media_type)
+    WHERE superseded_at IS NULL;
 `
 
 // maxMigrationVersion is the maximum [migration.version] across

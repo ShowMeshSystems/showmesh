@@ -161,6 +161,53 @@ func TestCreateAssetSupersedesPriorCurrentInSameTransaction(t *testing.T) {
 	}
 }
 
+// TestCreateAssetDoesNotSupersedeAcrossMediaTypes is the upload sequence
+// ADR-028 decision 1's amendment exists to fix: an FSEQ
+// registered current for a sequence, then audio uploaded for the SAME
+// (show, sequence, target), must leave the FSEQ current afterward. Before
+// the amendment, createAsset superseded whatever held the tuple regardless
+// of media type, so the audio upload silently displaced the FSEQ and a
+// later render assignment resolved the sequence to the wrong file.
+func TestCreateAssetDoesNotSupersedeAcrossMediaTypes(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	fseq := newTestAsset("asset-fseq", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:aaa", "Thriller.fseq")
+	if _, _, err := st.CreateAsset(ctx, fseq); err != nil {
+		t.Fatalf("create fseq: %v", err)
+	}
+
+	audio := newTestAsset("asset-audio", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:bbb", "Thriller.mp3")
+	audio.MediaType = "audio"
+	if _, _, err := st.CreateAsset(ctx, audio); err != nil {
+		t.Fatalf("create audio: %v", err)
+	}
+
+	gotFSEQ, err := st.GetAsset(ctx, "asset-fseq")
+	if err != nil {
+		t.Fatalf("get fseq: %v", err)
+	}
+	if gotFSEQ.SupersededAt != nil {
+		t.Fatalf("fseq asset SupersededAt = %v, want nil: an audio upload for the same sequence must not supersede it", gotFSEQ.SupersededAt)
+	}
+
+	gotAudio, err := st.GetAsset(ctx, "asset-audio")
+	if err != nil {
+		t.Fatalf("get audio: %v", err)
+	}
+	if gotAudio.SupersededAt != nil {
+		t.Fatalf("audio asset SupersededAt = %v, want nil: it is the current audio asset", gotAudio.SupersededAt)
+	}
+
+	current, err := st.ListCurrentAssetsForTarget(ctx, "halloween-2026", AssetTargetKindNode, "render-01")
+	if err != nil {
+		t.Fatalf("list current: %v", err)
+	}
+	if len(current) != 2 {
+		t.Fatalf("current assets = %+v, want both the fseq and the audio asset current", current)
+	}
+}
+
 // TestCreateAssetRollsBackSupersededIdentity proves the rollback path
 // (ADR-028 decision 10): rolledBack=true, no third row inserted.
 func TestCreateAssetRollsBackSupersededIdentity(t *testing.T) {

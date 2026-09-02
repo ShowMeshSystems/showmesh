@@ -334,7 +334,7 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 		// Read before CreateAsset runs: a rollback supersedes whatever this
 		// returns, and that row is unrecoverable from the tuple alone once
 		// superseded.
-		prevCurrent, prevErr := tx.GetCurrentAssetForTuple(ctx, fields.show, fields.sequence, fields.targetKind, fields.target)
+		prevCurrent, prevErr := tx.GetCurrentAssetForTuple(ctx, fields.show, fields.sequence, fields.targetKind, fields.target, fields.mediaType)
 		if prevErr != nil && !errors.Is(prevErr, store.ErrAssetNotFound) {
 			return identity.AuditEntry{}, prevErr
 		}
