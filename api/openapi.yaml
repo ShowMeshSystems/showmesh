@@ -9574,10 +9574,13 @@ components:
         collectors:
           type: array
           description: >-
-            Ordered exactly as this coordinator's own FPP endpoint
-            configuration lists them (one collector per configured
-            instance), stable for the life of the process. This ordering
-            is guaranteed.
+            Each collector source's own run state, not uniform in shape:
+            the FPP MQTT collector emits one row per configured host,
+            ordered by host id (its configuration carries no other order to
+            preserve), host-qualified as "fpp-mqtt:<hostID>"; the FPP REST
+            and Resolume collectors each emit exactly one aggregate row
+            regardless of how many instances they poll. Row count and
+            ordering are otherwise stable for the life of the process.
           items:
             $ref: "#/components/schemas/CollectorStatus"
         macroRuns:

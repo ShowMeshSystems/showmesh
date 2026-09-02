@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -253,11 +254,15 @@ func (m *fppMQTTManager) Run(ctx context.Context) {
 // fppMQTTCollectorStatusLister{configured: cfg.FPPMQTTBrokerURL != ""}
 // startup snapshot this replaces.
 //
-// One row for the whole collector, matching this method's own existing
-// shape: with two or more configured hosts, one publishing host clears
-// [api.CollectorConnectedNoData] for all of them, so a single silent host
-// among several stays invisible here. Per-host status is out of scope for
-// this change.
+// One row per configured host: a silent host among several publishing
+// ones is now individually identifiable by its own row, rather than one
+// publishing host clearing [api.CollectorConnectedNoData] for the whole
+// collector. Rows are ordered by instance id. bundle.cfg.Hosts is a map
+// with no ordering of its own anywhere in its lifecycle (env parsing, the
+// stored JSON payload, and this map all carry no sequence), so sorting by
+// id is the only order this method can make an actual, repeatable
+// guarantee about, and it does: the same configuration always yields rows
+// in the same order.
 func (m *fppMQTTManager) CollectorStatuses(context.Context) ([]api.CollectorState, error) {
 	m.mu.Lock()
 	bundle := m.bundle
@@ -267,19 +272,41 @@ func (m *fppMQTTManager) CollectorStatuses(context.Context) ([]api.CollectorStat
 		reason := "no FPP MQTT broker configured"
 		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
-	silent, reason := bundle.collector.SilentSinceConnect()
-	return []api.CollectorState{fppMQTTCollectorState(silent, reason)}, nil
+
+	ids := make([]string, 0, len(bundle.cfg.Hosts))
+	for id := range bundle.cfg.Hosts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	states := make([]api.CollectorState, 0, len(ids))
+	for _, id := range ids {
+		silent, reason := bundle.collector.SilentSinceConnect(id)
+		states = append(states, fppMQTTCollectorState(id, silent, reason))
+	}
+	return states, nil
 }
 
-// fppMQTTCollectorState maps [fppmqtt.Collector.SilentSinceConnect]'s
+// fppMQTTHostCollectorIDSeparator joins [fppMQTTCollectorSourceID] to a
+// configured instance id to build one host's [api.CollectorState.ID].
+// Colon, not hyphen: mqttproto.ValidateNodeID constrains every instance id
+// to [a-z0-9-], so a hyphen-joined id could not be split back apart
+// unambiguously (both the collector's own name and an instance id may
+// contain one), while a colon never appears in an instance id and already
+// has the same compound-id role elsewhere in this codebase (see
+// config/showcue.go's CueTarget Kind:Resource / Kind:Node ids).
+const fppMQTTHostCollectorIDSeparator = ":"
+
+// fppMQTTCollectorState maps one host's [fppmqtt.Collector.SilentSinceConnect]
 // result to a [api.CollectorState], pure and independent of any live
 // connection so the silent=true direction is directly testable without a
 // broker.
-func fppMQTTCollectorState(silent bool, reason string) api.CollectorState {
+func fppMQTTCollectorState(instanceID string, silent bool, reason string) api.CollectorState {
+	id := fppMQTTCollectorSourceID + fppMQTTHostCollectorIDSeparator + instanceID
 	if silent {
-		return api.CollectorState{ID: fppMQTTCollectorSourceID, State: string(api.CollectorConnectedNoData), Reason: &reason}
+		return api.CollectorState{ID: id, State: string(api.CollectorConnectedNoData), Reason: &reason}
 	}
-	return api.CollectorState{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning)}
+	return api.CollectorState{ID: id, State: string(api.CollectorRunning)}
 }
 
 // CurrentHosts implements [api.FPPMQTTHostLister]: the id->HostName map

@@ -287,11 +287,13 @@ func TestFPPMQTTManagerRunAppliesConfigurationOnATicker(t *testing.T) {
 // direction of fppMQTTCollectorState, independent of any live connection:
 // SilentSinceConnect's own threshold and message-tracking behavior are
 // covered exhaustively by the fppmqtt package's own tests; this only checks
-// the mapping onto api.CollectorState is correct.
+// the mapping onto api.CollectorState is correct, now including the
+// host-qualified id.
 func TestFPPMQTTCollectorStateMapsSilentToConnectedNoData(t *testing.T) {
-	got := fppMQTTCollectorState(true, "connected to the broker since 2026-08-31T00:00:00Z but has received no message on any subscribed topic since")
-	if got.ID != fppMQTTCollectorSourceID {
-		t.Errorf("ID = %q, want %q", got.ID, fppMQTTCollectorSourceID)
+	got := fppMQTTCollectorState("player-01", true, "connected to the broker since 2026-08-31T00:00:00Z but has received no message on any subscribed topic for host \"player-01\" since 2026-08-30T23:59:00Z")
+	wantID := fppMQTTCollectorSourceID + ":player-01"
+	if got.ID != wantID {
+		t.Errorf("ID = %q, want %q", got.ID, wantID)
 	}
 	if got.State != "connected_no_data" {
 		t.Errorf("State = %q, want %q", got.State, "connected_no_data")
@@ -302,15 +304,98 @@ func TestFPPMQTTCollectorStateMapsSilentToConnectedNoData(t *testing.T) {
 }
 
 // TestFPPMQTTCollectorStateMapsNotSilentToRunning is the mirror case: a
-// collector that has received evidence (or was never silent) reports
-// running, with no reason: the same shape this endpoint has always used
-// for a healthy collector.
+// host that has received evidence (or was never silent) reports running,
+// with no reason: the same shape this endpoint has always used for a
+// healthy collector, now per host.
 func TestFPPMQTTCollectorStateMapsNotSilentToRunning(t *testing.T) {
-	got := fppMQTTCollectorState(false, "")
+	got := fppMQTTCollectorState("player-01", false, "")
+	wantID := fppMQTTCollectorSourceID + ":player-01"
+	if got.ID != wantID {
+		t.Errorf("ID = %q, want %q", got.ID, wantID)
+	}
 	if got.State != "running" {
 		t.Errorf("State = %q, want %q", got.State, "running")
 	}
 	if got.Reason != nil {
 		t.Errorf("Reason = %v, want nil for running", got.Reason)
+	}
+}
+
+// TestFPPMQTTManagerCollectorStatusesOneRowPerHost is the acceptance test
+// at the manager layer: three configured hosts produce three rows, each
+// with its own host-qualified id, none of them silent (the broker is
+// unreachable here, so every host is still inside SilentSinceConnect's
+// disconnected=>false branch. The point of this test is the per-host row
+// count and id shape, not the silence verdict, which fppmqtt's own
+// package tests cover exhaustively).
+func TestFPPMQTTManagerCollectorStatusesOneRowPerHost(t *testing.T) {
+	mgr, src := newTestFPPMQTTManager(t)
+	ctx := context.Background()
+
+	cfg := config.FPPMQTTConfig{
+		BrokerURL: "tcp://127.0.0.1:1",
+		Hosts:     map[string]string{"c-player": "c", "a-player": "a", "b-player": "b"},
+	}
+	seedFPPMQTTRevision(t, src.st, 1, cfg)
+	got, password := src.Current(ctx)
+	mgr.reconcile(ctx, got, password)
+
+	statuses, err := mgr.CollectorStatuses(ctx)
+	if err != nil {
+		t.Fatalf("CollectorStatuses: %v", err)
+	}
+	if len(statuses) != 3 {
+		t.Fatalf("len(statuses) = %d, want 3 (one row per configured host)", len(statuses))
+	}
+
+	seen := make(map[string]bool, len(statuses))
+	for _, s := range statuses {
+		seen[s.ID] = true
+	}
+	for _, id := range []string{"a-player", "b-player", "c-player"} {
+		want := fppMQTTCollectorSourceID + ":" + id
+		if !seen[want] {
+			t.Errorf("no row with ID %q in %+v", want, statuses)
+		}
+	}
+}
+
+// TestFPPMQTTManagerCollectorStatusesOrderedByHostIDDeterministically is
+// the ordering guarantee under test: bundle.cfg.Hosts is a map with no
+// order of its own, so the only order this method can promise is a sort by
+// instance id, asserted here as determinism across repeated calls against
+// the SAME configuration, not merely that one call happens to come back
+// sorted.
+func TestFPPMQTTManagerCollectorStatusesOrderedByHostIDDeterministically(t *testing.T) {
+	mgr, src := newTestFPPMQTTManager(t)
+	ctx := context.Background()
+
+	cfg := config.FPPMQTTConfig{
+		BrokerURL: "tcp://127.0.0.1:1",
+		Hosts:     map[string]string{"z-player": "z", "m-player": "m", "a-player": "a"},
+	}
+	seedFPPMQTTRevision(t, src.st, 1, cfg)
+	got, password := src.Current(ctx)
+	mgr.reconcile(ctx, got, password)
+
+	wantOrder := []string{
+		fppMQTTCollectorSourceID + ":a-player",
+		fppMQTTCollectorSourceID + ":m-player",
+		fppMQTTCollectorSourceID + ":z-player",
+	}
+
+	for attempt := 0; attempt < 5; attempt++ {
+		statuses, err := mgr.CollectorStatuses(ctx)
+		if err != nil {
+			t.Fatalf("CollectorStatuses (attempt %d): %v", attempt, err)
+		}
+		if len(statuses) != len(wantOrder) {
+			t.Fatalf("attempt %d: len(statuses) = %d, want %d", attempt, len(statuses), len(wantOrder))
+		}
+		for i, want := range wantOrder {
+			if statuses[i].ID != want {
+				t.Fatalf("attempt %d: statuses[%d].ID = %q, want %q (order must be identical on every call)", attempt, i, statuses[i].ID, want)
+			}
+		}
 	}
 }

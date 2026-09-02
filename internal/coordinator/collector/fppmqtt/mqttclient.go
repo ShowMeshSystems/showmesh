@@ -163,10 +163,13 @@ type Collector struct {
 	connReason string
 
 	// connectedAt: when the current connection came up (zero while
-	// disconnected). messageSinceConnect: any message received since. Both
-	// reset together on every OnConnectionUp, see setConnected.
+	// disconnected). messageSinceConnect: per configured instance id,
+	// whether a message from that host has arrived since. Both reset
+	// together on every OnConnectionUp, see setConnected. A reconnect
+	// clears every host's latch, not just the one that happens to publish
+	// next, so a healthy host's silence never masks a different host's.
 	connectedAt         time.Time
-	messageSinceConnect bool
+	messageSinceConnect map[string]bool
 
 	// unmatchedMu guards unmatchedLogged, contract section 4.4's "logged
 	// at info once per host" bookkeeping for a message whose HostName does
@@ -339,7 +342,9 @@ func (c *Collector) connectionState() (connected bool, reason string) {
 // setConnected records a fresh connection-state observation from an
 // autopaho callback. reason is only meaningful when connected is false. A
 // transition to connected restarts connectedAt/messageSinceConnect fresh,
-// on both the first connect and every reconnect.
+// on both the first connect and every reconnect: every configured host's
+// latch clears together, since they all share the one underlying broker
+// connection this resets.
 func (c *Collector) setConnected(connected bool, reason string) {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
@@ -347,35 +352,60 @@ func (c *Collector) setConnected(connected bool, reason string) {
 	c.connReason = reason
 	if connected {
 		c.connectedAt = c.now()
-		c.messageSinceConnect = false
+		c.messageSinceConnect = make(map[string]bool, len(c.hosts))
 	}
 }
 
-// markMessageReceived records that a message has arrived since the
-// current connection came up. Called only for a message this package
-// actually stored, never for one it ignored (unmatched host or suffix).
-func (c *Collector) markMessageReceived() {
+// markMessageReceived records that a message from instanceID has arrived
+// since the current connection came up. Called only for a message this
+// package actually stored, never for one it ignored (unmatched host or
+// suffix).
+func (c *Collector) markMessageReceived(instanceID string) {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
-	c.messageSinceConnect = true
+	c.messageSinceConnect[instanceID] = true
 }
 
-// SilentSinceConnect reports whether no message has arrived on any
-// subscribed topic for at least silentSinceConnectThreshold since the
-// current connection came up. States only that fact, never why. Always
-// false while disconnected: Poll (render.go) already reports that case.
-func (c *Collector) SilentSinceConnect() (silent bool, reason string) {
+// SilentSinceConnect reports whether instanceID's host has gone silent:
+// connected, but no message has arrived on any of ITS subscribed topics
+// for at least silentSinceConnectThreshold since the current connection
+// came up. States only that fact, never why the host in particular is
+// quiet. Always false while disconnected: Poll (render.go) already
+// reports that case, per host, via collection_failed.
+//
+// A host with an empty message store (see store.go's latestReceivedAt) has
+// never published anything at all, ever: a candidate for a HostName/topic
+// misconfiguration a working host would never exhibit. A host with a
+// non-empty store has published in the past but has gone quiet now: a
+// candidate for a broken fast path. Both conditions report silent=true
+// with the SAME [api.CollectorRunState] (this package does not introduce a
+// new one), but the reason text names which is which, in the past tense in
+// one case ("since <timestamp>") and the present-perfect negative in the
+// other ("has never received"). This is an operator-readable distinction,
+// not a machine-parseable one: reason remains free-form prose, and nothing
+// in this package or its caller promises a stable grammar for it.
+func (c *Collector) SilentSinceConnect(instanceID string) (silent bool, reason string) {
 	c.connMu.Lock()
-	defer c.connMu.Unlock()
-	if !c.connected || c.messageSinceConnect || c.connectedAt.IsZero() {
+	connected := c.connected
+	connectedAt := c.connectedAt
+	publishedThisConnection := c.messageSinceConnect[instanceID]
+	c.connMu.Unlock()
+
+	if !connected || publishedThisConnection || connectedAt.IsZero() {
 		return false, ""
 	}
-	if c.now().Sub(c.connectedAt) < silentSinceConnectThreshold {
+	if c.now().Sub(connectedAt) < silentSinceConnectThreshold {
 		return false, ""
+	}
+
+	if lastMsgAt, everPublished := c.store.latestReceivedAt(instanceID); everPublished {
+		return true, fmt.Sprintf(
+			"connected to the broker but has received no message on any subscribed topic for host %q since %s",
+			instanceID, lastMsgAt.Format(time.RFC3339))
 	}
 	return true, fmt.Sprintf(
-		"connected to the broker since %s but has received no message on any subscribed topic since",
-		c.connectedAt.Format(time.RFC3339))
+		"connected to the broker since %s but has never received a message on any subscribed topic for host %q",
+		connectedAt.Format(time.RFC3339), instanceID)
 }
 
 // subscriber is the ENTIRE method set this package ever calls on its live
@@ -422,7 +452,7 @@ func (c *Collector) newPublishHandler() func(paho.PublishReceived) (bool, error)
 			retained:   pr.Packet.Retain,
 			receivedAt: c.now(),
 		})
-		c.markMessageReceived()
+		c.markMessageReceived(instanceID)
 
 		// Always report the message as handled: this is the only consumer
 		// on this connection.
