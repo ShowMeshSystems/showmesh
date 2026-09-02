@@ -101,17 +101,6 @@ func (m *Manager) restoreInterrupted(ctx context.Context, interrupterID pkgaudio
 // ending is none of those. It is a transient suspension the session never
 // asked for, so its release always tries to continue from the bookmark,
 // landing on 0 only when that bookmark genuinely cannot be resolved.
-// dropInterrupterMembershipLocked removes interrupterID from t's
-// interrupter set with no Engine.Resume/Start and no gain change, unlike
-// [Manager.removeInterrupterLocked]. Used only by [Manager.SilenceAll]:
-// every session in that call, t included, is being silenced too, so
-// resuming t here would start audio the emergency stop exists to kill,
-// if only for the round trip until the loop reaches t itself. Caller
-// holds t.mu.
-func (m *Manager) dropInterrupterMembershipLocked(t *Session, interrupterID pkgaudio.SessionID) {
-	delete(t.interruptedByAll, interrupterID)
-}
-
 func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, interrupterID pkgaudio.SessionID) {
 	if _, ok := t.interruptedByAll[interrupterID]; !ok {
 		return
@@ -213,4 +202,15 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	t.lastObservedAt = obs.ObservedAt
 	m.startLTCLocked(ctx, t, position)
 	t.persistBestEffortLocked("state change")
+}
+
+// dropInterrupterMembershipLocked removes interrupterID from t's
+// interrupter set with no Engine.Resume/Start and no gain change, unlike
+// [Manager.removeInterrupterLocked]. Used only by [Manager.SilenceAll]:
+// every session in that call, t included, is being silenced too, so
+// resuming t here would start audio the emergency stop exists to kill,
+// if only for the round trip until the loop reaches t itself. Caller
+// holds t.mu.
+func (m *Manager) dropInterrupterMembershipLocked(t *Session, interrupterID pkgaudio.SessionID) {
+	delete(t.interruptedByAll, interrupterID)
 }
