@@ -45,6 +45,8 @@ import type {
   ConfigShowWrite,
   CreatePrincipalRequest,
   CurrentRunsResponse,
+  EmergencyStopArmResponse,
+  EmergencyStopResult,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   FPPMQTTConfigResponse,
@@ -430,6 +432,25 @@ export function prevFPPPlaylistItem(instanceId: string): Promise<FPPCommandResul
 
 export function setFPPVolume(instanceId: string, volume: number): Promise<FPPCommandResult> {
   return store.setFPPVolume(instanceId, volume)
+}
+
+// The three-level emergency stop and its hard-stop arm/fire gate. Same
+// thin pass-through pattern.
+
+export function emergencyStop(): Promise<EmergencyStopResult> {
+  return store.emergencyStop()
+}
+
+export function emergencyStopPowerDown(): Promise<EmergencyStopResult> {
+  return store.emergencyStopPowerDown()
+}
+
+export function armEmergencyStopHardStop(): Promise<EmergencyStopArmResponse> {
+  return store.armEmergencyStopHardStop()
+}
+
+export function fireEmergencyStopHardStop(armToken: string): Promise<EmergencyStopResult> {
+  return store.fireEmergencyStopHardStop(armToken)
 }
 
 // Track B seam B2b-front: the three render.* dispatch endpoints. Same

@@ -33,6 +33,10 @@ const stubs = vi.hoisted(() => ({
   muteAudioSessionOutput: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   unmuteAudioSessionOutput: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  emergencyStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  emergencyStopPowerDown: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  armEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  fireEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -62,6 +66,10 @@ vi.mock('../api', async () => {
     muteAudioSessionOutput: (...args: never[]) => stubs.muteAudioSessionOutput(...args),
     unmuteAudioSessionOutput: (...args: never[]) => stubs.unmuteAudioSessionOutput(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
+    emergencyStop: (...args: never[]) => stubs.emergencyStop(...args),
+    emergencyStopPowerDown: (...args: never[]) => stubs.emergencyStopPowerDown(...args),
+    armEmergencyStopHardStop: (...args: never[]) => stubs.armEmergencyStopHardStop(...args),
+    fireEmergencyStopHardStop: (...args: never[]) => stubs.fireEmergencyStopHardStop(...args),
   }
 })
 
@@ -150,6 +158,10 @@ describe('Live Control', () => {
     stubs.muteAudioSessionOutput = () => new Promise(() => {})
     stubs.unmuteAudioSessionOutput = () => new Promise(() => {})
     stubs.listFPPPlaylistDefinitions = () => new Promise(() => {})
+    stubs.emergencyStop = () => new Promise(() => {})
+    stubs.emergencyStopPowerDown = () => new Promise(() => {})
+    stubs.armEmergencyStopHardStop = () => new Promise(() => {})
+    stubs.fireEmergencyStopHardStop = () => new Promise(() => {})
   })
 
   const fppInstance = (playerState = 'stopped') =>
@@ -178,6 +190,17 @@ describe('Live Control', () => {
     session: null,
     credentialForm: 'session',
     scopes: ['audio:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
+
+  const emergencyAllowedSession = {
+    serverTime: '2026-08-28T21:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['show:emergencystop:invoke'],
     scopesState: 'current',
     bootstrapRequired: false,
   } as never
@@ -228,6 +251,7 @@ describe('Live Control', () => {
     renderScreen({})
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Transport',
+      'Emergency stop',
       'What each output is doing',
       'Resolume',
       'Night lifecycle',
@@ -252,10 +276,108 @@ describe('Live Control', () => {
     expect(stubs.blackoutResolume).toHaveBeenCalledTimes(1)
   })
 
-  it('explains Stop now as a helper line under the transport, not a callout, and offers no emergency-stop control', () => {
+  it('explains Stop now as a helper line under the transport, not a callout', () => {
     renderScreen({})
     expect(screen.getByText(/halts this player only/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /emergency/i })).not.toBeInTheDocument()
+  })
+
+  it('gates every emergency-stop control on show:emergencystop:invoke, disabled with the real reason, never hidden', () => {
+    renderScreen({
+      session: {
+        serverTime: '2026-08-28T21:07:00Z',
+        authenticated: true,
+        principal: { id: 'p', name: 'op', role: 'viewer', disabled: false },
+        session: null,
+        credentialForm: 'session',
+        scopes: [],
+        scopesState: 'current',
+        bootstrapRequired: false,
+      } as never,
+    })
+    const region = screen.getByRole('region', { name: 'Emergency stop' })
+    const stop = within(region).getByRole('button', { name: 'Stop' })
+    const stopPowerDown = within(region).getByRole('button', { name: 'Stop and power down' })
+    const arm = within(region).getByRole('button', { name: 'Arm hard stop' })
+    const fire = within(region).getByRole('button', { name: 'Fire hard stop' })
+    for (const button of [stop, stopPowerDown, arm, fire]) {
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', expect.stringMatching(/operator|sign in|permission/i))
+    }
+  })
+
+  it('confirms level 1 stop, dispatches it, and reports per-instance and follow-up outcomes honestly', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    stubs.emergencyStop = vi.fn(() =>
+      Promise.resolve({
+        level: 'stop',
+        idempotencyKey: 'k1',
+        stopOutcomes: [
+          { instanceId: 'main-player', outcome: 'confirmed', outcomeReason: 'Stopped.', dispatchedAt: null, replay: false },
+          { instanceId: 'lobby-player', outcome: 'failed', outcomeReason: 'Unreachable.', dispatchedAt: null, replay: false },
+        ],
+        noInstancesConfigured: false,
+        followUps: [{ actionId: 'act-1', label: 'Notify staff', outcome: 'confirmed', outcomeReason: 'Ran.' }],
+      }),
+    )
+    renderScreen({ session: emergencyAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(window.confirm).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('main-player')).toBeInTheDocument()
+    expect(screen.getByText('lobby-player')).toBeInTheDocument()
+    expect(screen.getAllByText('confirmed')).toHaveLength(2)
+    expect(screen.getByText('failed')).toBeInTheDocument()
+    expect(screen.getByText('Unreachable.')).toBeInTheDocument()
+    expect(screen.getByText('Notify staff')).toBeInTheDocument()
+    expect(stubs.emergencyStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends nothing when level 1 stop’s confirmation is cancelled', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    stubs.emergencyStop = vi.fn(() => new Promise(() => {}))
+    renderScreen({ session: emergencyAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(stubs.emergencyStop).not.toHaveBeenCalled()
+  })
+
+  it('arms then fires the hard-stop gate with the minted token, with Fire disabled until armed', async () => {
+    stubs.armEmergencyStopHardStop = vi.fn(() =>
+      Promise.resolve({ serverTime: '2026-08-28T21:07:00Z', armToken: 'token-1', expiresAt: new Date(Date.now() + 10_000).toISOString() }),
+    )
+    stubs.fireEmergencyStopHardStop = vi.fn((armToken: string) =>
+      Promise.resolve({
+        level: 'hard-stop',
+        idempotencyKey: 'k2',
+        stopOutcomes: [{ instanceId: 'main-player', outcome: 'confirmed', outcomeReason: `Stopped (${armToken}).`, dispatchedAt: null, replay: false }],
+        noInstancesConfigured: false,
+        nightSession: { present: false },
+        followUps: [],
+      }),
+    )
+    renderScreen({ session: emergencyAllowedSession })
+    const fire = screen.getByRole('button', { name: 'Fire hard stop' })
+    expect(fire).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Arm hard stop' }))
+    await screen.findByText(/Armed\. Fire within/)
+    expect(fire).not.toBeDisabled()
+
+    fireEvent.click(fire)
+    expect(await screen.findByText('No night session was active.')).toBeInTheDocument()
+    expect(stubs.fireEmergencyStopHardStop).toHaveBeenCalledExactlyOnceWith('token-1')
+  })
+
+  it('reports a refused fire attempt honestly instead of retrying it', async () => {
+    stubs.armEmergencyStopHardStop = vi.fn(() =>
+      Promise.resolve({ serverTime: '2026-08-28T21:07:00Z', armToken: 'token-1', expiresAt: new Date(Date.now() + 10_000).toISOString() }),
+    )
+    stubs.fireEmergencyStopHardStop = vi.fn(() => Promise.reject(new ApiError('this arm token is unknown, expired, or already consumed', 409)))
+    renderScreen({ session: emergencyAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Arm hard stop' }))
+    await screen.findByText(/Armed\. Fire within/)
+    fireEvent.click(screen.getByRole('button', { name: 'Fire hard stop' }))
+    expect(await screen.findByText(/Hard stop was refused/)).toBeInTheDocument()
+    expect(stubs.fireEmergencyStopHardStop).toHaveBeenCalledTimes(1)
+    expect(stubs.armEmergencyStopHardStop).toHaveBeenCalledTimes(1)
   })
 
   it('draws the mock’s Fire button, warns that it is not wired, and leaves it inert', async () => {

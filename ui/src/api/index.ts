@@ -30,6 +30,12 @@ export type {
   EventSeq,
   FPPEndpointsConfigResponse,
   FPPCommandResult,
+  // The three-level emergency stop and its hard-stop arm/fire gate.
+  EmergencyStopResult,
+  EmergencyStopInstanceOutcome,
+  EmergencyStopFollowUpResult,
+  EmergencyStopNightSessionOutcome,
+  EmergencyStopArmResponse,
   // Track G seam G-2 (ADR-039).
   ConfigResolumeInstance,
   ConfigResolumeInstancesPayload,
@@ -298,6 +304,10 @@ export {
   nextFPPPlaylistItem,
   prevFPPPlaylistItem,
   setFPPVolume,
+  emergencyStop,
+  emergencyStopPowerDown,
+  armEmergencyStopHardStop,
+  fireEmergencyStopHardStop,
   applyRenderSurface,
   clearRenderSurface,
   restartRenderPipeline,
