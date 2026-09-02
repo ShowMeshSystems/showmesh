@@ -1,6 +1,6 @@
 package audio
 
-// Operation is one of the seventeen reserved agent operations, in the
+// Operation is one of the eighteen reserved agent operations, in the
 // exact spelling the identifier register carries. select_media,
 // select_playlist, set_loop, announce, and duck
 // from AUDIO-ENGINE section 14 mint no operation of their own: they are
@@ -33,6 +33,12 @@ const (
 	// converges on the current revision without a restart.
 	OperationNodeConfigure     Operation = "audio.node.configure"
 	OperationSettingsConfigure Operation = "audio.settings.configure"
+
+	// OperationNodeSilence is node-scoped like OperationNodeConfigure: no
+	// sessionId, no revision. It stops every session this node's Manager
+	// currently holds unconditionally, so an installation-wide emergency
+	// stop can reach a session the coordinator never observed.
+	OperationNodeSilence Operation = "audio.node.silence"
 )
 
 var operations = map[string]struct{}{
@@ -42,14 +48,15 @@ var operations = map[string]struct{}{
 	string(OperationGainSet): {}, string(OperationGainFade): {}, string(OperationOutputMute): {},
 	string(OperationOutputUnmute): {}, string(OperationDeviceProbe): {}, string(OperationMediaProbe): {},
 	string(OperationNodeConfigure): {}, string(OperationSettingsConfigure): {},
+	string(OperationNodeSilence): {},
 }
 
-// Validate reports whether op is one of the seventeen reserved operations.
+// Validate reports whether op is one of the eighteen reserved operations.
 func (op Operation) Validate() error {
 	return closedSet("audio.Operation", string(op), operations)
 }
 
-// Operations returns the seventeen reserved operations in the declaration
+// Operations returns the eighteen reserved operations in the declaration
 // order above. The returned slice is a fresh copy on every call.
 func Operations() []Operation {
 	return []Operation{
@@ -58,6 +65,6 @@ func Operations() []Operation {
 		OperationSessionAdvance, OperationSessionStop, OperationSessionClear,
 		OperationGainSet, OperationGainFade, OperationOutputMute,
 		OperationOutputUnmute, OperationDeviceProbe, OperationMediaProbe,
-		OperationNodeConfigure, OperationSettingsConfigure,
+		OperationNodeConfigure, OperationSettingsConfigure, OperationNodeSilence,
 	}
 }
