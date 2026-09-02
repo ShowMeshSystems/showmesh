@@ -376,3 +376,60 @@ func TestNightSessionActiveObjectIDIsFixedConstant(t *testing.T) {
 		t.Fatalf("expected two revisions of the SAME object, never two objects; body: %s", revBody)
 	}
 }
+
+// TestPutNightSessionRevisionPreconditionWiring and
+// TestPutNightSessionActiveRevisionPreconditionWiring are smoke tests
+// proving handlePutNightSession/handlePutNightSessionActive thread the
+// shared precondition check (showconfig.go's
+// parseRevisionPrecondition/writeShowConfigRevision) through to their own
+// call sites. The full behavioural matrix lives once, on kind "show" in
+// showobjects_test.go's own precondition tests.
+func TestPutNightSessionRevisionPreconditionWiring(t *testing.T) {
+	api, _, token := setupNightSessionFixture(t)
+
+	putSession := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", validNightSessionBody, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putSession(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putSession(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putSession(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putSession(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created session: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPutNightSessionActiveRevisionPreconditionWiring(t *testing.T) {
+	api, _, token := setupNightSessionFixture(t)
+	mustPutNightSession(t, api, token, "halloween-main", validNightSessionBody)
+
+	putActive := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session.active", `{"session":"halloween-main"}`, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putActive(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("protected create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putActive(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putActive(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}

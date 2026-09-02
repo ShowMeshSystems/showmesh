@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -561,5 +564,332 @@ func TestPreviousShowSurfaceNodeLogsARealReadFailureDistinctFromNotFound(t *test
 	}
 	if !strings.Contains(logBuf.String(), "simulated transient store failure") {
 		t.Errorf("log output missing the underlying error; got: %s", logBuf.String())
+	}
+}
+
+// --- config write precondition (If-Match / If-None-Match) ---
+//
+// This block is this task's own test suite for the opt-in revision
+// precondition writeShowConfigRevision now enforces (showconfig.go). It
+// exercises kind "show" as the representative full behavioural suite
+// (every other kind sharing writeShowConfigRevision gets a smaller smoke
+// test in its own file, since the check itself is the same shared code
+// reached from ten call sites - what differs per kind is only whether
+// that call site was wired correctly). Manager-D's build authorization
+// ruled the guarantee opt-in, not mandatory: a PUT with neither header
+// stays accepted, unprotected, exactly as before this task.
+
+func putShowWithHeaders(t *testing.T, api *API, token, id, body string, extraHeaders map[string]string) (*http.Response, []byte) {
+	t.Helper()
+	headers := map[string]string{"Authorization": "Bearer " + token}
+	for k, v := range extraHeaders {
+		headers[k] = v
+	}
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show/"+id, body, headers)
+	return doRawRequest(t, api.Handler, req)
+}
+
+// TestPutShowRevisionPreconditionOptInDefault pins the ruled default: a
+// PUT that sends neither If-Match nor If-None-Match is accepted
+// unconditionally, exactly as before this task added the precondition -
+// a future move toward a mandatory guarantee has to touch this named
+// test rather than pass silently.
+func TestPutShowRevisionPreconditionOptInDefault(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	mustPutShow(t, api, token, "unprotected-show", `{"name":"Unprotected","notes":"v1"}`)
+	// A second, unconditional write, never having read revision 1 back,
+	// still succeeds: this is exactly the D-014 hazard this task narrows
+	// rather than closes, reproduced deliberately so its absence-of-header
+	// behaviour is pinned rather than assumed.
+	resp, body := putShowWithHeaders(t, api, token, "unprotected-show", `{"name":"Unprotected","notes":"v2, no precondition sent"}`, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (no precondition means unconditional accept); body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestPutShowRevisionPreconditionMatchingIfMatchSucceeds proves the
+// protected-update path: a client that read revision 1 back and sends it
+// as If-Match gets its write accepted.
+func TestPutShowRevisionPreconditionMatchingIfMatchSucceeds(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	mustPutShow(t, api, token, "matching-show", `{"name":"Matching","notes":"v1"}`)
+	resp, body := putShowWithHeaders(t, api, token, "matching-show", `{"name":"Matching","notes":"v2"}`, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if decodeMap(t, body)["revision"] != float64(2) {
+		t.Errorf("revision = %v, want 2", decodeMap(t, body)["revision"])
+	}
+}
+
+// TestPutShowRevisionPreconditionStaleIfMatchIsRefusedAndPreservesTheOtherWrite
+// is the actual claim this feature makes, proved on stored content rather
+// than only a status code: a writer holding a stale revision is refused
+// 409, and the write it would have clobbered is still there afterward.
+func TestPutShowRevisionPreconditionStaleIfMatchIsRefusedAndPreservesTheOtherWrite(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	mustPutShow(t, api, token, "stale-show", `{"name":"Stale","notes":"v1"}`)
+	// A second writer, who never sends a precondition, lands revision 2 -
+	// the exact unprotected write the first writer's stale read cannot see.
+	mustPutShow(t, api, token, "stale-show", `{"name":"Stale","notes":"v2-from-second-writer"}`)
+
+	resp, body := putShowWithHeaders(t, api, token, "stale-show", `{"name":"Stale","notes":"v3-lost-update-attempt"}`, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	problem := decodeMap(t, body)
+	if problem["type"] != ProblemTypeConfigRevisionPreconditionFailed {
+		t.Errorf("problem.type = %v, want %v", problem["type"], ProblemTypeConfigRevisionPreconditionFailed)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/stale-show", map[string]string{"Authorization": "Bearer " + token})
+	if !containsAll(string(getBody), `"notes":"v2-from-second-writer"`) {
+		t.Fatalf("the second writer's payload should have survived the refused stale write; body: %s", getBody)
+	}
+	if containsAll(string(getBody), "lost-update-attempt") {
+		t.Fatalf("the refused write's payload must never have been persisted; body: %s", getBody)
+	}
+}
+
+// TestPutShowRevisionPreconditionIfMatchAgainstNonexistentIdIsRefused
+// proves If-Match against an id with no active revision (current
+// revision implicitly 0) is refused, never silently treated as a create.
+func TestPutShowRevisionPreconditionIfMatchAgainstNonexistentIdIsRefused(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := putShowWithHeaders(t, api, token, "never-created", `{"name":"Never Created"}`, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestPutShowRevisionPreconditionCreateGuard proves If-None-Match: "*"
+// succeeds against a brand-new id (protected create) and is refused 409
+// against an id that already has an active revision - the create-guard
+// half of the carrier this task's design proposal recommended getting
+// "for free" from the standard header rather than an invented sentinel.
+func TestPutShowRevisionPreconditionCreateGuard(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	t.Run("brand new id succeeds", func(t *testing.T) {
+		resp, body := putShowWithHeaders(t, api, token, "brand-new", `{"name":"Brand New"}`, map[string]string{"If-None-Match": "*"})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("existing id is refused 409", func(t *testing.T) {
+		mustPutShow(t, api, token, "already-exists", `{"name":"Already Exists"}`)
+		resp, body := putShowWithHeaders(t, api, token, "already-exists", `{"name":"Already Exists","notes":"racing create"}`, map[string]string{"If-None-Match": "*"})
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+		}
+	})
+}
+
+// TestPutShowRevisionPreconditionMalformedRequestsAreRejected covers the
+// 400 paths: both headers on one request, a zero revision (the
+// orchestrator's own ruling - an undocumented second spelling of the
+// create guard is refused rather than silently accepted), a non-quoted
+// value, and an If-None-Match value other than the literal "*".
+func TestPutShowRevisionPreconditionMalformedRequestsAreRejected(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	cases := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"both headers on one request", map[string]string{"If-Match": `"1"`, "If-None-Match": "*"}},
+		{"If-Match zero is rejected, not treated as a create guard", map[string]string{"If-Match": `"0"`}},
+		{"If-Match unquoted", map[string]string{"If-Match": "7"}},
+		{"If-Match negative", map[string]string{"If-Match": `"-1"`}},
+		{"If-Match non-numeric", map[string]string{"If-Match": `"abc"`}},
+		{"If-None-Match not the literal *", map[string]string{"If-None-Match": `"1"`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := putShowWithHeaders(t, api, token, "malformed-target", `{"name":"Malformed"}`, tc.headers)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+// TestPutShowRevisionPreconditionSerializesUnderConcurrency is this
+// task's test of the transaction boundary rather than only the handler.
+// A sequential handler-then-handler test only proves the SECOND HTTP
+// request observes the first one's effect; it says nothing about actual
+// concurrency, which is the property this whole change exists for.
+//
+// This is deliberately NOT billed as a race test: the store package this
+// coordinator uses already forbids that race by construction - store.go's
+// DSN comment confirms every [store.Store.InTx]/AuditedWrite transaction
+// issues BEGIN IMMEDIATE (the write lock is taken at transaction START,
+// not first write), and tx.go's own InTx doc comment confirms the
+// connection pool is capped at exactly one connection, so only one
+// AuditedWrite closure ever runs at a time regardless of how many
+// goroutines call this handler concurrently. What this test actually
+// proves is that the precondition check correctly observes whichever of
+// two goroutine-concurrent, serialized writers commits first: exactly one
+// of the two receives 200 and the other 409, never both, never neither,
+// and the store ends with exactly one new revision (no gap, no double
+// create) holding the winning writer's payload, never a mix of the two.
+func TestPutShowRevisionPreconditionSerializesUnderConcurrency(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	mustPutShow(t, api, token, "race-show", `{"name":"Race","notes":"v1"}`)
+
+	writerNotes := [2]string{"writer-a-wins-or-loses", "writer-b-wins-or-loses"}
+	statuses := [2]int{}
+	bodies := [2][]byte{}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/config/show/race-show",
+				strings.NewReader(`{"name":"Race","notes":"`+writerNotes[i]+`"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("If-Match", `"1"`)
+			rec := httptest.NewRecorder()
+			api.Handler.ServeHTTP(rec, req)
+			resp := rec.Result()
+			body, _ := io.ReadAll(resp.Body)
+			statuses[i] = resp.StatusCode
+			bodies[i] = body
+		}(i)
+	}
+	wg.Wait()
+
+	okCount, conflictCount, winner := 0, 0, -1
+	for i, s := range statuses {
+		switch s {
+		case http.StatusOK:
+			okCount++
+			winner = i
+		case http.StatusConflict:
+			conflictCount++
+		default:
+			t.Fatalf("unexpected status %d among concurrent writers (want only 200/409); bodies: %s / %s", s, bodies[0], bodies[1])
+		}
+	}
+	if okCount != 1 || conflictCount != 1 {
+		t.Fatalf("want exactly one 200 and one 409 among two concurrent writers holding the same stale-or-current If-Match, got statuses %v; bodies: %s / %s",
+			statuses, bodies[0], bodies[1])
+	}
+
+	revResp, revBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/race-show/revisions", map[string]string{"Authorization": "Bearer " + token})
+	if revResp.StatusCode != http.StatusOK {
+		t.Fatalf("REVISIONS: status = %d; body: %s", revResp.StatusCode, revBody)
+	}
+	revs := decodeMap(t, revBody)["revisions"].([]any)
+	if len(revs) != 2 {
+		t.Fatalf("want exactly 2 revisions (the setup write plus exactly ONE winning concurrent write, no gap and no double-create), got %d; body: %s", len(revs), revBody)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/race-show", map[string]string{"Authorization": "Bearer " + token})
+	if !containsAll(string(getBody), `"notes":"`+writerNotes[winner]+`"`) {
+		t.Fatalf("stored payload should be the ONE winning writer's (%s), never a mix; body: %s", writerNotes[winner], getBody)
+	}
+}
+
+// TestPutShowSurfaceRevisionPreconditionWiring is a smoke test proving
+// handlePutShowSurface actually threads the shared precondition check
+// (showconfig.go's parseRevisionPrecondition/writeShowConfigRevision)
+// through to its own call site, rather than the wiring having been
+// dropped on this one handler among the ten that share it. The full
+// behavioural matrix (stale-write content preservation, malformed
+// headers, the concurrency proof) lives once, on kind "show" above; every
+// other kind sharing writeShowConfigRevision is the same shared code
+// reached from a different call site, so what is worth re-proving per
+// kind is only that the call site itself was wired, not the check's own
+// logic a second time.
+func TestPutShowSurfaceRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	putSurface := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/garage-door", validSurfaceBodyNDI, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putSurface(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putSurface(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putSurface(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putSurface(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created surface: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestPutShowActiveRevisionPreconditionWiring is the same wiring smoke
+// test as TestPutShowSurfaceRevisionPreconditionWiring, for the singleton
+// kind show.active, which has no {id} path segment - proving the
+// precondition works identically for a fixed-id singleton, not only a
+// caller-chosen id.
+func TestPutShowActiveRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	putActive := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.active", `{"show":"halloween-2026"}`, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putActive(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("protected create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putActive(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putActive(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 }

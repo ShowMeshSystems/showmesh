@@ -830,3 +830,79 @@ func TestShowActionStaleShowReferenceStillReadsAndLists(t *testing.T) {
 		t.Fatalf("LIST must still include the stale action: status=%d body=%s", listResp.StatusCode, listBody)
 	}
 }
+
+// TestPutShowActionRevisionPreconditionWiring and
+// TestPutShowMacroRevisionPreconditionWiring are smoke tests proving
+// handlePutShowAction/handlePutShowMacro thread the shared precondition
+// check (parseRevisionPrecondition/writeShowConfigRevision, this file)
+// through to their own call sites. The full behavioural matrix (stale-
+// write content preservation, malformed headers, the concurrency proof)
+// lives once, on kind "show" in showobjects_test.go; every other kind
+// sharing writeShowConfigRevision reaches the same shared check from a
+// different call site, so what is worth re-proving per kind is that the
+// wiring itself is present, not the check's own logic a second time.
+func TestPutShowActionRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	putAction := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putAction(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putAction(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putAction(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putAction(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created action: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPutShowMacroRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("fixture show.action: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	macroBody := validShowMacroBody("start-main-show")
+	putMacro := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/opening", macroBody, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putMacro(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putMacro(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putMacro(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putMacro(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created macro: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}

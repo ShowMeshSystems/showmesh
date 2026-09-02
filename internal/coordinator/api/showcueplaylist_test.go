@@ -665,3 +665,71 @@ func TestPutShowPlaylistShowmeshAudioRunnerRoundTripPreservesEveryField(t *testi
 		t.Errorf("GET response payload = %+v, want %+v", getResp.Payload, want)
 	}
 }
+
+// TestPutShowCueRevisionPreconditionWiring and
+// TestPutShowPlaylistRevisionPreconditionWiring are smoke tests proving
+// handlePutShowCue/handlePutShowPlaylist thread the shared precondition
+// check (showconfig.go's parseRevisionPrecondition/writeShowConfigRevision)
+// through to their own call sites. The full behavioural matrix lives once,
+// on kind "show" in showobjects_test.go's own precondition tests.
+func TestPutShowCueRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	putCue := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.cue/thriller", validCueBody, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putCue(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putCue(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putCue(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putCue(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created cue: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPutShowPlaylistRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	mustPutCue(t, api, token, "thriller", validCueBody)
+
+	playlistBody := `{"show":"halloween-2026","name":"Main show","runner":"showmesh-audio","entries":[{"id":"e1","cue":"thriller"}]}`
+	putPlaylist := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.playlist/main", playlistBody, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putPlaylist(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putPlaylist(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putPlaylist(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putPlaylist(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created playlist: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
