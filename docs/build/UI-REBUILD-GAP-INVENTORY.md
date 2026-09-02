@@ -1,5 +1,11 @@
 # Operator UI rebuild: capability with no home in the new UI
 
+`docs/build/UI-RECONCILE-WORKLIST.md` re-checked every row in this document's
+Gaps table individually against `main` on 2026-09-02, after the operator UI
+overhaul merged as #301. Most rows below were closed by the rebuild in the
+days after this document was written. Read that file first for the current
+state of each row; the content below is left as originally written.
+
 Compared the API contract against the rebuilt UI on 2026-08-30. The contract
 side is `origin/main:api/openapi.yaml` at `ff86986` (147 operations) unioned
 with `HEAD:api/openapi.yaml` at `3a787ce` (148 operations); the only difference
