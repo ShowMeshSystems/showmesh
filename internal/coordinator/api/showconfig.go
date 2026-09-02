@@ -634,7 +634,7 @@ func parseRevisionPrecondition(r *http.Request) (revisionPrecondition, *v1.Probl
 		return revisionPrecondition{Mode: revisionPreconditionIfNoneMatchCreate}, nil
 	}
 
-	return revisionPrecondition{}, nil
+	return revisionPrecondition{Mode: revisionPreconditionNone}, nil
 }
 
 // parseQuotedRevisionETag parses v as an RFC 7232 strong entity tag
