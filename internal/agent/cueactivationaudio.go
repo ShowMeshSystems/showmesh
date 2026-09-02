@@ -241,6 +241,16 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 			// reports Stopped, not a failure, and this Cue's own activation
 			// must not fail because cleanup of a session it does not itself
 			// own had nothing to do.
+			//
+			// Session.dispatchExemptFromStaleRevision's own THE TRADE
+			// paragraph (session.go) describes a delayed clear tearing down
+			// a newer session established in the meantime; that danger does
+			// not reach this call for two reasons. The staging session id
+			// is single purpose, so no newer session ever exists under it
+			// for a late clear to tear down, and this Clear is a
+			// synchronous in-process call inside one activation, not a
+			// dispatched command that can be delayed between broker and
+			// agent.
 			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(act, activationStepStart))
 		}
 	}

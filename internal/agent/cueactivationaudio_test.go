@@ -242,6 +242,73 @@ func TestActivateAudioRedeliveredActivationIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestActivateAudioSkipsPrepareAndStartWhenPromoteSucceeds proves the skip
+// half of the prepare-ahead design at activateAudio's own call site, not
+// only at [audio.Manager.Promote]'s own level (see
+// TestPromoteMovesLoadedHandleWhenStagedContentMatches, internal/agent/
+// audio/promote_test.go): when a staged session's content matches what the
+// real activating Cue wants, Promote's own success must actually stop
+// activateAudio from running its ordinary Prepare+Start fallback, not
+// merely leave the show session Playing with the correct asset — a state a
+// redundant fresh Prepare+Start would reach too, since it loads the
+// identical content. [audio.FakeEngine.LastLoadedHandle] is what makes the
+// two distinguishable from this package: Manager.Promote's own success path
+// moves an already-loaded handle between sessions without ever calling
+// Load, so the ONLY way a second Load could happen here is a fallback that
+// was not actually skipped.
+func TestActivateAudioSkipsPrepareAndStartWhenPromoteSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, fake := newTestAudioManager(t, dir, clock)
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	stagedRef := pkgaudio.MediaRef{
+		AssetID: "cue-song-asset", ContentHash: hash, RuntimeFilename: "cue-song.wav",
+	}
+	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
+	if r := mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(stagedRef)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging prepare refused: %+v", r)
+	}
+	stagedHandle, ok := fake.LastLoadedHandle()
+	if !ok {
+		t.Fatal("no Load was recorded after staging Apply+Prepare; test setup is broken")
+	}
+
+	// The real activating Cue wants the IDENTICAL content just staged —
+	// the same AssetID and content hash activateAudio's own request
+	// building will independently derive from this Cue's resolved outputs.
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-12", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-audio-promote-skip", "cue-12", 1, "halloween-2026", 3, "rev-a", 0)
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm: %+v", result)
+	}
+
+	gotHandle, ok := fake.LastLoadedHandle()
+	if !ok {
+		t.Fatal("no Load was ever recorded")
+	}
+	if gotHandle != stagedHandle {
+		t.Fatalf("last loaded handle = %q, want it unchanged at the staging handle %q: a second Load ran, meaning the fallback Prepare was not actually skipped", gotHandle, stagedHandle)
+	}
+}
+
 // TestActivateAudioClearsStaleStagedSessionWhenContentDoesNotMatch proves
 // the discard half of the prepare-ahead design: when a session staged
 // ahead of time under [cueactivation.PrepareStagingSessionID] (an ordinary

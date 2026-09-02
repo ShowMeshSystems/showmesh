@@ -40,6 +40,17 @@ type FakeEngine struct {
 	// whether any frame was then emitted. Cleared by StopLTC.
 	ltcRequest   LTCSpec
 	ltcRequested bool
+
+	// lastLoadedHandle is the most recent handle Load has successfully
+	// created, mirroring ltcRequest/ltcRequested's own shape: identity
+	// written once by Load, at the moment it succeeds, and read back
+	// afterward by a test — never a counter, since [Manager.Promote]
+	// itself never calls Load at all, so a test only ever needs to tell
+	// whether a SECOND, different Load happened after the first, not how
+	// many. Never cleared: unlike ltcRequest, there is no corresponding
+	// "unload" operation to reset it against.
+	lastLoadedHandle      EngineHandle
+	lastLoadedHandleKnown bool
 }
 
 // fakeLTCNeverStartedReason is FakeEngine's LTC state before StartLTC is
@@ -199,6 +210,7 @@ func (e *FakeEngine) Load(_ context.Context, handle EngineHandle, media pkgaudio
 	}
 	h := &fakeHandle{media: media, duration: duration, state: pkgaudio.StateReady, gain: 1}
 	e.handles[handle] = h
+	e.lastLoadedHandle, e.lastLoadedHandleKnown = handle, true
 	return e.obs(h), nil
 }
 
@@ -415,6 +427,16 @@ func (e *FakeEngine) LastLTCRequest() (LTCSpec, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.ltcRequest, e.ltcRequested
+}
+
+// LastLoadedHandle returns the most recent handle Load has successfully
+// created, and whether Load has ever been called — mirrors
+// [FakeEngine.LastLTCRequest]'s identical shape, see lastLoadedHandle's
+// own doc comment for why this is an identity, not a count.
+func (e *FakeEngine) LastLoadedHandle() (EngineHandle, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastLoadedHandle, e.lastLoadedHandleKnown
 }
 
 // StopLTC ends FakeEngine's LTC run.
