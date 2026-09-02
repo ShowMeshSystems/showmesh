@@ -1,0 +1,21 @@
+/*
+ * Node detail's content, floated in the kit Drawer (D-021/D-022). The
+ * drawer body already caps width at 960px.
+ */
+
+.sm-node-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+/* Caps the Rendering cell so the table wraps its controls instead of
+   widening the column and forcing a horizontal scrollbar. */
+.sm-node-surface-cell {
+  max-width: 360px;
+}
+
+.sm-node-surface-cell .sm-field,
+.sm-node-surface-cell .sm-btn-row {
+  max-width: 360px;
+}

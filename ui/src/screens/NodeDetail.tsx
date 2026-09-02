@@ -29,7 +29,6 @@ import {
   Input,
   NotWired,
   NotWiredBanner,
-  PageTitle,
   RuledStrip,
   Section,
   SelectableRow,
@@ -41,9 +40,12 @@ import {
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDuration } from '../domain/time'
-import { signalRows, signalSummary } from './monitorModel'
+import { nodeSignalGroups, signalRows, signalSummary } from './monitorModel'
 import { formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
 import type { Node } from '../api'
+
+/** Stable heading id for the drawer's `aria-labelledby`, present in both the found and not-found branches. */
+export const NODE_DRAWER_TITLE_ID = 'nd-drawer-title'
 
 const CONTROL_TONE: Record<Node['controlPlane']['state'], Tone> = { online: 'good', offline: 'bad', unknown: 'unknown' }
 const CONTROL_WORD: Record<Node['controlPlane']['state'], string> = { online: 'Online', offline: 'Offline', unknown: 'Unknown' }
@@ -253,7 +255,9 @@ export function NodeDetail() {
   if (node === undefined) {
     return (
       <>
-        <PageTitle title="Node" />
+        <h2 id={NODE_DRAWER_TITLE_ID} className="sm-sr-only">
+          Node {nodeId}
+        </h2>
         <BlankingPlate
           absence="empty"
           stamp="Not found"
@@ -335,22 +339,14 @@ export function NodeDetail() {
       : ''
 
   return (
-    <div className="sm-node-detail">
-      <p className="sm-small sm-muted">
-        <Link to="/monitor/fleet" className="sm-muted">
-          Monitor
-        </Link>{' '}
-        <span className="sm-faint">/</span>{' '}
-        <Link to="/monitor/fleet" className="sm-muted">
-          Fleet
-        </Link>{' '}
-        <span className="sm-faint">/</span> {node.nodeId}
-      </p>
-
+    <div className="sm-node-drawer">
+      <p className="sm-eyebrow">Node</p>
       <div className="sm-page__head">
         <div>
           <div className="sm-inline-row">
-            <h1 className="sm-page__title">{node.label ?? node.nodeId}</h1>
+            <h2 id={NODE_DRAWER_TITLE_ID} className="sm-inspector__title">
+              {node.label ?? node.nodeId}
+            </h2>
             <StatusPair tone={CONTROL_TONE[node.controlPlane.state]} label={controlLabel} />
           </div>
           <p className="sm-page__lede">Everything configured about this box, in one place.</p>
@@ -426,6 +422,38 @@ export function NodeDetail() {
             },
           ]}
         />
+      </Section>
+
+      <Section
+        id="nd-signals"
+        title="Signals"
+        aside={<Link to="/monitor/signals">{nodeSignalRows.length} signals</Link>}
+      >
+        {nodeSignalGroups(node).map((group) => (
+          <section key={group.name} aria-labelledby={`nd-signals-${group.name}`} className="sm-inspector__group">
+            <h3 id={`nd-signals-${group.name}`} className="sm-subsection__title">
+              {group.name}
+            </h3>
+            {group.absent !== null ? (
+              <RuledStrip absence="unobserved" label="Never advertised" fact="Nothing to observe" detail={group.absent} />
+            ) : (
+              group.rows.map((row) => (
+                <div key={row.key} className="sm-inspector__row">
+                  <span className="sm-inspector__label sm-data">{row.label}</span>
+                  <div>
+                    <p className="sm-inspector__value sm-data">{row.value}</p>
+                    {row.state !== null && (
+                      <p className="sm-inspector__state">
+                        <StatusPair tone={row.tone} label={row.state} />
+                      </p>
+                    )}
+                    {row.detail !== null && <p className="sm-inspector__detail">{row.detail}</p>}
+                  </div>
+                </div>
+              ))
+            )}
+          </section>
+        ))}
       </Section>
 
       <Section
@@ -529,7 +557,7 @@ export function NodeDetail() {
                             </span>
                           </td>
                           <td className="sm-small sm-muted">{surface.payload.show}</td>
-                          <td>
+                          <td className="sm-table__wrap sm-node-surface-cell">
                             <StatusPair tone={status.tone} label={status.label} />
                             <RenderSurfaceControls nodeId={node.nodeId} surfaceId={surface.id} gate={renderGate} />
                           </td>

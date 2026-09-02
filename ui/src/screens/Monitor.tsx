@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, NavLink, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   AttentionRow,
   Button,
@@ -31,6 +31,7 @@ import {
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
+import { NodeDetail, NODE_DRAWER_TITLE_ID } from './NodeDetail'
 import {
   activityRows,
   facetCounts,
@@ -40,7 +41,6 @@ import {
   fleetSummary,
   fppInspector,
   monitorConnection,
-  nodeInspector,
   type FleetKind,
   type FleetRow,
 } from './monitorModel'
@@ -103,10 +103,12 @@ export function MonitorHead({ model }: { model: Model }) {
 
 export function Monitor() {
   const model = useModelContext()
+  const navigate = useNavigate()
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const [kind, setKind] = useState<FleetKind>('all')
   const [searchParams, setSearchParams] = useSearchParams()
-  const [selected, setSelected] = useState<string | null>(() => searchParams.get('resource'))
+  const [resourceParam, setResourceParam] = useState<string | null>(() => searchParams.get('resource'))
+  const { nodeId: routeNodeId } = useParams<{ nodeId?: string }>()
 
   const counts = fleetCounts(model)
   const rows = fleetRows(model, nowIso)
@@ -114,16 +116,29 @@ export function Monitor() {
   const items = attentionItems(model, nowIso)
   const activity = activityRows(model.events, 5)
 
-  const selectedNode = model.nodes.find((node) => `node:${node.nodeId}` === selected)
+  /** A node's drawer is the route `/monitor/fleet/node/:nodeId` (D-021/D-022);
+   * FPP still opens from `?resource=`. */
+  const selected = routeNodeId !== undefined ? `node:${routeNodeId}` : resourceParam
   const selectedFpp = model.fpp.find((instance) => `fpp:${instance.instanceId}` === selected)
   const select = (key: string) => {
+    if (key.startsWith('node:')) {
+      navigate(key === selected ? '/monitor/fleet' : `/monitor/fleet/node/${encodeURIComponent(key.slice('node:'.length))}`)
+      return
+    }
     const next = key === selected ? null : key
-    setSelected(next)
+    setResourceParam(next)
     setSearchParams(next === null ? {} : { resource: next })
   }
-  const closeInspector = () => { setSelected(null); setSearchParams({}) }
-  const inspectorLabelledBy = selectedNode !== undefined
-    ? `inspect-${selected}`
+  const closeInspector = () => {
+    if (routeNodeId !== undefined) {
+      navigate('/monitor/fleet')
+      return
+    }
+    setResourceParam(null)
+    setSearchParams({})
+  }
+  const inspectorLabelledBy = routeNodeId !== undefined
+    ? NODE_DRAWER_TITLE_ID
     : selectedFpp !== undefined
       ? `inspect-fpp-${selectedFpp.instanceId}`
       : 'mo-inspector-empty'
@@ -132,7 +147,12 @@ export function Monitor() {
     <div className="sm-monitor">
       <MonitorHead model={model} />
 
-      <Panes inspectorOpen={selected !== null} onInspectorClose={closeInspector} inspectorLabelledBy={inspectorLabelledBy}>
+      <Panes
+        inspectorOpen={selected !== null}
+        onInspectorClose={closeInspector}
+        inspectorLabelledBy={inspectorLabelledBy}
+        inspectorWidth={routeNodeId !== undefined ? 'wide' : 'content'}
+      >
         <div>
           <Tiles>
             <StatTile label="Nodes" value={`${counts.nodesOnline} / ${counts.nodesTotal}`} detail={nodesDetail(counts)} />
@@ -281,8 +301,8 @@ export function Monitor() {
         </div>
 
         <aside>
-          {selectedNode !== undefined ? (
-            <Inspector nodeKey={selected ?? ''} node={selectedNode} nowIso={nowIso} />
+          {routeNodeId !== undefined ? (
+            <NodeDetail />
           ) : selectedFpp !== undefined ? (
             <FppInspector instance={selectedFpp} nowIso={nowIso} />
           ) : (
@@ -552,48 +572,3 @@ function FallbackProgramGroup({ instance }: { instance: FPPInstance }) {
   )
 }
 
-function Inspector({ nodeKey, node, nowIso }: { nodeKey: string; node: Parameters<typeof nodeInspector>[0]; nowIso: string | null }) {
-  const inspector = nodeInspector(node, nowIso)
-  const signals = node.render.length + node.audio.length + node.fppConnect.length
-
-  return (
-    <div className="sm-inspector">
-      <p className="sm-eyebrow">Node</p>
-      <h2 className="sm-inspector__title" id={`inspect-${nodeKey}`}>
-        {inspector.title}
-      </h2>
-      <p className="sm-small sm-muted">{inspector.subtitle}</p>
-      {inspector.groups.map((group) => (
-        <section key={group.name} aria-labelledby={`inspect-${nodeKey}-${group.name}`} className="sm-inspector__group">
-          <h3 id={`inspect-${nodeKey}-${group.name}`} className="sm-subsection__title">
-            {group.name}
-          </h3>
-          {group.absent !== null ? (
-            <RuledStrip absence="unobserved" label="Never advertised" fact="Nothing to observe" detail={group.absent} />
-          ) : (
-            group.rows.map((row) => (
-              <div key={row.key} className="sm-inspector__row">
-                <span className="sm-inspector__label sm-data">{row.label}</span>
-                <div>
-                  <p className="sm-inspector__value sm-data">{row.value}</p>
-                  {row.state !== null && (
-                    <p className="sm-inspector__state">
-                      <StatusPair tone={row.tone} label={row.state} />
-                    </p>
-                  )}
-                  {row.detail !== null && <p className="sm-inspector__detail">{row.detail}</p>}
-                </div>
-              </div>
-            ))
-          )}
-        </section>
-      ))}
-      <div className="sm-inspector__actions">
-        <Link to={`/monitor/fleet/node/${node.nodeId}`}>All {signals} signals</Link>
-        <Button disabled title="This coordinator advertises no discovery command for a single node.">
-          Run discovery
-        </Button>
-      </div>
-    </div>
-  )
-}

@@ -183,32 +183,12 @@ export type InspectorRow = {
 }
 
 /**
- * What one node is reporting, grouped the way the node reports it. A group
- * with no observations says the capability was never advertised, which is
- * not the same as a path that is failing.
+ * A node's own Render/Audio evidence rows, restored for the drawer's
+ * Signals section (Identity/Capabilities cover the rest of `nodeInspector`,
+ * which this replaces). A group with no observations says the capability
+ * was never advertised, not that its path is failing.
  */
-export function nodeInspector(node: Node, nowIso: string | null): { title: string; subtitle: string; groups: { name: string; rows: InspectorRow[]; absent: string | null }[] } {
-  const heard = node.evidence.heartbeat.observedAt ?? node.evidence.hello.observedAt
-  const age = ageMs(heard, nowIso)
-  const control: InspectorRow[] = [
-    {
-      key: 'control-plane',
-      label: 'Control plane',
-      value: node.controlPlane.state,
-      state: null,
-      detail: node.controlPlane.reason,
-      tone: NODE_TONE[node.controlPlane.state] ?? 'unknown',
-    },
-    {
-      key: 'agent',
-      label: 'Agent build',
-      value: node.agentVersion ?? 'not reported',
-      state: null,
-      detail: 'As of the last report, not now.',
-      tone: node.agentVersion === null ? 'unknown' : 'pending',
-    },
-  ]
-
+export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow[]; absent: string | null }[] {
   const observationRows = (entries: Node['render'], prefix: string): InspectorRow[] =>
     entries.slice(0, 6).map((entry, index) => ({
       key: `${prefix}:${entry.signal}:${index}`,
@@ -231,32 +211,24 @@ export function nodeInspector(node: Node, nowIso: string | null): { title: strin
                 : 'pending',
     }))
 
-  return {
-    title: node.label ?? node.nodeId,
-    subtitle:
-      node.controlPlane.state === 'online'
-        ? `Online · last report ${age === null ? 'never' : `${formatDuration(age)} ago`}`
-        : `${node.controlPlane.state} since ${formatClock(heard) ?? 'an unrecorded time'}${age === null ? '' : ` · ${formatDuration(age)}`}`,
-    groups: [
-      { name: 'Node', rows: control, absent: null },
-      {
-        name: 'Render',
-        rows: observationRows(node.render, 'render'),
-        absent:
-          node.render.length === 0
-            ? 'This node has never published a render observation. That is not the same as a render path that is failing.'
-            : null,
-      },
-      {
-        name: 'Audio',
-        rows: observationRows(node.audio, 'audio'),
-        absent:
-          node.audio.length === 0
-            ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'
-            : null,
-      },
-    ],
-  }
+  return [
+    {
+      name: 'Render',
+      rows: observationRows(node.render, 'render'),
+      absent:
+        node.render.length === 0
+          ? 'This node has never published a render observation. That is not the same as a render path that is failing.'
+          : null,
+    },
+    {
+      name: 'Audio',
+      rows: observationRows(node.audio, 'audio'),
+      absent:
+        node.audio.length === 0
+          ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'
+          : null,
+    },
+  ]
 }
 
 /**

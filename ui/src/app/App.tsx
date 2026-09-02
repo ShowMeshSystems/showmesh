@@ -13,7 +13,6 @@ import { MonitorSignals } from '../screens/MonitorSignals'
 import { MonitorActivity } from '../screens/MonitorActivity'
 import { MonitorCapabilities } from '../screens/MonitorCapabilities'
 import { MonitorManifest } from '../screens/MonitorManifest'
-import { NodeDetail } from '../screens/NodeDetail'
 import { ResolumeConfig } from '../screens/ResolumeConfig'
 import { ResolumeControl } from '../screens/ResolumeControl'
 import { ShowNight } from '../screens/ShowNight'
@@ -98,7 +97,7 @@ export default function App() {
             <Route path="monitor/activity" element={<MonitorActivity />} />
             <Route path="monitor/capabilities" element={<MonitorCapabilities />} />
             <Route path="monitor/manifest" element={<MonitorManifest />} />
-            <Route path="monitor/fleet/node/:nodeId" element={<NodeDetail />} />
+            <Route path="monitor/fleet/node/:nodeId" element={<Monitor />} />
             <Route path="monitor/fleet/fpp/:instanceId" element={<FppFleetRedirect />} />
             <Route path="monitor/fleet/resolume" element={<Navigate replace to="/settings/resolume" />} />
             <Route path="monitor/fleet/resolume/:instanceId" element={<ResolumeFleetRedirect />} />
