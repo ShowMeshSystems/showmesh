@@ -151,6 +151,11 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -174,9 +179,14 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowConfigKind, id, payloadJSON, precondition,
 		map[string]any{"name": payload.Name})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show config revision", writeErr)
 		return
 	}
@@ -337,6 +347,11 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
 
 	previousNode, hadPreviousNode := h.previousShowSurfaceNode(r.Context(), id)
 
@@ -362,9 +377,14 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowSurfaceConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowSurfaceConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "node": payload.Node})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.surface config revision", writeErr)
 		return
 	}
@@ -454,6 +474,12 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 	ac := authFromContext(r.Context())
 	id := config.ShowActiveObjectID
 
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
 		h.writeInternalError(w, now, "read show.active request body", err)
@@ -476,9 +502,14 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowActiveConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowActiveConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.active config revision", writeErr)
 		return
 	}

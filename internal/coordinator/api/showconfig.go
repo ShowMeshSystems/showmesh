@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -452,6 +454,12 @@ func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
 	ac := authFromContext(r.Context())
 	id := r.PathValue("id")
 
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
 		h.writeInternalError(w, now, "read show.action request body", err)
@@ -492,9 +500,14 @@ func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowActionConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowActionConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "safetyClass": payload.SafetyClass, "integration": payload.Target.Integration})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.action config revision", writeErr)
 		return
 	}
@@ -508,6 +521,12 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ac := authFromContext(r.Context())
 	id := r.PathValue("id")
+
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -531,9 +550,14 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowMacroConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowMacroConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "stepCount": len(payload.Steps)})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.macro config revision", writeErr)
 		return
 	}
@@ -543,6 +567,143 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 	}, payload))
 }
 
+// revisionPreconditionMode is [revisionPrecondition]'s own discriminant.
+type revisionPreconditionMode int
+
+const (
+	// revisionPreconditionNone is the ruled default (D-014, Manager-D's
+	// build authorization): a PUT that sends neither If-Match nor
+	// If-None-Match is accepted unconditionally, exactly as before this
+	// change. The guarantee below is opt-in, not mandatory - a caller
+	// that never sends either header gets none of it, silently, which is
+	// the accepted, narrower-than-total fix, not an oversight.
+	revisionPreconditionNone revisionPreconditionMode = iota
+	// revisionPreconditionIfMatch is an update guard: the request named
+	// the revision it expects to still be current.
+	revisionPreconditionIfMatch
+	// revisionPreconditionIfNoneMatchCreate is a create guard
+	// (If-None-Match: *): the request expects no revision has ever been
+	// activated for this id yet.
+	revisionPreconditionIfNoneMatchCreate
+)
+
+// revisionPrecondition is what a config PUT asked writeShowConfigRevision
+// to enforce, parsed once per request by [parseRevisionPrecondition] and
+// threaded through to the single check inside writeShowConfigRevision's
+// AuditedWrite closure. Revision is meaningful only when Mode is
+// revisionPreconditionIfMatch.
+type revisionPrecondition struct {
+	Mode     revisionPreconditionMode
+	Revision int64
+}
+
+// parseRevisionPrecondition reads the optional If-Match/If-None-Match
+// request headers and returns what writeShowConfigRevision should
+// enforce. Absence of both is revisionPreconditionNone - see that
+// constant's own doc comment for why that is the ruled default rather
+// than a gap this function papers over. A malformed value, or both
+// headers present on the same request, is reported as a non-nil
+// *v1.Problem (400) the caller writes and returns immediately, never
+// silently downgraded to "no precondition": a client that took the
+// trouble to send a header gets told when this coordinator could not
+// honor it, rather than getting an unprotected write it never asked for.
+func parseRevisionPrecondition(r *http.Request) (revisionPrecondition, *v1.Problem) {
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
+
+	if ifMatch != "" && ifNoneMatch != "" {
+		p := invalidParameterProblem("If-Match and If-None-Match cannot both be sent on the same request")
+		return revisionPrecondition{}, &p
+	}
+
+	if ifMatch != "" {
+		rev, ok := parseQuotedRevisionETag(ifMatch)
+		if !ok {
+			p := invalidParameterProblem(fmt.Sprintf(
+				`If-Match %q is not a quoted revision integer of 1 or greater, e.g. "7" (the value of "revision" from a prior GET or PUT response, quoted; revisions start at 1, so "0" is refused as malformed rather than accepted as a second spelling of If-None-Match: "*")`, ifMatch))
+			return revisionPrecondition{}, &p
+		}
+		return revisionPrecondition{Mode: revisionPreconditionIfMatch, Revision: rev}, nil
+	}
+
+	if ifNoneMatch != "" {
+		if ifNoneMatch != "*" {
+			p := invalidParameterProblem(`If-None-Match only supports the literal value "*", asserting that no revision has been activated for this id yet`)
+			return revisionPrecondition{}, &p
+		}
+		return revisionPrecondition{Mode: revisionPreconditionIfNoneMatchCreate}, nil
+	}
+
+	return revisionPrecondition{Mode: revisionPreconditionNone}, nil
+}
+
+// parseQuotedRevisionETag parses v as an RFC 7232 strong entity tag
+// wrapping a revision integer of 1 or greater, e.g. `"7"`. Every other
+// shape (unquoted, a weak validator's leading `W/`, zero, negative,
+// non-numeric) is rejected: this coordinator never emits a revision ETag
+// of 0 or less (revisions start at 1 - store/config.go's own "current
+// revision 0" means "nothing activated yet", never a real revision
+// number), so a value outside 1..N is either a hand-typed guess or an
+// undocumented second spelling of the create guard If-None-Match: "*"
+// already exists for. One documented spelling per behaviour, enforced
+// here rather than silently accepted as a second one.
+func parseQuotedRevisionETag(v string) (int64, bool) {
+	if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' {
+		return 0, false
+	}
+	rev, err := strconv.ParseInt(v[1:len(v)-1], 10, 64)
+	if err != nil || rev < 1 {
+		return 0, false
+	}
+	return rev, true
+}
+
+// errConfigRevisionPreconditionFailed is writeShowConfigRevision's own
+// sentinel for a failed If-Match/If-None-Match precondition, returned
+// from inside the AuditedWrite closure BEFORE tx.CreateConfigRevision
+// ever runs (a refused precondition creates nothing, not even a
+// discarded revision row) and returned UNWRAPPED by AuditedWrite itself
+// (identity.Service.AuditedWrite's own doc comment), so every call site
+// tells it apart from a generic store failure with errors.As rather than
+// string-matching an error message.
+type errConfigRevisionPreconditionFailed struct {
+	kind, id       string
+	precondition   revisionPrecondition
+	actualRevision int64
+}
+
+func (e *errConfigRevisionPreconditionFailed) Error() string {
+	return fmt.Sprintf("config revision precondition failed for %s/%s: current revision is %d", e.kind, e.id, e.actualRevision)
+}
+
+// ProblemTypeConfigRevisionPreconditionFailed is
+// [configRevisionConflictProblem]'s own type URI - ONE type shared by
+// every config kind this change touches (no per-kind variation, matching
+// the scope this task was given), never a distinct URI per kind.
+const ProblemTypeConfigRevisionPreconditionFailed = ProblemBaseURI + "config-revision-precondition-failed"
+
+// configRevisionConflictProblem renders e as the 409 [v1.Problem] every
+// PUT handler in this package writes when its own call to
+// writeShowConfigRevision reports errConfigRevisionPreconditionFailed.
+func configRevisionConflictProblem(e *errConfigRevisionPreconditionFailed) v1.Problem {
+	var detail string
+	if e.precondition.Mode == revisionPreconditionIfNoneMatchCreate {
+		detail = fmt.Sprintf(
+			`If-None-Match: "*" requires %s %q to have no active revision yet, but it is already at revision %d`,
+			e.kind, e.id, e.actualRevision)
+	} else {
+		detail = fmt.Sprintf(
+			`If-Match %q is no longer current for %s %q; its current revision is %d`,
+			fmt.Sprintf("%d", e.precondition.Revision), e.kind, e.id, e.actualRevision)
+	}
+	return v1.Problem{
+		Type:   ProblemTypeConfigRevisionPreconditionFailed,
+		Title:  "Config write refused: the revision precondition is no longer current",
+		Status: http.StatusConflict,
+		Detail: detail,
+	}
+}
+
 // writeShowConfigRevision is handlePutShowAction/handlePutShowMacro's
 // shared write core, mirroring handlePutFPPEndpointsConfig's own
 // AuditedWrite closure (config.go) exactly: the next revision number is
@@ -550,17 +711,40 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 // PUT of the same object, per that handler's own doc comment), and the
 // revision write, its activation, and its audit entry land in one
 // transaction or none of them do (ADR-024 decision 11).
-func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac authContext, kind, id, payloadJSON string, auditParams map[string]any) (store.ConfigRevisionRecord, int64, error) {
+//
+// precondition is checked against that SAME read, before nextRevisionNo
+// is used for anything: this is deliberately not a second read. The
+// store's own single-connection, BEGIN IMMEDIATE design (store.go's DSN
+// comment) means this closure already runs with the database's one write
+// lock held for its whole duration, so the read this precondition check
+// reuses and the write it guards can never have a second writer's commit
+// land in between them - the check does not need a lock or a retry of
+// its own, only to run inside this existing closure rather than before
+// it.
+func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac authContext, kind, id, payloadJSON string, precondition revisionPrecondition, auditParams map[string]any) (store.ConfigRevisionRecord, int64, error) {
 	var (
 		activated      store.ConfigRevisionRecord
 		nextRevisionNo int64
 	)
 	writeErr := h.deps.Identity.AuditedWrite(r.Context(), func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		currentRevision := int64(0)
 		nextRevisionNo = 1
 		if obj, gerr := tx.GetConfigObject(ctx, kind, id); gerr == nil {
+			currentRevision = obj.CurrentRevision
 			nextRevisionNo = obj.CurrentRevision + 1
 		} else if !errors.Is(gerr, store.ErrConfigObjectNotFound) {
 			return identity.AuditEntry{}, gerr
+		}
+
+		switch precondition.Mode {
+		case revisionPreconditionIfMatch:
+			if currentRevision != precondition.Revision {
+				return identity.AuditEntry{}, &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
+			}
+		case revisionPreconditionIfNoneMatchCreate:
+			if currentRevision != 0 {
+				return identity.AuditEntry{}, &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
+			}
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{

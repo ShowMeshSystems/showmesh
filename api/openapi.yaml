@@ -4046,13 +4046,18 @@ paths:
         never a member of `programChannels`) are checked structurally, not
         against evidence. `clockDomain` and `clockDomainProvenance` are
         operator-declared and never inferred: no software call on this
-        platform proves two outputs share a hardware clock.
+        platform proves two outputs share a hardware clock. Optionally
+        carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
+        refused with `409` when the precondition names a revision that is
+        no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -4087,6 +4092,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/audio.node/{id}/revisions:
@@ -4469,12 +4476,18 @@ paths:
         this endpoint reads back. Stores the VALIDATED, NORMALIZED
         payload, never the raw request body. Audited in the same
         transaction as the revision write (ADR-024 decision 11).
+        Optionally carries `If-Match`/`If-None-Match` (opt-in; see those
+        parameters): refused with `409` when the precondition names a
+        revision that is no longer current, or when becoming a Resolume
+        action is blocked by a stored macro step's local fallback.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -4499,6 +4512,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.action/{id}/revisions:
@@ -4623,13 +4638,17 @@ paths:
         the strict, always-resolved shape this endpoint reads back. Stores
         the VALIDATED, NORMALIZED payload - including description and
         onFailure/onUnconfirmed resolved to their defaults - never the raw
-        request body.
+        request body. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -4654,6 +4673,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.macro/{id}/revisions:
@@ -5404,13 +5425,18 @@ paths:
         same absent/null/empty distinction every write surface in this
         contract enforces. The request body is therefore ConfigShowWrite;
         the response is always the resolved ConfigShow shape, which
-        renders `notes` even when empty (never absent).
+        renders `notes` even when empty (never absent). Optionally
+        carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
+        refused with `409` when the precondition names a revision that is
+        no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5435,6 +5461,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show/{id}/revisions:
@@ -5561,13 +5589,18 @@ paths:
         key), so the request and response share the same
         ConfigShowSurface shape. A second surface assigned to the same
         node is accepted (ADR-026's `N=1` is a scope limit on the
-        renderer, not a schema rule).
+        renderer, not a schema rule). Optionally carries
+        `If-Match`/`If-None-Match` (opt-in; see those parameters): refused
+        with `409` when the precondition names a revision that is no
+        longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5592,6 +5625,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.surface/{id}/revisions:
@@ -5704,12 +5739,17 @@ paths:
         to play is a policy with no subject). `outputs.announcement.policy`
         of "duck" requires `duckGainDb` (negative, at least -60 dB) and
         refuses it on "mix"/"interrupt". This is a FULL REPLACEMENT.
+        Optionally carries `If-Match`/`If-None-Match` (opt-in; see those
+        parameters): refused with `409` when the precondition names a
+        revision that is no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5734,6 +5774,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.cue/{id}/revisions:
@@ -5849,13 +5891,18 @@ paths:
         same-show `show.cue` object, entry ids must be unique, and two
         entries sharing the same `fpp.section`/`fpp.position` pair are
         refused (they derive the identical FPP entry key). This is a FULL
-        REPLACEMENT.
+        REPLACEMENT. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current, or when
+        this Show already has a different showmesh-audio playlist.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5880,6 +5927,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.playlist/{id}/revisions:
@@ -5953,7 +6002,12 @@ paths:
         constant, never derived from `show` or from any other
         configuration value, so activating a different show accumulates
         as a new revision of the SAME object rather than orphaning the
-        previous history.
+        previous history. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5978,6 +6032,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.active/revisions:
@@ -6076,13 +6132,17 @@ paths:
         existing show.action object in the same show. This is a FULL
         REPLACEMENT: an omitted optional block (backgroundAudio) is left
         unconfigured, never wiped by an absent key on top of a required
-        one.
+        one. Optionally carries `If-Match`/`If-None-Match` (opt-in; see
+        those parameters): refused with `409` when the precondition names
+        a revision that is no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -6107,6 +6167,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/night.session/{id}/revisions:
@@ -6220,7 +6282,12 @@ paths:
         id is a fixed constant, never derived from `session`, so
         activating a different session (or clearing it) accumulates as a
         new revision of the SAME object rather than orphaning the
-        previous history.
+        previous history. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -6245,6 +6312,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/night.session.active/revisions:
@@ -7765,6 +7834,50 @@ components:
         hand-maintained list.
       schema:
         type: string
+  parameters:
+    ConfigRevisionIfMatch:
+      name: If-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >-
+        Optional revision precondition for a config PUT, shared by every
+        route sharing this parameter across every config kind that
+        supports it (no per-kind variation). When present, must be a
+        quoted revision integer of 1 or greater, e.g. `"7"` - the value of
+        this response shape's own `revision` field, quoted; revisions
+        start at 1, so `"0"` is refused as `400` malformed rather than
+        accepted as an undocumented second spelling of
+        `If-None-Match: "*"`. Asserts that the revision the client last
+        read is still the object's current one: if the object's current
+        revision has moved since, the write is refused with `409` and
+        nothing is written. Mutually exclusive with `If-None-Match` on the
+        same request (`400` if both are sent). Absent means unconditional:
+        this coordinator accepts the write regardless of the object's
+        current revision, exactly as it always has before this
+        precondition existed. That absence-accepted default is
+        deliberate and ruled, not a gap: the guarantee this parameter
+        provides is opt-in, never mandatory, so a client that never sends
+        it is unprotected, and two clients that both omit it can still
+        silently overwrite one another.
+    ConfigRevisionIfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >-
+        Optional create-only precondition for a config PUT, shared by
+        every route sharing this parameter across every config kind that
+        supports it (no per-kind variation). The only accepted value is
+        the literal `*`; anything else is refused `400`. Asserts that this
+        id has no active revision yet: if one already exists, the write is
+        refused with `409` and nothing is written. Mutually exclusive with
+        `If-Match` on the same request (`400` if both are sent). Absent
+        means unconditional, exactly like `If-Match`'s own absence: this
+        coordinator creates or overwrites whatever is there, exactly as it
+        always has before this precondition existed.
   securitySchemes:
     bearerAuth:
       type: http
