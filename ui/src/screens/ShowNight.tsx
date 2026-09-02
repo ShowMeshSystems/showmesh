@@ -238,10 +238,6 @@ export function ShowNight() {
         <div>
           <p className="sm-eyebrow">Show Night · <span className="sm-data">{session.id}</span></p>
           <h1 className="sm-page__title">Cycle {session.cycle} of the night</h1>
-          <p className="sm-page__lede">
-            FPP owns the schedule, playlist selection, and progression. ShowMesh advances the transitions between shows
-            and records what it observed.
-          </p>
         </div>
         <ButtonRow>
           {session.armedShowId !== '' ? (
@@ -452,7 +448,7 @@ export function ShowNight() {
             </TableWrap>
             <p className="sm-section__footnote">
               {steps.length} steps this cycle · {armed} armed for the boundary. A step marked unconfirmable expects no
-              response and reports that on every run, by design.
+              response and reports that on every run.
             </p>
           </>
         )}

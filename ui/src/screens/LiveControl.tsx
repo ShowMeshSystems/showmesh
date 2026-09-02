@@ -1182,10 +1182,7 @@ function PageHeader() {
   return (
     <>
       <h1 className="sm-page__title">Live Control</h1>
-      <p className="sm-page__lede">
-        Acting on the show that is running now. A command is not successful because it was sent: each one reports the
-        evidence that it took effect, or why it did not.
-      </p>
+      <p className="sm-page__lede">Acting on the show that is running now.</p>
     </>
   )
 }

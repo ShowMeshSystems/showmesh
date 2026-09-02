@@ -609,7 +609,7 @@ function MacroCard({
 
       <p className="sm-section__footnote">
         {lastRun === null ? (
-          'Never run. There is no run history to read, that is a settled fact, not missing evidence.'
+          'Never run.'
         ) : (
           <>
             Last run <span className="sm-data">{formatClock(lastRun.createdAt) ?? 'at an unrecorded time'}</span> by {lastRun.issuerPrincipalName}{' '}

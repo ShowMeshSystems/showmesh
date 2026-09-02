@@ -18,10 +18,7 @@ export function Settings() {
   const resolume = model.resolume[0]
   return (
     <>
-      <PageTitle
-        title="Settings"
-        lede="Installation-wide configuration. Every save creates a coordinator revision, is attributed to you, and can conflict with someone else's."
-      />
+      <PageTitle title="Settings" />
 
       <nav className="sm-facets" aria-label="Settings tabs">
         {TABS.map((tab) => (
