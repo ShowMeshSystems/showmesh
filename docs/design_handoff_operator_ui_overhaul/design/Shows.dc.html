@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e; --surface: #0c1215; --raised: #111a1d; --sunken: #050809;
+  --border: #26343a; --border-strong: #3b4d54;
+  --text: #eef5f3; --text-muted: #a5b5b9; --text-faint: #96a5a2; --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181); --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181); --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181); --on-accent: #05191a; --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158); --good-bg: oklch(0.255 0.045 158); --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80); --warn-bg: oklch(0.26 0.05 80); --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24); --bad-bg: oklch(0.26 0.06 24); --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210); --unk-bg: oklch(0.255 0.012 210); --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">▾</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 · next in 1:06</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night<span style="font:var(--t-meta);color:var(--good-fg)">LIVE</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--bad-bg);border:1px solid var(--bad-border);color:var(--bad-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:22px 28px 80px;max-width:1120px">
+
+      <sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap">
+          <div style="min-width:0">
+            <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Shows</h1>
+            <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:80ch">A show is a namespace. Its cues, playlists, surfaces and assets reference only each other — nothing crosses between shows, at authoring time or at runtime.</p>
+          </div>
+          <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">New show</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:20px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+          <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)">● One active</span>
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Only the active show can affect the running system. That is why next season's show can be prepared without touching tonight — and why a Hallowed Hollow sequence playing in FPP will not activate its audio while Winter Ridge is active.</p>
+        </div>
+
+        <section aria-labelledby="sh-list" style="margin-top:20px">
+          <h2 id="sh-list" style="margin:0 0 12px;font:var(--t-heading);letter-spacing:-0.015em">All shows</h2>
+          <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <table style="width:100%;min-width:620px;border-collapse:collapse;font:var(--t-body)">
+            <thead>
+              <tr>
+                <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</th>
+                <th style="width:230px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Contents</th>
+                <th style="width:158px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Last saved</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="background:var(--accent-bg)">
+                <td style="padding:10px 10px 10px 12px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);border-left:2px solid var(--accent)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Winter Ridge 2026</a> <span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase">Active</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-ridge-2026 · rev 47</span></td>
+                <td style="padding:10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);font:var(--t-small);color:var(--text-muted)">2 playlists · 14 cues · 3 surfaces · 22 assets</td>
+                <td style="padding:10px 14px 10px 10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);font:var(--t-small);color:var(--text-muted)">Today 18:22<br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">erbartos</span></td>
+              </tr>
+              <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Hallowed Hollow 2026</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">hallowed-hollow-2026 · rev 61</span></td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">3 playlists · 21 cues · 3 surfaces · 34 assets</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">2 Aug 23:14<br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">erbartos</span></td>
+              </tr>
+              <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                <td style="padding:10px 10px 10px 12px;border-left:2px solid var(--border-strong)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Spring Test Bench</a><br><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint)">Nothing authored yet</span></td>
+                <td style="padding:10px"><span style="font:var(--t-small);color:var(--text-faint)">Empty</span></td>
+                <td style="padding:10px 14px 10px 10px;font:var(--t-small);color:var(--text-muted)">14 Aug 16:02<br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">erbartos</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="padding:9px 14px;border-top:1px solid var(--border);background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Switching the active show invalidates the previous show's authority and requires readiness for the new one. It is an audited change, not a view filter.</span>
+          </div>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ isDetail }}" hint-placeholder-val="{{ false }}">
+        <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Shows</a> <span style="color:var(--text-faint)">/</span> Winter Ridge 2026 <span style="color:var(--text-faint)">/</span> Details</p>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:8px">
+          <div style="min-width:0">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Winter Ridge 2026</h1>
+              <span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:3px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase">Active</span>
+            </div>
+            <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">Identity and notes only. What the show <em>contains</em> lives in its workspace tabs.</p>
+          </div>
+          <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Open workspace</button>
+        </div>
+
+        <section aria-labelledby="sh-ident" style="margin-top:26px;max-width:660px">
+          <h2 id="sh-ident" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Identity</h2>
+          <div style="display:grid;gap:16px;margin-top:14px">
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Name</span>
+              <input type="text" value="Winter Ridge 2026" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+            </label>
+            <div style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Id</span>
+              <p style="margin:0;display:flex;align-items:center;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);font:var(--t-data);color:var(--text-muted)">winter-ridge-2026</p>
+              <span style="font:var(--t-small);color:var(--text-faint)">Fixed at creation. Every cue, surface and asset in this show is keyed on it, so it cannot change.</span>
+            </div>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Notes</span>
+              <textarea style="min-height:88px;padding:8px 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);resize:vertical">Barn roof and driveway arch rebuilt for 2026. Garage bay is new — its projector runs hot, watch the cooldown interlock at power-down.</textarea>
+              <span style="font:var(--t-small);color:var(--text-faint)">For whoever operates this next, including you in eleven months.</span>
+            </label>
+          </div>
+        </section>
+
+        <section aria-labelledby="sh-contents" style="margin-top:26px;max-width:660px">
+          <h2 id="sh-contents" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">What this show contains</h2>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;margin-top:14px;background:var(--border);border:1px solid var(--border);border-radius:5px;overflow:hidden">
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Playlists</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">2</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Cues</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">14</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Surfaces</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">3</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Assets</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">22</p>
+            </a>
+          </div>
+          <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-muted);max-width:72ch">Each of these is its own revisioned object, so editing a cue creates a cue revision — not an opaque revision of the whole show.</p>
+        </section>
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:18px;border-top:1px solid var(--border);max-width:660px">
+          <button type="button" style="height:34px;padding:0 16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save show</button>
+          <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Discard changes</button>
+          <span style="margin-left:auto;font:var(--t-small);color:var(--text-muted)">Active revision <span style="font:var(--t-data);color:var(--text)">47</span> · erbartos today 18:22</span>
+        </div>
+
+        <section aria-labelledby="sh-danger" style="margin-top:32px;max-width:660px">
+          <h2 id="sh-danger" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Delete this show</h2>
+          <div style="margin-top:12px;padding:16px;border:1px solid var(--bad-border);border-radius:5px;background:var(--surface)">
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:70ch">This is the <strong style="color:var(--text)">active</strong> show and a show is running on it right now. Deleting it would orphan 14 cues, 2 playlists and 3 surfaces, and leave the installation with no authority for tonight.</p>
+            <button type="button" disabled="{{ true }}" style="height:34px;margin-top:14px;padding:0 14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text-faint);font:var(--t-body);font-weight:500;cursor:not-allowed">Delete show</button>
+            <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-faint)">Make another show active first. Its 22 assets are not removed either way — they are content, not configuration.</p>
+          </div>
+        </section>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;view&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;list&quot;, &quot;detail&quot;], &quot;default&quot;: &quot;list&quot;, &quot;tsType&quot;: &quot;'list' | 'detail'&quot;, &quot;section&quot;: &quot;View&quot; },
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot;, &quot;section&quot;: &quot;Theme&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const view = this.props.view ?? 'list';
+    return {
+      theme: this.props.theme ?? 'dark',
+      isList: view === 'list',
+      isDetail: view === 'detail',
+    };
+  }
+}
+
+</script>
+</body>
+</html>

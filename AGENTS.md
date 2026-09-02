@@ -34,6 +34,17 @@ human approval. The build log remains an active historical record through the
 first pre-release; do not rewrite or flag superseded historical statuses as
 current inconsistencies.
 
+# Operator UI
+
+Before changing anything under `ui/`, read
+[`docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md`](docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md).
+It is normative for the operator UI: tokens, layout, the four absences, copy,
+and the component rules. `ui/src/kit` is the only stylesheet tree, and every
+screen composes from it. A control the mocks have no home for goes to
+`docs/ui-rebuild/OPEN-DECISIONS.md` for a ruling rather than being dropped or
+invented. Verify the change in a browser against a running coordinator; the
+unit suite does no layout.
+
 # Local agent overrides
 
 Contributors and maintainers may keep private or user-specific agent guidance

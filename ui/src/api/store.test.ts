@@ -13,6 +13,8 @@ import {
 } from './test-support/test-server'
 import {
   makeAuthenticatedSession,
+  makeCurrentRuns,
+  makeCurrentRunsChangedEvent,
   makeEvent,
   makeEventsResponse,
   makeFPPInstance,
@@ -27,7 +29,7 @@ import {
 import {
   makeRemote01Instance,
   makeRemote04Instance,
-} from '../app/test-support/fppFleetFixtures'
+} from './test-support/fppFleetFixtures'
 import type { components } from './generated/schema'
 
 type Evidence = components['schemas']['Evidence']
@@ -2691,6 +2693,106 @@ describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
   })
 })
 
+// ADR-048: the fallback-program readiness reads.
+// Both are plain ApiClient.getJson pass-throughs, same as
+// getFPPEndpointsConfig above, so they are proven the same way. Neither
+// touches store.connect() / the SSE read loop.
+describe('ApiStore: fallback programs (ADR-048, Track J’s J1)', () => {
+  it('listFallbackPrograms() GETs /fallback-programs and returns the decoded list', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        programs: [
+          {
+            fppInstanceUuid: 'uuid-1',
+            packageId: 'pkg-1',
+            revision: 'rev-1',
+            show: 'demo',
+            generation: 3,
+            expiresAt: '2026-09-02T00:00:00Z',
+            compiledAt: '2026-09-01T00:00:00Z',
+          },
+        ],
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.listFallbackPrograms()
+
+    expect(gotPath).toBe('/fallback-programs')
+    expect(resp.programs).toHaveLength(1)
+    expect(resp.programs[0]?.fppInstanceUuid).toBe('uuid-1')
+    expect(resp.programs[0]?.packageId).toBe('pkg-1')
+  })
+
+  it('listFallbackPrograms() rejects with a typed error on 404 (older coordinator, route unknown)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 404, makeProblem({
+        type: 'https://showmesh.dev/problems/resource-not-found', status: 404,
+        detail: 'no such route',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.listFallbackPrograms()).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('getFallbackProgram() GETs /fallback-programs/{fppInstanceId} and returns the decoded response', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        fppInstanceUuid: 'uuid-1',
+        published: true,
+        signatureBase64: 'c2ln',
+        acknowledgedStatus: 'fallback-program-current',
+        acknowledgedPackageId: 'pkg-1',
+        acknowledgedAt: '2026-09-01T00:05:00Z',
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getFallbackProgram('uuid-1')
+
+    expect(gotPath).toBe('/fallback-programs/uuid-1')
+    expect(resp.published).toBe(true)
+    expect(resp.acknowledgedStatus).toBe('fallback-program-current')
+  })
+
+  it('getFallbackProgram() encodes the instance id in the path', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        fppInstanceUuid: 'uuid with space',
+        published: false,
+        acknowledgedStatus: 'fallback-program-unacknowledged',
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.getFallbackProgram('uuid with space')
+
+    expect(gotPath).toBe('/fallback-programs/uuid%20with%20space')
+  })
+
+  it('getFallbackProgram() rejects with a typed error on 403 (fpp:fallback is admin/scheduler only)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 403, makeProblem({
+        type: 'https://showmesh.dev/problems/forbidden', status: 403,
+        detail: 'missing scope fpp:fallback',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.getFallbackProgram('uuid-1')).rejects.toMatchObject({ status: 403 })
+  })
+})
+
 // Track D seam D-2a (ADR-032): getResolumeComposition is a plain
 // ApiClient.getJson pass-through, same as getFPPEndpointsConfig above, so
 // it is proven the same way. uploadResolumeComposition is NOT — it
@@ -3187,6 +3289,76 @@ describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first
   })
 })
 
+describe('ApiStore: dispatchNightCommand skipEnterShowLead (RESTING-MODE.md §7.1)', () => {
+  function nightCommandResponse(command: string) {
+    return {
+      serverTime: '2026-08-12T22:00:00Z',
+      command: { command, outcome: 'applied', attributionDegraded: false },
+      session: {},
+    }
+  }
+
+  it('sends skipEnterShowLead: true on start-night when requested', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/start-night' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('start-night'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('start-night', undefined, undefined, true)
+    expect(gotBody.skipEnterShowLead).toBe(true)
+  })
+
+  it('sends no skipEnterShowLead field on start-night when not requested', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/start-night' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('start-night'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('start-night', undefined, undefined, false)
+    expect('skipEnterShowLead' in gotBody).toBe(false)
+  })
+
+  it('never sends skipEnterShowLead for a command other than start-night, even when true', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/end-session' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('end-session'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('end-session', undefined, undefined, true)
+    expect('skipEnterShowLead' in gotBody).toBe(false)
+  })
+})
+
 // Step 8, ADR-015: FPPCommandRequest.params used to be generated as
 // Record<string, never> (api/openapi.yaml declared it as a bare object
 // with no JSON Schema `properties`), a type no non-empty object
@@ -3249,6 +3421,74 @@ describe('FPPCommandRequest params (type-level only, Step 8/ADR-015)', () => {
       params: { paylist: 'showmesh-test', repeat: false, ifBusy: 'refuse' },
     }
     expect(misspelled.action).toBe('startPlaylist')
+  })
+})
+
+describe('ApiStore: current runner playback', () => {
+  it('fetches GET /current-runs after the baseline and applies concurrent runners', async () => {
+    let stream: import('node:http').ServerResponse | null = null
+    const current = makeCurrentRuns({
+      runs: [
+        makeCurrentRuns().runs[0]!,
+        { ...makeCurrentRuns().runs[0]!, id: 'run-audio-1', runner: 'showmesh-audio' },
+      ],
+    })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        stream = res
+        writeSSEFrame(res, 'stream.start', { streamId: 's1', apiVersion: 1, serverTime: '2026-08-11T12:00:00.000Z', snapshotRequired: true })
+      } else if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+      } else if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+      } else if (req.url === '/current-runs') {
+        respondJson(res, 200, current)
+      } else if (req.url === '/session') {
+        respondJson(res, 200, makeSessionResponse())
+      } else {
+        res.writeHead(404).end()
+      }
+    })
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().currentRuns?.runs.length === 2)
+
+    expect(s.requestsFor('/current-runs')).toHaveLength(1)
+    expect(store.getSnapshot().currentRuns?.runs.map((run) => run.runner)).toEqual(['fpp', 'showmesh-audio'])
+    expect(stream).not.toBeNull()
+  })
+
+  it('replaces current playback from a currentRuns.changed full frame', async () => {
+    let stream: import('node:http').ServerResponse | null = null
+    const initial = makeCurrentRuns()
+    const changed = makeCurrentRunsChangedEvent({ runs: [], activeShow: { configured: false, show: null, generation: null } })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        stream = res
+        writeSSEFrame(res, 'stream.start', { streamId: 's1', apiVersion: 1, serverTime: '2026-08-11T12:00:00.000Z', snapshotRequired: true })
+      } else if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+      } else if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+      } else if (req.url === '/current-runs') {
+        respondJson(res, 200, initial)
+      } else if (req.url === '/session') {
+        respondJson(res, 200, makeSessionResponse())
+      } else {
+        res.writeHead(404).end()
+      }
+    })
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().currentRuns !== null)
+    if (stream === null) throw new Error('stream was not opened')
+    writeSSEFrame(stream, 'currentRuns.changed', changed)
+    await waitFor(() => store.getSnapshot().currentRuns?.runs.length === 0)
+    expect(store.getSnapshot().currentRuns?.activeShow.configured).toBe(false)
   })
 })
 
@@ -3512,6 +3752,135 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
 
     await waitFor(() => store.getSnapshot().nightSession === null, {
       message: 'stream.reset did not clear model.nightSession',
+    })
+  })
+
+  it('applies a resolumeRecovery.changed frame as a whole-object replace of model.resolumeRecovery', async () => {
+    const changed = {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      resolumeConfigured: true,
+      autoRestoreEnabled: true,
+      autoRestoreConfigured: true,
+      settleDelaySeconds: 5,
+      record: [{ layer: 'Base', layerNameGenerated: false, state: 'dark' as const }],
+      lastRestore: {
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        trigger: 'automatic' as const,
+        outcome: 'restored' as const,
+        principal: 'coordinator',
+        layers: [],
+        omittedLayerCount: 0,
+      },
+    }
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'resolumeRecovery.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+
+    // Model.resolumeRecovery is not part of Snapshot (unlike resolume/fpp)
+    // — this asserts the "before the first live frame" state a view
+    // relies on for its own REST fallback (screens/ResolumeConfig.tsx).
+    expect(store.getSnapshot().resolumeRecovery).toBeNull()
+
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().resolumeRecovery?.lastRestore?.outcome === 'restored', {
+      message: 'resolumeRecovery.changed was never applied to the model',
+    })
+
+    expect(store.getSnapshot().resolumeRecovery).toEqual({
+      serverTime: changed.serverTime,
+      resolumeConfigured: changed.resolumeConfigured,
+      autoRestoreEnabled: changed.autoRestoreEnabled,
+      autoRestoreConfigured: changed.autoRestoreConfigured,
+      settleDelaySeconds: changed.settleDelaySeconds,
+      record: changed.record,
+      lastRestore: changed.lastRestore,
+    })
+  })
+
+  it('a stream.reset clears model.resolumeRecovery back to null, matching model.nightSession', async () => {
+    const changed = {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      resolumeConfigured: true,
+      autoRestoreEnabled: true,
+      autoRestoreConfigured: true,
+      settleDelaySeconds: 5,
+      record: [] as unknown[],
+      lastRestore: null,
+    }
+    let streamRes = null as import('node:http').ServerResponse | null
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamRes = res
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'resolumeRecovery.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().resolumeRecovery !== null, {
+      message: 'resolumeRecovery.changed was never applied to the model',
+    })
+
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'stream.reset', {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      reason: 'subscriber_too_slow',
+      snapshotRequired: true,
+    })
+
+    await waitFor(() => store.getSnapshot().resolumeRecovery === null, {
+      message: 'stream.reset did not clear model.resolumeRecovery',
     })
   })
 

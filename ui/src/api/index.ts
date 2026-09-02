@@ -12,6 +12,15 @@ export type {
   ConfigRevisionMeta,
   ConfigRevisionsResponse,
   ConnectionState,
+  CurrentRunsResponse,
+  CurrentShowContext,
+  CurrentRun,
+  CurrentPlayback,
+  CurrentRunFreshness,
+  CurrentReconciliation,
+  CurrentRunActivation,
+  CurrentRunTarget,
+  CurrentRunNext,
   ControlPlane,
   DiscoveryProposal,
   DiscoveryRun,
@@ -29,6 +38,8 @@ export type {
   ConfigFPPMQTTPayload,
   ConfigFPPMQTTPutRequest,
   FPPMQTTConfigResponse,
+  FPPConnectSettingsConfigResponse,
+  ConfigFPPConnectSettingsPayload,
   // Track G seam G-4 (ADR-039).
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPayload,
@@ -79,6 +90,8 @@ export type {
   // Track B seam B2b-front: the three render.* dispatch endpoints.
   ObservationEntry,
   RenderCommandResult,
+  // GET /observations, the flat evidence list.
+  ObservationsResponse,
   // The first audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
   AudioSessionCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
@@ -212,6 +225,7 @@ export type {
   NightAuthorization,
   NightSessionState,
   NightSessionResponse,
+  NightInterlockOverride,
   NightCommandRequest,
   NightCommandResult,
   NightCommandResponse,
@@ -232,6 +246,10 @@ export type {
   // operator reviews before clearing it.
   FPPPlaylistEntryObservation,
   FPPPlaylistEntryObservationsResponse,
+  // ADR-048, Track J's J1: the fallback-program readiness evidence.
+  FallbackProgramListEntry,
+  FallbackProgramListResponse,
+  FallbackProgramResponse,
 } from './domain'
 export {
   useModel,
@@ -252,12 +270,17 @@ export {
   listFPPPlaylistDefinitions,
   getFPPPlaylistDefinition,
   getFPPPlaylistDefinitionEntries,
+  listFallbackPrograms,
+  getFallbackProgram,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
   getFPPMQTTConfig,
   putFPPMQTTConfig,
   getFPPMQTTConfigRevisions,
+  getFPPConnectSettingsConfig,
+  putFPPConnectSettingsConfig,
+  getFPPConnectSettingsConfigRevisions,
   getAssetsSettingsConfig,
   putAssetsSettingsConfig,
   getAssetsSettingsConfigRevisions,
@@ -291,6 +314,7 @@ export {
   setAudioSessionGain,
   fadeAudioSessionGain,
   applyAudioSession,
+  listObservations,
   probeRenderTransport,
   runDiscovery,
   declareNode,
@@ -361,6 +385,7 @@ export {
   listAssets,
   uploadAsset,
   assetContentUrl,
+  getAssetContent,
   getAssetManifest,
   getNodeAssetManifest,
   listAudit,
@@ -371,6 +396,7 @@ export {
   // Track F seam F2/F1: the night-session lifecycle controller and the
   // night.session/night.session.active configuration kinds.
   getCurrentNightSession,
+  getCurrentRuns,
   getNightSessionById,
   dispatchNightCommand,
   getNightSessionConfig,
@@ -397,6 +423,12 @@ export type { UploadProgress } from './resolumeCompositionUpload'
 // storage contract, which stays owned by token.ts.
 export { getStoredToken } from './token'
 
+// The codebase's one idempotency-key generator (uuid.ts), used by every
+// mutating store method that sends one. ShowNight.tsx needs its own copy
+// to give `prepare-site` a stable key across a double-press, matching
+// the store's own generation rather than inventing a second scheme.
+export { randomUUIDv4 } from './uuid'
+
 // Exported for seam C's error-boundary / advanced testing needs and for
 // this seam's own tests; the real application only ever needs the
 // singleton wired up in useModel.ts.
@@ -418,3 +450,8 @@ export {
   TooManyRequestsError,
   UnauthorizedError,
 } from './errors'
+
+// RFC 9457 `type` values (problem.ts). ShowNight.tsx branches on
+// `ApiError.problemType` against these to render the night command
+// endpoint's three 409s and one 503 distinguishably.
+export { PROBLEM_TYPE } from './problem'

@@ -1,339 +1,651 @@
-import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { getServiceDescriptor, type ServiceDescriptor } from '../api'
-import { ConnectionBanner } from '../components/ConnectionBanner'
-import { AuditStoreBanner } from '../components/AuditStoreBanner'
-import { TokenPrompt } from '../components/TokenPrompt'
-import { SessionPanel, SessionIdentity } from '../components/SessionPanel'
-import { ShowModeIndicator } from '../components/ShowModeIndicator'
-import { describeApiError } from './session'
-import { useHighContrast } from './useHighContrast'
-import { useNavGroupOpenState } from './useNavGroupState'
+import { useEffect, useRef, useState } from 'react'
+import { Outlet } from 'react-router-dom'
+import {
+  Button,
+  ChromeBar,
+  ChromeProgress,
+  ClockSkewStrip,
+  ConnectionPill,
+  Notice,
+  Popover,
+  Rail,
+  RailFooter,
+  RailGroup,
+  RailLink,
+  RuledStrip,
+  ShellBody,
+  type Connection,
+} from '../kit'
+import {
+  ApiError,
+  getCurrentNightSession,
+  getServiceDescriptor,
+  getShowActive,
+  getShowModeConfig,
+  listConfigObjects,
+  putShowActive,
+  putShowModeConfig,
+  type ConfigObjectSummary,
+  type ConfigShowModePayload,
+  type ConnectionState,
+  type Model,
+  type NightSessionState,
+  type ShowActiveConfigResponse,
+  type ShowModeConfigResponse,
+} from '../api'
+import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
+import { describeApiError, describeSignInState, evaluateScope, type SignInState } from '../domain/session'
+import { guardedSave, type SaveOutcome } from '../domain/save'
+import { StaleWriteStrip } from '../screens/StaleWrite'
+import { liveCycle } from '../screens/settingsModel'
 import { useModelContext } from './ModelContext'
+import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
-export interface LayoutProps {
-  /** Wired to seam B's token submission (spec section 5.6); App.tsx supplies it. */
-  onSubmitToken: (token: string) => void
+const CONNECTION_LABEL: Record<Connection, string> = {
+  live: 'Live',
+  degraded: 'Degraded',
+  lost: 'Lost',
+  unknown: 'Unknown',
+}
+
+function connectionOf(state: ConnectionState): Connection {
+  switch (state.kind) {
+    case 'live':
+      return 'live'
+    case 'connecting':
+      return 'unknown'
+    case 'reconnecting':
+      return 'degraded'
+    default:
+      return 'lost'
+  }
+}
+
+const BLIND_NOW: Partial<Record<SignInState['kind'], string>> = {
+  signed_out: 'Nothing is being read on this device',
+  bootstrap_required: 'Unclaimed coordinator, no administrator exists',
+  loading: 'Reading the coordinator',
+}
+
+const BLIND_PRINCIPAL: Partial<Record<SignInState['kind'], string>> = {
+  signed_out: 'Signed out',
+  bootstrap_required: 'No principal',
+  loading: 'not signed in yet',
 }
 
 /**
- * Navigation is grouped by the OPERATOR-UI section 8 information
- * architecture: Show night, Monitor, Diagnostics, Control, Configure.
- *
- * Show night exists because those three screens are what an operator
- * actually uses while the installation is running at night: the
- * night-session controller, the active show, and the dashboard overview.
- * Grouping them together keeps the run-time path out of the diagnostic
- * and archival screens an operator does not need mid-show.
- *
- * Configure now exists: Step 7 seam A ships this application's first
- * configuration write surface (RES-008 D1). Control now exists too, as
- * of Step 9: "moving between operational states through show macros" is
- * OPERATOR-UI section 8's own example of what belongs here, and a macro
- * run is the first thing that fits it. Both groups were deliberately
- * NOT rendered empty or disabled before the behaviour behind them
- * existed — this is the same rule the dashboard follows for subsystems
- * the coordinator does not model: a visible-but-empty group asserts that
- * the section exists and currently has nothing in it, which was a false
- * statement right up until this step. A future group (e.g. controlled
- * devices) stays absent from this list until its own behaviour ships,
- * the same way these two did.
+ * The now-playing group truncates and never wraps. Cycle and time to next
+ * transition come from the night session, so they arrive with Show Night;
+ * the show picker and mode badge arrive with Shows and Settings › Mode.
  */
-const NAV_GROUPS: Array<{
-  heading: string
-  items: Array<{ to: string; label: string; end: boolean }>
-}> = [
-  {
-    heading: 'Show night',
-    items: [
-      // Track F seam F2 (UI half): the night-session lifecycle operating
-      // view — observes and commands the RUNNING controller. It is what
-      // an operator opens first while the installation is running.
-      { to: '/night', label: 'Night session', end: false },
-      { to: '/config/show.active', label: 'Active show', end: false },
-      // TRACK-H-H2-SPEC.md §5/§6: whether a show's Playlists are actually
-      // ready to run, and whether each FPP instance's latest observation
-      // still matches what the show declares. This is the show-night
-      // question a stale import, missing asset, or unbound Playlist
-      // would otherwise only surface from `showmeshctl fpp`.
-      { to: '/playlists/readiness', label: 'Playlist readiness', end: false },
-      { to: '/', label: 'Dashboard', end: true },
-    ],
-  },
-  {
-    heading: 'Monitor',
-    items: [
-      { to: '/nodes', label: 'Nodes', end: false },
-      { to: '/fpp', label: 'FPP', end: false },
-      // Track D seam D-4: monitor and control both live on this one route
-      // (build contract §2.2/§2.3), so it belongs in Monitor rather than
-      // splitting it across two nav groups.
-      { to: '/resolume', label: 'Resolume', end: false },
-      { to: '/events', label: 'Events', end: false },
-    ],
-  },
-  {
-    heading: 'Diagnostics',
-    items: [
-      { to: '/capabilities', label: 'Capabilities', end: false },
-      // Track G seam G-8: read-only surfaces — a node's own asset
-      // readiness and the append-only audit log.
-      { to: '/assets/manifest', label: 'Asset manifest', end: false },
-      { to: '/audit', label: 'Audit log', end: false },
-    ],
-  },
-  {
-    heading: 'Control',
-    items: [{ to: '/macros', label: 'Macros', end: false }],
-  },
-  {
-    heading: 'Configure',
-    // /config holds both the FPP endpoints and (Track G seam G-2, ADR-039)
-    // the Resolume instance connection, so the label names both. Before
-    // that seam this label named Resolume while Configuration.tsx held no
-    // Resolume content at all — the composition upload lives on /resolume,
-    // not here — which TRACK-G-surface-parity.md's own audit named as a
-    // placement fault seam G-2 was scoped to fix by making the label true
-    // rather than by changing it.
-    items: [
-      // `end: true`, unlike every other item in this list (Track G seam
-      // G-8 finding): NavLink's non-end matching is "current path starts
-      // with this path plus a segment boundary", and every new
-      // /config/show* route below satisfies that boundary against bare
-      // /config — this link would otherwise render as "active" on every
-      // page this seam added.
-      { to: '/config', label: 'FPP & Resolume', end: true },
-      { to: '/actions', label: 'Show actions', end: false },
-      // Track G seam G-5: identity administration's own nav entry.
-      { to: '/access', label: 'Access', end: false },
-      // Track G seam G-8: Track E's authoring surfaces, previously
-      // reachable only from showmeshctl.
-      { to: '/config/show', label: 'Shows', end: false },
-      { to: '/config/show.surface', label: 'Surfaces', end: false },
-      // Track H seam H6: the show.cue authoring surface, previously
-      // reachable only from showmeshctl.
-      { to: '/config/show.cue', label: 'Cues', end: false },
-
-      // ADR-039/ADR-018: the audio.settings/audio.node configuration
-      // kinds, previously reachable only from showmeshctl.
-      { to: '/config/audio.settings', label: 'Audio settings', end: false },
-      { to: '/config/audio.node', label: 'Audio nodes', end: false },
-
-      // Track H seam H6: show.playlist authoring, previously reachable
-      // only from showmeshctl.
-      { to: '/config/show.playlist', label: 'Playlists', end: false },
-      // TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition
-      // import evidence -- what an author sees to decide whether a
-      // Playlist binding still matches what FPP will actually play.
-      // Previously reachable only from `showmeshctl fpp
-      // playlist-definitions`.
-      { to: '/config/fpp-playlist-definitions', label: 'FPP playlist definitions', end: false },
-      // Track F seam F1 (UI half): the night.session/night.session.active
-      // authoring surfaces, previously reachable only from showmeshctl.
-      { to: '/config/night.session', label: 'Night sessions', end: false },
-      { to: '/config/night.session.active', label: 'Active night session', end: false },
-      { to: '/assets', label: 'Assets', end: false },
-    ],
-  },
-]
-
-// A stable DOM id for each group's link list (aria-controls target), not
-// used for anything else -- lowercased/hyphenated so it stays a valid id
-// across every current and future heading in NAV_GROUPS.
-function slugifyHeading(heading: string): string {
-  return heading.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-}
-
-export function Layout({ onSubmitToken }: LayoutProps) {
-  const model = useModelContext()
-  const [highContrast, toggleHighContrast] = useHighContrast()
-  const location = useLocation()
-  const { isOpen, toggle } = useNavGroupOpenState(NAV_GROUPS, location.pathname)
-
-  // Acceptance criterion 5 (spec section 7 / OPERATOR-UI section 5.1): an
-  // incompatible coordinator "produces the explicit error, not a partial
-  // render." Rendering the normal views underneath the banner in that
-  // state would show an empty dashboard ("0 nodes") that looks like real
-  // inventory rather than like a connection this UI has refused to trust.
-  // The same reasoning covers any state before the first snapshot has
-  // ever been applied (model.snapshotReceivedAt === null) -- an empty
-  // node list before any data has arrived is not evidence there are no
-  // nodes, so it must not render as if it were. Once a snapshot has been
-  // applied at least once, spec section 5.5's "keep the last good model
-  // across a disconnection" takes over instead: the views render
-  // normally and each one's DataFreshnessNotice carries the staleness.
-  const blockContent = model.connection.kind === 'incompatible' || model.snapshotReceivedAt === null
-
+function NowPlaying({ model, signInKind }: { model: Model; signInKind: SignInState['kind'] }) {
+  // Without a credential this device cannot read the show, which is not the
+  // same fact as the show being stopped. Never report the second for the first.
+  const blind = BLIND_NOW[signInKind]
+  if (blind !== undefined) {
+    return (
+      <>
+        <span className="sm-meta sm-faint">Now</span>
+        <span className="sm-small sm-faint sm-truncate">{blind}</span>
+      </>
+    )
+  }
+  const run = model.currentRuns?.runs[0]
+  if (run === undefined) {
+    return (
+      <>
+        <span className="sm-meta sm-faint">Now</span>
+        <span className="sm-small sm-faint">Nothing playing</span>
+      </>
+    )
+  }
+  const item = run.playback.media !== '' ? run.playback.media : run.playback.itemId
   return (
-    <div className="app-shell">
-      <nav className="app-nav" aria-label="Primary">
-        {NAV_GROUPS.map((group) => {
-          const open = isOpen(group.heading)
-          const linksId = `app-nav__group-links-${slugifyHeading(group.heading)}`
-          return (
-            // The group wrapper AND its links list are both `display:
-            // contents` at phone width (styles/global.css), so every link
-            // stays a direct flex child of the bottom tab bar and that
-            // layout is unaffected by collapsing -- collapsing only takes
-            // effect at the sidebar breakpoint. `data-open` drives that
-            // breakpoint's show/hide rule.
-            <div key={group.heading} className="app-nav__group" data-open={open}>
-              <button
-                type="button"
-                className="app-nav__group-heading"
-                aria-expanded={open}
-                aria-controls={linksId}
-                onClick={() => toggle(group.heading)}
-              >
-                <span>{group.heading}</span>
-                {/* A collapsed group still shows how many links it holds,
-                    so an operator can see there is something in there
-                    rather than reading it as an empty label. */}
-                {!open && <span className="app-nav__group-count">{group.items.length}</span>}
-              </button>
-              <div id={linksId} className="app-nav__group-links">
-                {group.items.map((item) => (
-                  <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
-                    {/* react-router-dom's NavLink sets aria-current="page" on the active
-                        link automatically; styles/global.css's [aria-current='page']
-                        rule uses that rather than a className toggle. */}
-                    {item.label}
-                  </NavLink>
-                ))}
-              </div>
-            </div>
-          )
-        })}
-      </nav>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <header className="app-header">
-          <h1 className="app-header__title">ShowMesh Operator</h1>
-          {/* ADR-033 decision 3: the installation-wide operating mode is
-              visible PERSISTENTLY, on every route, not on a settings page.
-              It sits in this header for the same reason SessionIdentity
-              below is not gated on `blockContent`: an operator must be able
-              to see which mode they are in even while the rest of the page
-              is showing "no data yet", because that is exactly the moment
-              every surface behaves differently and nothing says why. */}
-          <ShowModeIndicator />
-          {/* GET / (getServiceDescriptor): "is this the thing I just
-              deployed" has no other answer anywhere in this UI during a
-              fleet upgrade -- showmeshctl version reports it, this did not.
-              Low-noise reference text, never an alert, since an
-              unreachable coordinator already has ConnectionBanner's own
-              alert below. Operator-reported: this used to be its own
-              full-width row below the connection banner, one of three
-              stacked bands consuming vertical space before any page
-              content -- it folds in here instead, next to the other
-              persistent header text, and still states plainly when the
-              descriptor could not be read rather than rendering blank. */}
-          <CoordinatorBuildNotice />
-          {/* Operator-reported: this used to be a full-width band
-              (SessionPanel's signed-in case) below, spent purely on
-              "Signed in as X" and Sign out. It renders here instead, same
-              non-gating on `blockContent` as SessionPanel's other states
-              below -- see SessionIdentity's own header comment. */}
-          <SessionIdentity />
-          <button
-            type="button"
-            className="icon-button"
-            aria-pressed={highContrast}
-            onClick={toggleHighContrast}
-          >
-            {highContrast ? 'High contrast: on' : 'High contrast: off'}
-          </button>
-        </header>
-        <ConnectionBanner connection={model.connection} />
-        {/* ADR-024 decision 11's amendment: independent of `connection`
-            above and never gated on `blockContent` below, matching
-            SessionPanel's identical reasoning -- an operator must be able
-            to see the audit store is down even while the rest of the
-            page is showing "no data yet". */}
-        <AuditStoreBanner auditStore={model.auditStore} />
-        {model.connection.kind === 'unauthorized' && (
-          <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
-        )}
-        {/* ADR-024: independent of `connection` above — this renders
-            whenever GET /api/v1/session has answered, regardless of
-            whether reads are open, closed, or currently interrupted. See
-            SessionPanel's own header comment for why it is not gated on
-            `blockContent` below: an operator must be able to see "you are
-            signed out" even while the rest of the page is showing "no
-            data yet". */}
-        <SessionPanel />
-        <main className="app-main">
-          {blockContent ? (
-            <p className="text-muted" role="status">
-              {model.connection.kind === 'incompatible'
-                ? 'This view cannot be shown until the coordinator and this UI agree on an API version. See the message above.'
-                : 'Waiting for the first response from the coordinator…'}
-            </p>
-          ) : (
-            <Outlet />
-          )}
-        </main>
-      </div>
-    </div>
+    <>
+      <span className="sm-meta sm-faint">Now</span>
+      <span className="sm-truncate">{item !== '' ? item : 'Item not named'}</span>
+      <span className="sm-small sm-faint sm-truncate">{run.playback.state}</span>
+    </>
   )
 }
 
-type DescriptorState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; descriptor: ServiceDescriptor }
-
-// `GET /` is "Always open, with no credential and regardless of whether
-// reads are otherwise closed" (api/openapi.yaml's own doc comment), so
-// this fetches exactly once on mount, independent of `model.connection`
-// and `model.session` above -- there is no scope to gate it on and no
-// stream frame that would ever refresh it. A failed fetch renders as a
-// stated fact, never a blank or a guessed version: the reader must be
-// able to tell "unknown" apart from "same build as before".
-function CoordinatorBuildNotice() {
-  const [state, setState] = useState<DescriptorState>({ kind: 'loading' })
+/**
+ * D-020 (Eric, 2026-09-01): a night session, seeded once and kept live by
+ * `nightSession.changed`, exactly as SettingsMode's identically named hook
+ * does. Needed here only to word the mode-badge confirm's leaving-show-mode
+ * warning the same way SettingsMode does.
+ */
+function useNightSessionSeed(model: Model): NightSessionState | null {
+  const [seeded, setSeeded] = useState<NightSessionState | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    async function load(): Promise<void> {
-      try {
-        const descriptor = await getServiceDescriptor()
-        if (cancelled) return
-        setState({ kind: 'loaded', descriptor })
-      } catch (err) {
-        if (cancelled) return
-        setState({ kind: 'error', message: describeApiError(err) })
-      }
-    }
-    void load()
+    getCurrentNightSession()
+      .then((response) => {
+        if (!cancelled) setSeeded(response.session)
+      })
+      .catch(() => {
+        // An unread session stays unread; it never claims a cycle either way.
+      })
     return () => {
       cancelled = true
     }
   }, [])
 
-  if (state.kind === 'loading') {
-    return (
-      <p className="text-muted coordinator-build-notice" role="status">
-        Coordinator build: loading…
-      </p>
-    )
-  }
+  return model.nightSession ?? seeded
+}
 
-  if (state.kind === 'error') {
-    return (
-      <p className="text-muted coordinator-build-notice" role="status">
-        Coordinator build: could not be read ({state.message}).
-      </p>
-    )
-  }
+type CoordinatorBuildState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; version: string; commit: string }
+  | { kind: 'failed' }
 
-  const { coordinator, apiVersion } = state.descriptor
+/** D-002 (re-ruled, 2026-09-01): the coordinator's version and commit live once, in the rail footer. */
+function useCoordinatorBuild(): CoordinatorBuildState {
+  const [state, setState] = useState<CoordinatorBuildState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    getServiceDescriptor()
+      .then((descriptor) => {
+        if (!cancelled) {
+          setState({ kind: 'loaded', version: descriptor.coordinator.version, commit: descriptor.coordinator.commit })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setState({ kind: 'failed' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
+/** The rail footer shows a short commit and titles the full one; empty while loading, never a guess. */
+function RailBuild() {
+  const build = useCoordinatorBuild()
+  if (build.kind === 'loading') return null
+  if (build.kind === 'failed') {
+    return <span className="sm-small sm-faint">Coordinator build not reported</span>
+  }
   return (
-    <p
-      className="text-muted coordinator-build-notice"
-      role="status"
-      title={`Commit ${coordinator.commit}, built ${coordinator.buildDate}, ${coordinator.goVersion}`}
-    >
-      Coordinator {coordinator.version} ({coordinator.commit.slice(0, 7)}, API v{apiVersion})
-    </p>
+    <>
+      <span className="sm-small sm-faint">{build.version}</span>
+      <span className="sm-data sm-small sm-faint" title={build.commit}>
+        {build.commit.slice(0, 7)}
+      </span>
+    </>
+  )
+}
+
+/** No `show.active` object has ever existed: the 404 the store documents, translated so `guardedSave` never special-cases it. Mirrors Shows.tsx's identical helper. */
+function emptyShowActive(): ShowActiveConfigResponse {
+  return {
+    serverTime: '',
+    kind: 'show.active',
+    id: 'show.active',
+    revision: 0,
+    payload: { show: '' },
+    updatedAt: '',
+    createdByPrincipalId: null,
+    createdByPrincipalName: null,
+    source: 'api',
+  }
+}
+
+function readShowActiveOrEmpty(): Promise<ShowActiveConfigResponse> {
+  return getShowActive().catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return emptyShowActive()
+    throw err
+  })
+}
+
+type ShowStale = Extract<SaveOutcome<ShowActiveConfigResponse>, { kind: 'stale' }>
+type ModeStale = Extract<SaveOutcome<ShowModeConfigResponse>, { kind: 'stale' }>
+
+/**
+ * The show-pill popover's body: the show list, the current selection, and
+ * the audited `show.active` write, gated by the anchor already being
+ * disabled when `config:write` is refused (nothing here re-checks the gate).
+ */
+function ShowActivePicker({
+  current,
+  gate,
+  onClose,
+}: {
+  current: string
+  gate: ReturnType<typeof evaluateScope>
+  onClose: () => void
+}) {
+  const [objects, setObjects] = useState<ConfigObjectSummary[] | null>(null)
+  const [objectsError, setObjectsError] = useState<string | null>(null)
+  const [baseline, setBaseline] = useState<ShowActiveConfigResponse | null>(null)
+  const [baselineError, setBaselineError] = useState<string | null>(null)
+  const [selected, setSelected] = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<ShowStale | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    listConfigObjects('show')
+      .then((response) => {
+        if (!cancelled) setObjects(response.objects)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setObjectsError(describeApiError(err))
+      })
+    readShowActiveOrEmpty()
+      .then((response) => {
+        if (!cancelled) setBaseline(response)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setBaselineError(describeApiError(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const apply = () => {
+    if (baseline === null || selected === '' || selected === current) return
+    const was = current !== '' ? `"${current}"` : 'none'
+    if (!window.confirm(`Activate show "${selected}"? This replaces the active show (currently ${was}).`)) return
+    setSaving(true)
+    setSaveError(null)
+    setStale(null)
+    guardedSave({
+      loaded: baseline,
+      read: readShowActiveOrEmpty,
+      write: () => putShowActive({ show: selected }),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onClose()
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <>
+      {objectsError !== null ? (
+        <RuledStrip absence="failed" label="Read failed" fact={objectsError} />
+      ) : objects === null ? (
+        <p className="sm-small sm-faint">Reading shows.</p>
+      ) : objects.length === 0 ? (
+        <p className="sm-small sm-faint">No show is configured.</p>
+      ) : (
+        <div className="sm-popover__options">
+          {objects.map((object) => (
+            <button
+              key={object.id}
+              type="button"
+              className={`sm-popover__option${selected === object.id ? ' sm-popover__option--selected' : ''}`}
+              onClick={() => setSelected(object.id)}
+            >
+              <span>{object.label}</span>
+              {current === object.id && <span className="sm-popover__option-current">Current</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {baselineError !== null && <RuledStrip absence="failed" label="Read failed" fact={baselineError} />}
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            setBaseline(null)
+            readShowActiveOrEmpty()
+              .then(setBaseline)
+              .catch((err: unknown) => setBaselineError(describeApiError(err)))
+          }}
+        />
+      )}
+      {!gate.allowed && <p className="sm-small sm-faint">{gate.reason}</p>}
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <div className="sm-popover__actions">
+        <Button
+          variant="primary"
+          size="compact"
+          onClick={apply}
+          disabled={!gate.allowed || saving || baseline === null || selected === '' || selected === current}
+          title={gate.allowed ? undefined : gate.reason}
+        >
+          {saving ? 'Applying…' : 'Apply'}
+        </Button>
+        <Button variant="quiet" size="compact" onClick={onClose} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+    </>
+  )
+}
+
+/**
+ * The active show is a config object (`config/show.active`), which every
+ * coordinator has; that read is this pill's source of truth for the current
+ * show and its revision. `model.currentRuns.activeShow` is used only as
+ * extra evidence (its generation) when a `current-runs` read has succeeded,
+ * never as the primary source — a coordinator without `GET /current-runs`
+ * must still open the picker. `Show not reported` is reserved for the one
+ * case that actually is unreported: the `show.active` read itself failed.
+ */
+function ShowPicker({ model, signInKind }: { model: Model; signInKind: SignInState['kind'] }) {
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState<ShowActiveConfigResponse | null>(null)
+  const [readError, setReadError] = useState<string | null>(null)
+  const authenticated = signInKind === 'signed_in'
+  const principalId = model.session?.principal?.id ?? null
+
+  // Without a credential this device cannot read show.active either; the
+  // read is never issued until signed in, and is re-issued whenever the
+  // signed-in principal changes.
+  useEffect(() => {
+    if (!authenticated) return
+    let cancelled = false
+    setActive(null)
+    setReadError(null)
+    readShowActiveOrEmpty()
+      .then((response) => {
+        if (!cancelled) setActive(response)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setReadError(describeApiError(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [authenticated, principalId])
+
+  if (!authenticated) {
+    return (
+      <span className="sm-showpicker sm-showpicker--unavailable">
+        <span className="sm-showpicker__eyebrow">Show</span>
+      </span>
+    )
+  }
+
+  if (readError !== null) {
+    return (
+      <span className="sm-showpicker sm-showpicker--unavailable">
+        <span className="sm-showpicker__eyebrow">Show</span>
+        <span className="sm-small sm-faint">Show not reported</span>
+        <span className="sm-small sm-faint sm-truncate">{readError}</span>
+      </span>
+    )
+  }
+
+  // Not yet resolved: say nothing rather than invent a value.
+  if (active === null) return null
+
+  const current = active.payload.show
+  const generation = model.currentRuns?.activeShow.generation ?? null
+
+  return (
+    <span className="sm-chrome__picker">
+      <button
+        ref={anchorRef}
+        type="button"
+        className="sm-showpicker"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={generation !== null ? `Generation ${generation}` : undefined}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="sm-showpicker__eyebrow">Show</span>
+        <span className="sm-showpicker__value">{current !== '' ? current : 'None'}</span>
+        <span className="sm-showpicker__chevron" aria-hidden="true">▾</span>
+      </button>
+      <Popover open={open} title="Choose show" anchorRef={anchorRef} onClose={() => setOpen(false)}>
+        <ShowActivePicker current={current} gate={gate} onClose={() => setOpen(false)} />
+      </Popover>
+    </span>
+  )
+}
+
+const MODE_CHOICES: readonly { value: ConfigShowModePayload['mode']; label: string }[] = [
+  { value: 'show', label: 'Show mode' },
+  { value: 'program', label: 'Program mode' },
+]
+
+/** The mode-badge popover's body: the show.mode schema's two values, the audited `show.mode` write. */
+function ModePicker({
+  response,
+  nightSession,
+  gate,
+  onClose,
+}: {
+  response: ShowModeConfigResponse
+  nightSession: NightSessionState | null
+  gate: ReturnType<typeof evaluateScope>
+  onClose: () => void
+}) {
+  const current = response.payload.mode
+  const [selected, setSelected] = useState<ConfigShowModePayload['mode']>(current)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<ModeStale | null>(null)
+
+  const apply = () => {
+    if (selected === current) return
+    const chosen = MODE_CHOICES.find((option) => option.value === selected)?.label ?? selected
+    const leavingShowLive = current === 'show' && selected === 'program' && liveCycle(nightSession) !== null
+    const warning = leavingShowLive ? ' Switching to Program mode now is allowed, but it stops treating the audience as present.' : ''
+    if (!window.confirm(`Switch mode to ${chosen}?${warning}`)) return
+    setSaving(true)
+    setSaveError(null)
+    setStale(null)
+    guardedSave({
+      loaded: response,
+      read: getShowModeConfig,
+      write: () => putShowModeConfig({ mode: selected }),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onClose()
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <>
+      <div className="sm-popover__options">
+        {MODE_CHOICES.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`sm-popover__option${selected === option.value ? ' sm-popover__option--selected' : ''}`}
+            onClick={() => setSelected(option.value)}
+          >
+            <span>{option.label}</span>
+            {current === option.value && <span className="sm-popover__option-current">Current</span>}
+          </button>
+        ))}
+      </div>
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            onClose()
+          }}
+        />
+      )}
+      {!gate.allowed && <p className="sm-small sm-faint">{gate.reason}</p>}
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <div className="sm-popover__actions">
+        <Button
+          variant="primary"
+          size="compact"
+          onClick={apply}
+          disabled={!gate.allowed || saving || selected === current}
+          title={gate.allowed ? undefined : gate.reason}
+        >
+          {saving ? 'Applying…' : 'Apply'}
+        </Button>
+        <Button variant="quiet" size="compact" onClick={onClose} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+    </>
+  )
+}
+
+function ShellMode({ model, signInKind }: { model: Model; signInKind: SignInState['kind'] }) {
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const nightSession = useNightSessionSeed(model)
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  const [response, setResponse] = useState<ShowModeConfigResponse | null>(null)
+  const authenticated = signInKind === 'signed_in'
+  const principalId = model.session?.principal?.id ?? null
+
+  // Same rule as ShowPicker: no show.mode read without a credential, and a
+  // fresh read whenever the signed-in principal changes.
+  useEffect(() => {
+    if (!authenticated) return
+    let cancelled = false
+    setResponse(null)
+    getShowModeConfig()
+      .then((r) => {
+        if (!cancelled) setResponse(r)
+      })
+      .catch(() => {
+        // The mode is a fact only after the coordinator has reported it.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [authenticated, principalId])
+
+  if (!authenticated) {
+    return (
+      <span className="sm-showpicker sm-showpicker--unavailable">
+        <span className="sm-showpicker__eyebrow">Mode</span>
+      </span>
+    )
+  }
+
+  if (response === null) return null
+  const mode = response.payload.mode
+  // A coordinator older than the pin field reports no pin; say nothing rather than invent one.
+  const pin: typeof response.cueActivationPin | undefined = response.cueActivationPin
+  const firstSentence = response.resolumeWebSocketEffect.replace(/\.\s*$/, '')
+  const title = pin === undefined ? response.resolumeWebSocketEffect : `${firstSentence}. ${pin.effect}`
+  return (
+    <span className="sm-chrome__picker">
+      <button
+        ref={anchorRef}
+        type="button"
+        className={`sm-mode-badge sm-mode-badge--${mode}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={title}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {mode}
+        {pin?.pinned === true && ' (edit staged)'}
+        {pin?.pinned === true && (
+          <span role="status" className="sm-sr-only">
+            Show mode: {mode}. A show.cue edit is staged and will not reach any node until the show is stopped and restarted.
+          </span>
+        )}
+      </button>
+      <Popover open={open} title="Choose mode" anchorRef={anchorRef} onClose={() => setOpen(false)}>
+        <ModePicker response={response} nightSession={nightSession} gate={gate} onClose={() => setOpen(false)} />
+      </Popover>
+    </span>
+  )
+}
+
+export function Layout() {
+  const model = useModelContext()
+  const signIn = describeSignInState(model.session)
+  const connection = connectionOf(model.connection)
+  const principal = BLIND_PRINCIPAL[signIn.kind] ?? model.session?.principal?.name ?? 'Not signed in'
+  // Shared with SignedOutPlate below: one credential form, so the plate's
+  // own "Sign in" CTA in `main` focuses the same field the band above does.
+  const signedOutBand = useSignedOutBand()
+
+  return (
+    <div className="sm-shell">
+      <ChromeBar
+        showPicker={<ShowPicker model={model} signInKind={signIn.kind} />}
+        mode={<ShellMode model={model} signInKind={signIn.kind} />}
+        nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
+        connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
+        principal={
+          <>
+            <span className="sm-small sm-muted">{principal}</span>
+            {signIn.kind === 'signed_in' && <SignOutControl />}
+          </>
+        }
+      />
+      <ChromeProgress value={null} label="Position of the current item" />
+      {model.clockSkewMs !== null && Math.abs(model.clockSkewMs) >= CLOCK_SKEW_WARNING_THRESHOLD_MS && (
+        <ClockSkewStrip>
+          This browser&rsquo;s clock is {model.clockSkewMs > 0 ? 'behind' : 'ahead of'} the coordinator&rsquo;s, the
+          reference clock, by about {formatDuration(Math.abs(model.clockSkewMs))}. Every age and relative time shown
+          here is off by roughly that much.
+        </ClockSkewStrip>
+      )}
+      {signIn.kind === 'loading' && <ConnectingBand liveUpdatesConnected={model.connection.kind === 'live'} />}
+      {signIn.kind === 'bootstrap_required' && <BootstrapBand />}
+      {signIn.kind === 'signed_out' && <SignedOutBand state={signedOutBand} />}
+      {model.auditStore?.state === 'unusable' && (
+        <Notice
+          tone="warn"
+          live="status"
+          headline="Audit attribution is degraded"
+          explanation={model.auditStore.reason ?? 'Commands continue, but this coordinator cannot durably write their audit entries.'}
+        />
+      )}
+      <ShellBody>
+        <Rail>
+          <RailGroup>Operate</RailGroup>
+          <RailLink to="/">Dashboard</RailLink>
+          <RailLink to="/night">Show Night</RailLink>
+          <RailLink to="/control">Live Control</RailLink>
+          <RailLink to="/control/resolume" sub>Resolume</RailLink>
+          <RailGroup>Author</RailGroup>
+          <RailLink to="/shows">Shows</RailLink>
+          <RailLink to="/assets">Assets</RailLink>
+          <RailGroup>System</RailGroup>
+          <RailLink to="/monitor">Monitor</RailLink>
+          <RailLink to="/settings">Settings</RailLink>
+          <RailFooter>
+            <RailBuild />
+          </RailFooter>
+        </Rail>
+        <main className="sm-main">
+          {signIn.kind === 'signed_out' ? (
+            <SignedOutPlate state={signedOutBand} />
+          ) : signIn.kind === 'bootstrap_required' ? (
+            <BootstrapPlate />
+          ) : (
+            <Outlet />
+          )}
+        </main>
+      </ShellBody>
+    </div>
   )
 }

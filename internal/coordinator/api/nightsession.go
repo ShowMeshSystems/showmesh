@@ -176,6 +176,11 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -206,9 +211,14 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "label": payload.Label})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write night.session config revision", writeErr)
 		return
 	}
@@ -361,6 +371,12 @@ func (h *handlers) handlePutNightSessionActive(w http.ResponseWriter, r *http.Re
 	ac := authFromContext(r.Context())
 	id := config.NightSessionActiveObjectID
 
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
+
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
 		h.writeInternalError(w, now, "read night.session.active request body", err)
@@ -383,9 +399,14 @@ func (h *handlers) handlePutNightSessionActive(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionActiveConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionActiveConfigKind, id, payloadJSON, precondition,
 		map[string]any{"session": payload.Session})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write night.session.active config revision", writeErr)
 		return
 	}

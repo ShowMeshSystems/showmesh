@@ -230,3 +230,41 @@ func TestListAudioNodesReturnsConfiguredObjects(t *testing.T) {
 		t.Fatalf("list missing render-01/hw:0,0; body: %s", listBody1)
 	}
 }
+
+// TestPutAudioNodeRevisionPreconditionWiring is a smoke test proving
+// handlePutAudioNode threads the shared precondition check (showconfig.go's
+// parseRevisionPrecondition/writeShowConfigRevision) through to its own
+// call site. The full behavioural matrix lives once, on kind "show" in
+// showobjects_test.go's own precondition tests.
+func TestPutAudioNodeRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("render-01", []string{"hw:0,0"}, []string{"hw:0,0"}),
+	})
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	putNode := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/audio.node/render-01", validAudioNodeBody, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putNode(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putNode(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putNode(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putNode(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created node: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}

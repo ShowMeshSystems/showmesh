@@ -270,6 +270,11 @@ type pendingFrame struct {
 	// materialize, exactly like every other kind.
 	macroRun *v1.MacroRunChangedEvent
 
+	// currentRuns is the full runner-neutral current-runs projection. It is
+	// one frame for the complete zero-to-many set, so a reconnecting client
+	// can refetch GET /current-runs and treat this event as a replacement.
+	currentRuns *v1.CurrentRunsChangedEvent
+
 	// instanceID, changedObs, and removedSignals are set only for an
 	// "fpp.observations.changed" pendingFrame (ADR-023); every other kind
 	// leaves them at their zero value and materialize never reads them for
@@ -307,6 +312,11 @@ func (pf pendingFrame) materialize(seq uint64) (event string, payload any) {
 		ev.Seq = seq
 		ev.ServerTime = pf.serverTime
 		return "macroRun.changed", ev
+	case "currentRuns.changed":
+		ev := *pf.currentRuns
+		ev.Seq = seq
+		ev.ServerTime = pf.serverTime
+		return "currentRuns.changed", ev
 	case "resolume.changed":
 		return "resolume.changed", v1.ResolumeChangedEvent{Seq: seq, ServerTime: pf.serverTime, Instance: *pf.resolumeInstance}
 	case "resolumeRecovery.changed":
@@ -430,6 +440,27 @@ func (h *Hub) Run(ctx context.Context) {
 func (h *Hub) render(ctx context.Context) {
 	now := h.clock()
 	var pending []pendingFrame
+
+	// Current runs are intentionally a full-frame replacement. The REST
+	// response remains the reconnect authority; this event is only a prompt
+	// carrying the same complete projection for already-connected clients.
+	if s, err := h.deps.CurrentRuns.Snapshot(ctx, now); err != nil {
+		h.logger.Warn("stream hub: read current runs failed", "error", err)
+	} else {
+		body := mapCurrentSnapshot(s, now)
+		// Establish the empty baseline silently. Existing stream clients must
+		// not receive a synthetic current-runs frame on every Notify when no
+		// runner has reported a run; once a non-empty baseline exists, an empty
+		// replacement remains a real full-frame transition.
+		h.mu.Lock()
+		_, hadCurrentRuns := h.lastRendered["current-runs"]
+		h.mu.Unlock()
+		changed := h.updateRendered("current-runs", currentRunsDiffProjection(body))
+		if changed && (hadCurrentRuns || body.ActiveShow.Configured || len(body.Runs) != 0) {
+			ev := v1.CurrentRunsChangedEvent{ServerTime: formatTime(now), ActiveShow: body.ActiveShow, Runs: body.Runs}
+			pending = append(pending, pendingFrame{event: "currentRuns.changed", serverTime: formatTime(now), currentRuns: &ev})
+		}
+	}
 
 	if views, err := h.deps.Nodes.Snapshot(ctx, now); err != nil {
 		h.logger.Warn("stream hub: list nodes failed", "error", err)

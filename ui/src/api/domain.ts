@@ -112,6 +112,8 @@ export type ConfigResolumeInstancesPayload = components['schemas']['ConfigResolu
 export type FPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
 export type ConfigFPPMQTTPayload = components['schemas']['ConfigFPPMQTTPayload']
 export type ConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
+export type FPPConnectSettingsConfigResponse = components['schemas']['FPPConnectSettingsConfigResponse']
+export type ConfigFPPConnectSettingsPayload = components['schemas']['ConfigFPPConnectSettingsPayload']
 // Track G seam G-4 (ADR-039): the assets.settings configuration write
 // surface, aliased for the identical reason as resolume.instances' own
 // shapes above. ConfigAssetsSettingsPutPayload is a SEPARATE type from
@@ -138,6 +140,9 @@ export type CueCatalogDeployResult = components['schemas']['CueCatalogDeployResu
 // separately so NodeDetail.tsx and the dashboard attention list can
 // import it directly rather than indexing through Node.
 export type ObservationEntry = components['schemas']['ObservationEntry']
+// GET /observations: the flat list of every ObservationEntry
+// this coordinator currently holds, optionally filtered.
+export type ObservationsResponse = components['schemas']['ObservationsResponse']
 // The first audio-dispatch slice: pause/resume/stop/output.mute/
 // output.unmute's own response shape, aliased for the identical reason
 // as RenderCommandResult above.
@@ -228,6 +233,7 @@ export type ResolumeRecoveryRestoreLayer = components['schemas']['ResolumeRecove
 export type ResolumeRecoveryRestoreReport = components['schemas']['ResolumeRecoveryRestoreReport']
 export type ResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 export type ResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+export type ResolumeRecoveryChangedEvent = components['schemas']['ResolumeRecoveryChangedEvent']
 export type ConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 export type ResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 
@@ -340,6 +346,7 @@ export type NightBackgroundAudio = components['schemas']['NightBackgroundAudio']
 export type NightAuthorization = components['schemas']['NightAuthorization']
 export type NightSessionState = components['schemas']['NightSessionState']
 export type NightSessionResponse = components['schemas']['NightSessionResponse']
+export type NightInterlockOverride = components['schemas']['NightInterlockOverride']
 export type NightCommandRequest = components['schemas']['NightCommandRequest']
 export type NightCommandResult = components['schemas']['NightCommandResult']
 export type NightCommandResponse = components['schemas']['NightCommandResponse']
@@ -353,6 +360,20 @@ export type NightCommandName =
   | 'fade-out-night'
   | 'power-down-presentation'
   | 'end-session'
+
+// Runner-neutral current playback projection. Unlike macroRuns, these are
+// the coordinator's authoritative FPP and showmesh-audio runs, including the
+// per-run playback, freshness, reconciliation, activation, and next-item
+// answers supplied by each runner.
+export type CurrentRunsResponse = components['schemas']['CurrentRunsResponse']
+export type CurrentShowContext = components['schemas']['CurrentShowContext']
+export type CurrentRun = components['schemas']['CurrentRun']
+export type CurrentPlayback = components['schemas']['CurrentPlayback']
+export type CurrentRunFreshness = components['schemas']['CurrentRunFreshness']
+export type CurrentReconciliation = components['schemas']['CurrentReconciliation']
+export type CurrentRunActivation = components['schemas']['CurrentRunActivation']
+export type CurrentRunTarget = components['schemas']['CurrentRunTarget']
+export type CurrentRunNext = components['schemas']['CurrentRunNext']
 
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
 // verdicts, aliased for the identical reason as every type above
@@ -381,6 +402,15 @@ export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPla
 // unchanged for FPPResetObservationSequenceControl.tsx's own use.
 export type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 export type FPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+
+// ADR-048, Track J's J1: fallback-program metadata (the list) and one
+// host's full signed-program read, an operator's pre-show readiness
+// evidence for FPP's coordinator-loss fallback. Same "aliased, not
+// re-declared" and "plain on-demand side call, not part of Model"
+// posture as the FPP playlist types above.
+export type FallbackProgramListEntry = components['schemas']['FallbackProgramListEntry']
+export type FallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+export type FallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 
 /**
  * One recorded event, as held in the model. Identical to the wire
@@ -460,6 +490,17 @@ export interface Model {
    */
   macroRuns: MacroRunSummary[]
   /**
+   * The authoritative runner-neutral projection from GET /current-runs.
+   * It is replaced by reconnect fetches and full-frame currentRuns.changed
+   * events. It is deliberately separate from macroRuns: a current run is
+   * playback state, not proof that the coordinator executed a macro.
+   */
+  currentRuns: CurrentRunsResponse | null
+  /** Browser receipt time of the current-runs response or event. */
+  currentRunsReceivedAt: number | null
+  /** True when the latest authoritative current-runs fetch failed. */
+  currentRunsFetchFailed: boolean
+  /**
    * Track D seam D-4: every configured Resolume instance, exactly as
    * `Snapshot.resolume` carries them — an empty array on a coordinator
    * with none configured, never null. Replaced wholesale on every
@@ -502,6 +543,20 @@ export interface Model {
    * never confirmed against.
    */
   nightSession: NightSessionState | null
+  /**
+   * Track D seam D-3a: the Resolume crash-recovery toggle/record/last-restore
+   * state, kept live by `resolumeRecovery.changed` frames (store.ts's
+   * applyResolumeRecoveryChanged) — a whole-object replace, matching
+   * `nightSession`'s exact same posture and for the identical reason (no
+   * delta kind exists for this resource, and `Snapshot` carries no
+   * `resolumeRecovery` field). Stays `null` until either the first live
+   * frame arrives or a view's own `GET /resolume/recovery` call seeds it
+   * (screens/ResolumeConfig.tsx). Cleared back to `null` by every
+   * `applySnapshot`, matching `nightSession` again: a stale value from a
+   * prior connection generation must not keep rendering as current across
+   * one it was never confirmed against.
+   */
+  resolumeRecovery: ResolumeRecoveryResponse | null
   /**
    * Each FPP instance's latest accepted playlist-entry
    * observation, kept live by `fppPlaylistEntry.changed` frames (store.ts's
@@ -572,9 +627,13 @@ export function initialModel(): Model {
     fpp: [],
     collectors: [],
     macroRuns: [],
+    currentRuns: null,
+    currentRunsReceivedAt: null,
+    currentRunsFetchFailed: false,
     resolume: [],
     auditStore: null,
     nightSession: null,
+    resolumeRecovery: null,
     fppPlaylistEntryObservations: [],
     events: [],
     eventsGap: false,

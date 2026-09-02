@@ -82,14 +82,24 @@ type v1ExtraAssetForTest struct {
 	SizeBytes   int64  `json:"sizeBytes"`
 }
 
+type v1AssetSyncVerdictForTest struct {
+	AssetID     string `json:"assetId"`
+	Sequence    string `json:"sequence"`
+	Filename    string `json:"filename"`
+	ContentHash string `json:"contentHash"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	State       string `json:"state"`
+}
+
 type v1NodeAssetManifestForTest struct {
-	Node       string                  `json:"node"`
-	State      string                  `json:"state"`
-	Reason     *string                 `json:"reason"`
-	Missing    []v1MissingAssetForTest `json:"missing"`
-	Gaps       []v1AssetGapForTest     `json:"gaps"`
-	Extra      []v1ExtraAssetForTest   `json:"extra"`
-	ObservedAt *string                 `json:"observedAt"`
+	Node       string                      `json:"node"`
+	State      string                      `json:"state"`
+	Reason     *string                     `json:"reason"`
+	Missing    []v1MissingAssetForTest     `json:"missing"`
+	Gaps       []v1AssetGapForTest         `json:"gaps"`
+	Extra      []v1ExtraAssetForTest       `json:"extra"`
+	ObservedAt *string                     `json:"observedAt"`
+	Verdicts   []v1AssetSyncVerdictForTest `json:"verdicts"`
 }
 
 type v1NodeAssetManifestResponseForTest struct {
@@ -540,6 +550,66 @@ func TestNodeAssetManifestExtraAssetIsReportedNeverAnError(t *testing.T) {
 	}
 	if len(decoded.Manifest.Extra) != 1 || decoded.Manifest.Extra[0].ContentHash != "sha256:deadbeef" {
 		t.Errorf("extra = %+v, want exactly one entry naming sha256:deadbeef", decoded.Manifest.Extra)
+	}
+}
+
+// --- verdicts: D-016 item 2's per-asset sync verdict ---
+
+// TestNodeAssetManifestVerdictHeldOverHTTP proves the new field actually
+// reaches the wire: a ready node's single expected asset renders a
+// verdicts entry with State "held", alongside every pre-existing field
+// unchanged.
+func TestNodeAssetManifestVerdictHeldOverHTTP(t *testing.T) {
+	api, st, auth := assetManifestAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+	mustPutShowActive(t, api, token, "halloween-2026")
+	asset := uploadOneAsset(t, api, auth, "render-01", "opening", "Thriller.fseq", []byte("content"))
+
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01",
+		[]store.NodeAssetInventoryRecord{{NodeID: "render-01", ContentHash: asset.ContentHash, RuntimeFilename: asset.RuntimeFilename, SizeBytes: asset.SizeBytes, VerifiedAt: testNow}},
+		store.NodeAssetReportRecord{ReportedAt: testNow, Complete: true}); err != nil {
+		t.Fatalf("seed satisfied report: %v", err)
+	}
+
+	resp, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if len(decoded.Manifest.Verdicts) != 1 {
+		t.Fatalf("verdicts = %+v, want exactly one entry; body: %s", decoded.Manifest.Verdicts, body)
+	}
+	v := decoded.Manifest.Verdicts[0]
+	if v.AssetID != asset.ID || v.ContentHash != asset.ContentHash || v.State != "held" {
+		t.Errorf("verdicts[0] = %+v, want assetId=%q contentHash=%q state=held", v, asset.ID, asset.ContentHash)
+	}
+}
+
+// TestNodeAssetManifestVerdictsAbsentOnStaleReport is the one most worth
+// getting right at the HTTP layer too: a stale report must not render any
+// verdict, even though the inventory it carries would otherwise satisfy
+// the expected asset.
+func TestNodeAssetManifestVerdictsAbsentOnStaleReport(t *testing.T) {
+	api, st, auth := assetManifestAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+	mustPutShowActive(t, api, token, "halloween-2026")
+	asset := uploadOneAsset(t, api, auth, "render-01", "opening", "Thriller.fseq", []byte("content"))
+
+	staleReportedAt := testNow.Add(-time.Hour) // older than the 6-minute staleness window
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01",
+		[]store.NodeAssetInventoryRecord{{NodeID: "render-01", ContentHash: asset.ContentHash, RuntimeFilename: asset.RuntimeFilename, SizeBytes: asset.SizeBytes, VerifiedAt: staleReportedAt}},
+		store.NodeAssetReportRecord{ReportedAt: staleReportedAt, Complete: true}); err != nil {
+		t.Fatalf("seed stale report: %v", err)
+	}
+
+	resp, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if decoded.Manifest.State != "unknown" {
+		t.Fatalf("state = %q, want %q; body: %s", decoded.Manifest.State, "unknown", body)
+	}
+	if len(decoded.Manifest.Verdicts) != 0 {
+		t.Fatalf("verdicts = %+v, want none: a stale report is not evidence of what the node currently holds; body: %s", decoded.Manifest.Verdicts, body)
 	}
 }
 

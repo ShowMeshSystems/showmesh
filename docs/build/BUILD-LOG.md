@@ -40,9 +40,13 @@ The **Current state** block at the top of this file is overwritten each session:
 > read for this block.
 >
 > **Three branches are deliberately off `main`.**
-> `feature/operator-ui-overhaul-2` is 176 ahead and 17 behind: the wholesale
-> Operator UI rebuild, owner-driven; the owner opens its fold pull request
-> himself and runs a reconcile pass afterward, and until then UI work is held.
+> `feature/operator-ui-overhaul-2` is 177 ahead and 0 behind after `main` was
+> merged into it at `a257ad8` on 2026-09-01: the wholesale Operator UI rebuild,
+> owner-driven; its fold pull request #301 was opened on 2026-09-01 on the
+> owner's instruction, with the reconcile pass for controls added on `main`
+> deferred to later sessions. Three owner review
+> rounds are applied on it; the dated entry below records the branch state and
+> the UI gates run against `a257ad8`.
 > `dev/multi-audio` is 12 ahead and 64 behind and is **superseded as a
 > branch**: its content was rebuilt directly onto `main` and merged as #280 on
 > 2026-09-01, so the branch remains only as history and must not be folded.
@@ -91,6 +95,42 @@ The **Current state** block at the top of this file is overwritten each session:
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
 
 ---
+
+## 2026-09-01 (operator UI overhaul branch: three owner review rounds, `main` merged in, UI gates re-run at `a257ad8`)
+
+**Goal:** record the state of `feature/operator-ui-overhaul-2` as evidence, and bring the repository's own documentation into line with the UI that exists on it. No code was changed by this entry's author.
+
+**Completed:**
+
+- **Three owner review rounds are applied on the branch**, on top of the 2026-08-30 per-screen stack. Round one is `3734b72` (timecode offsets, terse copy, the transport row, now-playing absence, signed-out plates, the issued credential). Round two runs `1e03010` to `208c82e` (macro step editing, the chrome-bar show and mode pickers, fallback-program evidence, principal administration, the audio session transport, the kit `Drawer`, every inspector floated into it, and a layout pass). Round three runs `d5d5d6e` to `ec3991a` (node detail into a 960px drawer over Monitor › Fleet, one page width with every per-screen cap deleted, inline chip alignment, the `ReorderButtons` pattern, Live Control rebuilt on the kit with one `LifecycleCommands` element and a playlist select fed by imported FPP playlist definitions, the audio session drawer, and a copy pass that cut architecture prose and fabricated example names).
+- **`main` was merged into the branch** at `a257ad8`, the first time the two have met. The branch is 177 commits ahead of `main` at `289806e` and 0 behind it. Pull request #301 was opened on 2026-09-01 on the owner's instruction after his click-through of the round-three build.
+- The seven round-three rulings are recorded as **D-023 to D-029** in [docs/ui-rebuild/OPEN-DECISIONS.md](../ui-rebuild/OPEN-DECISIONS.md), with the commit that applied each.
+- Documentation brought into line with the code: [UI-DESIGN-GUIDE.md](../design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md) rewritten from `ui/src` (tokens against `kit/styles/tokens.css`, layout against `shell.css` and `drawer.css`, the screen map against `app/App.tsx`, the component rules against the kit, and the pre-PR checklist gaining the defect classes that pass jsdom and fail in a browser); `AGENTS.md` and `CLAUDE.md` now point UI work at the guide and the kit rule; `docs/ui-rebuild/HANDOFF.md` and `REBUILD-PLAN.md` state the branch's real position; `CONTROL-INVENTORY.md` marks three node rows as not carried into the drawer, with the reason for each.
+
+**Decisions made:** none by this entry. D-023 to D-029 are Eric's, given live during round three and recorded in `OPEN-DECISIONS.md`.
+
+**Questions raised with the owner:** none.
+
+**Deferred:**
+
+- The pull request to `main`, and the reconcile pass after it. Both are the owner's.
+- Three of the four `design/revision1` features are drawn but not built (the Shows › Assets sequence-coverage roll-up, list-then-detail node routing with a Declare action, and Monitor › Fleet's playlist-definitions block). Recorded in that folder's README; no ruling exists for them.
+
+**Verification gates:** run in this session in a worktree of the branch at `a257ad8`, with a clean tree apart from untracked `ui/node_modules`. UI gates only; the diff this session produced is documentation.
+
+- `npm run typecheck` (both `tsconfig.json` and `tsconfig.node.json`): exit 0, no output.
+- `npm run lint`: `2 problems (0 errors, 2 warnings)`. Both warnings are pre-existing: `react-refresh/only-export-components` in `ui/src/app/SessionBand.tsx:48`, `react-hooks/exhaustive-deps` in `ui/src/screens/NodeDetail.tsx:219`.
+- `npm test` (vitest): `Test Files 1 failed | 40 passed (41)`, `Tests 2 failed | 826 passed (828)`. Both failures are in `src/api/store.test.ts`. Re-running that file alone immediately afterwards passed `88 passed (88)`. This is the interference `docs/ui-rebuild/HANDOFF.md` documents: those cases drive a real jsdom connection and fail when a dev server or fixture coordinator is listening. **The full suite was not observed green in one run this session.**
+- `npm run build` (typecheck, then `check-old-design.mjs`, then `vite build`): built, 125 modules, `dist/assets/index-7WQ2WXky.js` 763.39 kB with the pre-existing 500 kB chunk-size advisory.
+- Generated-client freshness, the `make ui-gen-check` body run by hand: `npm run gen:api` rewrote `ui/src/api/generated/schema.d.ts` and `git diff` on that file is empty, so the client matches `api/openapi.yaml`.
+- **No documentation or link checker exists in this repository.** `grep -n "lint-docs\|markdown\|links" Makefile` matches only two unrelated comments about linking C libraries.
+
+**Not run, and not claimed:**
+
+- The Go half of `make check` (`fmt-check`, `vet`, `lint`, `test`) and `make check` itself. The review rounds' own diffs were `ui/`-only, and the merge of `main` at `a257ad8` has not been gated end to end anywhere this session can see.
+- `make test-integration` and the FPP integration suite.
+- Any browser check by this session. The three review rounds were driven in a browser against a rehearsal-coordinator deployment by the orchestrating session, but no screenshot, log or terminal capture from those runs was handed to this record, so no browser verification is claimed for this branch.
+- Hardware, deployed-fleet and live-show verification. None exists for any part of this branch.
 
 ## 2026-09-01 (evening wave: ctl parity, catalog-deploy and render-restart hardening, audio wire deadlines and signal freshness, media-type asset identity v28, cue prepare-ahead, macro refusal outcome, session expiry; `main` `998d4a6` to `b4a60ae`; plugin repo #18/#19)
 

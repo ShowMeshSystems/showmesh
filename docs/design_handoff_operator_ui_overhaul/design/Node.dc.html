@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">▾</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 · next in 1:06</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night<span style="font:var(--t-meta);color:var(--good-fg)">LIVE</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--bad-bg);border:1px solid var(--bad-border);color:var(--bad-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:22px 28px 80px;max-width:1120px">
+
+      <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Monitor</a> <span style="color:var(--text-faint)">/</span> Fleet <span style="color:var(--text-faint)">/</span> media-garage</p>
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:8px">
+        <div style="min-width:0">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">media-garage</h1>
+            <span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:3px;background:var(--bad-bg);border:1px solid var(--bad-fg);color:var(--bad-fg);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase"><span aria-hidden="true">✕</span>Offline 26 m</span>
+          </div>
+          <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">Render node · one surface · everything configured about this box, in one place</p>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Run discovery</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:20px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+        <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--bad-fg)">✕ Not reporting</span>
+        <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Last will received at 20:41:07, so the agent went away rather than the network dropping. Everything below is its last known state — configuration is still stored and still valid.</p>
+      </div>
+
+      <section aria-labelledby="nd-ident" style="margin-top:26px;max-width:760px">
+        <h2 id="nd-ident" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Identity</h2>
+        <div style="margin-top:10px;border-top:1px solid var(--border-strong)">
+          <div style="display:grid;grid-template-columns:170px minmax(0,1fr);gap:0 20px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Node id</span>
+            <span style="font:var(--t-data)">media-garage</span>
+          </div>
+          <div style="display:grid;grid-template-columns:170px minmax(0,1fr);gap:0 20px;align-items:center;padding:11px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Label</span>
+            <input type="text" value="Garage bay projector host" style="height:32px;max-width:340px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+          </div>
+          <div style="display:grid;grid-template-columns:170px minmax(0,1fr);gap:0 20px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Declared</span>
+            <span style="font:var(--t-small)">12 Aug 09:41 by erbartos</span>
+          </div>
+          <div style="display:grid;grid-template-columns:170px minmax(0,1fr);gap:0 20px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Agent build</span>
+            <span><span style="font:var(--t-data)">0.9.4 · a3f91c2</span><br><span style="font:var(--t-small);color:var(--text-faint)">As of its last report, not now.</span></span>
+          </div>
+          <div style="display:grid;grid-template-columns:170px minmax(0,1fr);gap:0 20px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Signals</span>
+            <span style="font:var(--t-small)"><a href="#">47 signals</a> <span style="color:var(--text-muted)">· all stale since 20:41</span></span>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="nd-caps" style="margin-top:26px;max-width:760px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <h2 id="nd-caps" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Capabilities</h2>
+          <span style="font:var(--t-small);color:var(--text-muted)">What the node says it can do · not what we assume</span>
+        </div>
+        <div style="margin-top:12px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <table style="width:100%;min-width:520px;border-collapse:collapse;font:var(--t-body)">
+            <thead>
+              <tr>
+                <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Capability</th>
+                <th style="width:64px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Ver</th>
+                <th style="padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Advertised</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:12px">matrix.render</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">v1</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">1 surface</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:12px">display.hdmi</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">v1</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">2 outputs · no display names</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;font:var(--t-data);font-size:12px">media.cache</td>
+                <td style="padding:10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">v1</td>
+                <td style="padding:10px 14px 10px 10px;font:var(--t-small);color:var(--text-muted)">holds show assets locally</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">This node advertises no <span style="font:var(--t-data)">audio.*</span> capability, so it has no audio routing to configure — different from an audio path that is failing. <span style="font:var(--t-data)">display.hdmi</span> reports an output count but no display names, which is why the surface's display field has to be typed by hand.</p>
+      </section>
+
+      <section aria-labelledby="nd-surf" style="margin-top:26px;max-width:760px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <h2 id="nd-surf" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Surfaces on this node</h2>
+          <span style="font:var(--t-small);color:var(--text-muted)">Authored per show, not per node</span>
+        </div>
+        <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">A surface belongs to a show, so this list is a view across shows rather than something you configure here. Editing one opens it in that show.</p>
+        <div style="margin-top:12px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <table style="width:100%;min-width:540px;border-collapse:collapse;font:var(--t-body)">
+            <thead>
+              <tr>
+                <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Surface</th>
+                <th style="width:150px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</th>
+                <th style="width:132px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Rendering</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:10px 10px 10px 14px"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Garage door</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">32×32 rgbw · HDMI-1 · ch 15,361–19,456</span></td>
+                <td style="padding:10px;font:var(--t-small);color:var(--text-muted)">Winter Ridge 2026</td>
+                <td style="padding:10px 14px 10px 10px"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--warn-fg)">⚠ Stale 26 m</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="nd-assets" style="margin-top:26px;max-width:760px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <h2 id="nd-assets" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Assets held locally</h2>
+          <span style="font:var(--t-small);color:var(--text-muted)">3 expected · 1 matches</span>
+        </div>
+        <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Readiness is not "the file exists" — it is that the variant assigned to <em>this</em> node matches the expected artifact. The node plays from its own disk, so this is what will actually run.</p>
+        <div style="margin-top:12px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <table style="width:100%;min-width:540px;border-collapse:collapse;font:var(--t-body)">
+            <thead>
+              <tr>
+                <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Sequence</th>
+                <th style="width:104px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Hash</th>
+                <th style="width:142px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">On disk</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">preshow-loop</a></td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">7c02…14</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Matches</span></td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--warn-fg)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">carol-of-the-bells</a><br><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--warn-fg)">Node holds older bytes</span></td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">e2d0…88</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--warn-fg)">⚠ Hash mismatch</span></td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 12px;border-left:2px dashed var(--text-faint)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">rooftop-finale</a><br><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint)">Never delivered</span></td>
+                <td style="padding:10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">b1e7…35</td>
+                <td style="padding:10px 14px 10px 10px"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint)">Not synced</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:9px 14px;border-top:1px solid var(--border);background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Sync cannot run while the node is offline.</span>
+            <button type="button" disabled="{{ true }}" style="height:30px;padding:0 12px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text-faint);font:var(--t-small);font-weight:500;cursor:not-allowed">Re-sync all</button>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="nd-danger" style="margin-top:32px;max-width:760px">
+        <h2 id="nd-danger" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Remove this node</h2>
+        <div style="margin-top:12px;padding:16px;border:1px solid var(--bad-border);border-radius:5px;background:var(--surface)">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:70ch">Undeclaring drops this node from inventory and orphans the <strong style="color:var(--text)">Garage door</strong> surface in Winter Ridge 2026 — that surface would render nowhere until it is pointed at another node. Files already on the node's disk are not removed.</p>
+          <button type="button" style="height:34px;margin-top:14px;padding:0 14px;border:1px solid var(--bad-border);border-radius:5px;background:var(--bad-bg);color:var(--bad-fg);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--bad-fg);color:var(--bg);border-color:var(--bad-fg)">Remove declaration</button>
+          <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-faint)">Asks for the node id before it proceeds. This is not the unsaved-changes dialog.</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'dark' };
+  }
+}
+
+</script>
+</body>
+</html>

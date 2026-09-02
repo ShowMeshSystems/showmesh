@@ -27,6 +27,8 @@ import type {
   ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
   ConfigFPPMQTTPutRequest,
+  ConfigFPPConnectSettingsPayload,
+  FPPConnectSettingsConfigResponse,
   ConfigNightSessionActive,
   ConfigNightSessionWrite,
   ConfigRenderSettingsPayload,
@@ -42,6 +44,7 @@ import type {
   ConfigShowPlaylist,
   ConfigShowWrite,
   CreatePrincipalRequest,
+  CurrentRunsResponse,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   FPPMQTTConfigResponse,
@@ -50,9 +53,11 @@ import type {
   Model,
   NightCommandName,
   NightCommandResponse,
+  NightInterlockOverride,
   NightSessionActiveConfigResponse,
   NightSessionConfigResponse,
   NightSessionResponse,
+  ObservationsResponse,
   PrincipalResponse,
   PrincipalsResponse,
   AudioSessionCommandResult,
@@ -94,6 +99,10 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+// ADR-048, Track J's J1: the fallback-program metadata list and one
+// host's full signed-program read.
+type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
@@ -225,6 +234,16 @@ export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsRespons
   return store.getFPPEndpointsConfigRevisions()
 }
 
+// ADR-048, Track J's J1: the fallback-program readiness evidence. Same
+// thin pass-through pattern as every method above.
+export function listFallbackPrograms(): Promise<SchemaFallbackProgramListResponse> {
+  return store.listFallbackPrograms()
+}
+
+export function getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {
+  return store.getFallbackProgram(fppInstanceId)
+}
+
 // Track G seam G-2 (ADR-039): the same thin pass-through pattern, for the
 // resolume.instances configuration write surface.
 export function getResolumeInstancesConfig(): Promise<ResolumeInstancesConfigResponse> {
@@ -258,6 +277,18 @@ export function putFPPMQTTConfig(
 
 export function getFPPMQTTConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPMQTTConfigRevisions()
+}
+
+export function getFPPConnectSettingsConfig(): Promise<FPPConnectSettingsConfigResponse> {
+  return store.getFPPConnectSettingsConfig()
+}
+
+export function putFPPConnectSettingsConfig(payload: ConfigFPPConnectSettingsPayload): Promise<FPPConnectSettingsConfigResponse> {
+  return store.putFPPConnectSettingsConfig(payload)
+}
+
+export function getFPPConnectSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getFPPConnectSettingsConfigRevisions()
 }
 
 // Track G seam G-4 (ADR-039): the same thin pass-through pattern, for the
@@ -499,13 +530,24 @@ export function fadeAudioSessionGain(
   sessionId: string,
   revision: number,
   targetGainDb: number,
-  durationMs: number,
+  durationMs?: number,
 ): Promise<AudioSessionCommandResult> {
   return store.fadeAudioSessionGain(nodeId, sessionId, revision, targetGainDb, durationMs)
 }
 
 export function probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
   return store.probeRenderTransport(nodeId, surfaceId)
+}
+
+// GET /observations, the flat evidence list used to discover a
+// real audio session id and its desired_revision. Same thin
+// pass-through pattern as every method above.
+export function listObservations(
+  resourceKind?: 'node' | 'fpp' | 'coordinator' | 'resolume' | 'surface' | 'audio_session',
+  resourceId?: string,
+  signal?: string,
+): Promise<ObservationsResponse> {
+  return store.listObservations(resourceKind, resourceId, signal)
 }
 
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same
@@ -793,6 +835,10 @@ export function assetContentUrl(id: string): string {
   return store.assetContentUrl(id)
 }
 
+export function getAssetContent(id: string): Promise<Blob> {
+  return store.getAssetContent(id)
+}
+
 export function getAssetManifest(): Promise<SchemaAssetManifestResponse> {
   return store.getAssetManifest()
 }
@@ -829,6 +875,10 @@ export function getCurrentNightSession(): Promise<NightSessionResponse> {
   return store.getCurrentNightSession()
 }
 
+export function getCurrentRuns(): Promise<CurrentRunsResponse> {
+  return store.getCurrentRuns()
+}
+
 export function getNightSessionById(id: string): Promise<NightSessionResponse> {
   return store.getNightSessionById(id)
 }
@@ -836,8 +886,10 @@ export function getNightSessionById(id: string): Promise<NightSessionResponse> {
 export function dispatchNightCommand(
   command: NightCommandName,
   idempotencyKey?: string,
+  interlockOverrides?: readonly NightInterlockOverride[],
+  skipEnterShowLead?: boolean,
 ): Promise<NightCommandResponse> {
-  return store.dispatchNightCommand(command, idempotencyKey)
+  return store.dispatchNightCommand(command, idempotencyKey, interlockOverrides, skipEnterShowLead)
 }
 
 export function getNightSessionConfig(id: string): Promise<NightSessionConfigResponse> {

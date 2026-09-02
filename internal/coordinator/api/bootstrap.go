@@ -70,7 +70,7 @@ func (h *handlers) handleClaimBootstrap(w http.ResponseWriter, r *http.Request) 
 	// acquiring a slot, never while holding one) — per this step's spec
 	// requirement that bootstrap "be bounded by the same login limiter as
 	// POST /session, for the same reason".
-	h.loginLimiter.delay(r.Context(), source)
+	h.loginLimiter.delayOnce(r.Context(), source)
 
 	if !h.loginLimiter.acquire(r.Context()) {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(h.loginLimiter.queueWait)))

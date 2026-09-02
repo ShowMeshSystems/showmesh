@@ -74,6 +74,7 @@ import {
   initialModel,
   type AudioSessionCommandResult,
   type ConnectionState,
+  type CurrentRunsResponse,
   type CueCatalogDeployResult,
   type Evidence,
   type Event as ModelEvent,
@@ -108,6 +109,8 @@ type SchemaConfigResolumeInstancesPayload = components['schemas']['ConfigResolum
 // Track G seam G-3 (ADR-039).
 type SchemaFPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
 type SchemaConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
+type SchemaFPPConnectSettingsConfigResponse = components['schemas']['FPPConnectSettingsConfigResponse']
+type SchemaConfigFPPConnectSettingsPayload = components['schemas']['ConfigFPPConnectSettingsPayload']
 // Track G seam G-4 (ADR-039).
 type SchemaAssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
 type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
@@ -122,6 +125,7 @@ type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRes
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+type SchemaResolumeRecoveryChangedEvent = components['schemas']['ResolumeRecoveryChangedEvent']
 // The pending-instanceUuid-change acknowledgement.
 type SchemaAcknowledgeFPPInstanceUUIDChangeResponse = components['schemas']['AcknowledgeFPPInstanceUUIDChangeResponse']
 // `GET /` (getServiceDescriptor): the coordinator's own self-description.
@@ -149,6 +153,11 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+// ADR-048, Track J's J1: the fallback-program metadata list and one
+// host's full signed-program read, an operator's pre-show readiness
+// evidence for FPP's coordinator-loss fallback.
+type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
@@ -169,6 +178,10 @@ type SchemaAudioSessionParams =
   | components['schemas']['AudioSessionGainParams']
   | components['schemas']['AudioSessionGainFadeParams']
   | components['schemas']['AudioSessionNoParamsRequest']['params']
+// GET /observations, the flat evidence list an operator uses to
+// discover a real audio session id (resourceKind=audio_session) and its
+// desired_revision, since the API lists no sessions any other way.
+type SchemaObservationsResponse = components['schemas']['ObservationsResponse']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -240,12 +253,15 @@ type SchemaCueCatalogDeployResponse = components['schemas']['CueCatalogDeployRes
 // night.session/night.session.active configuration kinds.
 type SchemaNightSessionResponse = components['schemas']['NightSessionResponse']
 type SchemaNightCommandRequest = components['schemas']['NightCommandRequest']
+type SchemaNightInterlockOverride = components['schemas']['NightInterlockOverride']
 type SchemaNightCommandResponse = components['schemas']['NightCommandResponse']
 type SchemaNightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
 type SchemaConfigNightSessionWrite = components['schemas']['ConfigNightSessionWrite']
 type SchemaNightSessionConfigResponse = components['schemas']['NightSessionConfigResponse']
 type SchemaConfigNightSessionActive = components['schemas']['ConfigNightSessionActive']
 type SchemaNightSessionActiveConfigResponse = components['schemas']['NightSessionActiveConfigResponse']
+type SchemaCurrentRunsResponse = components['schemas']['CurrentRunsResponse']
+type SchemaCurrentRunsChangedEvent = components['schemas']['CurrentRunsChangedEvent']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -390,6 +406,7 @@ export class ApiStore {
   private attempt = 0
   private lastError: string | null = null
   private loopAbort: AbortController | null = null
+  private currentRunsUpdateCounter = 0
 
   /**
    * ADR-024: independent, short-lived requests this store makes outside
@@ -813,6 +830,48 @@ export class ApiStore {
   }
 
   /**
+   * `GET /api/v1/fallback-programs` (ADR-048, Track J's J1): metadata for
+   * every FPP host's last published fallback program — package id,
+   * revision, show, generation, and timestamps, never the signed payload
+   * itself. Open under `observation:read`, same posture as
+   * [listFPPPlaylistDefinitions] above.
+   */
+  async listFallbackPrograms(): Promise<SchemaFallbackProgramListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFallbackProgramListResponse>(
+        '/fallback-programs',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/fallback-programs/{fppInstanceId}` (ADR-048, Track J's
+   * J1): one FPP host's current fallback program, including publication
+   * and acknowledgement state. Behind `fpp:fallback`, the same
+   * admin/scheduler-only scope the installed FPP plugin itself uses to
+   * fetch and verify this program — an operator credential is commonly
+   * refused this read (403), distinct from `listFallbackPrograms`'s open
+   * `observation:read` posture above. `published: false` (with `program`
+   * and `signatureBase64` both absent) is a real, non-404 answer: this
+   * coordinator has never compiled a program for this host.
+   */
+  async getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFallbackProgramResponse>(
+        `/fallback-programs/${encodeURIComponent(fppInstanceId)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * `POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge`. Behind
    * `config:write` (an operator-authored inventory decision, not a
    * command sent to any device, api/openapi.yaml's own doc comment on
@@ -956,6 +1015,33 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fpp.mqtt/revisions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async getFPPConnectSettingsConfig(): Promise<SchemaFPPConnectSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPConnectSettingsConfigResponse>('/config/fppconnect.settings', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async putFPPConnectSettingsConfig(payload: SchemaConfigFPPConnectSettingsPayload): Promise<SchemaFPPConnectSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaFPPConnectSettingsConfigResponse>('/config/fppconnect.settings', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async getFPPConnectSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fppconnect.settings/revisions', controller.signal)
     } finally {
       this.endSideCall(controller)
     }
@@ -1471,12 +1557,12 @@ export class ApiStore {
     sessionId: string,
     revision: number,
     targetGainDb: number,
-    durationMs: number,
+    durationMs?: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain/fade', revision, {
       targetGainDb,
-      durationMs,
       curve: 'linear',
+      ...(durationMs === undefined ? {} : { durationMs }),
     })
   }
 
@@ -1885,6 +1971,32 @@ export class ApiStore {
       const query = kind !== 'show' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
       return await this.client.getJson<SchemaConfigObjectsListResponse>(
         `/config/${kind}${query}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/observations`. A filter that matches nothing is a real
+   * 200 with an empty array, never a 404 — see the endpoint's own
+   * description. Requires observation:read.
+   */
+  async listObservations(
+    resourceKind?: 'node' | 'fpp' | 'coordinator' | 'resolume' | 'surface' | 'audio_session',
+    resourceId?: string,
+    signal?: string,
+  ): Promise<SchemaObservationsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (resourceKind !== undefined) params.set('resourceKind', resourceKind)
+      if (resourceId !== undefined) params.set('resourceId', resourceId)
+      if (signal !== undefined) params.set('signal', signal)
+      const query = params.toString()
+      return await this.client.getJson<SchemaObservationsResponse>(
+        `/observations${query === '' ? '' : `?${query}`}`,
         controller.signal,
       )
     } finally {
@@ -2338,6 +2450,16 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/current-runs`: authoritative runner playback for the Dashboard. */
+  async getCurrentRuns(): Promise<SchemaCurrentRunsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaCurrentRunsResponse>('/current-runs', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/night/sessions/{id}` (Track F seam F2). Throws (404) when no session with this id has ever existed. */
   async getNightSessionById(id: string): Promise<SchemaNightSessionResponse> {
     const controller = this.beginSideCall()
@@ -2356,21 +2478,34 @@ export class ApiStore {
    * `night:command`. Answers `202`, never `200` — accepted and applied,
    * or recognized as an idempotent duplicate. `idempotencyKey` is
    * honored only by `prepare-site`; every other command ignores it.
-   * Throws a typed `ApiError` on the three distinguishable `409`s
-   * (`night-not-ready`, `night-state-rejected`, `night-ambiguous`) and
-   * the `503` (`night-command-refused-audit-unavailable`, `prepare-site`/
+   * `interlockOverrides` (Track F seam F6) is honored by every command
+   * except `request-final-show` and `end-session`, which REFUSE a
+   * non-empty one; each override is consulted only against a rule that
+   * declares `overridePolicy: authorized-operator` and only when the
+   * caller separately holds `night:override` — `night:command` alone
+   * never authorizes a bypass. `skipEnterShowLead` is honored only by
+   * `start-night`; sent only when true. Throws a typed `ApiError` on the
+   * three distinguishable `409`s (`night-not-ready`, `night-state-rejected`,
+   * `night-ambiguous`) and the `503`
+   * (`night-command-refused-audit-unavailable`, `prepare-site`/
    * `run-readiness`/`start-preshow`/`start-night` only) — see
-   * NightCommandButton.tsx for the caller that branches on
-   * `ApiError.problemType` to render each distinguishably rather than as
-   * one generic failure.
+   * ShowNight.tsx for the caller that branches on `ApiError.problemType`
+   * to render each distinguishably rather than as one generic failure.
    */
   async dispatchNightCommand(
     command: NightCommandName,
     idempotencyKey?: string,
+    interlockOverrides?: readonly SchemaNightInterlockOverride[],
+    skipEnterShowLead?: boolean,
   ): Promise<SchemaNightCommandResponse> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaNightCommandRequest = idempotencyKey === undefined ? {} : { idempotencyKey }
+      const body: SchemaNightCommandRequest = {}
+      if (idempotencyKey !== undefined) body.idempotencyKey = idempotencyKey
+      if (interlockOverrides !== undefined && interlockOverrides.length > 0) {
+        body.interlockOverrides = [...interlockOverrides]
+      }
+      if (command === 'start-night' && skipEnterShowLead === true) body.skipEnterShowLead = true
       return await this.client.postJson<SchemaNightCommandResponse>(
         `/night/commands/${encodeURIComponent(command)}`,
         body,
@@ -2567,6 +2702,22 @@ export class ApiStore {
    */
   assetContentUrl(id: string): string {
     return `${this.baseUrl}/assets/${encodeURIComponent(id)}/content`
+  }
+
+  /**
+   * `GET /api/v1/assets/{id}/content` (ADR-028), fetched into memory
+   * rather than navigated to — the "Make current" rollback control
+   * (Show Assets.dc.html) needs the superseded asset's own bytes to
+   * replay through [uploadAsset], not a browser download.
+   */
+  async getAssetContent(id: string): Promise<Blob> {
+    const controller = this.beginSideCall()
+    try {
+      const response = await this.client.request(`/assets/${encodeURIComponent(id)}/content`, controller.signal)
+      return await response.blob()
+    } finally {
+      this.endSideCall(controller)
+    }
   }
 
   /**
@@ -3290,6 +3441,17 @@ export class ApiStore {
         this.applyResolumeChanged(payload.instance, payload.serverTime)
         return
       }
+      case 'resolumeRecovery.changed': {
+        // Track D seam D-3a: mirrors `nightSession.changed`'s own shape —
+        // this frame's schema (ResolumeRecoveryChangedEvent) carries
+        // `serverTime` as one of its OWN top-level fields, alongside the
+        // full current recovery state, never a delta. Parsed as the whole
+        // event, matching `nightSession.changed`'s own parsing below.
+        const payload = tryParse<SchemaResolumeRecoveryChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyResolumeRecoveryChanged(payload)
+        return
+      }
       case 'macroRun.changed': {
         // Unlike every case above, this frame's own schema (MacroRunChangedEvent)
         // carries serverTime as one of its OWN top-level fields rather than
@@ -3323,6 +3485,19 @@ export class ApiStore {
         )
         if (payload === null || gen !== this.generation) return
         this.applyFppPlaylistEntryChanged(payload.observation, payload.serverTime)
+        return
+      }
+      case 'currentRuns.changed': {
+        // This is a complete replacement, not a cursor or delta. A client
+        // already connected can apply it immediately; reconnects fetch the
+        // REST authority in reloadSnapshot below.
+        const payload = tryParse<SchemaCurrentRunsChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyCurrentRuns({
+          serverTime: payload.serverTime,
+          activeShow: payload.activeShow,
+          runs: payload.runs,
+        })
         return
       }
       default:
@@ -3362,6 +3537,17 @@ export class ApiStore {
     )
     if (gen !== this.generation) return
     this.applyInitialEvents(events)
+
+    // GET /current-runs is the reconnect authority for playback. Keep a
+    // failed read visible as unknown while allowing the inventory stream to
+    // remain live; a transient current-runs failure must not reconnect the
+    // entire shell or make stale macro-run data masquerade as playback.
+    // Do not hold the inventory stream's live transition on this auxiliary
+    // projection. Older coordinators and a temporarily unavailable runner
+    // may leave this read pending, while the stream itself still provides a
+    // valid inventory baseline. The request remains tied to the connection
+    // signal and its result is applied only for this generation.
+    void this.fetchCurrentRuns(gen, signal)
 
     // ADR-024 decision 12: a reconnect is exactly the moment the coordinator
     // may have closed the PREVIOUS connection over a generation bump (decision
@@ -3434,6 +3620,7 @@ export class ApiStore {
 
   private applySnapshot(snapshot: SchemaSnapshot): void {
     const receivedAt = this.now()
+    this.currentRunsUpdateCounter += 1
     this.setModel({
       ...this.model,
       serverTime: snapshot.serverTime,
@@ -3453,6 +3640,9 @@ export class ApiStore {
       // bounded recently-finished tail), not a delta this store needs to
       // merge.
       macroRuns: snapshot.macroRuns,
+      currentRuns: null,
+      currentRunsReceivedAt: null,
+      currentRunsFetchFailed: false,
       // Track D seam D-4 (build contract §1.7): a plain wholesale replace,
       // exactly like `fpp` above — `Snapshot.resolume` is this
       // coordinator's own authoritative current list, never a delta this
@@ -3479,6 +3669,13 @@ export class ApiStore {
       // re-establish ground truth rather than trusting a value this
       // connection has no evidence still holds.
       nightSession: null,
+      // Same "invalidate, do not carry forward" posture as `nightSession`
+      // immediately above, and for the identical reason: this is not part
+      // of `Snapshot` either (Model.resolumeRecovery's own comment), so a
+      // stale value from before a reconnect must not keep rendering as
+      // current across a generation boundary this connection cannot
+      // vouch for.
+      resolumeRecovery: null,
       // Same "invalidate, do not carry forward" posture as
       // `nightSession` immediately above, and for the identical reason:
       // this is not part of `Snapshot` either (Model.fppPlaylistEntryObservations's
@@ -3487,6 +3684,35 @@ export class ApiStore {
       // connection cannot vouch for.
       fppPlaylistEntryObservations: [],
     })
+  }
+
+  private applyCurrentRuns(currentRuns: CurrentRunsResponse): void {
+    this.currentRunsUpdateCounter += 1
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      currentRuns,
+      currentRunsReceivedAt: receivedAt,
+      currentRunsFetchFailed: false,
+      serverTime: currentRuns.serverTime,
+      clockSkewMs: this.computeClockSkewMs(currentRuns.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+    })
+  }
+
+  private async fetchCurrentRuns(gen: number, signal: AbortSignal): Promise<void> {
+    const updateCounter = this.currentRunsUpdateCounter
+    try {
+      const currentRuns = await this.client.getJson<SchemaCurrentRunsResponse>('/current-runs', signal)
+      // A full-frame SSE update received while this REST read was pending is
+      // newer than the request's starting point. Never let the older REST
+      // response roll the model back over that event.
+      if (gen !== this.generation || updateCounter !== this.currentRunsUpdateCounter) return
+      this.applyCurrentRuns(currentRuns)
+    } catch (err) {
+      if (isAbortError(err) || gen !== this.generation || updateCounter !== this.currentRunsUpdateCounter) return
+      this.setModel({ ...this.model, currentRunsFetchFailed: true })
+    }
   }
 
   /**
@@ -3662,6 +3888,35 @@ export class ApiStore {
       clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
       serverTimeReceivedAt: receivedAt,
       nightSession: event.session,
+    })
+  }
+
+  /**
+   * `resolumeRecovery.changed` (Track D seam D-3a) carries the recovery
+   * resource's COMPLETE current representation, matching
+   * [applyNightSessionChanged]'s exact same whole-object-replace posture
+   * and for the identical reason (no delta kind exists for this resource
+   * either, and it is not part of `Snapshot` — see `Model.resolumeRecovery`'s
+   * own comment). The event's own fields, minus `seq` (per-connection
+   * only, never a durable cursor), are exactly `ResolumeRecoveryResponse`'s
+   * shape.
+   */
+  private applyResolumeRecoveryChanged(event: SchemaResolumeRecoveryChangedEvent): void {
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime: event.serverTime,
+      clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      resolumeRecovery: {
+        serverTime: event.serverTime,
+        resolumeConfigured: event.resolumeConfigured,
+        autoRestoreEnabled: event.autoRestoreEnabled,
+        autoRestoreConfigured: event.autoRestoreConfigured,
+        settleDelaySeconds: event.settleDelaySeconds,
+        record: event.record,
+        lastRestore: event.lastRestore,
+      },
     })
   }
 

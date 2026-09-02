@@ -46,14 +46,10 @@ info:
     `state: "unknown_age"`.
 
 
-    **Desired state, capability assignments, and reconciliation status are
-    not modelled by this API yet.** They are a real part of the eventual
-    architecture (see ARCHITECTURE section 7.2 and OPERATOR-UI section 10),
-    but nothing in the coordinator computes them today, and Step 3
-    deliberately ships no placeholder field for them: a field like
-    `reconciliationStatus: "unknown"` that no code actually computes would
-    be read by an operator as a real verdict. These arrive additively, in
-    the version of this API that introduces the behavior behind them.
+    **Current runner state is exposed by `GET /current-runs`.** It is a
+    server-computed, runner-neutral full frame. FPP is optional, FPP and
+    `showmesh-audio` may be active concurrently, and absent reconciliation or
+    next-item evidence is stated explicitly rather than inferred by a client.
 
 
     **A `gap: true` on `GET /api/v1/events` means history was permanently
@@ -173,6 +169,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Snapshot"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /current-runs:
+    get:
+      operationId: getCurrentRuns
+      summary: Current runner playback
+      description: >-
+        Full runner-neutral projection of the current zero-to-many runs.
+        FPP is optional; FPP and showmesh-audio can be present concurrently.
+        The server computes active Show/generation context, runner status,
+        playback and freshness, reconciliation, activation, and per-target
+        evidence. `next` is null unless a runner provided an authoritative
+        next item, so clients must not infer one from local playlist order.
+        After reconnect, refetch this endpoint; `currentRuns.changed` is an
+        optional full-frame prompt, not a resumable cursor.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentRunsResponse"
         "400":
           $ref: "#/components/responses/UnsupportedAPIVersion"
         "401":
@@ -1865,6 +1894,7 @@ paths:
           | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
           | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
           | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
+          | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded
@@ -4046,13 +4076,18 @@ paths:
         never a member of `programChannels`) are checked structurally, not
         against evidence. `clockDomain` and `clockDomainProvenance` are
         operator-declared and never inferred: no software call on this
-        platform proves two outputs share a hardware clock.
+        platform proves two outputs share a hardware clock. Optionally
+        carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
+        refused with `409` when the precondition names a revision that is
+        no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -4087,6 +4122,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/audio.node/{id}/revisions:
@@ -4469,12 +4506,18 @@ paths:
         this endpoint reads back. Stores the VALIDATED, NORMALIZED
         payload, never the raw request body. Audited in the same
         transaction as the revision write (ADR-024 decision 11).
+        Optionally carries `If-Match`/`If-None-Match` (opt-in; see those
+        parameters): refused with `409` when the precondition names a
+        revision that is no longer current, or when becoming a Resolume
+        action is blocked by a stored macro step's local fallback.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -4499,6 +4542,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.action/{id}/revisions:
@@ -4623,13 +4668,17 @@ paths:
         the strict, always-resolved shape this endpoint reads back. Stores
         the VALIDATED, NORMALIZED payload - including description and
         onFailure/onUnconfirmed resolved to their defaults - never the raw
-        request body.
+        request body. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -4654,6 +4703,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.macro/{id}/revisions:
@@ -5404,13 +5455,18 @@ paths:
         same absent/null/empty distinction every write surface in this
         contract enforces. The request body is therefore ConfigShowWrite;
         the response is always the resolved ConfigShow shape, which
-        renders `notes` even when empty (never absent).
+        renders `notes` even when empty (never absent). Optionally
+        carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
+        refused with `409` when the precondition names a revision that is
+        no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5435,6 +5491,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show/{id}/revisions:
@@ -5561,13 +5619,18 @@ paths:
         key), so the request and response share the same
         ConfigShowSurface shape. A second surface assigned to the same
         node is accepted (ADR-026's `N=1` is a scope limit on the
-        renderer, not a schema rule).
+        renderer, not a schema rule). Optionally carries
+        `If-Match`/`If-None-Match` (opt-in; see those parameters): refused
+        with `409` when the precondition names a revision that is no
+        longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5592,6 +5655,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.surface/{id}/revisions:
@@ -5704,12 +5769,17 @@ paths:
         to play is a policy with no subject). `outputs.announcement.policy`
         of "duck" requires `duckGainDb` (negative, at least -60 dB) and
         refuses it on "mix"/"interrupt". This is a FULL REPLACEMENT.
+        Optionally carries `If-Match`/`If-None-Match` (opt-in; see those
+        parameters): refused with `409` when the precondition names a
+        revision that is no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5734,6 +5804,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.cue/{id}/revisions:
@@ -5849,13 +5921,18 @@ paths:
         same-show `show.cue` object, entry ids must be unique, and two
         entries sharing the same `fpp.section`/`fpp.position` pair are
         refused (they derive the identical FPP entry key). This is a FULL
-        REPLACEMENT.
+        REPLACEMENT. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current, or when
+        this Show already has a different showmesh-audio playlist.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5880,6 +5957,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.playlist/{id}/revisions:
@@ -5953,7 +6032,12 @@ paths:
         constant, never derived from `show` or from any other
         configuration value, so activating a different show accumulates
         as a new revision of the SAME object rather than orphaning the
-        previous history.
+        previous history. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -5978,6 +6062,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/show.active/revisions:
@@ -6076,13 +6162,17 @@ paths:
         existing show.action object in the same show. This is a FULL
         REPLACEMENT: an omitted optional block (backgroundAudio) is left
         unconfigured, never wiped by an absent key on top of a required
-        one.
+        one. Optionally carries `If-Match`/`If-None-Match` (opt-in; see
+        those parameters): refused with `409` when the precondition names
+        a revision that is no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -6107,6 +6197,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/night.session/{id}/revisions:
@@ -6220,7 +6312,12 @@ paths:
         id is a fixed constant, never derived from `session`, so
         activating a different session (or clearing it) accumulates as a
         new revision of the SAME object rather than orphaning the
-        previous history.
+        previous history. Optionally carries `If-Match`/`If-None-Match`
+        (opt-in; see those parameters): refused with `409` when the
+        precondition names a revision that is no longer current.
+      parameters:
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -6245,6 +6342,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/night.session.active/revisions:
@@ -7765,6 +7864,50 @@ components:
         hand-maintained list.
       schema:
         type: string
+  parameters:
+    ConfigRevisionIfMatch:
+      name: If-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >-
+        Optional revision precondition for a config PUT, shared by every
+        route sharing this parameter across every config kind that
+        supports it (no per-kind variation). When present, must be a
+        quoted revision integer of 1 or greater, e.g. `"7"` - the value of
+        this response shape's own `revision` field, quoted; revisions
+        start at 1, so `"0"` is refused as `400` malformed rather than
+        accepted as an undocumented second spelling of
+        `If-None-Match: "*"`. Asserts that the revision the client last
+        read is still the object's current one: if the object's current
+        revision has moved since, the write is refused with `409` and
+        nothing is written. Mutually exclusive with `If-None-Match` on the
+        same request (`400` if both are sent). Absent means unconditional:
+        this coordinator accepts the write regardless of the object's
+        current revision, exactly as it always has before this
+        precondition existed. That absence-accepted default is
+        deliberate and ruled, not a gap: the guarantee this parameter
+        provides is opt-in, never mandatory, so a client that never sends
+        it is unprotected, and two clients that both omit it can still
+        silently overwrite one another.
+    ConfigRevisionIfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >-
+        Optional create-only precondition for a config PUT, shared by
+        every route sharing this parameter across every config kind that
+        supports it (no per-kind variation). The only accepted value is
+        the literal `*`; anything else is refused `400`. Asserts that this
+        id has no active revision yet: if one already exists, the write is
+        refused with `409` and nothing is written. Mutually exclusive with
+        `If-Match` on the same request (`400` if both are sent). Absent
+        means unconditional, exactly like `If-Match`'s own absence: this
+        coordinator creates or overwrites whatever is there, exactly as it
+        always has before this precondition existed.
   securitySchemes:
     bearerAuth:
       type: http
@@ -9544,6 +9687,129 @@ components:
           type: boolean
         oldestRetainedSeq:
           type: [integer, "null"]
+    CurrentRunsResponse:
+      type: object
+      required: [serverTime, activeShow, runs]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        activeShow:
+          $ref: "#/components/schemas/CurrentShowContext"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurrentRun"
+    CurrentShowContext:
+      type: object
+      required: [configured, show, generation]
+      properties:
+        configured:
+          type: boolean
+        show:
+          type: [string, "null"]
+        generation:
+          type: [integer, "null"]
+    CurrentRun:
+      type: object
+      required:
+        [id, runner, show, generation, playlistId, playlistRevision,
+         status, statusReason, playback, freshness, reconciliation,
+         activation, targets, next]
+      properties:
+        id: {type: string}
+        runner:
+          type: string
+          enum: [fpp, showmesh-audio]
+        show: {type: string}
+        generation: {type: integer}
+        playlistId: {type: string}
+        playlistRevision: {type: integer}
+        status: {type: string}
+        statusReason: {type: string}
+        playback:
+          $ref: "#/components/schemas/CurrentPlayback"
+        freshness:
+          $ref: "#/components/schemas/CurrentRunFreshness"
+        reconciliation:
+          $ref: "#/components/schemas/CurrentReconciliation"
+        activation:
+          $ref: "#/components/schemas/CurrentRunActivation"
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurrentRunTarget"
+        next:
+          oneOf:
+            - $ref: "#/components/schemas/CurrentRunNext"
+            - type: "null"
+    CurrentPlayback:
+      type: object
+      required: [state, reason, itemId, itemIndex, positionMs, media, evidence]
+      properties:
+        state: {type: string}
+        reason: {type: string}
+        itemId: {type: string}
+        itemIndex: {type: [integer, "null"]}
+        positionMs: {type: [integer, "null"]}
+        media: {type: string}
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/Evidence"
+    CurrentRunFreshness:
+      type: object
+      required: [state, reason, observedAt, collectedAt]
+      properties:
+        state: {type: string}
+        reason: {type: string}
+        observedAt: {type: [string, "null"], format: date-time}
+        collectedAt: {type: [string, "null"], format: date-time}
+    CurrentReconciliation:
+      type: object
+      required: [state, reason]
+      properties:
+        state: {type: string}
+        reason: {type: string}
+    CurrentRunActivation:
+      type: object
+      required: [show, generation, playlistId, revision, runner]
+      properties:
+        show: {type: string}
+        generation: {type: integer}
+        playlistId: {type: string}
+        revision: {type: integer}
+        runner: {type: string}
+    CurrentRunTarget:
+      type: object
+      required: [kind, id, evidence]
+      properties:
+        kind: {type: string}
+        id: {type: string}
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/Evidence"
+    CurrentRunNext:
+      type: object
+      required: [itemId, itemIndex, media, source]
+      properties:
+        itemId: {type: string}
+        itemIndex: {type: integer}
+        media: {type: string}
+        source: {type: string}
+    CurrentRunsChangedEvent:
+      type: object
+      required: [seq, serverTime, activeShow, runs]
+      properties:
+        seq: {type: integer}
+        serverTime: {type: string, format: date-time}
+        activeShow:
+          $ref: "#/components/schemas/CurrentShowContext"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurrentRun"
     Snapshot:
       type: object
       required:
@@ -12074,8 +12340,10 @@ components:
         channel index reused within programChannels, or repeated within
         ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a
         channel already claimed by programChannels), and
-        "audio-node-route-mismatch" (programRoute and ltcRoute naming the
-        same device route). Two are this contract's own additions, both scoped to
+        "audio-node-route-mismatch" (a non-empty ltcRoute naming a
+        DIFFERENT device route from programRoute: program and LTC leave
+        through one interface in one clock domain, ADR-018, so the two
+        must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to
         `POST /integrations/fpp/playlist-entry-observations`:
         "unsupported-observation-schema-version" (`schemaVersion` is not
         `1`, `400`) and "observation-entry-key-mismatch" (the coordinator
@@ -15512,7 +15780,9 @@ components:
         inventory report exists, regardless of state - never an error and
         never a basis for deletion. observedAt is null exactly when state
         is "unknown": there is no evidence an unknown verdict rests on, so
-        there is nothing to date it by.
+        there is nothing to date it by. verdicts is additive (D-016 item
+        2): a client that predates it keeps working unchanged reading
+        every other field exactly as before.
       additionalProperties: false
       required: [node, state, reason, missing, gaps, extra, observedAt]
       properties:
@@ -15538,6 +15808,27 @@ components:
         observedAt:
           type: [string, "null"]
           format: date-time
+        verdicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetSyncVerdict"
+          description: >-
+            One entry per asset this node was expected to hold, naming
+            what its own reported inventory says about that asset's
+            bytes. Absent, or an empty array, whenever no fresh inventory
+            report exists for this node - the identical condition extra
+            is populated under, for the identical reason: a stale report
+            is not evidence of what a node currently holds. When present,
+            this array has exactly one entry per asset the node was
+            expected to hold, keyed by assetId - never by
+            runtimeFilename, which Asset's own description already says
+            is not identity. state is "held" (the node's inventory holds
+            this asset's own content hash), "superseded" (the node does
+            not hold that hash, but holds the content hash of a row that
+            used to be current for this exact asset's (show, sequence,
+            targetKind, target) identity before being superseded), or
+            "absent" (the node holds nothing recognizable for this
+            identity at all).
     MissingAsset:
       type: object
       description: One expected asset a manifest found the node does not currently hold.
@@ -15584,6 +15875,29 @@ components:
           type: string
         sizeBytes:
           type: integer
+    AssetSyncVerdict:
+      type: object
+      description: >-
+        One expected asset's per-node sync verdict (D-016 item 2): exists
+        only for an asset this node was expected to hold, keyed by
+        assetId, and derived only from facts the manifest already computes
+        for missing/extra - never a filename join and never a timestamp.
+      additionalProperties: false
+      required: [assetId, sequence, filename, contentHash, sizeBytes, state]
+      properties:
+        assetId:
+          type: string
+        sequence:
+          type: string
+        filename:
+          type: string
+        contentHash:
+          type: string
+        sizeBytes:
+          type: integer
+        state:
+          type: string
+          enum: [held, superseded, absent]
     NodeAssetManifestResponse:
       type: object
       description: The body of GET /nodes/{nodeId}/assets.

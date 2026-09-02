@@ -725,7 +725,11 @@ func resolveAudioSessionReplay(existing store.CommandRecord, requestedAction, re
 // carrying a recognized outcome, the result is always "unconfirmable" —
 // never "started": a bare transport-level Confirmed with no evidence, or
 // an unrecognized outcome string, must not be reported as if the node's
-// own session layer had confirmed anything.
+// own session layer had confirmed anything. A recognized outcome that
+// [pkgaudio.OutcomeResult.Validate] says requires a reason keeps its own
+// outcome word even when the node left the reason blank; the reason is
+// replaced with the coordinator's own statement of that violation, never
+// left blank and never attributed to the node.
 func mapResultOutcome(res mqttproto.ResultPayload) (outcome, reason string) {
 	if res.Evidence != nil {
 		if v, ok := res.Evidence.Value.(map[string]any); ok {
@@ -734,6 +738,10 @@ func mapResultOutcome(res mqttproto.ResultPayload) (outcome, reason string) {
 					return string(pkgaudio.OutcomeUnconfirmable), fmt.Sprintf("node reported an outcome value this coordinator does not recognize: %q", o)
 				}
 				r, _ := v["reason"].(string)
+				result := pkgaudio.OutcomeResult{Outcome: pkgaudio.Outcome(o), Reason: r}
+				if err := result.Validate(); errors.Is(err, pkgaudio.ErrOutcomeReasonRequired) {
+					return o, fmt.Sprintf("node reported outcome %q with no reason; the coordinator did not receive one and the outcome requires one", o)
+				}
 				return o, r
 			}
 		}

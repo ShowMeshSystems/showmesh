@@ -49,6 +49,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/current-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current runner playback
+         * @description Full runner-neutral projection of the current zero-to-many runs. FPP is optional; FPP and showmesh-audio can be present concurrently. The server computes active Show/generation context, runner status, playback and freshness, reconciliation, activation, and per-target evidence. `next` is null unless a runner provided an authoritative next item, so clients must not infer one from local playlist order. After reconnect, refetch this endpoint; `currentRuns.changed` is an optional full-frame prompt, not a resumable cursor.
+         */
+        get: operations["getCurrentRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes": {
         parameters: {
             query?: never;
@@ -612,6 +632,7 @@ export interface paths {
          *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
          *       | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
          *       | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
+         *       | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
          *     `data:` is always exactly one line of compact (no embedded newlines) JSON - never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
@@ -1333,7 +1354,7 @@ export interface paths {
         get: operations["getAudioNode"];
         /**
          * Write a new audio.node revision (ADR-018)
-         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: every field is required on every write. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) - never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `programRoute` and `ltcRoute` must also name the SAME route, refused at decode time before evidence is even consulted. `programChannels` (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based, never a member of `programChannels`) are checked structurally, not against evidence. `clockDomain` and `clockDomainProvenance` are operator-declared and never inferred: no software call on this platform proves two outputs share a hardware clock.
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: every field is required on every write. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) - never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `programRoute` and `ltcRoute` must also name the SAME route, refused at decode time before evidence is even consulted. `programChannels` (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based, never a member of `programChannels`) are checked structurally, not against evidence. `clockDomain` and `clockDomainProvenance` are operator-declared and never inferred: no software call on this platform proves two outputs share a hardware clock. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putAudioNode"];
         post?: never;
@@ -1521,7 +1542,7 @@ export interface paths {
         get: operations["getShowAction"];
         /**
          * Write a new show.action revision (Step 9)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object (`GET /config/show`); a nonexistent show is refused naming the missing id. This is a write-time check only - an existing revision written before this check shipped still reads, lists, and runs unchanged. `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker this deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no default. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) - the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11).
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object (`GET /config/show`); a nonexistent show is refused naming the missing id. This is a write-time check only - an existing revision written before this check shipped still reads, lists, and runs unchanged. `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker this deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no default. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) - the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current, or when becoming a Resolume action is blocked by a stored macro step's local fallback.
          */
         put: operations["putShowAction"];
         post?: never;
@@ -1579,7 +1600,7 @@ export interface paths {
         get: operations["getShowMacro"];
         /**
          * Write a new show.macro revision (Step 9)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object, refused naming the missing id otherwise (write-time only; an existing revision keeps reading, listing, and running unchanged). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object **in this macro's own show** - a step naming an action belonging to a different show is refused, naming both shows. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `continue`) / `onUnconfirmed` (default `continue`). Both default to `continue` because a macro run always runs every step (owner decision 2026-08-14); they remain two independent fields, and `abort` is available on either as an explicit per-step choice. `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload - including description and onFailure/onUnconfirmed resolved to their defaults - never the raw request body.
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object, refused naming the missing id otherwise (write-time only; an existing revision keeps reading, listing, and running unchanged). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object **in this macro's own show** - a step naming an action belonging to a different show is refused, naming both shows. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `continue`) / `onUnconfirmed` (default `continue`). Both default to `continue` because a macro run always runs every step (owner decision 2026-08-14); they remain two independent fields, and `abort` is available on either as an explicit per-step choice. `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload - including description and onFailure/onUnconfirmed resolved to their defaults - never the raw request body. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putShowMacro"];
         post?: never;
@@ -1883,7 +1904,7 @@ export interface paths {
         get: operations["getShow"];
         /**
          * Write a new show revision (Track E, ADR-027 decision 2)
-         * @description Requires `config:write` (admin only). A Show is a namespace, not a container: this payload carries no list of surfaces, actions, or macros. `name` is required, non-empty, at most 200 characters. This is a FULL REPLACEMENT: `notes` is optional and an absent key means notes becomes empty, never "leave the previous value" - the same absent/null/empty distinction every write surface in this contract enforces. The request body is therefore ConfigShowWrite; the response is always the resolved ConfigShow shape, which renders `notes` even when empty (never absent).
+         * @description Requires `config:write` (admin only). A Show is a namespace, not a container: this payload carries no list of surfaces, actions, or macros. `name` is required, non-empty, at most 200 characters. This is a FULL REPLACEMENT: `notes` is optional and an absent key means notes becomes empty, never "leave the previous value" - the same absent/null/empty distinction every write surface in this contract enforces. The request body is therefore ConfigShowWrite; the response is always the resolved ConfigShow shape, which renders `notes` even when empty (never absent). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putShow"];
         post?: never;
@@ -1941,7 +1962,7 @@ export interface paths {
         get: operations["getShowSurface"];
         /**
          * Write a new show.surface revision (Track E, ADR-026)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` object; `node` must name a declared node - this coordinator deliberately does NOT check the node's advertised NDI/HDMI capability, which is observed state and absent whenever a node is offline (checking it would manufacture absence from a node that has simply not checked in yet). `channelRange` is required and must be non-empty: an absent `channelRange`, an explicit `null`, and an explicitly empty one (`channelCount: 0`) are three distinct refusals with three distinct messages, never a silent default. `geometry.width * geometry.height * channelsPerPixel(pixelFormat)` must equal `channelRange.channelCount` exactly. `output.transport` selects exactly one of `output.ndi` / `output.hdmi`; the other must be absent - support for one transport is never evidence for the other, so nothing here defaults a transport. This is a FULL REPLACEMENT: every field is required on every write (this payload has no optional/defaulted key), so the request and response share the same ConfigShowSurface shape. A second surface assigned to the same node is accepted (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule).
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` object; `node` must name a declared node - this coordinator deliberately does NOT check the node's advertised NDI/HDMI capability, which is observed state and absent whenever a node is offline (checking it would manufacture absence from a node that has simply not checked in yet). `channelRange` is required and must be non-empty: an absent `channelRange`, an explicit `null`, and an explicitly empty one (`channelCount: 0`) are three distinct refusals with three distinct messages, never a silent default. `geometry.width * geometry.height * channelsPerPixel(pixelFormat)` must equal `channelRange.channelCount` exactly. `output.transport` selects exactly one of `output.ndi` / `output.hdmi`; the other must be absent - support for one transport is never evidence for the other, so nothing here defaults a transport. This is a FULL REPLACEMENT: every field is required on every write (this payload has no optional/defaulted key), so the request and response share the same ConfigShowSurface shape. A second surface assigned to the same node is accepted (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putShowSurface"];
         post?: never;
@@ -1999,7 +2020,7 @@ export interface paths {
         get: operations["getShowCue"];
         /**
          * Write a new show.cue revision (Track H seam H1, ADR-043)
-         * @description Requires `config:write`. `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` object. `outputs` is required and must declare at least one of render/audio/ltc/announcement — a Cue declaring nothing is an authoring mistake, not an empty-but-valid Cue. `outputs.ltc` and `outputs.announcement` each require `outputs.audio` to also be present (ADR-018's one clock domain; an announcement with no audio to play is a policy with no subject). `outputs.announcement.policy` of "duck" requires `duckGainDb` (negative, at least -60 dB) and refuses it on "mix"/"interrupt". This is a FULL REPLACEMENT.
+         * @description Requires `config:write`. `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` object. `outputs` is required and must declare at least one of render/audio/ltc/announcement — a Cue declaring nothing is an authoring mistake, not an empty-but-valid Cue. `outputs.ltc` and `outputs.announcement` each require `outputs.audio` to also be present (ADR-018's one clock domain; an announcement with no audio to play is a policy with no subject). `outputs.announcement.policy` of "duck" requires `duckGainDb` (negative, at least -60 dB) and refuses it on "mix"/"interrupt". This is a FULL REPLACEMENT. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putShowCue"];
         post?: never;
@@ -2057,7 +2078,7 @@ export interface paths {
         get: operations["getShowPlaylist"];
         /**
          * Write a new show.playlist revision (Track H seam H1, ADR-043)
-         * @description Requires `config:write`. `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` object. `runner` is one of `fpp`/`showmesh-audio`; the reserved, unimplemented `showmesh` runner is refused with a 400 Problem whose type is `show-config-not-implemented`, never a 501. `fpp` is required iff `runner` is `fpp`; `showmeshAudio` is permitted only when `runner` is `showmesh-audio`. `mismatchPolicy` is permitted only when `runner` is `fpp`; `safeCueRef` is required iff `mismatchPolicy` is `safeCue`, and must name a same-show `show.cue` object. `entries` is required and non-empty; each entry's `cue` must name a same-show `show.cue` object, entry ids must be unique, and two entries sharing the same `fpp.section`/`fpp.position` pair are refused (they derive the identical FPP entry key). This is a FULL REPLACEMENT.
+         * @description Requires `config:write`. `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` object. `runner` is one of `fpp`/`showmesh-audio`; the reserved, unimplemented `showmesh` runner is refused with a 400 Problem whose type is `show-config-not-implemented`, never a 501. `fpp` is required iff `runner` is `fpp`; `showmeshAudio` is permitted only when `runner` is `showmesh-audio`. `mismatchPolicy` is permitted only when `runner` is `fpp`; `safeCueRef` is required iff `mismatchPolicy` is `safeCue`, and must name a same-show `show.cue` object. `entries` is required and non-empty; each entry's `cue` must name a same-show `show.cue` object, entry ids must be unique, and two entries sharing the same `fpp.section`/`fpp.position` pair are refused (they derive the identical FPP entry key). This is a FULL REPLACEMENT. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current, or when this Show already has a different showmesh-audio playlist.
          */
         put: operations["putShowPlaylist"];
         post?: never;
@@ -2098,7 +2119,7 @@ export interface paths {
         get: operations["getShowActive"];
         /**
          * Activate a show (Track E, ADR-027 decision 3)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` object. The active show is configuration, revisioned and audited exactly like every other kind here, so that programming Christmas cannot accidentally break Halloween. This is a singleton: the underlying object id is a fixed constant, never derived from `show` or from any other configuration value, so activating a different show accumulates as a new revision of the SAME object rather than orphaning the previous history.
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` object. The active show is configuration, revisioned and audited exactly like every other kind here, so that programming Christmas cannot accidentally break Halloween. This is a singleton: the underlying object id is a fixed constant, never derived from `show` or from any other configuration value, so activating a different show accumulates as a new revision of the SAME object rather than orphaning the previous history. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putShowActive"];
         post?: never;
@@ -2156,7 +2177,7 @@ export interface paths {
         get: operations["getNightSession"];
         /**
          * Write a new night.session revision (Track F seam F1)
-         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteControl`/`interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present - the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one.
+         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteControl`/`interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present - the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putNightSession"];
         post?: never;
@@ -2217,7 +2238,7 @@ export interface paths {
         get: operations["getNightSessionActive"];
         /**
          * Activate a night session, or clear the pointer (Track F seam F1, ADR-039 rule 4)
-         * @description Requires `config:write` (admin only). `session` is a REQUIRED key but may be the empty string, which explicitly clears the pointer back to unset - the zero-to-one-and-back-to-zero transition ADR-039 rule 4 requires. A non-empty value must name an existing night.session object. This is a singleton: the underlying object id is a fixed constant, never derived from `session`, so activating a different session (or clearing it) accumulates as a new revision of the SAME object rather than orphaning the previous history.
+         * @description Requires `config:write` (admin only). `session` is a REQUIRED key but may be the empty string, which explicitly clears the pointer back to unset - the zero-to-one-and-back-to-zero transition ADR-039 rule 4 requires. A non-empty value must name an existing night.session object. This is a singleton: the underlying object id is a fixed constant, never derived from `session`, so activating a different session (or clearing it) accumulates as a new revision of the SAME object rather than orphaning the previous history. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putNightSessionActive"];
         post?: never;
@@ -3326,6 +3347,80 @@ export interface components {
             gap: boolean;
             oldestRetainedSeq: number | null;
         };
+        CurrentRunsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            activeShow: components["schemas"]["CurrentShowContext"];
+            runs: components["schemas"]["CurrentRun"][];
+        };
+        CurrentShowContext: {
+            configured: boolean;
+            show: string | null;
+            generation: number | null;
+        };
+        CurrentRun: {
+            id: string;
+            /** @enum {string} */
+            runner: "fpp" | "showmesh-audio";
+            show: string;
+            generation: number;
+            playlistId: string;
+            playlistRevision: number;
+            status: string;
+            statusReason: string;
+            playback: components["schemas"]["CurrentPlayback"];
+            freshness: components["schemas"]["CurrentRunFreshness"];
+            reconciliation: components["schemas"]["CurrentReconciliation"];
+            activation: components["schemas"]["CurrentRunActivation"];
+            targets: components["schemas"]["CurrentRunTarget"][];
+            next: components["schemas"]["CurrentRunNext"] | null;
+        };
+        CurrentPlayback: {
+            state: string;
+            reason: string;
+            itemId: string;
+            itemIndex: number | null;
+            positionMs: number | null;
+            media: string;
+            evidence: components["schemas"]["Evidence"][];
+        };
+        CurrentRunFreshness: {
+            state: string;
+            reason: string;
+            /** Format: date-time */
+            observedAt: string | null;
+            /** Format: date-time */
+            collectedAt: string | null;
+        };
+        CurrentReconciliation: {
+            state: string;
+            reason: string;
+        };
+        CurrentRunActivation: {
+            show: string;
+            generation: number;
+            playlistId: string;
+            revision: number;
+            runner: string;
+        };
+        CurrentRunTarget: {
+            kind: string;
+            id: string;
+            evidence: components["schemas"]["Evidence"][];
+        };
+        CurrentRunNext: {
+            itemId: string;
+            itemIndex: number;
+            media: string;
+            source: string;
+        };
+        CurrentRunsChangedEvent: {
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            activeShow: components["schemas"]["CurrentShowContext"];
+            runs: components["schemas"]["CurrentRun"][];
+        };
         Snapshot: {
             /** Format: date-time */
             serverTime: string;
@@ -4286,7 +4381,7 @@ export interface components {
          *
          *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) - a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision - the macro was edited between two submissions under one key, 409) - minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** an unavailable audit store no longer blocks a command dispatch on ANY request path this coordinator has - the amendment covers every one of them, not a named subset - so `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable"; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own former ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface), is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing in this coordinator's audit-write posture treats Resolume actions differently from FPP commands, so this type is no longer produced either. **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (programRoute and ltcRoute naming the same device route). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** an unavailable audit store no longer blocks a command dispatch on ANY request path this coordinator has - the amendment covers every one of them, not a named subset - so `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable"; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own former ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface), is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing in this coordinator's audit-write posture treats Resolume actions differently from FPP commands, so this type is no longer produced either. **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (a non-empty ltcRoute naming a DIFFERENT device route from programRoute: program and LTC leave through one interface in one clock domain, ADR-018, so the two must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
          */
         Problem: {
             /**
@@ -5606,7 +5701,7 @@ export interface components {
             /** @description Required, and must name a declared node, when targetKind is "node". */
             target?: string;
         };
-        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. */
+        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. verdicts is additive (D-016 item 2): a client that predates it keeps working unchanged reading every other field exactly as before. */
         NodeAssetManifest: {
             node: string;
             /** @enum {string} */
@@ -5617,6 +5712,8 @@ export interface components {
             extra: components["schemas"]["ExtraAsset"][];
             /** Format: date-time */
             observedAt: string | null;
+            /** @description One entry per asset this node was expected to hold, naming what its own reported inventory says about that asset's bytes. Absent, or an empty array, whenever no fresh inventory report exists for this node - the identical condition extra is populated under, for the identical reason: a stale report is not evidence of what a node currently holds. When present, this array has exactly one entry per asset the node was expected to hold, keyed by assetId - never by runtimeFilename, which Asset's own description already says is not identity. state is "held" (the node's inventory holds this asset's own content hash), "superseded" (the node does not hold that hash, but holds the content hash of a row that used to be current for this exact asset's (show, sequence, targetKind, target) identity before being superseded), or "absent" (the node holds nothing recognizable for this identity at all). */
+            verdicts?: components["schemas"]["AssetSyncVerdict"][];
         };
         /** @description One expected asset a manifest found the node does not currently hold. */
         MissingAsset: {
@@ -5636,6 +5733,16 @@ export interface components {
             contentHash: string;
             filename: string;
             sizeBytes: number;
+        };
+        /** @description One expected asset's per-node sync verdict (D-016 item 2): exists only for an asset this node was expected to hold, keyed by assetId, and derived only from facts the manifest already computes for missing/extra - never a filename join and never a timestamp. */
+        AssetSyncVerdict: {
+            assetId: string;
+            sequence: string;
+            filename: string;
+            contentHash: string;
+            sizeBytes: number;
+            /** @enum {string} */
+            state: "held" | "superseded" | "absent";
         };
         /** @description The body of GET /nodes/{nodeId}/assets. */
         NodeAssetManifestResponse: {
@@ -5985,7 +6092,12 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+        ConfigRevisionIfMatch: string;
+        /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+        ConfigRevisionIfNoneMatch: string;
+    };
     requestBodies: never;
     headers: {
         /** @description The API major version this response was served by. Present on every `/api/v1` response, success or error, with no exception (contract section 6.2). A client MAY also send this as a request header naming the version it expects; a coordinator that does not serve that version answers with the `UnsupportedAPIVersion` problem instead of a partial or best-guess render (contract section 6.6). */
@@ -6038,6 +6150,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Snapshot"];
+                };
+            };
+            400: components["responses"]["UnsupportedAPIVersion"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCurrentRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentRunsResponse"];
                 };
             };
             400: components["responses"]["UnsupportedAPIVersion"];
@@ -8620,7 +8758,12 @@ export interface operations {
     putAudioNode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -8655,6 +8798,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -8934,7 +9078,12 @@ export interface operations {
     putShowAction: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -8960,6 +9109,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -9050,7 +9200,12 @@ export interface operations {
     putShowMacro: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -9076,6 +9231,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -9581,7 +9737,12 @@ export interface operations {
     putShow: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -9607,6 +9768,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -9698,7 +9860,12 @@ export interface operations {
     putShowSurface: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -9724,6 +9891,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -9814,7 +9982,12 @@ export interface operations {
     putShowCue: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -9840,6 +10013,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -9930,7 +10104,12 @@ export interface operations {
     putShowPlaylist: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -9956,6 +10135,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -10015,7 +10195,12 @@ export interface operations {
     putShowActive: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -10039,6 +10224,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -10123,7 +10309,12 @@ export interface operations {
     putNightSession: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -10149,6 +10340,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -10238,7 +10430,12 @@ export interface operations {
     putNightSessionActive: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -10262,6 +10459,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

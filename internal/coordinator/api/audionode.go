@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -241,6 +242,11 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxAudioNodeConfigRequestBodyBytes+1))
 	if err != nil {
@@ -292,9 +298,14 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.AudioNodeConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.AudioNodeConfigKind, id, payloadJSON, precondition,
 		map[string]any{"programRoute": payload.ProgramRoute, "ltcRoute": payload.LTCRoute})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write audio.node config revision", writeErr)
 		return
 	}

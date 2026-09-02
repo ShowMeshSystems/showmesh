@@ -5,11 +5,20 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
+
+// CurrentRunsReader supplies the complete runner-neutral current-runs
+// projection. The API keeps this behind a consumer-side interface so tests
+// can exercise the route without constructing collectors, while production
+// wiring can assemble it from the store and collector read adapters.
+type CurrentRunsReader interface {
+	Snapshot(ctx context.Context, now time.Time) (currentrun.Snapshot, error)
+}
 
 // NodeLister lists the coordinator's current node inventory. It exists so
 // this package does not import internal/coordinator/inventory's Manager
