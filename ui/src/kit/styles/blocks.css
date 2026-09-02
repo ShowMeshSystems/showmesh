@@ -423,62 +423,6 @@ a.sm-tile:hover {
   font: var(--t-body);
 }
 
-/* Transport is one operational surface. Extra live controls stay in their
-   functional order, but never float outside the player they operate. */
-.sm-transport-surface {
-  margin-top: 14px;
-  overflow: hidden;
-  border: 1px solid var(--accent-border);
-  border-radius: var(--r-card);
-  background: var(--surface);
-}
-
-.sm-transport-surface__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s-4);
-  flex-wrap: wrap;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--accent-bg);
-}
-
-.sm-transport-surface__head .sm-small {
-  margin: 0;
-}
-
-.sm-transport-surface__body {
-  display: grid;
-  gap: 16px;
-  padding: 16px;
-}
-
-.sm-transport-surface__body > .sm-btn-row {
-  gap: 10px;
-}
-
-.sm-transport-surface .sm-rule-v {
-  height: var(--ctrl-h-gloved);
-}
-
-.sm-transport-surface > .sm-outcome {
-  margin: 0;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--raised);
-}
-
-.sm-transport-surface .sm-outcome__detail {
-  margin-bottom: 0;
-}
-
-.sm-volume.sm-transport__start,
-.sm-volume.sm-transport__volume {
-  max-width: none;
-  margin: 0;
-}
-
 .sm-volume.sm-transport__start {
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
@@ -845,27 +789,6 @@ a.sm-tile:hover {
   gap: var(--s-2);
   padding: 14px;
   background: var(--surface);
-}
-
-.sm-lifecycle-command--request-final-show { order: 1; }
-.sm-lifecycle-command--fade-out-night { order: 2; }
-.sm-lifecycle-command--power-down-presentation { order: 3; }
-.sm-lifecycle-command--start-night { order: 4; }
-.sm-lifecycle-command--prepare-site { order: 5; }
-.sm-lifecycle-command--start-preshow { order: 6; }
-.sm-lifecycle-command--end-session { order: 7; }
-
-.sm-lifecycle-commands > .sm-lifecycle-command--request-final-show,
-.sm-lifecycle-commands > .sm-lifecycle-command--fade-out-night,
-.sm-lifecycle-commands > .sm-lifecycle-command--power-down-presentation,
-.sm-lifecycle-commands > .sm-lifecycle-command--start-night {
-  grid-column: span 3;
-}
-
-.sm-lifecycle-commands > .sm-lifecycle-command--prepare-site,
-.sm-lifecycle-commands > .sm-lifecycle-command--start-preshow,
-.sm-lifecycle-commands > .sm-lifecycle-command--end-session {
-  grid-column: span 4;
 }
 
 .sm-lifecycle-command--fade-out-night .sm-btn:not(:disabled) {
