@@ -110,14 +110,26 @@ func nightBackgroundAudioSessionID(rec store.NightSessionRecord) string {
 // session and enforced by the node (nightannouncement.go), so no step
 // kind here exists for it.
 const (
-	nightBGStepApply    = "apply"
-	nightBGStepGain     = "gain"
-	nightBGStepStart    = "start"
-	nightBGStepPause    = "pause"
-	nightBGStepResume   = "resume"
-	nightBGStepStop     = "stop"
-	nightBGStepFadeDown = "fadedown"
-	nightBGStepFadeUp   = "fadeup"
+	nightBGStepApply         = "apply"
+	nightBGStepGain          = "gain"
+	nightBGStepStart         = "start"
+	nightBGStepPause         = "pause"
+	nightBGStepResume        = "resume"
+	nightBGStepStop          = "stop"
+	nightBGStepFadeDown      = "fadedown"
+	nightBGStepFadeUp        = "fadeup"
+	nightBGStepExpiryRefresh = "expiryrefresh"
+)
+
+// nightBackgroundAudioExpiryTTL is how long the agent keeps a bed session
+// alive, per audio.session.apply's own expiresInMs param
+// (pkgaudio.ApplyRequest.ExpiryTTL), before restore.go retires it as
+// unclaimed. nightBackgroundAudioExpiryRefreshInterval is how often this
+// controller re-sends it while steadily playing — well under the TTL so
+// a missed tick or two never lets the deadline lapse.
+const (
+	nightBackgroundAudioExpiryTTL             = 10 * time.Minute
+	nightBackgroundAudioExpiryRefreshInterval = 4 * time.Minute
 )
 
 // nightBackgroundAudioStep is one parsed night_cue_outbox row under this
@@ -135,6 +147,9 @@ func nightBackgroundAudioCueNameResume(seq int) string   { return fmt.Sprintf("b
 func nightBackgroundAudioCueNameStop(seq int) string     { return fmt.Sprintf("bg-%04d-stop", seq) }
 func nightBackgroundAudioCueNameFadeDown(seq int) string { return fmt.Sprintf("bg-%04d-fadedown", seq) }
 func nightBackgroundAudioCueNameFadeUp(seq int) string   { return fmt.Sprintf("bg-%04d-fadeup", seq) }
+func nightBackgroundAudioCueNameExpiryRefresh(seq int) string {
+	return fmt.Sprintf("bg-%04d-expiryrefresh", seq)
+}
 
 // nightBackgroundAudioSeqFromCueName extracts the leading "bg-%04d-"
 // sequence number. The suffix after the second hyphen is always one of
@@ -190,6 +205,8 @@ func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (step nightBac
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeDown}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-fadeup"):
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeUp}, nodeID, true
+	case strings.HasSuffix(row.CueName, "-expiryrefresh"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepExpiryRefresh}, nodeID, true
 	}
 	return nightBackgroundAudioStep{}, "", false
 }
@@ -488,7 +505,8 @@ func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSe
 			"ownerRevision": rec.ConfigRevision, "items": wireItems,
 			"repeat": ba.Repeat, "resume": ba.Resume, "requestedTransition": ba.ItemTransition,
 		},
-		"mixPolicy": string(pkgaudio.MixPolicyMix),
+		"mixPolicy":   string(pkgaudio.MixPolicyMix),
+		"expiresInMs": float64(nightBackgroundAudioExpiryTTL.Milliseconds()),
 	}
 }
 
@@ -586,7 +604,8 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		}
 		// Confirmed, no fade-in configured: playing at full gain
 		// already. The engine owns advancement and repeat from here;
-		// nothing more for this controller to do.
+		// only a due expiry refresh is left for this controller.
+		h.nightMaybeRefreshBackgroundAudioExpiry(ctx, now, rec, nodeID, sessionID, latest, history)
 
 	case nightBGStepFadeUp:
 		if !confirmed {
@@ -596,6 +615,14 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		// Confirmed: ramping (or already arrived) at full gain again.
 		// Nothing downstream depends on this fade's own true completion,
 		// unlike fadedown before a suspend, so no further gate is needed.
+		h.nightMaybeRefreshBackgroundAudioExpiry(ctx, now, rec, nodeID, sessionID, latest, history)
+
+	case nightBGStepExpiryRefresh:
+		if !confirmed {
+			h.nightBackgroundAudioRefreshExpiry(ctx, now, rec, nodeID, sessionID, history) // retry under a fresh revision: never let expiry lapse from a stuck refresh.
+			return
+		}
+		h.nightMaybeRefreshBackgroundAudioExpiry(ctx, now, rec, nodeID, sessionID, latest, history)
 
 	case nightBGStepPause:
 		if !confirmed {
@@ -614,6 +641,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 			return
 		}
 		// Confirmed, no fade-in configured: playing again at full gain.
+		h.nightMaybeRefreshBackgroundAudioExpiry(ctx, now, rec, nodeID, sessionID, latest, history)
 
 	case nightBGStepStop:
 		if !confirmed {
@@ -701,6 +729,47 @@ func (h *handlers) nightBackgroundAudioStart(ctx context.Context, now time.Time,
 	}
 }
 
+// nightBackgroundAudioExpiryRefreshDue reports whether enough real time
+// has passed since latest's own confirmation to warrant re-sending the
+// bed's expiresInMs before nightBackgroundAudioExpiryTTL lapses. An
+// unresolved latest is never due here — its own retry path in
+// [nightAdvanceBackgroundAudioForNode]'s case nightBGStepExpiryRefresh
+// handles that.
+func nightBackgroundAudioExpiryRefreshDue(now time.Time, latest nightBackgroundAudioHistoryRow) bool {
+	if latest.Row.ResolvedAt == nil {
+		return false
+	}
+	return now.Sub(*latest.Row.ResolvedAt) >= nightBackgroundAudioExpiryRefreshInterval
+}
+
+// nightBackgroundAudioRefreshExpiry re-sends audio.session.apply carrying
+// only expiresInMs: every other ApplyRequest field stays
+// [pkgaudio.FieldUnset] and so merges onto the session's current desired
+// state unchanged (Manager.Apply merges rather than replaces), so this
+// never reloads the engine or touches playback.
+func (h *handlers) nightBackgroundAudioRefreshExpiry(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, history []nightBackgroundAudioHistoryRow) {
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameExpiryRefresh(int(revision))
+	target := nightAudioTarget(nodeID, sessionID, "audio.session.apply", map[string]any{
+		"expiresInMs": float64(nightBackgroundAudioExpiryTTL.Milliseconds()),
+	})
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
+		h.logWarn("night loop: background audio: expiry refresh failed", "sessionId", rec.ID, "error", err)
+	}
+}
+
+// nightMaybeRefreshBackgroundAudioExpiry is the shared tail call for
+// every "steadily playing, nothing else due" branch in
+// [nightAdvanceBackgroundAudioForNode]: it re-sends expiresInMs only when
+// [nightBackgroundAudioExpiryRefreshDue], so a bed left playing for a
+// long show never has its retirement deadline lapse for want of a
+// refresh.
+func (h *handlers) nightMaybeRefreshBackgroundAudioExpiry(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, latest nightBackgroundAudioHistoryRow, history []nightBackgroundAudioHistoryRow) {
+	if nightBackgroundAudioExpiryRefreshDue(now, latest) {
+		h.nightBackgroundAudioRefreshExpiry(ctx, now, rec, nodeID, sessionID, history)
+	}
+}
+
 func (h *handlers) nightBackgroundAudioResume(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, history []nightBackgroundAudioHistoryRow) {
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameResume(int(revision))
@@ -767,6 +836,10 @@ func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time,
 			return
 		}
 		target = nightAudioTarget(nodeID, sessionID, "audio.gain.fade", map[string]any{"targetGain": float64(result.Effective), "durationMs": float64(*ba.FadeInMs)})
+	case nightBGStepExpiryRefresh:
+		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", map[string]any{
+			"expiresInMs": float64(nightBackgroundAudioExpiryTTL.Milliseconds()),
+		})
 	default:
 		return
 	}

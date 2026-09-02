@@ -1,6 +1,9 @@
 package audio
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // SessionDesiredState is a session's merged desired state. A nil field
 // means "not currently set."
@@ -14,6 +17,13 @@ type SessionDesiredState struct {
 	MixPolicy  *MixPolicy
 	Outputs    *[]string
 	Bookmark   *Bookmark
+
+	// Expiry is this session's retirement deadline, computed by
+	// [ApplyRequest.Merge] from ExpiryTTL using the agent's own clock —
+	// never the coordinator's. nil means no deadline: a record persisted
+	// before this field existed decodes with Expiry nil and is never
+	// retired on that account.
+	Expiry *time.Time
 
 	// LTCStartOffset is this session's own override of audio.settings'
 	// default LTC start offset: the generating half of RES-001 §54's
@@ -93,6 +103,12 @@ type ApplyRequest struct {
 	Outputs        Field[[]string]
 	Bookmark       Field[Bookmark]
 	LTCStartOffset Field[LTCTimecode]
+
+	// Expiry, when set, replaces SessionDesiredState.Expiry outright — an
+	// absolute deadline the caller must already have computed from its
+	// own clock. See that field's doc comment for why the deadline is
+	// agent-computed rather than coordinator-supplied.
+	Expiry Field[time.Time]
 }
 
 // mergeField resolves one Field against a session's current *T: unset
@@ -160,6 +176,7 @@ func (r ApplyRequest) Merge(s SessionDesiredState) (SessionDesiredState, MergeRe
 	s.Outputs = mergeOutputs(s.Outputs, r.Outputs)
 	s.Bookmark = mergeField(s.Bookmark, r.Bookmark)
 	s.LTCStartOffset = mergeField(s.LTCStartOffset, r.LTCStartOffset)
+	s.Expiry = mergeField(s.Expiry, r.Expiry)
 
 	if err := s.Validate(); err != nil {
 		return SessionDesiredState{}, MergeReport{}, err

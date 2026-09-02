@@ -3220,6 +3220,8 @@ export interface components {
              * @enum {string}
              */
             mixPolicy?: "mix" | "duck" | "interrupt";
+            /** @description The coordinator stamps this on its own applies to keep a session's retirement deadline current; an operator need not send it. */
+            expiresInMs?: number;
         };
         /** @description This schema is stricter than the node: an unrecognized key here is refused, where the node itself silently ignores one instead. */
         AudioSessionSeekParams: {
