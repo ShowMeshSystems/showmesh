@@ -2,6 +2,7 @@ package macro
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -233,7 +234,11 @@ func TestOnFailureAbortDoesAbort(t *testing.T) {
 	run := submitAndWait(t, e, api.MacroSubmitRequest{MacroObjectID: "m1", IdempotencyKey: "k1", Trigger: "api", Issuer: testIssuer()})
 
 	if run.Run.Completed == nil || *run.Run.Completed {
-		t.Fatalf("Completed = %v, want false (onFailure:abort must abort)", run.Run.Completed)
+		got := "nil"
+		if run.Run.Completed != nil {
+			got = fmt.Sprintf("%t", *run.Run.Completed)
+		}
+		t.Fatalf("Completed = %s, want false (onFailure:abort must abort)", got)
 	}
 	if dispatch.callCount() != 1 {
 		t.Fatalf("dispatch called %d times, want 1 (step 2 must never be dispatched once step 1's failure aborts the run)", dispatch.callCount())
