@@ -824,10 +824,9 @@ function parseAudioSessionApplyParams(raw: string): { params: Record<string, unk
 }
 
 /**
- * Collapsed per 2026-09-01 owner feedback: the
- * block itself is just the target picker (node, then a real session id).
- * The gloved transport row, seek, gain set/fade, mute/unmute, apply, and the
- * typed clear/apply confirmations live in a floating inspector opened from here.
+ * Collapsed per 2026-09-01 owner feedback into a target picker plus a floating inspector.
+ * `apply` was excluded here 2026-09-01 as authoring rather than live control, then restored
+ * 2026-09-02 by Eric's later owner placement ruling that this method belongs on Live Control.
  */
 function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null }) {
   const nodesState = useAudioNodes()
