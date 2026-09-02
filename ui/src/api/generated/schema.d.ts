@@ -3431,7 +3431,7 @@ export interface components {
                 /** @description Ordered exactly as configured, stable for the life of the process. Same guarantee as FPPResponse.instances. */
                 instances: components["schemas"]["FPPInstance"][];
             };
-            /** @description Ordered exactly as this coordinator's own FPP endpoint configuration lists them (one collector per configured instance), stable for the life of the process. This ordering is guaranteed. */
+            /** @description Each collector source's own run state, not uniform in shape: the FPP MQTT collector emits one row per configured host, ordered by host id (its configuration carries no other order to preserve), host-qualified as "fpp-mqtt:<hostID>"; the FPP REST and Resolume collectors each emit exactly one aggregate row regardless of how many instances they poll. Row count and ordering are otherwise stable for the life of the process. */
             collectors: components["schemas"]["CollectorStatus"][];
             /** @description Step 9: every in-flight macro run, plus a bounded window of recently finished ones (STEP-9-SPEC.md section 6.6). Fatal to omit per ADR-020 decision 3: the change stream emits no id, so a client connecting for the first time during an in-flight run has no other way to learn the run exists. */
             macroRuns: components["schemas"]["MacroRunSummary"][];

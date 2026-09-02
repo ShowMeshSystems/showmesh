@@ -70,3 +70,28 @@ func (s *messageStore) snapshot(instanceID string) map[string]message {
 	}
 	return out
 }
+
+// latestReceivedAt reports the most recent receivedAt across every topic
+// suffix ever stored for instanceID, and whether instanceID has ever had
+// any message stored for it at all. everPublished answers a whole-process
+// question, independent of any MQTT reconnect: put never removes an entry
+// except by a newer message superseding it on the SAME topic (see the
+// message/messageStore doc comments), so an instance that has published at
+// least once keeps a row here for the life of the collector, even across a
+// broker disconnect and reconnect. A never-stored instanceID reports the
+// zero Time and everPublished=false.
+func (s *messageStore) latestReceivedAt(instanceID string) (t time.Time, everPublished bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	byTopic, ok := s.data[instanceID]
+	if !ok || len(byTopic) == 0 {
+		return time.Time{}, false
+	}
+	for _, m := range byTopic {
+		if m.receivedAt.After(t) {
+			t = m.receivedAt
+		}
+	}
+	return t, true
+}
