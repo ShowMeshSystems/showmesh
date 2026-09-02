@@ -29,7 +29,7 @@ import {
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
 } from '../api'
-import { AttentionRow, BlankingPlate, Button, ButtonRow, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
+import { AttentionRow, BlankingPlate, Button, ButtonRow, Choice, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, Textarea } from '../kit'
 import type { Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../domain/session'
@@ -572,40 +572,25 @@ function MacroCard({
               <span className="sm-handle" aria-hidden="true">
                 ⠿
               </span>
-              <button type="button" className="sm-linkbutton" onClick={() => onSelectStep(index)} aria-pressed={selectedStep === index}>
-                {index + 1}. {step.action === '' ? 'New step' : (action?.payload.label ?? step.action)}
-              </button>{' '}
-              <span className="sm-small sm-faint">{step.id}</span>
-              {selectedStep === index && <span className="sm-viewing">Editing</span>}
-              {action !== undefined && <span className="sm-chip">{actionIntegrationLabel(action.payload.target.integration)}</span>}
-              <StatusPair tone={bindingTone(binding?.state)} label={bindingLabel(binding?.state)} />
-              {step.onFailure === 'abort' && <span className="sm-small sm-muted"> Aborts the rest if it fails.</span>}
-              <ButtonRow>
-                <Button
-                  size="compact"
-                  onClick={() => onMoveStep(index, -1)}
-                  disabled={!canAuthor.allowed || moveUpReason !== undefined}
-                  title={!canAuthor.allowed ? canAuthor.reason : moveUpReason}
-                >
-                  Move up
-                </Button>
-                <Button
-                  size="compact"
-                  onClick={() => onMoveStep(index, 1)}
-                  disabled={!canAuthor.allowed || moveDownReason !== undefined}
-                  title={!canAuthor.allowed ? canAuthor.reason : moveDownReason}
-                >
-                  Move down
-                </Button>
-                <Button
-                  size="compact"
-                  onClick={() => onRemoveStep(index)}
-                  disabled={!canAuthor.allowed || removeReason !== undefined}
-                  title={!canAuthor.allowed ? canAuthor.reason : removeReason}
-                >
-                  Remove
-                </Button>
-              </ButtonRow>
+              <div className="sm-step-row__meta">
+                <button type="button" className="sm-linkbutton" onClick={() => onSelectStep(index)} aria-pressed={selectedStep === index}>
+                  {index + 1}. {step.action === '' ? 'New step' : (action?.payload.label ?? step.action)}
+                </button>
+                <span className="sm-small sm-faint">{step.id}</span>
+                {selectedStep === index && <span className="sm-viewing">Editing</span>}
+                {action !== undefined && <span className="sm-chip">{actionIntegrationLabel(action.payload.target.integration)}</span>}
+                <StatusPair tone={bindingTone(binding?.state)} label={bindingLabel(binding?.state)} />
+                {step.onFailure === 'abort' && <span className="sm-small sm-muted">Aborts the rest if it fails.</span>}
+              </div>
+              <ReorderButtons
+                itemLabel={`step ${index + 1}`}
+                onMoveUp={() => onMoveStep(index, -1)}
+                onMoveDown={() => onMoveStep(index, 1)}
+                onRemove={() => onRemoveStep(index)}
+                moveUpReason={!canAuthor.allowed ? canAuthor.reason : moveUpReason}
+                moveDownReason={!canAuthor.allowed ? canAuthor.reason : moveDownReason}
+                removeReason={!canAuthor.allowed ? canAuthor.reason : removeReason}
+              />
             </li>
           )
         })}

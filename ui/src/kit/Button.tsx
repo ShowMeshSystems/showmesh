@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 type Variant = 'primary' | 'secondary' | 'quiet' | 'danger'
-type Size = 'compact' | 'default' | 'gloved'
+type Size = 'compact' | 'default' | 'gloved' | 'icon'
 
 const VARIANT: Record<Variant, string> = {
   primary: 'sm-btn--primary',
@@ -14,11 +14,13 @@ const SIZE: Record<Size, string> = {
   compact: 'sm-btn--compact',
   default: '',
   gloved: 'sm-btn--gloved',
+  icon: 'sm-btn--icon',
 }
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: Variant
-  /** Gloved is 48px: transport, lifecycle, macro Run, sign-in and bootstrap. */
+  /** Gloved is 48px: transport, lifecycle, macro Run, sign-in and bootstrap.
+   *  Icon is square and glyph-only: callers must supply `aria-label`. */
   size?: Size
 }
 
@@ -38,4 +40,44 @@ export function ButtonRow({ children }: { children: ReactNode }) {
 /** Separates a destructive control from the save path. */
 export function ButtonRule() {
   return <span className="sm-rule-v" aria-hidden="true" />
+}
+
+/**
+ * The kit's one reorderable-row control pattern (design guide §6): a
+ * `⠿` drag handle plus compact keyboard/pointer fallbacks. Pair with a
+ * handle rendered in the row's index column; this renders only the
+ * move/remove icon buttons, disabled with a reason rather than hidden.
+ */
+export function ReorderButtons({
+  itemLabel,
+  onMoveUp,
+  onMoveDown,
+  onRemove,
+  moveUpReason,
+  moveDownReason,
+  removeReason,
+}: {
+  /** Names the row for its button labels, e.g. "step 2" or the entry's own label. */
+  itemLabel: string
+  onMoveUp: () => void
+  onMoveDown: () => void
+  onRemove: () => void
+  /** Present and non-empty disables the button and states why. */
+  moveUpReason?: string | undefined
+  moveDownReason?: string | undefined
+  removeReason?: string | undefined
+}) {
+  return (
+    <ButtonRow>
+      <Button size="icon" variant="quiet" aria-label={`Move ${itemLabel} up`} title={moveUpReason} onClick={onMoveUp} disabled={moveUpReason !== undefined}>
+        <span aria-hidden="true">▲</span>
+      </Button>
+      <Button size="icon" variant="quiet" aria-label={`Move ${itemLabel} down`} title={moveDownReason} onClick={onMoveDown} disabled={moveDownReason !== undefined}>
+        <span aria-hidden="true">▼</span>
+      </Button>
+      <Button size="icon" variant="quiet" aria-label={`Remove ${itemLabel}`} title={removeReason} onClick={onRemove} disabled={removeReason !== undefined}>
+        <span aria-hidden="true">✕</span>
+      </Button>
+    </ButtonRow>
+  )
 }

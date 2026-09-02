@@ -612,19 +612,19 @@ export function ResolumeConfig() {
             )}
             <ButtonRow>
               <Button
-                disabled={!actionGate.allowed || restoring}
-                title={actionGate.allowed ? undefined : actionGate.reason}
-                onClick={restoreRecovery}
-              >
-                {restoring ? 'Restoring…' : 'Run restore now'}
-              </Button>
-              <Button
                 variant="primary"
                 onClick={saveRecovery}
                 disabled={!recoveryDirty || savingRecovery || !gate.allowed || recoveryConfigState.kind !== 'loaded'}
                 title={gate.allowed ? undefined : gate.reason}
               >
                 {savingRecovery ? 'Saving…' : 'Save recovery'}
+              </Button>
+              <Button
+                disabled={!actionGate.allowed || restoring}
+                title={actionGate.allowed ? undefined : actionGate.reason}
+                onClick={restoreRecovery}
+              >
+                {restoring ? 'Restoring…' : 'Run restore now'}
               </Button>
               {recoveryConfigState.kind === 'loaded' && (
                 <div className="sm-push-end sm-inline-row sm-stack-3">

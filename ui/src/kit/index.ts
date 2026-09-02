@@ -1,5 +1,5 @@
 export { AttentionRow, StatTile, Tiles } from './Attention'
-export { Button, ButtonRow, ButtonRule } from './Button'
+export { Button, ButtonRow, ButtonRule, ReorderButtons } from './Button'
 export { Callout, DefinitionStrip, Notice, PageTitle, Section, type Definition } from './Blocks'
 export { ClockSkewStrip } from './ClockSkewStrip'
 export { Choice, ChoiceRow, Field, FieldGrid, Input, Select, Textarea } from './Field'

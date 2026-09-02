@@ -346,10 +346,10 @@ describe('Shows · Automation tab', () => {
       fireEvent.click(handle)
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-      fireEvent.click(screen.getAllByRole('button', { name: 'Move down' })[0]!)
+      fireEvent.click(screen.getAllByRole('button', { name: /^Move step \d+ down$/ })[0]!)
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-      fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]!)
+      fireEvent.click(screen.getAllByRole('button', { name: /^Remove step \d+$/ })[0]!)
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
 
@@ -393,7 +393,7 @@ describe('Shows · Automation tab', () => {
 
       await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
       expect(screen.getAllByRole('listitem')).toHaveLength(2)
-      const removeButtons = screen.getAllByRole('button', { name: 'Remove' })
+      const removeButtons = screen.getAllByRole('button', { name: /^Remove step \d+$/ })
       fireEvent.click(removeButtons[0]!)
       expect(screen.getAllByRole('listitem')).toHaveLength(1)
 
@@ -419,12 +419,12 @@ describe('Shows · Automation tab', () => {
       stubs.putShowMacro = putSpy
 
       await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
-      const moveDown = screen.getAllByRole('button', { name: 'Move down' })[0]!
+      const moveDown = screen.getAllByRole('button', { name: /^Move step \d+ down$/ })[0]!
       fireEvent.click(moveDown)
       expect(await screen.findByRole('button', { name: /^1\. Second Step Action/ })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /^2\. Start Preshow Playlist/ })).toBeInTheDocument()
 
-      const moveUp = screen.getAllByRole('button', { name: 'Move up' })[1]!
+      const moveUp = screen.getAllByRole('button', { name: /^Move step \d+ up$/ })[1]!
       fireEvent.click(moveUp)
       expect(await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /^2\. Second Step Action/ })).toBeInTheDocument()
@@ -442,8 +442,8 @@ describe('Shows · Automation tab', () => {
     it('disables Move up on the first row and Move down on the last, each with its own reason', async () => {
       setupTwoStepMacro()
       await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
-      const moveUps = screen.getAllByRole('button', { name: 'Move up' })
-      const moveDowns = screen.getAllByRole('button', { name: 'Move down' })
+      const moveUps = screen.getAllByRole('button', { name: /^Move step \d+ up$/ })
+      const moveDowns = screen.getAllByRole('button', { name: /^Move step \d+ down$/ })
       expect(moveUps[0]).toBeDisabled()
       expect(moveUps[0]).toHaveAttribute('title', 'Already first.')
       expect(moveDowns[1]).toBeDisabled()
@@ -453,7 +453,7 @@ describe('Shows · Automation tab', () => {
     it('blocks Remove on a macro left with only one step', async () => {
       setup()
       await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
-      const remove = screen.getByRole('button', { name: 'Remove' })
+      const remove = screen.getByRole('button', { name: /^Remove step \d+$/ })
       expect(remove).toBeDisabled()
       expect(remove).toHaveAttribute('title', 'A macro needs at least one step.')
     })

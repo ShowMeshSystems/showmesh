@@ -10,6 +10,8 @@
 .sm-status {
   display: inline-flex;
   align-items: center;
+  vertical-align: middle;
+  line-height: 1;
   gap: 5px;
   height: 20px;
   padding: 0 7px;

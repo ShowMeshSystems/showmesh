@@ -109,6 +109,8 @@
 
 /* Reorderable lists. Say "Drag to reorder" once in the container footer. */
 .sm-table__handle {
+  display: inline-block;
+  margin-right: 6px;
   cursor: grab;
   color: var(--text-faint);
   font: var(--t-data);
