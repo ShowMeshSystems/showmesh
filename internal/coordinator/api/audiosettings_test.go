@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -177,4 +178,48 @@ func TestSnapshotDegradesAudioConfigPushOnConfigStoreFailure(t *testing.T) {
 		t.Fatalf("a store failure must not be reported as a decode failure (unusable); body: %s", body)
 	}
 	t.Logf("what an operator reads when the coordinator itself cannot read audio.settings: %s", body)
+}
+
+// TestPutAudioSettingsConfigRevisionPreconditionWiring is a smoke test
+// proving handlePutAudioSettingsConfig actually threads the shared
+// revision precondition through to its own call site. The full
+// behavioural matrix lives once, on the representative kind
+// fpp.endpoints (config_test.go).
+func TestPutAudioSettingsConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := func(driftMs int) string {
+		return fmt.Sprintf(`{"driftIgnoreThresholdMs":%d,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"duckFadeDurationMs":150,"duckRestoreFadeDurationMs":700,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`, driftMs)
+	}
+	put := func(payload string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/audio.settings", payload, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, respBody := put(body(10), nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	if resp, respBody := put(body(20), map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	resp, respBody := put(body(30), map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, respBody)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["driftIgnoreThresholdMs"] != float64(20) {
+		t.Errorf("payload.driftIgnoreThresholdMs = %v, want 20 (the matching-If-Match writer's payload, which must have survived the refused stale write); body: %s", payload["driftIgnoreThresholdMs"], getBody)
+	}
 }

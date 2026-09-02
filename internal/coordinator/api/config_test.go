@@ -937,3 +937,218 @@ func TestPutFPPEndpointsConfigCSRF(t *testing.T) {
 		}
 	})
 }
+
+// --- revision precondition (opt-in If-Match/If-None-Match) ---
+//
+// fpp.endpoints is this task's REPRESENTATIVE kind for the full
+// behavioural matrix (showobjects_test.go's own precondition block, on
+// kind "show", is the model this mirrors): the shared parser
+// (parseRevisionPrecondition), sentinel (errConfigRevisionPreconditionFailed)
+// and problem renderer (configRevisionConflictProblem) are already proven
+// there and in showconfig.go's own kinds, so what is worth proving again
+// here is only that THIS handler's own inline AuditedWrite closure
+// enforces the identical check — plus this kind's own real wrinkle, a
+// second and unrelated 409 cause (TestPutFPPEndpointsConfigTwoDistinct
+// ConflictCauses below). Every other of the ten singleton kinds gets a
+// smaller wiring-only test, in its own file, right next to its other PUT
+// coverage.
+
+func putFPPEndpointsWithHeaders(t *testing.T, api *API, token, body string, extraHeaders map[string]string) (*http.Response, []byte) {
+	t.Helper()
+	headers := map[string]string{"Authorization": "Bearer " + token}
+	for k, v := range extraHeaders {
+		headers[k] = v
+	}
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.endpoints", body, headers)
+	return doRawRequest(t, api.Handler, req)
+}
+
+// TestPutFPPEndpointsRevisionPreconditionOptInDefault pins the ruled
+// default (D-014): a PUT sending neither header is accepted
+// unconditionally, exactly as before this task.
+func TestPutFPPEndpointsRevisionPreconditionOptInDefault(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	if resp, body := putFPPEndpointsWithHeaders(t, api, adminToken, validFPPEndpointsBody, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	// A second, unconditional write, never having read revision 1 back,
+	// still succeeds - the D-014 hazard this task narrows rather than
+	// closes, reproduced deliberately.
+	if resp, body := putFPPEndpointsWithHeaders(t, api, adminToken, validFPPEndpointsBody, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestPutFPPEndpointsRevisionPreconditionMatchingIfMatchSucceeds proves
+// the protected-update path.
+func TestPutFPPEndpointsRevisionPreconditionMatchingIfMatchSucceeds(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	if resp, body := putFPPEndpointsWithHeaders(t, api, adminToken, validFPPEndpointsBody, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := putFPPEndpointsWithHeaders(t, api, adminToken,
+		`{"endpoints":[{"id":"matching-if-match","url":"http://10.0.1.40"}]}`, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if decodeMap(t, body)["revision"] != float64(2) {
+		t.Errorf("revision = %v, want 2", decodeMap(t, body)["revision"])
+	}
+}
+
+// TestPutFPPEndpointsRevisionPreconditionStaleIfMatchIsRefusedAndPreserves
+// TheOtherWrite is the actual claim this feature makes, proved on stored
+// content rather than only a status code.
+func TestPutFPPEndpointsRevisionPreconditionStaleIfMatchIsRefusedAndPreservesTheOtherWrite(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	if resp, body := putFPPEndpointsWithHeaders(t, api, adminToken,
+		`{"endpoints":[{"id":"setup-v1","url":"http://10.0.1.41"}]}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	// A second writer, who never sends a precondition, lands revision 2 -
+	// the exact unprotected write the first writer's stale read cannot see.
+	if resp, body := putFPPEndpointsWithHeaders(t, api, adminToken,
+		`{"endpoints":[{"id":"second-writer-v2","url":"http://10.0.1.42"}]}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second writer's unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	resp, body := putFPPEndpointsWithHeaders(t, api, adminToken,
+		`{"endpoints":[{"id":"stale-v3-refused","url":"http://10.0.1.43"}]}`, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	problem := decodeMap(t, body)
+	if problem["type"] != ProblemTypeConfigRevisionPreconditionFailed {
+		t.Errorf("problem.type = %v, want %v", problem["type"], ProblemTypeConfigRevisionPreconditionFailed)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/fpp.endpoints", map[string]string{"Authorization": "Bearer " + adminToken})
+	if !containsAll(string(getBody), `"id":"second-writer-v2"`) {
+		t.Fatalf("the second writer's payload should have survived the refused stale write; body: %s", getBody)
+	}
+	if containsAll(string(getBody), "stale-v3-refused") {
+		t.Fatalf("the refused write's payload must never have been persisted; body: %s", getBody)
+	}
+}
+
+// TestPutFPPEndpointsRevisionPreconditionCreateGuard proves
+// If-None-Match: "*" succeeds against a brand-new object and is refused
+// 409 against one that already has an active revision.
+func TestPutFPPEndpointsRevisionPreconditionCreateGuard(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	t.Run("brand new object succeeds", func(t *testing.T) {
+		api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+		resp, body := putFPPEndpointsWithHeaders(t, api, adminToken, validFPPEndpointsBody, map[string]string{"If-None-Match": "*"})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("existing object is refused 409", func(t *testing.T) {
+		svc2, st2, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+		admin2 := mustCreatePrincipal(t, svc2, "admin-1", identity.RoleAdmin)
+		token2 := mustIssueToken(t, svc2, admin2.ID)
+		api2 := New(configTestDeps(svc2, st2), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+		if resp, body := putFPPEndpointsWithHeaders(t, api2, token2, validFPPEndpointsBody, nil); resp.StatusCode != http.StatusOK {
+			t.Fatalf("setup write: status = %d, want 200; body: %s", resp.StatusCode, body)
+		}
+		resp, body := putFPPEndpointsWithHeaders(t, api2, token2, validFPPEndpointsBody, map[string]string{"If-None-Match": "*"})
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+		}
+	})
+}
+
+// TestPutFPPEndpointsRevisionPreconditionMalformedRequestsAreRejected
+// covers the 400 paths: both headers on one request, a zero revision (an
+// undocumented second spelling of the create guard, refused rather than
+// silently accepted), a non-quoted value, a negative value, a non-numeric
+// value, and an If-None-Match value other than the literal "*".
+func TestPutFPPEndpointsRevisionPreconditionMalformedRequestsAreRejected(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	cases := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"both headers on one request", map[string]string{"If-Match": `"1"`, "If-None-Match": "*"}},
+		{"If-Match zero is rejected, not treated as a create guard", map[string]string{"If-Match": `"0"`}},
+		{"If-Match unquoted", map[string]string{"If-Match": "7"}},
+		{"If-Match negative", map[string]string{"If-Match": `"-1"`}},
+		{"If-Match non-numeric", map[string]string{"If-Match": `"abc"`}},
+		{"If-None-Match not the literal *", map[string]string{"If-None-Match": `"1"`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := putFPPEndpointsWithHeaders(t, api, adminToken, validFPPEndpointsBody, tc.headers)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+// TestPutFPPEndpointsConfigTwoDistinctConflictCauses is this kind's real
+// wrinkle: PUT /config/fpp.endpoints already answered 409 for a totally
+// different reason (SHOWMESH_FPP_ENDPOINTS still set,
+// TestPutFPPEndpointsConfigRefusesWhenEnvVarSet above) before this task
+// added the revision precondition. The two causes must never be
+// ambiguous, and the env-var refusal - checked before the body is even
+// read - must keep firing FIRST when both conditions are present at once,
+// exactly as it always has: a caller cannot make the precondition cause
+// mask the env-var cause by also sending a header.
+func TestPutFPPEndpointsConfigTwoDistinctConflictCauses(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	t.Run("env var cause fires first even when a precondition is also sent", func(t *testing.T) {
+		deps := configTestDeps(svc, st)
+		deps.FPPEndpointsEnvVarSet = true
+		api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+		resp, body := putFPPEndpointsWithHeaders(t, api, adminToken, validFPPEndpointsBody, map[string]string{"If-Match": `"999"`})
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+		}
+		problem := decodeMap(t, body)
+		if problem["type"] != ProblemTypeConflict {
+			t.Errorf("problem.type = %v, want %v (the env-var cause must win, not %v)", problem["type"], ProblemTypeConflict, ProblemTypeConfigRevisionPreconditionFailed)
+		}
+		if !strings.Contains(fmt.Sprint(problem["detail"]), "SHOWMESH_FPP_ENDPOINTS") {
+			t.Errorf("detail = %v, want it to name SHOWMESH_FPP_ENDPOINTS even though an unrelated If-Match was also sent", problem["detail"])
+		}
+	})
+
+	t.Run("precondition cause fires once the env var is not set", func(t *testing.T) {
+		deps := configTestDeps(svc, st)
+		api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+		resp, body := putFPPEndpointsWithHeaders(t, api, adminToken, validFPPEndpointsBody, map[string]string{"If-Match": `"1"`})
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
+		}
+		problem := decodeMap(t, body)
+		if problem["type"] != ProblemTypeConfigRevisionPreconditionFailed {
+			t.Errorf("problem.type = %v, want %v", problem["type"], ProblemTypeConfigRevisionPreconditionFailed)
+		}
+	})
+}

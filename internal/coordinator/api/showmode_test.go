@@ -537,3 +537,53 @@ func TestShowModeRouteIsNotSwallowedByShowIDRoute(t *testing.T) {
 		t.Fatalf("kind = %v, want show.mode (the show/{id} route answered instead)", m["kind"])
 	}
 }
+
+// TestPutShowModeConfigRevisionPreconditionWiring is a smoke test proving
+// handlePutShowModeConfig actually threads the shared revision
+// precondition (showconfig.go's parseRevisionPrecondition/
+// checkRevisionPrecondition) through to its own call site, rather than
+// the wiring having been dropped on this one handler among the ten that
+// share it. The full behavioural matrix (stale-write content
+// preservation, malformed headers, the create guard) lives once, on the
+// representative kind fpp.endpoints (config_test.go); what is worth
+// proving here is only that this call site was wired.
+func TestPutShowModeConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(body string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.mode", body, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := put(`{"mode":"program"}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	// A second writer, sending no precondition, lands revision 2 - the
+	// exact unprotected write a stale reader cannot see.
+	if resp, body := put(`{"mode":"show"}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second writer's unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put(`{"mode":"program"}`, map[string]string{"If-Match": `"2"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put(`{"mode":"show"}`, map[string]string{"If-Match": `"2"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.mode", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["mode"] != "program" {
+		t.Errorf("payload.mode = %v, want program (the matching-If-Match writer's payload, which must have survived the refused stale write); body: %s", payload["mode"], getBody)
+	}
+}
