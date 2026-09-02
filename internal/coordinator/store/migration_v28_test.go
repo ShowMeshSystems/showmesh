@@ -70,7 +70,7 @@ func seedPreV28Asset(t *testing.T, db *sql.DB, id, showID, sequenceID, targetKin
 // already holds survives migration unchanged, with no data fix applied.
 // Every pre-v28 current row necessarily holds exactly one media type per
 // (show, sequence, target) tuple, since the OLD assets_current index never
-// allowed a second one to become current regardless of media type — so
+// allowed a second one to become current regardless of media type, so
 // nothing here needs backfilling, and this test seeds ordinary single-media-
 // type rows to prove that state is untouched by the migration.
 func TestMigrateV28FromPreV28DatabaseWithExistingRows(t *testing.T) {
@@ -119,9 +119,9 @@ func TestMigrateV28FromPreV28DatabaseWithExistingRows(t *testing.T) {
 
 // TestMigrateV28WidensAssetsCurrentToAllowBothMediaTypes proves the actual
 // structural change: after migration, an FSEQ and an audio asset MAY both
-// be current for the same (show, sequence, target) tuple at once — the
-// exact case the pre-v28 index forbade and this migration exists to permit
-// — while two current rows of the SAME media type for one tuple are still
+// be current for the same (show, sequence, target) tuple at once, the
+// exact case the pre-v28 index forbade and this migration exists to permit,
+// while two current rows of the SAME media type for one tuple are still
 // rejected.
 func TestMigrateV28WidensAssetsCurrentToAllowBothMediaTypes(t *testing.T) {
 	db := openDatabaseAtV27(t)
