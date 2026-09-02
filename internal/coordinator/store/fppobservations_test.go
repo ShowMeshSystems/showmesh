@@ -481,7 +481,7 @@ func TestMarkFPPPlaylistEntryObservationEvidenceBrokenUnknownInstanceErrors(t *t
 
 // TestFPPPlaylistEntryObservationAcceptClearsEvidenceBrokenMarker is my own
 // design decision from the owner ruling (cue-deactivate-on-jump proposal
-// §0a): the marker is cleared by the instance's next ACCEPTED observation,
+// §0.1): the marker is cleared by the instance's next ACCEPTED observation,
 // unconditionally, never exclusively by the operator reset route. This
 // proves BOTH shapes that accept can take: an ON CONFLICT DO UPDATE against
 // an existing (broken) row, and a fresh INSERT after the row was deleted.
