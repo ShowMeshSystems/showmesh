@@ -32,6 +32,7 @@ const stubs = vi.hoisted(() => ({
   fadeAudioSessionGain: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   muteAudioSessionOutput: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   unmuteAudioSessionOutput: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -60,6 +61,7 @@ vi.mock('../api', async () => {
     fadeAudioSessionGain: (...args: never[]) => stubs.fadeAudioSessionGain(...args),
     muteAudioSessionOutput: (...args: never[]) => stubs.muteAudioSessionOutput(...args),
     unmuteAudioSessionOutput: (...args: never[]) => stubs.unmuteAudioSessionOutput(...args),
+    listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
   }
 })
 
@@ -147,6 +149,7 @@ describe('Live Control', () => {
     stubs.fadeAudioSessionGain = () => new Promise(() => {})
     stubs.muteAudioSessionOutput = () => new Promise(() => {})
     stubs.unmuteAudioSessionOutput = () => new Promise(() => {})
+    stubs.listFPPPlaylistDefinitions = () => new Promise(() => {})
   })
 
   const fppInstance = (playerState = 'stopped') =>
@@ -198,9 +201,9 @@ describe('Live Control', () => {
 
   /**
    * One declared audio.node, no observed sessions, and a typed session id,
-   * with the floating controls drawer opened: the minimal ready state every
-   * dispatch test builds on. Returns the drawer, where the transport, seek,
-   * gain, mute and clear controls now live.
+   * with the drawer opened and its session opened: the minimal ready state
+   * every dispatch test builds on. Returns the drawer, where the target,
+   * transport, seek, gain, mute and clear controls all now live.
    */
   async function renderAudioSessionsReady(opts: { fps?: number } = {}) {
     stubs.listConfigObjects = ((kind: string) => {
@@ -214,9 +217,11 @@ describe('Live Control', () => {
         : () => Promise.resolve({ payload: { ltcFrameRate: opts.fps } } as never)
     renderScreen({ session: audioAllowedSession })
     const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.change(within(region).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
-    fireEvent.click(within(region).getByRole('button', { name: 'Open' }))
-    return screen.findByRole('dialog')
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
+    return dialog
   }
 
   it('keeps the Resolume emergency path between output evidence and night lifecycle', () => {
@@ -301,6 +306,13 @@ describe('Live Control', () => {
     expect(screen.getByText(/never that it is done/)).toBeInTheDocument()
   })
 
+  it('groups the lifecycle commands into Prepare, Start, End the night, with the late-start checkbox in Start night: the same element Show Night renders', () => {
+    renderScreen({})
+    const region = screen.getByRole('region', { name: 'Night lifecycle' })
+    expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
+    expect(within(region).getByLabelText(/Skip the enter-show lead/)).toBeInTheDocument()
+  })
+
   it('says an unconfirmed command was not confirmed', () => {
     const result = {
       outcome: 'unconfirmed',
@@ -375,6 +387,45 @@ describe('Live Control', () => {
 
     expect(received).toEqual(['main-player', 'Standard Show', true, 'refuse'])
     expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+  })
+
+  it('offers FPP’s own imported playlist names as a dropdown, preselecting the one reported as playing', async () => {
+    stubs.listFPPPlaylistDefinitions = () =>
+      Promise.resolve({
+        definitions: [
+          { instanceUuid: 'uuid-1', playlistName: 'Standard Show', playlistHash: 'h1', capturedAt: '', receivedAt: '', entryCount: 1, referenced: true },
+          { instanceUuid: 'uuid-1', playlistName: 'Holiday Show', playlistHash: 'h2', capturedAt: '', receivedAt: '', entryCount: 1, referenced: true },
+          { instanceUuid: 'uuid-other', playlistName: 'Other instance only', playlistHash: 'h3', capturedAt: '', receivedAt: '', entryCount: 1, referenced: true },
+        ],
+      })
+    renderScreen({
+      fpp: [
+        {
+          instanceId: 'main-player',
+          instanceUuid: 'uuid-1',
+          health: 'healthy',
+          observations: [
+            observation('fpp.status.player_state', 'playing', 'current', 'fpp', 'main-player'),
+            observation('fpp.playlist.name', 'Holiday Show', 'current', 'fpp', 'main-player'),
+          ],
+          instanceUuidChange: null,
+        } as never,
+      ],
+      session: commandAllowedSession,
+    })
+
+    const select = await screen.findByLabelText('Playlist')
+    expect(screen.queryByLabelText('Playlist name')).not.toBeInTheDocument()
+    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent)
+    expect(optionLabels).toEqual(['Choose a playlist', 'Holiday Show', 'Standard Show'])
+    expect(select).toHaveValue('Holiday Show')
+  })
+
+  it('falls back to a typed playlist name when the coordinator has reported none for this instance', () => {
+    stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ definitions: [] })
+    renderScreen({ fpp: [fppInstance()], session: commandAllowedSession })
+    expect(screen.getByLabelText('Playlist name')).toBeInTheDocument()
+    expect(screen.getByText(/coordinator has reported no imported playlists/)).toBeInTheDocument()
   })
 
   it('renders a start-playlist busy conflict distinguishably from a generic Refused outcome, and its own CTA resends ifBusy: replace', async () => {
@@ -610,9 +661,10 @@ describe('Live Control', () => {
     })
 
     const region = await screen.findByRole('region', { name: 'Audio sessions' })
-    fireEvent.change(within(region).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
-    fireEvent.click(within(region).getByRole('button', { name: 'Open' }))
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
     const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
     const prepare = within(dialog).getByRole('button', { name: 'Prepare' })
     expect(prepare).toBeDisabled()
     expect(prepare).toHaveAttribute('title', expect.stringContaining('audio:command'))
@@ -628,5 +680,30 @@ describe('Live Control', () => {
     const region = await screen.findByRole('region', { name: 'Audio sessions' })
     expect(within(region).getByText('No audio nodes')).toBeInTheDocument()
     expect(within(region).getByText('No node advertises an audio engine.')).toBeInTheDocument()
+  })
+
+  it('collapses the target, known sessions and transport into one drawer behind one button, with a one-line summary on the section itself', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () =>
+      Promise.resolve({ observations: [observation('audio_session.state', 'started', 'current', 'audio_session', 'bg-holiday-01')] })
+    renderScreen({ session: audioAllowedSession })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    expect(await within(region).findByText(/1 known session\./)).toBeInTheDocument()
+    expect(within(region).queryByLabelText('Session id')).not.toBeInTheDocument()
+
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByLabelText('Node')).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('Known sessions')).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('Session id')).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'Prepare' })).not.toBeInTheDocument()
+
+    fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
+    expect(within(dialog).getByRole('button', { name: 'Prepare' })).toBeInTheDocument()
   })
 })

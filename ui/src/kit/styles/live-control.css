@@ -1,0 +1,51 @@
+/* Live Control and Show Night's own layout rules. Everything reusable
+   across screens belongs in blocks.css, controls.css or status.css instead;
+   this file only holds what is specific to the transport and audio-session
+   surfaces built out of those shared parts. */
+
+.sm-lc-transport {
+  margin-top: 14px;
+  overflow: hidden;
+  padding: 0;
+  border-color: var(--accent-border);
+  display: grid;
+  gap: var(--s-4);
+}
+
+.sm-lc-transport__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  padding: 12px var(--s-4);
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-lc-transport__head p {
+  margin: 0;
+}
+
+.sm-lc-transport__body {
+  display: grid;
+  gap: var(--s-4);
+  padding: 0 var(--s-4) var(--s-4);
+}
+
+.sm-lc-transport__body > .sm-outcome {
+  margin: 0 calc(var(--s-4) * -1) calc(var(--s-4) * -1);
+  padding: 12px var(--s-4);
+  border-top: 1px solid var(--border);
+  background: var(--raised);
+}
+
+/* Centers the transport row without widening it to the panel's full width. */
+.sm-lc-transport__controls {
+  display: flex;
+  justify-content: center;
+}
+
+.sm-lc-transport__controls .sm-btn-row {
+  justify-content: center;
+}

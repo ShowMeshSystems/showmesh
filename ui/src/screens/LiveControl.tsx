@@ -13,6 +13,7 @@ import {
   invokeAction,
   listAssets,
   listConfigObjects,
+  listFPPPlaylistDefinitions,
   listObservations,
   muteAudioSessionOutput,
   nextFPPPlaylistItem,
@@ -35,6 +36,7 @@ import {
   type AudioSessionCommandResult,
   type ConfigObjectSummary,
   type FPPCommandResult,
+  type FPPPlaylistDefinitionMetadata,
   type NightCommandName,
   type ObservationEntry,
   type ResolumeActionResult,
@@ -49,6 +51,7 @@ import {
   Field,
   Input,
   LifecycleCommands,
+  Notice,
   NotWired,
   NotWiredBanner,
   RuledStrip,
@@ -58,7 +61,6 @@ import {
   StatusPair,
   Table,
   TableWrap,
-  type LifecycleCommandSpec,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -72,7 +74,10 @@ import {
   describeAudioSessionOutcome,
   describeFPPOutcome,
   formatPosition,
+  fppPlaylistNames,
+  nightLifecycleGroups,
   outputRows,
+  reportedPlaylistName,
   transportState,
   type CommandOutcome,
   type StartPlaylistConflictReason,
@@ -114,6 +119,30 @@ function useConfigList(kind: 'show.macro' | 'show.action' | 'show.cue', show: st
   return { items, error }
 }
 
+type PlaylistDefinitionsState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; definitions: FPPPlaylistDefinitionMetadata[] }
+  | { kind: 'failed' }
+
+/** FPP's imported playlist catalog. Failure degrades to the typed fallback silently; this is a convenience list, not a gate. */
+function useFPPPlaylistDefinitions(): PlaylistDefinitionsState {
+  const [state, setState] = useState<PlaylistDefinitionsState>({ kind: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    listFPPPlaylistDefinitions()
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', definitions: response.definitions })
+      })
+      .catch(() => {
+        if (!cancelled) setState({ kind: 'failed' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return state
+}
+
 function Outcome({ outcome }: { outcome: CommandOutcome | null }) {
   if (outcome === null) return null
   return (
@@ -142,6 +171,7 @@ export function LiveControl() {
   const [startPlaylistName, setStartPlaylistName] = useState('')
   const [startRepeat, setStartRepeat] = useState(false)
   const [startState, setStartState] = useState<StartPlaylistState>({ kind: 'idle' })
+  const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
 
   const macros = useConfigList('show.macro', show)
   const actions = useConfigList('show.action', show)
@@ -177,22 +207,36 @@ export function LiveControl() {
     [],
   )
 
-  const night = useCallback((command: NightCommandName) => {
-    dispatchNightCommand(command)
-      .then(() =>
-        setNightOutcome({
-          tone: 'warn',
-          label: 'Accepted',
-          detail: `${command} was accepted. The coordinator answers 202 and reports nothing further here; Show Night carries the session's own state.`,
-        }),
-      )
-      .catch((err: unknown) => setNightOutcome({ tone: 'bad', label: 'Refused', detail: `${command}: ${describeApiError(err)}` }))
-  }, [])
+  const night = useCallback(
+    (command: NightCommandName) => {
+      dispatchNightCommand(command, undefined, undefined, command === 'start-night' ? skipEnterShowLead : undefined)
+        .then(() => {
+          if (command === 'start-night') setSkipEnterShowLead(false)
+          setNightOutcome({
+            tone: 'warn',
+            label: 'Accepted',
+            detail: `${command} was accepted. The coordinator answers 202 and reports nothing further here; Show Night carries the session's own state.`,
+          })
+        })
+        .catch((err: unknown) => setNightOutcome({ tone: 'bad', label: 'Refused', detail: `${command}: ${describeApiError(err)}` }))
+    },
+    [skipEnterShowLead],
+  )
 
   const state = instance === undefined ? null : transportState(instance)
   const rows = [...outputRows(model, nowIso), ...audioRows(model, nowIso)]
   const confirmed = rows.filter((row) => row.confirmed).length
   const runsAbsence = currentRunsAbsence(model)
+
+  const playlistDefinitions = useFPPPlaylistDefinitions()
+  const playlistNames =
+    instance?.instanceUuid == null || playlistDefinitions.kind !== 'loaded'
+      ? []
+      : fppPlaylistNames(playlistDefinitions.definitions, instance.instanceUuid)
+  const reportedPlaylistNow = state === null ? null : reportedPlaylistName(state)
+  useEffect(() => {
+    if (reportedPlaylistNow !== null) setStartPlaylistName((current) => (current === '' ? reportedPlaylistNow : current))
+  }, [reportedPlaylistNow])
 
   return (
     <>
@@ -220,10 +264,10 @@ export function LiveControl() {
             detail="Settings › Connections is where an endpoint is added."
           />
         ) : (
-          <div className="sm-transport-surface">
-            <div className="sm-transport-surface__head">
-              <p className="sm-transport__now">
-                <span className="sm-data">{state.playlist ?? 'No playlist reported'}</span>
+          <div className="sm-panel sm-lc-transport">
+            <div className="sm-lc-transport__head">
+              <p className="sm-lc-transport__now">
+                <span className="sm-data">{reportedPlaylistName(state) ?? 'No playlist reported'}</span>
                 {state.itemIndex !== null && (
                   <>
                     {' · '}
@@ -240,18 +284,36 @@ export function LiveControl() {
                 {state.totalSeconds !== null && ` / ${formatPosition(state.totalSeconds) ?? ''}`}
               </p>
             </div>
-            <div className="sm-transport-surface__body">
-              <div className="sm-volume sm-transport__start">
-                <Field label="Playlist name" help="FPP's own catalog is not exposed here; type the exact name.">
-                  {(field) => (
-                    <Input
-                      {...field}
-                      value={startPlaylistName}
-                      onChange={(event) => setStartPlaylistName(event.target.value)}
-                      placeholder="e.g. Standard Show"
-                    />
-                  )}
-                </Field>
+            <div className="sm-lc-transport__body">
+              <div className="sm-volume">
+                {playlistNames.length > 0 ? (
+                  <Field label="Playlist">
+                    {(field) => (
+                      <Select {...field} value={startPlaylistName} onChange={(event) => setStartPlaylistName(event.target.value)}>
+                        <option value="">Choose a playlist</option>
+                        {playlistNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                ) : (
+                  <Field
+                    label="Playlist name"
+                    help="The coordinator has reported no imported playlists for this instance; type the exact name."
+                  >
+                    {(field) => (
+                      <Input
+                        {...field}
+                        value={startPlaylistName}
+                        onChange={(event) => setStartPlaylistName(event.target.value)}
+                        placeholder="e.g. Standard Show"
+                      />
+                    )}
+                  </Field>
+                )}
                 <Choice
                   type="checkbox"
                   checked={startRepeat}
@@ -285,34 +347,36 @@ export function LiveControl() {
                   </ButtonRow>
                 </div>
               )}
-              <ButtonRow>
-                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Previous item', () => prevFPPPlaylistItem(instance.instanceId))}>
-                  <span aria-hidden="true">⏮ </span>Previous item
-                </Button>
-                {state.playerState === 'paused' ? (
-                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Resume', () => resumeFPPPlaylist(instance.instanceId))}>
-                    <span aria-hidden="true">▶ </span>Resume
+              <div className="sm-lc-transport__controls">
+                <ButtonRow>
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Previous item', () => prevFPPPlaylistItem(instance.instanceId))}>
+                    <span aria-hidden="true">⏮ </span>Previous item
                   </Button>
-                ) : (
-                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Pause', () => pauseFPPPlaylist(instance.instanceId))}>
-                    <span aria-hidden="true">⏸ </span>Pause
+                  {state.playerState === 'paused' ? (
+                    <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Resume', () => resumeFPPPlaylist(instance.instanceId))}>
+                      <span aria-hidden="true">▶ </span>Resume
+                    </Button>
+                  ) : (
+                    <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Pause', () => pauseFPPPlaylist(instance.instanceId))}>
+                      <span aria-hidden="true">⏸ </span>Pause
+                    </Button>
+                  )}
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Next item', () => nextFPPPlaylistItem(instance.instanceId))}>
+                    <span aria-hidden="true">⏭ </span>Next item
                   </Button>
-                )}
-                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Next item', () => nextFPPPlaylistItem(instance.instanceId))}>
-                  <span aria-hidden="true">⏭ </span>Next item
-                </Button>
-                <ButtonRule />
-                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
-                  Stop after this item
-                </Button>
-                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this loop', () => stopFPPPlaylistGracefully(instance.instanceId, true))}>
-                  Stop after this loop
-                </Button>
-                <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
-                  <span aria-hidden="true">■ </span>Stop now
-                </Button>
-              </ButtonRow>
-              <div className="sm-volume sm-transport__volume">
+                  <ButtonRule />
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
+                    Stop after this item
+                  </Button>
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this loop', () => stopFPPPlaylistGracefully(instance.instanceId, true))}>
+                    Stop after this loop
+                  </Button>
+                  <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
+                    <span aria-hidden="true">■ </span>Stop now
+                  </Button>
+                </ButtonRow>
+              </div>
+              <div className="sm-volume">
                 <Field label="Volume" {...(state.volume === null ? { help: 'This instance does not report its volume.' } : {})}>
                   {(field) => (
                     <Input
@@ -334,15 +398,20 @@ export function LiveControl() {
                   Apply
                 </Button>
               </div>
+              <Outcome outcome={outcome} />
             </div>
-            <Outcome outcome={outcome} />
           </div>
         )}
-        <Callout>
-          <strong> Stop now</strong> halts this player only; projection and audio hold their last state until their own
-          cues run. Installation-wide emergency stop is now a separate, deliberately gated API workflow; it is not
-          represented by this transport control.
-        </Callout>
+        <Notice
+          tone="warn"
+          live="status"
+          headline={
+            <>
+              <strong>Stop now</strong> halts this player only.
+            </>
+          }
+          explanation="Projection and audio hold their last state until their own cues run. Installation-wide emergency stop is a separate, deliberately gated API workflow; it is not represented by this transport control."
+        />
       </Section>
 
       <Section
@@ -420,40 +489,19 @@ export function LiveControl() {
           what the session then reports.
         </p>
         <LifecycleCommands
-          groups={[
-            {
-              id: 'lc-prep',
-              title: 'Prepare',
-              commands: (
-                [
-                  ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
-                  ['run-readiness', 'Run readiness', 'Re-runs every readiness check against this epoch.'],
-                ] as const
-              ).map(nightCommandSpec(nightGate, night)),
-            },
-            {
-              id: 'lc-start',
-              title: 'Start',
-              commands: (
-                [
-                  ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
-                  ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
-                ] as const
-              ).map(nightCommandSpec(nightGate, night)),
-            },
-            {
-              id: 'lc-end',
-              title: 'End the night',
-              commands: (
-                [
-                  ['request-final-show', 'Request final show', 'Closes admission. The next normally timed show becomes the last.'],
-                  ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
-                  ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
-                  ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock; prepare-site then starts a fresh one.'],
-                ] as const
-              ).map(nightCommandSpec(nightGate, night)),
-            },
-          ]}
+          groups={nightLifecycleGroups(
+            nightGate,
+            night,
+            <label className="sm-choice sm-choice--gloved">
+              <input
+                type="checkbox"
+                checked={skipEnterShowLead}
+                disabled={!nightGate.allowed}
+                onChange={(event) => setSkipEnterShowLead(event.target.checked)}
+              />
+              <span>Skip the enter-show lead. An enter-show announcement cue still dispatches.</span>
+            </label>,
+          )}
         />
         <Outcome outcome={nightOutcome} />
       </Section>
@@ -762,7 +810,8 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
   const [fadeDurationMs, setFadeDurationMs] = useState('')
   const [clearConfirm, setClearConfirm] = useState('')
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
-  const [controlsOpen, setControlsOpen] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [sessionOpen, setSessionOpen] = useState(false)
 
   useEffect(() => {
     if (selectedNodeId === null && nodesState.kind === 'loaded' && nodesState.nodes[0] !== undefined) {
@@ -800,8 +849,23 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
   const positionEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.position_ms')
   const gainEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.gain.effective')
 
+  const audioSummary =
+    options.length === 0
+      ? 'No sessions known.'
+      : `${options.length} known session${options.length === 1 ? '' : 's'}.${
+          sessionOpen && trimmedSessionId !== '' ? ` ${trimmedSessionId} open.` : ''
+        }`
+
   return (
-    <Section id="lc-audio" title="Audio sessions" aside={<span className="sm-small sm-muted">Dispatched to one node's session</span>}>
+    <Section
+      id="lc-audio"
+      title="Audio sessions"
+      aside={
+        nodesState.kind === 'loaded' && nodesState.nodes.length > 0 ? (
+          <span className="sm-small sm-muted">{audioSummary}</span>
+        ) : undefined
+      }
+    >
       {nodesState.kind === 'loading' ? (
         <RuledStrip absence="loading" label="Reading" fact="Reading this deployment's declared audio nodes." />
       ) : nodesState.kind === 'failed' ? (
@@ -815,16 +879,42 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
         />
       ) : (
         <>
+          <p className="sm-small sm-muted">
+            Loading media into a session is authoring, not live control. A session gets its content from its cue, its playlist, or an audio
+            action.
+          </p>
+          <ButtonRow>
+            <Button variant="primary" onClick={() => setDrawerOpen(true)}>
+              Audio sessions…
+            </Button>
+          </ButtonRow>
+        </>
+      )}
+
+      <Drawer
+        open={drawerOpen}
+        onClose={() => {
+          setDrawerOpen(false)
+          setSessionOpen(false)
+        }}
+        labelledBy="lc-audio-controls"
+        width="wide"
+      >
+        <Section
+          id="lc-audio-controls"
+          title={trimmedSessionId === '' ? 'Audio session controls' : `Audio session controls · ${trimmedSessionId}`}
+        >
           <div className="sm-panel">
             <h3 className="sm-subsection__title">Target</h3>
             <Field label="Node">
               {(props) => (
                 <Select {...props} value={nodeId} onChange={(event) => setSelectedNodeId(event.target.value)}>
-                  {nodesState.nodes.map((node) => (
-                    <option key={node.id} value={node.id}>
-                      {node.label}
-                    </option>
-                  ))}
+                  {nodesState.kind === 'loaded' &&
+                    nodesState.nodes.map((node) => (
+                      <option key={node.id} value={node.id}>
+                        {node.label}
+                      </option>
+                    ))}
                 </Select>
               )}
             </Field>
@@ -913,25 +1003,15 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
                 variant="primary"
                 disabled={nodeId === '' || trimmedSessionId === ''}
                 title={nodeId === '' || trimmedSessionId === '' ? 'Choose a node and a session id first.' : undefined}
-                onClick={() => setControlsOpen(true)}
+                onClick={() => setSessionOpen(true)}
               >
                 Open
               </Button>
             </ButtonRow>
           </div>
 
-          <p className="sm-section__footnote">
-            Loading media into a session is authoring, not live control. A session gets its content from its cue, its playlist, or an audio
-            action.
-          </p>
-        </>
-      )}
-
-      <Drawer open={controlsOpen} onClose={() => setControlsOpen(false)} labelledBy="lc-audio-controls" width="wide">
-        <Section
-          id="lc-audio-controls"
-          title={trimmedSessionId === '' ? 'Audio session controls' : `Audio session controls · ${trimmedSessionId}`}
-        >
+          {sessionOpen && trimmedSessionId !== '' && (
+            <>
           <div className="sm-panel">
             <h3 className="sm-subsection__title">Transport</h3>
             <ButtonRow>
@@ -1046,6 +1126,8 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
               </Button>
             </ButtonRow>
           </div>
+            </>
+          )}
 
           <Outcome outcome={outcome} />
         </Section>
@@ -1109,18 +1191,6 @@ function PageHeader() {
 }
 
 type Gate = { allowed: true } | { allowed: false; reason: string }
-
-/** Turns a `[command, label, detail]` tuple into a `LifecycleCommands` spec, gated the same way every night command on this page is. */
-function nightCommandSpec(gate: Gate, onRun: (command: NightCommandName) => void) {
-  return ([command, label, detail]: readonly [NightCommandName, string, string]): LifecycleCommandSpec => ({
-    command,
-    label,
-    detail,
-    disabled: !gate.allowed,
-    disabledReason: gate.allowed ? undefined : gate.reason,
-    onRun: () => onRun(command),
-  })
-}
 
 function RunList({
   id,

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, PROBLEM_TYPE, type FPPInstance, type Model, type NightSessionState } from '../api'
@@ -269,6 +269,12 @@ describe('Show Night', () => {
     const names = ['Prepare site', 'Start preshow', 'Start night', 'Request final show', 'Fade out night', 'Power down presentation', 'End session']
     const buttons = screen.getAllByRole('button').filter((b) => names.includes(b.textContent ?? ''))
     expect(buttons.map((b) => b.textContent)).toEqual(names)
+  })
+
+  it('groups the lifecycle commands into Prepare, Start, End the night: the same one element Live Control renders', () => {
+    renderScreen({ nightSession: session(), session: allowedSession })
+    const region = screen.getByRole('region', { name: 'Lifecycle commands' })
+    expect(within(region).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Prepare', 'Start', 'End the night'])
   })
 
   it('leaves a command enabled regardless of session.state: the contract publishes no valid-from-state table for any command', () => {
