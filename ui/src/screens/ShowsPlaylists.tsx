@@ -16,7 +16,7 @@ import {
   type ShowPlaylistConfigResponse,
 } from '../api'
 import { randomUUIDv4 } from '../api/uuid'
-import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, Panes, RevisionHistory, RuledStrip, Section, SelectableRow, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, Panes, ReorderButtons, RevisionHistory, RuledStrip, Section, SelectableRow, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -605,6 +605,7 @@ function AudioPlaylistEditor({
   onSaved: (response: Playlist) => void
 }) {
   const [entries, setEntries] = useState<EntryDraft[]>([])
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [repeat, setRepeat] = useState<'none' | 'all'>('none')
   const [addCueId, setAddCueId] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -642,18 +643,19 @@ function AudioPlaylistEditor({
     setDirty(true)
   }
 
-  const moveEntry = (index: number, direction: -1 | 1) => {
+  const reorderEntry = (from: number, to: number) => {
     setEntries((prev) => {
-      const target = index + direction
-      if (target < 0 || target >= prev.length) return prev
+      if (to < 0 || to >= prev.length || to === from) return prev
       const next = [...prev]
-      const [item] = next.splice(index, 1)
+      const [item] = next.splice(from, 1)
       if (item === undefined) return prev
-      next.splice(target, 0, item)
+      next.splice(to, 0, item)
       return next
     })
     setDirty(true)
   }
+
+  const moveEntry = (index: number, direction: -1 | 1) => reorderEntry(index, index + direction)
 
   const save = () => {
     if (entries.length === 0) {
@@ -741,46 +743,43 @@ function AudioPlaylistEditor({
               <th scope="col">Cue</th>
               <th scope="col">Length</th>
               <th scope="col">Reorder</th>
-              <th scope="col">Remove</th>
             </tr>
           </thead>
           <tbody>
             {entries.length === 0 ? (
               <tr>
-                <td colSpan={5}>
+                <td colSpan={4}>
                   <RuledStrip absence="empty" label="None" fact="This playlist has no entries." />
                 </td>
               </tr>
             ) : (
               entries.map((entry, index) => (
-                <tr key={entry.id}>
-                  <td className="sm-data">{index + 1}</td>
+                <tr
+                  key={entry.id}
+                  draggable
+                  onDragStart={() => setDragIndex(index)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => {
+                    if (dragIndex !== null) reorderEntry(dragIndex, index)
+                    setDragIndex(null)
+                  }}
+                  onDragEnd={() => setDragIndex(null)}
+                >
+                  <td className="sm-data">
+                    <span className="sm-table__handle" aria-hidden="true">⠿</span>
+                    {index + 1}
+                  </td>
                   <td>{cueLabel(cues, entry.cue)}</td>
                   <td className="sm-data sm-faint">not reported</td>
                   <td>
-                    <Button
-                      variant="quiet"
-                      size="compact"
-                      onClick={() => moveEntry(index, -1)}
-                      disabled={index === 0}
-                      title="Move earlier in the playlist"
-                    >
-                      Move up
-                    </Button>
-                    <Button
-                      variant="quiet"
-                      size="compact"
-                      onClick={() => moveEntry(index, 1)}
-                      disabled={index === entries.length - 1}
-                      title="Move later in the playlist"
-                    >
-                      Move down
-                    </Button>
-                  </td>
-                  <td>
-                    <Button variant="quiet" size="compact" onClick={() => removeEntry(entry.id)}>
-                      Remove
-                    </Button>
+                    <ReorderButtons
+                      itemLabel={cueLabel(cues, entry.cue)}
+                      onMoveUp={() => moveEntry(index, -1)}
+                      onMoveDown={() => moveEntry(index, 1)}
+                      onRemove={() => removeEntry(entry.id)}
+                      moveUpReason={index === 0 ? 'Already first.' : undefined}
+                      moveDownReason={index === entries.length - 1 ? 'Already last.' : undefined}
+                    />
                   </td>
                 </tr>
               ))
@@ -790,7 +789,7 @@ function AudioPlaylistEditor({
       </TableWrap>
       <p className="sm-section__footnote">
         {entries.length} {entries.length === 1 ? 'entry' : 'entries'}. Entry duration is not a field the coordinator
-        reports; each cue's own length is not shown here.
+        reports; each cue's own length is not shown here. Drag to reorder.
       </p>
 
       <ButtonRow>

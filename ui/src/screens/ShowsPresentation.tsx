@@ -192,9 +192,10 @@ export function ShowsPresentation() {
             .filter(({ status }) => status.tone === 'warn' || status.tone === 'bad')
             .map(({ surface, status }) => (
               <div key={surface.id} className="sm-attn">
-                <StatusPair tone={status.tone} label={`${surface.payload.name} · ${status.label}`} />
+                <strong className="sm-attn__name">{surface.payload.name}</strong>
                 <div>
                   <p className="sm-attn__fact">
+                    <StatusPair tone={status.tone} label={status.label} />{' '}
                     {status.detail ?? `${surface.payload.node} reports this surface's pipeline as ${status.label.toLowerCase()}.`}
                   </p>
                   <p className="sm-attn__detail">

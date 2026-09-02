@@ -78,6 +78,13 @@
   padding: 0 10px;
 }
 
+/* Reorder/remove controls beside a grab handle: square, glyph-only. */
+.sm-btn--icon {
+  width: var(--ctrl-h-compact);
+  height: var(--ctrl-h-compact);
+  padding: 0;
+}
+
 /* Gloved: transport, lifecycle, macro Run, sign-in and bootstrap fields. */
 .sm-btn--gloved {
   height: var(--ctrl-h-gloved);
@@ -93,6 +100,13 @@
   background: var(--surface);
   color: var(--text-faint);
   cursor: not-allowed;
+}
+
+/* Quiet stays borderless when inert; only its color signals disabled. */
+.sm-btn--quiet:disabled,
+.sm-btn--quiet[aria-disabled='true'] {
+  border-color: transparent;
+  background: transparent;
 }
 
 .sm-btn-row {

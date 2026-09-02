@@ -196,10 +196,10 @@ describe('Shows · Playlists tab editing', () => {
       fireEvent.change(addSelect, { target: { value: 'cue-1' } })
       fireEvent.click(screen.getByRole('button', { name: 'Add cue' }))
 
-      const moveDownButtons = within(table).getAllByRole('button', { name: 'Move down' })
+      const moveDownButtons = within(table).getAllByRole('button', { name: /^Move .+ down$/ })
       fireEvent.click(moveDownButtons[0] as HTMLElement)
 
-      const removeButtons = within(table).getAllByRole('button', { name: 'Remove' })
+      const removeButtons = within(table).getAllByRole('button', { name: /^Remove / })
       fireEvent.click(removeButtons[removeButtons.length - 1] as HTMLElement)
 
       let sent: unknown = null

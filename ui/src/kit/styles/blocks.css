@@ -209,19 +209,23 @@
   font: var(--t-body);
 }
 
-/* The ruled state lane is intentionally fixed-width. Long literal status
-   labels must wrap inside that lane, never push into the adjoining fact. */
+/* The item's own name, when the lane names it rather than a chip. */
+.sm-attn__name {
+  font: var(--t-body);
+  font-weight: 600;
+}
+
+/* The ruled state lane is intentionally fixed-width. A chip never wraps; a
+   name or other prose in this lane wraps instead of pushing into the fact. */
 .sm-attn > :first-child {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
+/* A chip stretches to the lane rather than shrinking to its own text. */
 .sm-attn > .sm-status {
   width: max-content;
   max-width: 100%;
-  min-height: 20px;
-  height: auto;
-  white-space: normal;
 }
 
 .sm-attn__detail {
@@ -359,21 +363,36 @@ a.sm-tile:hover {
   border-bottom: 1px solid var(--border);
 }
 
-/* A macro step row: click anywhere but the handle or Move/Remove to open it. */
+/* A macro step row: click anywhere but the handle or Move/Remove to open it.
+   The handle and meta grow the row; reorder controls stay pinned at the end. */
 .sm-step-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
   cursor: pointer;
+}
+
+.sm-step-row > .sm-btn-row {
+  flex: 0 0 auto;
 }
 
 /* Reorderable list handle (guide §6): U+283F, grab cursor, dragged by the row. */
 .sm-handle {
   display: inline-block;
-  margin-right: 6px;
   color: var(--text-faint);
   cursor: grab;
+  flex: 0 0 auto;
 }
 
-.sm-plain-list > li .sm-btn-row {
-  margin-top: 6px;
+/* The step's name, id and status chips on one line: gap on the row, not
+   margins on each chip. */
+.sm-step-row__meta {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-width: 0;
 }
 
 /* What a command actually did, next to the control that sent it. */
@@ -523,35 +542,11 @@ a.sm-tile:hover {
 /* Monitor is the one full-spine evidence surface: its fleet table and
    inspector use the page width rather than the ordinary form measure. */
 .sm-main:has(.sm-monitor) {
-  max-width: none;
   padding: 0 0 80px;
-}
-
-/* These reference pages use the complete post-rail spine. The ordinary
-   1120px reading measure remains for narrow detail and form pages. */
-.sm-main:has(.sm-facets[aria-label='Monitor facets']),
-.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) {
-  max-width: none;
-}
-
-/* Assets uses the full post-rail spine. Its inspector track exists only while
-   upload or asset detail content is actually present. */
-.sm-main:has(.sm-assets-surface) {
-  max-width: none;
-}
-
-.sm-main:has(.sm-rc-breadcrumb) {
-  max-width: 1220px;
 }
 
 .sm-main:has(.sm-facets[aria-label='Monitor facets']) {
   padding-top: 20px;
-}
-
-/* Live Control has the mock's 1160px operational measure: wider than a
-   detail form, narrower than a full monitoring table. */
-.sm-main:has(#lc-transport) {
-  max-width: 1160px;
 }
 
 /* Show workspace and Show Night have their own compact page heads in the
@@ -596,42 +591,8 @@ a.sm-tile:hover {
   color: var(--accent);
 }
 
-/* Settings is the other wider reference page: its seven direct destinations
-   need the mock's 1160px measure without widening ordinary authoring forms. */
-.sm-main:has(> nav[aria-label='Settings tabs']) {
-  max-width: 1160px;
-}
-
-/* Direct Settings pages keep their navigation spine wide, then narrow into
-   the documented 640px editing column. Resolume configuration is a separate
-   800px evidence surface and retains its explicit measure below. */
-.sm-main:has(> nav[aria-label='Settings tabs']) > nav[aria-label='Settings tabs'] ~ :not(.sm-resolume-config) {
-  max-width: 640px;
-}
-
-/* The Resolume configuration reference is a focused configuration column,
-   not one of the settings pages that uses the full direct-settings measure. */
 .sm-main:has(.sm-resolume-config) {
-  max-width: 1120px !important;
   padding-top: 48px;
-}
-
-/* The Resolume configuration mock keeps its editable evidence in a focused
-   800px column, while the Settings header and direct-route tabs retain the
-   wider 1120px spine. This is presentation only: all existing controls stay
-   in their current route and order. */
-.sm-resolume-config {
-  max-width: 800px;
-}
-
-/* Node detail is a focused configuration/evidence column in the approved
-   reference, not a full-spine monitoring table. */
-.sm-node-detail {
-  max-width: 760px;
-}
-
-.sm-node-detail > .sm-small:first-child {
-  margin: 0 0 4px;
 }
 
 /* Show identity pages use the compact breadcrumb-to-title rhythm of the
@@ -640,18 +601,9 @@ a.sm-tile:hover {
   margin: 0 0 4px;
 }
 
-/* Access keeps the principal inventory on the full spine. Supporting
-   credentials and attribution evidence use the narrower measure shown in the
-   approved page, and the introductory copy remains readable rather than
-   spanning the inventory width. */
+/* Access's introductory copy stays readable rather than spanning the page. */
 .sm-main:has(#ac-princ) > .sm-page__lede {
   max-width: 72ch;
-}
-
-.sm-main:has(#ac-princ) > .sm-section:has(#ac-cred),
-.sm-main:has(#ac-princ) > .sm-section:has(#ac-audit),
-.sm-main:has(#ac-princ) > .sm-section:has(#ac-bootstrap) {
-  max-width: 800px;
 }
 
 .sm-monitor > .sm-page__head {
@@ -1494,6 +1446,13 @@ a.sm-tile:hover {
   flex-wrap: wrap;
 }
 
+/* A field's control plus its adjacent action, sharing one line. */
+.sm-inline-row--fill > .sm-input,
+.sm-inline-row--fill > .sm-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* A form column that stays readable rather than stretching to the page width. */
 .sm-form-column { max-width: 660px; }
 
@@ -1505,6 +1464,9 @@ a.sm-tile:hover {
 }
 
 .sm-chip {
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1.4;
   padding: 1px 4px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-chip);

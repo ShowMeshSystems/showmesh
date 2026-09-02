@@ -572,18 +572,19 @@ function AdministrationPanel({
   return (
     <div className="sm-inspector__group">
       <h3 className="sm-subsection__title">Administration</h3>
-      <Segmented<PrincipalObject['role']>
-        label="Role"
-        value={role}
-        options={CREATABLE_ROLES.map((option) => ({ value: option, label: option }))}
-        onChange={(value) => {
-          setRole(value)
-          setRoleOutcome(null)
-        }}
-        disabled={controlsDisabled}
-      />
-      <ButtonRow>
+      <div className="sm-inline-row">
+        <Segmented<PrincipalObject['role']>
+          label="Role"
+          value={role}
+          options={CREATABLE_ROLES.map((option) => ({ value: option, label: option }))}
+          onChange={(value) => {
+            setRole(value)
+            setRoleOutcome(null)
+          }}
+          disabled={controlsDisabled}
+        />
         <Button
+          size="compact"
           onClick={() => {
             setRoleConfirming(true)
             setRoleConfirmText('')
@@ -594,7 +595,33 @@ function AdministrationPanel({
         >
           Apply
         </Button>
-      </ButtonRow>
+        {principal.disabled ? (
+          <Button
+            size="compact"
+            className="sm-push-end"
+            onClick={enable}
+            disabled={controlsDisabled || enabling}
+            title={gateReason ?? undefined}
+          >
+            {enabling ? 'Enabling…' : 'Enable'}
+          </Button>
+        ) : (
+          <Button
+            size="compact"
+            variant="danger"
+            className="sm-push-end"
+            onClick={() => {
+              setDisableConfirming(true)
+              setDisableConfirmText('')
+              setDisableError(null)
+            }}
+            disabled={controlsDisabled || isSelf}
+            title={isSelf ? 'You cannot disable your own signed-in principal.' : (gateReason ?? undefined)}
+          >
+            Disable
+          </Button>
+        )}
+      </div>
       {roleConfirming && (
         <div className="sm-panel">
           <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
@@ -622,30 +649,6 @@ function AdministrationPanel({
         </p>
       )}
 
-      <ButtonRow>
-        {principal.disabled ? (
-          <Button
-            onClick={enable}
-            disabled={controlsDisabled || enabling}
-            title={gateReason ?? undefined}
-          >
-            {enabling ? 'Enabling…' : 'Enable'}
-          </Button>
-        ) : (
-          <Button
-            variant="danger"
-            onClick={() => {
-              setDisableConfirming(true)
-              setDisableConfirmText('')
-              setDisableError(null)
-            }}
-            disabled={controlsDisabled || isSelf}
-            title={isSelf ? 'You cannot disable your own signed-in principal.' : (gateReason ?? undefined)}
-          >
-            Disable
-          </Button>
-        )}
-      </ButtonRow>
       {enableError !== null && <RuledStrip absence="failed" label="Refused" fact={enableError} />}
       {disableConfirming && !principal.disabled && (
         <div className="sm-panel">
@@ -674,21 +677,24 @@ function AdministrationPanel({
       )}
 
       <Field label="New password">
-        {(props) => <Input {...props} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />}
+        {(props) => (
+          <div className="sm-inline-row sm-inline-row--fill">
+            <Input {...props} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+            <Button
+              size="compact"
+              onClick={() => {
+                setPasswordConfirming(true)
+                setPasswordConfirmText('')
+                setPasswordError(null)
+              }}
+              disabled={controlsDisabled || newPassword === ''}
+              title={gateReason ?? (newPassword === '' ? 'Enter a new password first.' : undefined)}
+            >
+              Set password
+            </Button>
+          </div>
+        )}
       </Field>
-      <ButtonRow>
-        <Button
-          onClick={() => {
-            setPasswordConfirming(true)
-            setPasswordConfirmText('')
-            setPasswordError(null)
-          }}
-          disabled={controlsDisabled || newPassword === ''}
-          title={gateReason ?? (newPassword === '' ? 'Enter a new password first.' : undefined)}
-        >
-          Set password
-        </Button>
-      </ButtonRow>
       {passwordConfirming && (
         <div className="sm-panel">
           <Field label={`Type ${principal.name} to confirm`} help="Asks for the principal's name before it proceeds.">
