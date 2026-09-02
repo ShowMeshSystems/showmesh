@@ -77,7 +77,7 @@ func (s *Session) applyEffectiveGainLocked(ctx context.Context) pkgaudio.Outcome
 	if obs.ObservedAt.Before(dispatchedAt) {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence predates this dispatch"}
 	}
-	if obs.Gain != effective {
+	if !gainsEqual(obs.Gain, effective) {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: fmt.Sprintf("engine reports gain %v, expected %v", obs.Gain, effective)}
 	}
 	return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
@@ -428,10 +428,11 @@ func (s *Session) resolveFadePendingStrandedLocked(reason string) {
 }
 
 // gainEpsilon bounds how far an engine's reported gain may sit from a
-// fade's target and still count as having reached it. A real backend
-// computes a ramp in floating point, so exact equality would report a
-// completed fade as unconfirmable forever; the fake stores exact values
-// and cannot expose that.
+// requested value, whether a fade's target or a direct gain apply, and
+// still count as confirmed. A real backend rounds through its own
+// floating point representation, so exact equality would report a
+// correctly applied gain as unconfirmable forever; the fake stores
+// exact values and cannot expose that.
 const gainEpsilon = 1e-6
 
 func gainsEqual(a, b pkgaudio.Gain) bool {
