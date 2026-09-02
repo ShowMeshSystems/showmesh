@@ -335,7 +335,45 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 
 	switch {
 	case errors.Is(txErr, store.ErrFPPPlaylistEntryObservationStale):
-		auditRefusal("sequence regression: last accepted sequence was " + formatInt64(lastAcceptedSequence))
+		// Owner ruling 2026-09-02 (cue-deactivate-on-jump): a sequence
+		// regression is contract §1.5's own named signature of a plugin/host
+		// restart, a genuine reorder, or a replayed/forged observation — the
+		// exact discontinuity [cueactivate.Decide] must be able to see, so
+		// this refusal's evidence, unlike every other refusal audited on
+		// this route, is recorded through a marker on the instance's own row
+		// (schemaV29), not only in audit_log. It is written here, through
+		// [identity.Service.AuditedWrite], in the SAME transaction as its
+		// own audit entry, deliberately never through auditRefusal's
+		// best-effort WriteAudit: that write's own error is logged and
+		// swallowed, correct for a forensic record and disqualifying for a
+		// control input, because on a write failure the discontinuity would
+		// silently degrade back into looking like true silence, exactly
+		// when the store is already unhealthy.
+		//
+		// A failure here is logged loudly (logError, not the ordinary
+		// best-effort warn) and does NOT change the response below: contract
+		// §1.7 fixes "Sequence regression | 409 | conflict" unconditionally,
+		// and this refusal is real and correct regardless of whether the
+		// coordinator also managed to record its own internal marker for
+		// it. The underlying condition (this instance's sequence is still
+		// regressed) persists until cleared, so the plugin's own next post
+		// retries this identical branch and gets another chance to record
+		// it — bounding a transient failure's blind spot to roughly one
+		// posting interval rather than leaving it permanently unrecorded.
+		reason := "sequence regression: last accepted sequence was " + formatInt64(lastAcceptedSequence)
+		if markErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+			if err := tx.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, req.InstanceUUID, now); err != nil {
+				return identity.AuditEntry{}, err
+			}
+			return identity.AuditEntry{
+				Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+				Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+				Action: auditActionFPPObservePlaylistEntry, Target: req.InstanceUUID,
+				Kind: identity.AuditOutcome, OutcomeReason: reason,
+			}, nil
+		}); markErr != nil {
+			h.logError("failed to record fpp playlist entry observation evidence-broken marker", "instanceUuid", req.InstanceUUID, "error", markErr)
+		}
 		writeProblem(w, h.logger, now, fppObservationConflictProblem(
 			"sequence "+formatInt64(rec.Sequence)+" is lower than the last accepted sequence "+formatInt64(lastAcceptedSequence)+
 				" for this instance; this refusal leaves the stored observation untouched"))

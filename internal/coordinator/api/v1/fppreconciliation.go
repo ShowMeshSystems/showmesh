@@ -45,6 +45,19 @@ type FPPPlaylistEntryReconciliationResponse struct {
 
 	DefinitionAvailable bool `json:"definitionAvailable"`
 
+	// EvidenceBrokenAt is nil whenever this instance's stored observation is
+	// believed to still be corroborated, and the moment a sequence-
+	// regression refusal was recorded for it otherwise (schemaV29, owner
+	// ruling 2026-09-02). Reported ADDITIVELY alongside Outcome/Reason,
+	// never collapsed into them: this route is the diagnostic, full-detail
+	// view of one instance, so it states both what fppreconcile computed
+	// from the row's own content and that the row's continuity separately
+	// broke, rather than choosing one fact to show. GET /current-runs
+	// carries the collapsed, one-word-per-run form of this same fact for
+	// the glanceable Show Night surface (internal/coordinator/api/
+	// currentruns.go's fppEvidenceBrokenReconciliation).
+	EvidenceBrokenAt *string `json:"evidenceBrokenAt,omitempty"`
+
 	ServerTime string `json:"serverTime"`
 }
 

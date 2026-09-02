@@ -146,6 +146,19 @@ const (
 	// identity for this observation, so there is nothing to resolve,
 	// mismatch, or hold.
 	StateIdentityUnavailable State = "identity-unavailable"
+
+	// StateEvidenceBroken is reached whenever obs.EvidenceBrokenAt is set
+	// (schemaV29, owner ruling 2026-09-02): a sequence-regression refusal
+	// was recorded for this instance since its stored observation was last
+	// accepted. This check runs BEFORE every other routing in [Decide],
+	// deliberately outranking whatever [fppreconcile.Reconcile] computed
+	// from the SAME now-possibly-stale row: no outcome that row can report
+	// is safe to trust once its own continuity is known to be broken.
+	// Decision.EvidenceBroken carries the effect — never Decision.
+	// Activations or Decision.ClearNodes, both of which mean something
+	// different (start, or clear-everything-on-this-node) that this state
+	// must not be confused with.
+	StateEvidenceBroken State = "evidence-broken"
 )
 
 // Decision is [Decide]'s result: the state it reached, human-readable
@@ -175,6 +188,19 @@ type Decision struct {
 	// command paths rather than a cue.activate: blacking is not itself an
 	// activation of any Cue.
 	ClearNodes []string
+
+	// EvidenceBroken is nodeID -> the [cueactivation.Activation] this
+	// coordinator most recently resolved for this node from the NOW-broken
+	// evidence, populated only for StateEvidenceBroken and only when that
+	// evidence's last resolution (before it broke) was
+	// [fppreconcile.OutcomeResolved] — empty otherwise, meaning there is
+	// nothing coherent to undo. A caller must use this to STOP each node's
+	// own currently-held Cue outputs (its own CueID's declared outputs,
+	// per-cue scoped — never the whole node), the same
+	// dispatchCueScopedBlackAndSilence-shaped effect the asset-missing
+	// fail-to-black path already uses; it must never be dispatched as a
+	// cue.activate the way Decision.Activations is.
+	EvidenceBroken map[string]cueactivation.Activation
 }
 
 // Decide resolves result (fppreconcile's own answer for obs) into a
@@ -188,6 +214,14 @@ type Decision struct {
 // non-FPP caller of the same decision shape is not forced through an
 // FPP-shaped observation.
 func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
+	// Checked first, unconditionally, before any routing on result.Outcome:
+	// StateEvidenceBroken's own doc comment for why a broken marker
+	// outranks whatever Reconcile computed from this same, now-possibly-
+	// stale row.
+	if obs.EvidenceBrokenAt != nil {
+		return decideEvidenceBroken(ctx, st, result, obs, runnerInstance, pin)
+	}
+
 	switch result.Outcome {
 	case fppreconcile.OutcomeIdentityUnavailable:
 		return Decision{State: StateIdentityUnavailable, Reason: result.Reason}, nil
@@ -338,6 +372,41 @@ func decideMismatch(ctx context.Context, st *store.Store, active assetsync.Activ
 	default:
 		return Decision{}, fmt.Errorf("cueactivate: unknown mismatchPolicy %q on show.playlist %q", binding.mismatchPolicy, binding.playlistID)
 	}
+}
+
+// decideEvidenceBroken is [Decide]'s path once obs.EvidenceBrokenAt is set
+// (StateEvidenceBroken's own doc comment). If result's last resolution
+// (before the marker was set) was [fppreconcile.OutcomeResolved], resolve
+// exactly what [decideResolved] would have resolved from that SAME frozen
+// identity — the Cue this coordinator actually activated before things
+// broke — so a caller can undo precisely that, never something guessed.
+// Any other result.Outcome means nothing was cleanly activated from this
+// instance's evidence to begin with (H0.2 already governed it, or there was
+// nothing to govern), so there is nothing coherent to undo and
+// Decision.EvidenceBroken is left nil.
+func decideEvidenceBroken(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
+	reason := fmt.Sprintf("%s; a sequence-regression refusal was recorded for this instance at %s, so this evidence can no longer be trusted",
+		result.Reason, obs.EvidenceBrokenAt.UTC().Format(time.RFC3339))
+	if result.Outcome != fppreconcile.OutcomeResolved {
+		return Decision{State: StateEvidenceBroken, Reason: reason}, nil
+	}
+
+	// A live resolution, not pin.Active: this call is not minting a new
+	// Activation to authorize and dispatch, only identifying what to stop,
+	// and the active show may legitimately have changed since the broken
+	// evidence was last resolved — resolveActivationsForCue's own
+	// catalogEntry lookup already returns "not participating" harmlessly
+	// for a Cue that no longer exists in a new active show's catalog, so no
+	// extra guard is needed here for that case.
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return Decision{}, fmt.Errorf("cueactivate: evidence-broken: resolve active show: %w", err)
+	}
+	activations, err := resolveActivationsForCue(ctx, st, active, result.PlaylistID, result.PlaylistRevision, result.EntryID, result.CueID, obs, runnerInstance, pin)
+	if err != nil {
+		return Decision{}, err
+	}
+	return Decision{State: StateEvidenceBroken, Reason: reason, EvidenceBroken: activations}, nil
 }
 
 // decideResolved is [Decide]'s path for [fppreconcile.OutcomeResolved]:

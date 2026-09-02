@@ -432,6 +432,192 @@ func TestFPPPlaylistEntryObservationConcurrentSameSequenceProducesExactlyOneWinn
 // sequence any goroutine attempted, and no lower sequence is ever allowed
 // to overwrite a higher one that already landed, regardless of the order
 // the driver actually serializes them in.
+// TestMarkFPPPlaylistEntryObservationEvidenceBrokenSetsMarker is schemaV29's
+// own set path: owner ruling 2026-09-02, the sequence-regression marker
+// lives on the instance's own row, read back exactly like every other
+// field.
+func TestMarkFPPPlaylistEntryObservationEvidenceBrokenSetsMarker(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	rec := fppObservationFixture("instance-1", 5)
+	if err := st.PutFPPPlaylistEntryObservation(ctx, rec); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	brokenAt := time.Date(2026, 9, 2, 3, 4, 5, 0, time.UTC)
+	if err := st.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, "instance-1", brokenAt); err != nil {
+		t.Fatalf("mark evidence broken: %v", err)
+	}
+
+	got, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.EvidenceBrokenAt == nil {
+		t.Fatal("EvidenceBrokenAt = nil, want set")
+	}
+	if !got.EvidenceBrokenAt.Equal(brokenAt) {
+		t.Fatalf("EvidenceBrokenAt = %v, want %v", got.EvidenceBrokenAt, brokenAt)
+	}
+	// Marking must never touch any other field on the row.
+	got.EvidenceBrokenAt = nil
+	if got != rec {
+		t.Fatalf("marking evidence broken changed other fields:\n got  = %+v\n want = %+v", got, rec)
+	}
+}
+
+// TestMarkFPPPlaylistEntryObservationEvidenceBrokenUnknownInstanceErrors
+// proves the "no row to mark" case is reported, never silently treated as a
+// no-op — see [ErrFPPPlaylistEntryObservationNotFoundForEvidenceBroken]'s
+// own doc comment for why a caller's stale view of an instance must be
+// visible rather than swallowed.
+func TestMarkFPPPlaylistEntryObservationEvidenceBrokenUnknownInstanceErrors(t *testing.T) {
+	st := openTestStore(t, nil)
+	err := st.MarkFPPPlaylistEntryObservationEvidenceBroken(context.Background(), "no-such-instance", time.Now())
+	if !errors.Is(err, ErrFPPPlaylistEntryObservationNotFoundForEvidenceBroken) {
+		t.Fatalf("error = %v, want ErrFPPPlaylistEntryObservationNotFoundForEvidenceBroken", err)
+	}
+}
+
+// TestFPPPlaylistEntryObservationAcceptClearsEvidenceBrokenMarker is my own
+// design decision from the owner ruling (cue-deactivate-on-jump proposal
+// §0a): the marker is cleared by the instance's next ACCEPTED observation,
+// unconditionally, never exclusively by the operator reset route. This
+// proves BOTH shapes that accept can take: an ON CONFLICT DO UPDATE against
+// an existing (broken) row, and a fresh INSERT after the row was deleted.
+func TestFPPPlaylistEntryObservationAcceptClearsEvidenceBrokenMarker(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	t.Run("higher sequence accept against an existing broken row", func(t *testing.T) {
+		if err := st.PutFPPPlaylistEntryObservation(ctx, fppObservationFixture("instance-a", 5)); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		if err := st.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, "instance-a", time.Now()); err != nil {
+			t.Fatalf("mark evidence broken: %v", err)
+		}
+		broken, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-a")
+		if err != nil {
+			t.Fatalf("get after marking: %v", err)
+		}
+		if broken.EvidenceBrokenAt == nil {
+			t.Fatal("precondition failed: EvidenceBrokenAt not set after marking")
+		}
+
+		if err := st.PutFPPPlaylistEntryObservation(ctx, fppObservationFixture("instance-a", 6)); err != nil {
+			t.Fatalf("put accepted observation after marking: %v", err)
+		}
+		got, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-a")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.EvidenceBrokenAt != nil {
+			t.Fatalf("EvidenceBrokenAt = %v after an accepted observation, want nil", got.EvidenceBrokenAt)
+		}
+	})
+
+	t.Run("fresh insert after delete", func(t *testing.T) {
+		if err := st.PutFPPPlaylistEntryObservation(ctx, fppObservationFixture("instance-b", 5)); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		if err := st.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, "instance-b", time.Now()); err != nil {
+			t.Fatalf("mark evidence broken: %v", err)
+		}
+		if _, err := st.DeleteFPPPlaylistEntryObservation(ctx, "instance-b"); err != nil {
+			t.Fatalf("delete (operator reset): %v", err)
+		}
+		// Simulates the plugin's own sequence restarting at 0 after fppd
+		// restarted, exactly as contract §1.5 describes: with no row left
+		// to compare against, this is accepted unconditionally.
+		if err := st.PutFPPPlaylistEntryObservation(ctx, fppObservationFixture("instance-b", 0)); err != nil {
+			t.Fatalf("put after reset: %v", err)
+		}
+		got, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-b")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.EvidenceBrokenAt != nil {
+			t.Fatalf("EvidenceBrokenAt = %v on a fresh row after reset, want nil", got.EvidenceBrokenAt)
+		}
+	})
+}
+
+// TestFPPPlaylistEntryObservationStaleOrConflictingPutLeavesEvidenceBrokenMarkerUntouched
+// proves the marker is not disturbed by the two refusal paths that leave
+// every OTHER field untouched too (mirroring
+// TestFPPPlaylistEntryObservationLowerSequenceIsStaleAndLeavesRowUntouched/
+// TestFPPPlaylistEntryObservationEqualSequenceIsConflictAndLeavesRowUntouched):
+// only a genuinely ACCEPTED put clears it.
+func TestFPPPlaylistEntryObservationStaleOrConflictingPutLeavesEvidenceBrokenMarkerUntouched(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	if err := st.PutFPPPlaylistEntryObservation(ctx, fppObservationFixture("instance-1", 5)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	brokenAt := time.Date(2026, 9, 2, 3, 4, 5, 0, time.UTC)
+	if err := st.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, "instance-1", brokenAt); err != nil {
+		t.Fatalf("mark evidence broken: %v", err)
+	}
+
+	lower := fppObservationFixture("instance-1", 3)
+	if err := st.PutFPPPlaylistEntryObservation(ctx, lower); !errors.Is(err, ErrFPPPlaylistEntryObservationStale) {
+		t.Fatalf("stale put: error = %v, want ErrFPPPlaylistEntryObservationStale", err)
+	}
+	same := fppObservationFixture("instance-1", 5)
+	same.Action = "stop"
+	if err := st.PutFPPPlaylistEntryObservation(ctx, same); !errors.Is(err, ErrFPPPlaylistEntryObservationSequenceConflict) {
+		t.Fatalf("same-sequence conflict put: error = %v, want ErrFPPPlaylistEntryObservationSequenceConflict", err)
+	}
+
+	got, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.EvidenceBrokenAt == nil || !got.EvidenceBrokenAt.Equal(brokenAt) {
+		t.Fatalf("EvidenceBrokenAt = %v after a refused (non-accepted) put, want unchanged at %v", got.EvidenceBrokenAt, brokenAt)
+	}
+}
+
+// TestMarkFPPPlaylistEntryObservationEvidenceBrokenTxAndStoreFormsAgree
+// mirrors TestFPPPlaylistEntryObservationTxAndStoreFormsAgree's own shape
+// for the new marker method: the Tx form runs the identical SQL its Store
+// sibling does, visible to a read through the same Tx before commit and
+// through the plain Store form after commit.
+func TestMarkFPPPlaylistEntryObservationEvidenceBrokenTxAndStoreFormsAgree(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	if err := st.PutFPPPlaylistEntryObservation(ctx, fppObservationFixture("instance-1", 5)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	brokenAt := time.Date(2026, 9, 2, 3, 4, 5, 0, time.UTC)
+	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		if err := tx.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, "instance-1", brokenAt); err != nil {
+			return err
+		}
+		got, err := tx.GetFPPPlaylistEntryObservation(ctx, "instance-1")
+		if err != nil {
+			return err
+		}
+		if got.EvidenceBrokenAt == nil || !got.EvidenceBrokenAt.Equal(brokenAt) {
+			t.Fatalf("read inside the same transaction did not see the just-written marker: got = %+v", got.EvidenceBrokenAt)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("InTx: %v", err)
+	}
+
+	got, err := st.GetFPPPlaylistEntryObservation(ctx, "instance-1")
+	if err != nil {
+		t.Fatalf("get after commit: %v", err)
+	}
+	if got.EvidenceBrokenAt == nil || !got.EvidenceBrokenAt.Equal(brokenAt) {
+		t.Fatalf("Store-form read after commit: EvidenceBrokenAt = %v, want %v", got.EvidenceBrokenAt, brokenAt)
+	}
+}
+
 func TestFPPPlaylistEntryObservationConcurrentAscendingSequencesEndsAtHighest(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()

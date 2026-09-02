@@ -331,6 +331,63 @@ func TestFPPObservationSequenceRegressionRefused409(t *testing.T) {
 	}
 }
 
+// TestFPPObservationSequenceRegressionSetsEvidenceBrokenMarker is owner
+// ruling 2026-09-02's own set path (cue-deactivate-on-jump): a sequence
+// regression records schemaV29's marker on the instance's own row, read
+// back through the ordinary Store form exactly like any other field, and
+// the 409 status/body are unaffected — contract §1.7 fixes "Sequence
+// regression | 409 | conflict" unconditionally, so recording this
+// discontinuity must never change what the plugin itself sees.
+func TestFPPObservationSequenceRegressionSetsEvidenceBrokenMarker(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	if resp, _ := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 5, "showmesh-test", "main", 0), token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed post: status = %d, want 200", resp.StatusCode)
+	}
+	rec, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after seed: %v", err)
+	}
+	if rec.EvidenceBrokenAt != nil {
+		t.Fatalf("EvidenceBrokenAt = %v after an ordinary accepted post, want nil", rec.EvidenceBrokenAt)
+	}
+
+	resp, m := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 3, "showmesh-test", "main", 0), token)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeConflict {
+		t.Errorf("type = %v, want %q (the marker write must never change the response the plugin sees)", m["type"], ProblemTypeConflict)
+	}
+
+	rec, err = setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after regression: %v", err)
+	}
+	if rec.EvidenceBrokenAt == nil {
+		t.Fatal("EvidenceBrokenAt = nil after a sequence-regression refusal, want set")
+	}
+	if !rec.EvidenceBrokenAt.Equal(testNow) {
+		t.Errorf("EvidenceBrokenAt = %v, want %v (the refusal's own now)", rec.EvidenceBrokenAt, testNow)
+	}
+
+	// The marker and its own audit entry are written in the SAME
+	// transaction (identity.AuditedWrite): the ordinary
+	// fpp.observe_playlist_entry refusal audit entry must still exist,
+	// unchanged from before this marker existed.
+	entries := fppAuditEntriesForObservation(t, setup.svc)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want exactly 1: %+v", len(entries), entries)
+	}
+	const wantReason = "sequence regression: last accepted sequence was 5"
+	if entries[0].OutcomeReason != wantReason {
+		t.Errorf("audit OutcomeReason = %q, want %q", entries[0].OutcomeReason, wantReason)
+	}
+}
+
 func TestFPPObservationSequenceConflictDifferentBodyRefused409(t *testing.T) {
 	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -347,6 +404,35 @@ func TestFPPObservationSequenceConflictDifferentBodyRefused409(t *testing.T) {
 	}
 	if m["type"] != ProblemTypeConflict {
 		t.Errorf("type = %v, want %q", m["type"], ProblemTypeConflict)
+	}
+}
+
+// TestFPPObservationSameSequenceConflictNeverSetsEvidenceBrokenMarker
+// proves the marker's own narrow scope (owner ruling 2026-09-02): a
+// same-sequence-different-body conflict is a different anomaly than a
+// sequence regression — it does not, by itself, mean the player's own
+// timeline moved on — and must never set schemaV29's marker, only the
+// genuine regression case above does.
+func TestFPPObservationSameSequenceConflictNeverSetsEvidenceBrokenMarker(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	if resp, _ := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 5, "showmesh-test", "main", 0), token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed post: status = %d, want 200", resp.StatusCode)
+	}
+	resp, _ := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 5, "showmesh-test", "other", 0), token)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+
+	rec, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if rec.EvidenceBrokenAt != nil {
+		t.Fatalf("EvidenceBrokenAt = %v after a same-sequence conflict, want nil (only a regression sets it)", rec.EvidenceBrokenAt)
 	}
 }
 

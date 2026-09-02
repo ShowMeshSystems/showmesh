@@ -9,6 +9,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -77,7 +78,7 @@ func (h *handlers) handleGetFPPPlaylistEntryReconciliation(w http.ResponseWriter
 		return
 	}
 
-	jsonWrite(w, mapFPPPlaylistEntryReconciliation(result, now))
+	jsonWrite(w, mapFPPPlaylistEntryReconciliation(result, obs.EvidenceBrokenAt, now))
 }
 
 // handleGetFPPPlaylistReadiness serves GET
@@ -132,8 +133,28 @@ func (h *handlers) handleGetFPPPlaylistReadiness(w http.ResponseWriter, r *http.
 	})
 }
 
+// fppEvidenceBrokenReconciliation is the collapsed, one-word-per-run
+// reconciliation value #301's GET /current-runs frame reports for an
+// instance whose evidence has broken (schemaV29, owner ruling 2026-09-02) —
+// shared with currentruns.go's appendFPPRuns so the two are never two
+// independently-worded copies of the same fact. It is deliberately NOT used
+// for the diagnostic per-instance route below: that route reports Outcome/
+// Reason and EvidenceBrokenAt as two separate, additive facts instead of
+// collapsing them into one.
+func fppEvidenceBrokenReconciliation(brokenAt time.Time) currentrun.Reconciliation {
+	return currentrun.Reconciliation{
+		State: "evidence-broken",
+		Reason: "a sequence-regression refusal was recorded for this instance at " + brokenAt.UTC().Format(time.RFC3339) +
+			"; this evidence cannot be trusted until it reports fresh data or an operator resets it",
+	}
+}
+
 // mapFPPPlaylistEntryReconciliation renders result for the wire.
-func mapFPPPlaylistEntryReconciliation(result fppreconcile.Result, now time.Time) v1.FPPPlaylistEntryReconciliationResponse {
+// evidenceBrokenAt is obs.EvidenceBrokenAt, reported additively — see
+// v1.FPPPlaylistEntryReconciliationResponse.EvidenceBrokenAt's own doc
+// comment for why this route never collapses it into Outcome/Reason the way
+// fppEvidenceBrokenReconciliation does for GET /current-runs.
+func mapFPPPlaylistEntryReconciliation(result fppreconcile.Result, evidenceBrokenAt *time.Time, now time.Time) v1.FPPPlaylistEntryReconciliationResponse {
 	return v1.FPPPlaylistEntryReconciliationResponse{
 		InstanceUUID: result.InstanceUUID,
 		Outcome:      string(result.Outcome),
@@ -159,6 +180,8 @@ func mapFPPPlaylistEntryReconciliation(result fppreconcile.Result, now time.Time
 		CueRevision: result.CueRevision,
 
 		DefinitionAvailable: result.DefinitionAvailable,
+
+		EvidenceBrokenAt: formatTimePtr(evidenceBrokenAt),
 
 		ServerTime: formatTime(now),
 	}
