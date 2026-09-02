@@ -25,6 +25,7 @@ const stubs = vi.hoisted(() => ({
   pauseAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   resumeAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   advanceAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  applyAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   stopAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   clearAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   seekAudioSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -54,6 +55,7 @@ vi.mock('../api', async () => {
     pauseAudioSession: (...args: never[]) => stubs.pauseAudioSession(...args),
     resumeAudioSession: (...args: never[]) => stubs.resumeAudioSession(...args),
     advanceAudioSession: (...args: never[]) => stubs.advanceAudioSession(...args),
+    applyAudioSession: (...args: never[]) => stubs.applyAudioSession(...args),
     stopAudioSession: (...args: never[]) => stubs.stopAudioSession(...args),
     clearAudioSession: (...args: never[]) => stubs.clearAudioSession(...args),
     seekAudioSession: (...args: never[]) => stubs.seekAudioSession(...args),
@@ -678,6 +680,82 @@ describe('Live Control', () => {
 
     fireEvent.click(clearButton)
     expect(stubs.clearAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+  })
+
+  /** Types the exact session id into Apply's own typed-confirmation field, the same gate Clear uses. */
+  function armApply(region: HTMLElement, sessionId = 'bg-holiday-01') {
+    fireEvent.change(within(region).getByLabelText(`Type ${sessionId} to confirm applying`), { target: { value: sessionId } })
+  }
+
+  it('keeps Apply disabled until the session id is typed to confirm, matching Clear', async () => {
+    const region = await renderAudioSessionsReady()
+
+    const applyButton = within(region).getByRole('button', { name: 'Apply' })
+    expect(applyButton).toBeDisabled()
+
+    armApply(region)
+    expect(applyButton).not.toBeDisabled()
+  })
+
+  it('parses the Apply payload as JSON and sends it with the node, session id, and derived revision', async () => {
+    stubs.applyAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.apply', outcome: 'completed' })))
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.change(within(region).getByLabelText('Params (JSON)'), { target: { value: '{"sourceRole": "primary"}' } })
+    armApply(region)
+    fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
+
+    expect(stubs.applyAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, { sourceRole: 'primary' })
+    expect(await within(region).findByText('Completed')).toBeInTheDocument()
+  })
+
+  it('sends Apply with params omitted, not an empty object, when the payload is left empty', async () => {
+    stubs.applyAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.apply', outcome: 'completed' })))
+    const region = await renderAudioSessionsReady()
+
+    armApply(region)
+    fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
+
+    expect(stubs.applyAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, undefined)
+  })
+
+  it('reports malformed JSON locally, says nothing was sent, and never dispatches Apply', async () => {
+    stubs.applyAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.apply' })))
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.change(within(region).getByLabelText('Params (JSON)'), { target: { value: '{not json' } })
+    armApply(region)
+    fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(region).findByText('Invalid JSON')).toBeInTheDocument()
+    expect(within(region).getByText(/The payload was not sent\. It is not valid JSON, so it never reached the coordinator/)).toBeInTheDocument()
+    expect(stubs.applyAudioSession).not.toHaveBeenCalled()
+  })
+
+  it('reports a non-object JSON payload with the same local-failure shape as a parse error, for a string, a number and an array', async () => {
+    stubs.applyAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.apply' })))
+    const region = await renderAudioSessionsReady()
+    armApply(region)
+
+    for (const payload of ['"just a string"', '42', '[1, 2, 3]']) {
+      fireEvent.change(within(region).getByLabelText('Params (JSON)'), { target: { value: payload } })
+      fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
+      expect(await within(region).findByText('Invalid JSON')).toBeInTheDocument()
+      expect(within(region).getByText(/The payload was not sent\. It must be a JSON object/)).toBeInTheDocument()
+    }
+    expect(stubs.applyAudioSession).not.toHaveBeenCalled()
+  })
+
+  it('reports Apply as Refused, distinct from Invalid JSON, when the coordinator declines a syntactically valid payload', async () => {
+    stubs.applyAudioSession = vi.fn(() => Promise.reject(new ApiError('revision is stale', 409, PROBLEM_TYPE.conflict)))
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.change(within(region).getByLabelText('Params (JSON)'), { target: { value: '{"sourceRole": "primary"}' } })
+    armApply(region)
+    fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
+
+    expect(await within(region).findByText('Refused')).toBeInTheDocument()
+    expect(within(region).queryByText('Invalid JSON')).not.toBeInTheDocument()
   })
 
   it('disables every audio session control with the audio:command reason when the scope is missing', async () => {
