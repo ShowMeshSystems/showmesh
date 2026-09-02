@@ -122,11 +122,10 @@ const (
 )
 
 // nightBackgroundAudioExpiryTTL is how long the agent keeps a bed session
-// alive, per audio.session.apply's own expiresInMs param
-// (pkgaudio.ApplyRequest.ExpiryTTL), before restore.go retires it as
-// unclaimed. nightBackgroundAudioExpiryRefreshInterval is how often this
-// controller re-sends it while steadily playing — well under the TTL so
-// a missed tick or two never lets the deadline lapse.
+// alive, per audio.session.apply's own expiresInMs param, before
+// restore.go retires it as unclaimed. nightBackgroundAudioExpiryRefreshInterval
+// is how often this controller re-sends it while steadily playing: well
+// under the TTL so a missed tick or two never lets the deadline lapse.
 const (
 	nightBackgroundAudioExpiryTTL             = 10 * time.Minute
 	nightBackgroundAudioExpiryRefreshInterval = 4 * time.Minute
@@ -732,7 +731,7 @@ func (h *handlers) nightBackgroundAudioStart(ctx context.Context, now time.Time,
 // nightBackgroundAudioExpiryRefreshDue reports whether enough real time
 // has passed since latest's own confirmation to warrant re-sending the
 // bed's expiresInMs before nightBackgroundAudioExpiryTTL lapses. An
-// unresolved latest is never due here — its own retry path in
+// unresolved latest is never due here: its own retry path in
 // [nightAdvanceBackgroundAudioForNode]'s case nightBGStepExpiryRefresh
 // handles that.
 func nightBackgroundAudioExpiryRefreshDue(now time.Time, latest nightBackgroundAudioHistoryRow) bool {

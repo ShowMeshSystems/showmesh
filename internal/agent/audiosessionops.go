@@ -186,7 +186,7 @@ func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // (Pause writes one; nothing here accepts one from a caller).
 // expiresInMs additionally refreshes the session's retirement deadline
 // ([pkgaudio.SessionDesiredState.Expiry]) to this agent's own now() plus
-// the given duration — a coordinator-stamped field an operator need not
+// the given duration: a coordinator-stamped field an operator need not
 // send.
 var audioSessionApplyKnownKeys = map[string]bool{
 	"sourceRole": true, "media": true, "playlist": true, "outputs": true,

@@ -18,11 +18,11 @@ type SessionDesiredState struct {
 	Outputs    *[]string
 	Bookmark   *Bookmark
 
-	// Expiry is this session's retirement deadline, computed by
-	// [ApplyRequest.Merge] from ExpiryTTL using the agent's own clock —
-	// never the coordinator's. nil means no deadline: a record persisted
-	// before this field existed decodes with Expiry nil and is never
-	// retired on that account.
+	// Expiry is this session's retirement deadline, an absolute value the
+	// caller must compute from its own clock, never the coordinator's.
+	// nil means no deadline: a record persisted before this field
+	// existed decodes with Expiry nil and is never retired on that
+	// account.
 	Expiry *time.Time
 
 	// LTCStartOffset is this session's own override of audio.settings'
@@ -104,7 +104,7 @@ type ApplyRequest struct {
 	Bookmark       Field[Bookmark]
 	LTCStartOffset Field[LTCTimecode]
 
-	// Expiry, when set, replaces SessionDesiredState.Expiry outright — an
+	// Expiry, when set, replaces SessionDesiredState.Expiry outright: an
 	// absolute deadline the caller must already have computed from its
 	// own clock. See that field's doc comment for why the deadline is
 	// agent-computed rather than coordinator-supplied.
