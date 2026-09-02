@@ -595,6 +595,32 @@ function AdministrationPanel({
         >
           Apply
         </Button>
+        {principal.disabled ? (
+          <Button
+            size="compact"
+            className="sm-push-end"
+            onClick={enable}
+            disabled={controlsDisabled || enabling}
+            title={gateReason ?? undefined}
+          >
+            {enabling ? 'Enabling…' : 'Enable'}
+          </Button>
+        ) : (
+          <Button
+            size="compact"
+            variant="danger"
+            className="sm-push-end"
+            onClick={() => {
+              setDisableConfirming(true)
+              setDisableConfirmText('')
+              setDisableError(null)
+            }}
+            disabled={controlsDisabled || isSelf}
+            title={isSelf ? 'You cannot disable your own signed-in principal.' : (gateReason ?? undefined)}
+          >
+            Disable
+          </Button>
+        )}
       </div>
       {roleConfirming && (
         <div className="sm-panel">
@@ -623,30 +649,6 @@ function AdministrationPanel({
         </p>
       )}
 
-      <ButtonRow>
-        {principal.disabled ? (
-          <Button
-            onClick={enable}
-            disabled={controlsDisabled || enabling}
-            title={gateReason ?? undefined}
-          >
-            {enabling ? 'Enabling…' : 'Enable'}
-          </Button>
-        ) : (
-          <Button
-            variant="danger"
-            onClick={() => {
-              setDisableConfirming(true)
-              setDisableConfirmText('')
-              setDisableError(null)
-            }}
-            disabled={controlsDisabled || isSelf}
-            title={isSelf ? 'You cannot disable your own signed-in principal.' : (gateReason ?? undefined)}
-          >
-            Disable
-          </Button>
-        )}
-      </ButtonRow>
       {enableError !== null && <RuledStrip absence="failed" label="Refused" fact={enableError} />}
       {disableConfirming && !principal.disabled && (
         <div className="sm-panel">

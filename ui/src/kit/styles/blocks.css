@@ -222,6 +222,12 @@
   overflow-wrap: anywhere;
 }
 
+/* A chip stretches to the lane rather than shrinking to its own text. */
+.sm-attn > .sm-status {
+  width: max-content;
+  max-width: 100%;
+}
+
 .sm-attn__detail {
   margin: 4px 0 0;
   font: var(--t-small);
@@ -357,17 +363,25 @@ a.sm-tile:hover {
   border-bottom: 1px solid var(--border);
 }
 
-/* A macro step row: click anywhere but the handle or Move/Remove to open it. */
+/* A macro step row: click anywhere but the handle or Move/Remove to open it.
+   The handle and meta grow the row; reorder controls stay pinned at the end. */
 .sm-step-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
   cursor: pointer;
+}
+
+.sm-step-row > .sm-btn-row {
+  flex: 0 0 auto;
 }
 
 /* Reorderable list handle (guide §6): U+283F, grab cursor, dragged by the row. */
 .sm-handle {
   display: inline-block;
-  margin-right: 6px;
   color: var(--text-faint);
   cursor: grab;
+  flex: 0 0 auto;
 }
 
 /* The step's name, id and status chips on one line: gap on the row, not
@@ -375,12 +389,10 @@ a.sm-tile:hover {
 .sm-step-row__meta {
   display: inline-flex;
   align-items: center;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   gap: var(--s-2);
-}
-
-.sm-plain-list > li .sm-btn-row {
-  margin-top: 6px;
+  min-width: 0;
 }
 
 /* What a command actually did, next to the control that sent it. */
@@ -583,34 +595,15 @@ a.sm-tile:hover {
   padding-top: 48px;
 }
 
-/* Node detail is a focused configuration/evidence column in the approved
-   reference, not a full-spine monitoring table. */
-.sm-node-detail {
-  max-width: 760px;
-}
-
-.sm-node-detail > .sm-small:first-child {
-  margin: 0 0 4px;
-}
-
 /* Show identity pages use the compact breadcrumb-to-title rhythm of the
    approved authoring references. This affects only vertical whitespace. */
 .sm-main:has(a[href='/shows']) > .sm-small:first-child {
   margin: 0 0 4px;
 }
 
-/* Access keeps the principal inventory on the full spine. Supporting
-   credentials and attribution evidence use the narrower measure shown in the
-   approved page, and the introductory copy remains readable rather than
-   spanning the inventory width. */
+/* Access's introductory copy stays readable rather than spanning the page. */
 .sm-main:has(#ac-princ) > .sm-page__lede {
   max-width: 72ch;
-}
-
-.sm-main:has(#ac-princ) > .sm-section:has(#ac-cred),
-.sm-main:has(#ac-princ) > .sm-section:has(#ac-audit),
-.sm-main:has(#ac-princ) > .sm-section:has(#ac-bootstrap) {
-  max-width: 800px;
 }
 
 .sm-monitor > .sm-page__head {

@@ -43,10 +43,9 @@ export function ButtonRule() {
 }
 
 /**
- * The kit's one reorderable-row control pattern (design guide §6): a
- * `⠿` drag handle plus compact keyboard/pointer fallbacks. Pair with a
- * handle rendered in the row's index column; this renders only the
- * move/remove icon buttons, disabled with a reason rather than hidden.
+ * The kit's one reorderable-row control pattern (design guide §6): pair
+ * with a `⠿` handle in the row's index column; this renders only the
+ * move/remove icon buttons.
  */
 export function ReorderButtons({
   itemLabel,
@@ -62,7 +61,7 @@ export function ReorderButtons({
   onMoveUp: () => void
   onMoveDown: () => void
   onRemove: () => void
-  /** Present and non-empty disables the button and states why. */
+  /** Defined disables the button and states why. */
   moveUpReason?: string | undefined
   moveDownReason?: string | undefined
   removeReason?: string | undefined

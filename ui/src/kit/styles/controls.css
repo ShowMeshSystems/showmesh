@@ -102,6 +102,13 @@
   cursor: not-allowed;
 }
 
+/* Quiet stays borderless when inert; only its color signals disabled. */
+.sm-btn--quiet:disabled,
+.sm-btn--quiet[aria-disabled='true'] {
+  border-color: transparent;
+  background: transparent;
+}
+
 .sm-btn-row {
   display: flex;
   flex-wrap: wrap;
