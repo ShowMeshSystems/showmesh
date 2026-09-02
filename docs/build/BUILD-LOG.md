@@ -29,39 +29,43 @@ The **Current state** block at the top of this file is overwritten each session:
 ---
 ## Current state
 
-> **`main` is at `b4a60ae`** (2026-09-01 evening). Thirty pull requests merged
-> to `main` on 2026-09-01: the morning wave recorded in the first 2026-09-01
-> entry below (the multi-node audio fold and its siblings, through #285), and
-> the evening wave recorded in the entry above it (#278 through #297, details
-> there). The plugin repository's `main` is at `7d270c9` after its #18 and #19.
-> Every merge in the evening wave carried a full green GitHub check rollup
-> (12 of 12, or 8 of 8 in the plugin repository) verified against its final
-> head commit at merge time; no post-merge CI run on `main` itself has been
-> read for this block.
+> **`main` is at `1fbda2b`** (2026-09-02 early morning). After the 2026-09-01
+> evening wave closed at `b4a60ae`, three more merges landed late that night
+> (#298 the evening build-log entry, #301 the wholesale Operator UI rebuild
+> fold at `58678ff`, and #302), and eight merged in the 2026-09-02 overnight
+> session recorded in the newest dated entry below (#303 through #309 and
+> #312, `58678ff` to `1fbda2b`). Two pull requests are deliberately held open
+> pending browser evidence (#310, #311; see the entry). Every 2026-09-02 merge
+> carried a full green GitHub check rollup verified against its final head
+> commit at merge time; two of them record an authorized single rerun of one
+> audio-engine CI timing test beside the original red. No post-merge CI run on
+> `main` itself has been read for this block.
 >
-> **Three branches are deliberately off `main`.**
-> `feature/operator-ui-overhaul-2` is 177 ahead and 0 behind after `main` was
-> merged into it at `a257ad8` on 2026-09-01: the wholesale Operator UI rebuild,
-> owner-driven; its fold pull request #301 was opened on 2026-09-01 on the
-> owner's instruction, with the reconcile pass for controls added on `main`
-> deferred to later sessions. Three owner review
-> rounds are applied on it; the dated entry below records the branch state and
-> the UI gates run against `a257ad8`.
+> **`feature/operator-ui-overhaul-2` is merged**: its fold #301 landed at
+> `58678ff` late on 2026-09-01, replacing the operator UI wholesale (the UI
+> test suite went from 90 files to 41 with the deleted screens; the backfill
+> and the dropped-control inventory are filed). The reconcile pass it deferred
+> is under way: its worklist is committed at
+> [UI-RECONCILE-WORKLIST.md](UI-RECONCILE-WORKLIST.md) (#307), and the first
+> two restorations are the held-open #310 and #311.
+> **Two branches remain deliberately off `main`.**
 > `dev/multi-audio` is 12 ahead and 64 behind and is **superseded as a
 > branch**: its content was rebuilt directly onto `main` and merged as #280 on
 > 2026-09-01, so the branch remains only as history and must not be folded.
 > `dev/clock-sync` holds Lane 22's seam I1 and is 1 ahead, 101 behind,
 > unchanged since 2026-08-28.
 >
-> **Schema versions on `main` run to v28.** v28 (media type joins asset
-> identity, both `assets_current` and `assets_identity` widened) shipped in
-> #294 with ADR-028 amended in the same commit. v27 remains reserved for the
-> `audio_sessions` re-key. v29 onward is free.
+> **Schema versions on `main` run to v29.** v29 (the nullable
+> `evidence_broken_at_millis` marker on `fpp_playlist_entry_observations`)
+> shipped in #309. v28 (media type joins asset identity) shipped in #294; v27
+> (the `audio_sessions` re-key) is shipped, not reserved, a correction to this
+> block's previous wording verified against the register on `main`. v30
+> onward is free.
 > [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is the register; builders
 > never edit it.
 >
 > **No hardware, deployed-fleet, browser, or live-show verification was
-> performed for anything merged on 2026-09-01.** The stated acceptance gaps
+> performed for anything merged on 2026-09-01 or 2026-09-02.** The stated acceptance gaps
 > (the `ldd -r` mechanism against a real library regression, the media-type
 > rig reproduction, prepare-ahead's audible effect at a cue transition, and
 > expiry behaviour over a real fleet reconnect) are the owner's and remain
@@ -95,6 +99,43 @@ The **Current state** block at the top of this file is overwritten each session:
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
 
 ---
+
+## 2026-09-02 (overnight wave: invocation reason text, per-host FPP MQTT staleness, OnFailure abort coverage, derivation-invalid boundary retries, UI reconcile worklist, framewriter stall test, evidence-broken marker schema v29, config PUT precondition coverage complete; `main` `58678ff` to `1fbda2b`)
+
+**Goal:** land the overnight queue of independently-scoped pull requests: an action-invocation reason-text fix, per-host FPP MQTT collector staleness rows, a macro OnFailure test-coverage gap, resting-boundary retry handling for derivation-invalid state, the operator UI reconcile worklist, a framewriter stall test hardening, the evidence-broken marker (schema v29), and the last ten config PUT precondition handlers.
+
+**Completed:**
+
+- #304 fixed a resolved action invocation reporting its `outcomeReason` text as though it were still pending: the field now derives from the invocation's own resolved state instead of the pending-state text carried over from before resolution. Merged at `8870290`.
+- #303 changed the FPP MQTT collector to emit one row per configured host instead of one row overall, each row independently sorted and each carrying its own staleness reason, distinguishing a host that has never published from one that went quiet. Merged at `2121009`.
+- #305 added the `OnFailure` abort-path coverage to the macro run tests that the `OnUnconfirmed` path already had, a five-mutation test record with no production code changed. Merged at `59d86b5`.
+- #306 added retries for a resting-night boundary that finds itself in a derivation-invalid state, instead of wedging the night outright: the retry keys on the `Kind` carried on the boundary's own JSON and fires only on an explicit derivation-invalid stamp, bounded to three attempts, with the existing degrade guard left untouched. One CI timing test in the audio engine ran red on the first attempt and green on an authorized rerun; both runs are recorded in the pull request. **Known limit, stated in the PR:** a session already wedged before this change stays wedged; the only remedy is `end-session` followed by `prepare-site`. Merged at `a9aab56`.
+- #307 (doc-only) committed the operator UI reconcile worklist to `docs/build`, including the row-13 ruling that a control stays API-only rather than gaining a UI home. Merged at `d8453dc`.
+- #308 changed the framewriter stall test to wait past two rate-window closes instead of one, proven against a forced two-close case where the old deadline failed as a negative control, and twenty green runs of the old test shown to have never actually exercised the defect it was meant to catch. Merged at `9259cd1`.
+- #309 added an evidence-broken marker: a nullable `evidence_broken_at_millis` column (schema v29), set only when a sequence-regression is refused and cleared either by the instance's next accepted observation or by the operator reset route deleting the stored observation row. Surfaced on `GET /current-runs` and the per-instance reconciliation route. ADR-043 amended in the same pull request, dated. The PR's verification table records all five local gate invocations, including two environment-caused reds, verbatim. Merged at `d956b26`.
+- #312 extended the `If-Match`/`If-None-Match` revision precondition to the ten remaining singleton config handlers via `checkRevisionPrecondition`, completing the coverage across all twenty config kinds that #300 began. **Stated limits:** the precondition is opt-in, no client sends the header yet, and UI/CLI adoption is pending. One CI timing test in the audio engine ran red on the first attempt and green on an authorized rerun; both attempts are recorded in the pull request's verification table. Merged at `1fbda2b`.
+
+**Held open, not merged this session:**
+
+- PR #311, restoring an apply-session control to Live Control's audio sessions drawer, is certified except for browser evidence; a morning bench session is planned.
+- PR #310, keying the background-audio asset select by id and dropping the NUL-byte composite-key packing in `ui/src`, is likewise held for the same reason.
+
+**Decisions made:** none by this entry.
+
+**Questions raised with the owner:** none.
+
+**Deferred:**
+
+- PR #311 and PR #310, pending browser verification on the morning bench.
+- Three test-reliability gaps found and filed as issues this session rather than fixed: `gstengine` timing sensitivity under load, a broker registry test's 2-second deadline, and a race-detector timeout observed on the `api` package. Referenced here generically; the issues carry the detail.
+
+**Verification gates:** state of gates as recorded in each pull request at merge time. No hardware, deployed-fleet, or browser verification is claimed for any of the eight merges above.
+
+- Each of #304, #303, #305, #306, #308, #309, #312 carried its own green GitHub check rollup at merge, per the pull request record. #307 is doc-only.
+- #306 and #312 each had one audio-engine CI timing red followed by an authorized rerun, both attempts recorded in their pull requests as noted above.
+- The rehearsal stack's coordinator and UI were redeployed from `main` this session, data preserved; no new browser or hardware evidence was collected against that redeploy.
+
+**Environment:** the rehearsal stack's coordinator and UI were redeployed from `main` (schema and other data preserved across the redeploy).
 
 ## 2026-09-01 (operator UI overhaul branch: three owner review rounds, `main` merged in, UI gates re-run at `a257ad8`)
 
