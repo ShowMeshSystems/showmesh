@@ -1,12 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import type { Event, FPPInstance, Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { Monitor } from './Monitor'
-import { activityRows, facetCounts, fleetRows, fleetSummary, nodeInspector } from './monitorModel'
+import { activityRows, facetCounts, fleetRows, fleetSummary } from './monitorModel'
 
 const PENDING = () => new Promise<never>(() => {})
 
@@ -15,12 +15,23 @@ const fallbackStubs = vi.hoisted(() => ({
   getFallbackProgram: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
+// The node drawer embeds NodeDetail's own reads: stubbed here as pending so
+// a node-selection test never depends on their resolved content.
+const nodeStubs = vi.hoisted(() => ({
+  listShowSurfacesForNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getNodeAssetManifest: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+}))
+
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
   return {
     ...actual,
     listFallbackPrograms: (...args: never[]) => fallbackStubs.listFallbackPrograms(...args),
     getFallbackProgram: (...args: never[]) => fallbackStubs.getFallbackProgram(...args),
+    listShowSurfacesForNode: (...args: never[]) => nodeStubs.listShowSurfacesForNode(...args),
+    getShowSurface: (...args: never[]) => nodeStubs.getShowSurface(...args),
+    getNodeAssetManifest: (...args: never[]) => nodeStubs.getNodeAssetManifest(...args),
   }
 })
 
@@ -64,11 +75,14 @@ const fpp = (instanceId: string, health: FPPInstance['health'], uuidChanged = fa
     instanceUuidChange: uuidChanged ? { previousUuid: 'old', changedAt: '2026-08-28T20:54:00Z' } : null,
   }) as unknown as FPPInstance
 
-function renderScreen(model: Partial<Model>) {
+function renderScreen(model: Partial<Model>, initialPath = '/monitor/fleet') {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), ...model, serverTime: '2026-08-28T21:07:00Z', serverTimeReceivedAt: Date.now() }}>
-      <MemoryRouter>
-        <Monitor />
+      <MemoryRouter initialEntries={[initialPath]}>
+        <Routes>
+          <Route path="/monitor/fleet" element={<Monitor />} />
+          <Route path="/monitor/fleet/node/:nodeId" element={<Monitor />} />
+        </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
   )
@@ -78,6 +92,9 @@ describe('Monitor · Fleet', () => {
   beforeEach(() => {
     fallbackStubs.listFallbackPrograms = () => PENDING()
     fallbackStubs.getFallbackProgram = () => PENDING()
+    nodeStubs.listShowSurfacesForNode = () => PENDING()
+    nodeStubs.getShowSurface = () => PENDING()
+    nodeStubs.getNodeAssetManifest = () => PENDING()
   })
   afterEach(cleanup)
 
@@ -140,15 +157,31 @@ describe('Monitor · Fleet', () => {
     expect(within(inspector).getByRole('link', { name: 'Open Live Control' })).toHaveAttribute('href', '/control')
   })
 
-  it('opens the inspector as a dialog portaled into document.body and clears the selection on Escape', () => {
+  it('clicking a node row opens the full node drawer at its route, portaled into document.body', () => {
     renderScreen({ nodes: [node('media-garage', 'online')] })
     fireEvent.click(screen.getByRole('row', { name: 'View media-garage' }))
     const dialog = screen.getByRole('dialog')
     expect(dialog.parentElement).toBe(document.body)
+    expect(dialog.className).toContain('sm-drawer--wide')
+    expect(within(dialog).getByRole('heading', { name: 'media-garage', level: 2 })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'Identity', level: 2 })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'Remove this node', level: 2 })).toBeInTheDocument()
+  })
+
+  it('deep-links the node drawer from the route and closing it navigates back to Fleet', () => {
+    renderScreen({ nodes: [node('media-garage', 'online')] }, '/monitor/fleet/node/media-garage')
+    const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByRole('heading', { name: 'media-garage', level: 2 })).toBeInTheDocument()
 
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Fleet', level: 2 })).toBeInTheDocument()
+  })
+
+  it('a stale node id in the route still opens the drawer with the not-found treatment', () => {
+    renderScreen({}, '/monitor/fleet/node/gone-node')
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/no record of this node/i)).toBeInTheDocument()
   })
 
   it('says what the fleet contains without arithmetic that does not close', () => {
@@ -158,23 +191,6 @@ describe('Monitor · Fleet', () => {
     )
     expect(fleetSummary(rows)).toContain('2 resources')
     expect(fleetSummary(rows)).toContain('1 node, 1 FPP player, 0 Resolume instances')
-  })
-
-  it('says a node never advertised audio rather than showing it as failing', () => {
-    const inspector = nodeInspector(node('media-garage', 'offline'), '2026-08-28T21:07:00Z')
-    const audio = inspector.groups.find((group) => group.name === 'Audio')
-    expect(audio?.absent).toContain('never claimed an audio capability')
-    expect(audio?.absent).toContain('Distinct from an audio path that is failing')
-  })
-
-  it('never wraps a signal value in a status chip', () => {
-    const inspector = nodeInspector(
-      node('a', 'online', [observation('surface.frames.rate', 'stale')]),
-      '2026-08-28T21:07:00Z',
-    )
-    const render = inspector.groups.find((group) => group.name === 'Render')
-    expect(render?.rows[0]?.value).toBe('x')
-    expect(render?.rows[0]?.state).toContain('stale')
   })
 
   it('keeps operator actions and system events in one stream, with the scope caveat', () => {

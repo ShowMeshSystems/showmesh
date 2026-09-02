@@ -1,0 +1,27 @@
+/*
+ * Node detail's own content, floated in the kit Drawer over Monitor > Fleet
+ * (D-021/D-022). The drawer body already caps width at 960px; nothing here
+ * re-imposes the narrower page-column width the standalone route used.
+ */
+
+.sm-node-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+/*
+ * A table's auto-layout sizes a column to its content's unwrapped natural
+ * width. Without a cap here the surface's evidence chip, sequence field and
+ * buttons would widen the Rendering column past the drawer, forcing the
+ * table wrap to scroll horizontally instead of the buttons wrapping onto
+ * their own lines.
+ */
+.sm-node-surface-cell {
+  max-width: 360px;
+}
+
+.sm-node-surface-cell .sm-field,
+.sm-node-surface-cell .sm-btn-row {
+  max-width: 360px;
+}

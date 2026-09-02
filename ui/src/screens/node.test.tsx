@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigObjectSummary, Model, Node, NodeAssetManifest, SessionResponse, ShowSurfaceConfigResponse } from '../api'
@@ -165,10 +165,10 @@ describe('Node detail', () => {
     stubs.probeRenderTransport = () => new Promise(() => {})
   })
 
-  it('renders the mock’s section labels in order', () => {
+  it('renders the drawer title and the mock’s section labels in order', () => {
     renderScreen([node()])
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Identity', 'Capabilities', 'Surfaces on this node', 'Assets held locally', 'Remove this node'])
+    expect(headings).toEqual(['Garage bay projector host', 'Identity', 'Capabilities', 'Surfaces on this node', 'Assets held locally', 'Remove this node'])
   })
 
   it('says the agent went away when a last will was received', () => {
@@ -333,7 +333,46 @@ describe('Node detail', () => {
 
   it('shows the not-found treatment naming the id when the node is not in the model', () => {
     renderScreen([])
-    expect(screen.getByText(/media-garage/)).toBeInTheDocument()
+    expect(screen.getAllByText(/media-garage/).length).toBeGreaterThan(0)
     expect(screen.getByText(/no record of this node/i)).toBeInTheDocument()
+  })
+})
+
+describe('Node detail · reached at its route', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    stubs.listShowSurfacesForNode = () => new Promise(() => {})
+    stubs.getShowSurface = () => new Promise(() => {})
+    stubs.getNodeAssetManifest = () => new Promise(() => {})
+  })
+
+  // D-021/D-022: this route no longer renders NodeDetail as a full page;
+  // it opens the same content as a wide Drawer over Monitor > Fleet.
+  it('opens the wide drawer with node content, not a standalone page', async () => {
+    const { Monitor } = await import('./Monitor')
+    render(
+      <ModelContext.Provider
+        value={{
+          ...initialModel(),
+          nodes: [node()],
+          session: signedIn(['config:write']),
+          serverTime: '2026-08-30T21:07:00Z',
+          serverTimeReceivedAt: Date.now(),
+        }}
+      >
+        <MemoryRouter initialEntries={['/monitor/fleet/node/media-garage']}>
+          <Routes>
+            <Route path="/monitor/fleet" element={<Monitor />} />
+            <Route path="/monitor/fleet/node/:nodeId" element={<Monitor />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.className).toContain('sm-drawer--wide')
+    expect(within(dialog).getByRole('heading', { name: 'Garage bay projector host', level: 2 })).toBeInTheDocument()
+    expect(within(dialog).getByRole('heading', { name: 'Identity', level: 2 })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Fleet', level: 2 })).toBeInTheDocument()
   })
 })
