@@ -759,10 +759,23 @@ func TestRecordTickSamplesRateOnEveryTickIncludingFailures(t *testing.T) {
 // achieved rate must stop being reported as the last good value and
 // converge toward 0 rather than freezing — the exact defect ("surface.
 // frames.rate keeps reporting 40.0 indefinitely") named in the finding.
-// frameRateWindow is a package const (5s), so this drives real ticks for
-// slightly over 5 seconds; acceptable as this finding's own end-to-end
-// proof, distinct from TestRecordTickSamplesRateOnEveryTickIncludingFailures
-// above, which is the fast unit-level version.
+//
+// sampleRate's window (frameRateWindow, 5s) anchors on whichever tick
+// happens to be the first call ever made to it, which in this test is
+// ordinarily the very same tick that satisfies the write>=1 wait below, so
+// the window usually opens holding that one write already and needs only
+// one close (~5s) to see a zero delta once the stall hits on the very next
+// tick. But the wait and the stdin-fail flip below run on the test
+// goroutine, racing the writer's own 5ms ticks: on an occasional or
+// loaded run, one more tick can succeed before the flip lands, landing a
+// second write inside the still-open window. That window then closes
+// nonzero (rate = 1 write / ~5s, matching this finding's real captured
+// failures of ~0.1997 and ~0.1999), and convergence needs a second close
+// (~10s) before the delta is finally zero. The deadline below has to
+// clear two closes, not one, for the test to pass no matter which side of
+// that race a given run lands on. Distinct from
+// TestRecordTickSamplesRateOnEveryTickIncludingFailures above, which is
+// the fast unit-level version.
 func TestFrameWriterRateDropsToZeroAfterPipelineStalls(t *testing.T) {
 	const surfaceID = "surface-1"
 	sup, fp := newTestFrameWriterSupervisor(t, surfaceID)
@@ -798,7 +811,12 @@ func TestFrameWriterRateDropsToZeroAfterPipelineStalls(t *testing.T) {
 	// goroutine while Run's goroutine writes it is a real data race, not
 	// merely a style preference — sup.Snapshot is the properly synchronized
 	// path every real caller (renderreport.go) already uses.
-	deadline := time.Now().Add(7 * time.Second)
+	//
+	// The deadline clears two full window closes (~10s measured worst case,
+	// see the doc comment above) with a margin over 20% to absorb scheduling
+	// jitter under load, rather than the single window this test used to
+	// budget for.
+	deadline := time.Now().Add(12 * time.Second)
 	var lastRate *float64
 	for time.Now().Before(deadline) {
 		snap, ok := sup.Snapshot(surfaceID)
@@ -814,7 +832,7 @@ func TestFrameWriterRateDropsToZeroAfterPipelineStalls(t *testing.T) {
 	if lastRate != nil {
 		got = fmt.Sprintf("%v", *lastRate)
 	}
-	t.Fatalf("currentRate never converged to 0 after the pipeline stalled for over 5s; last value = %s", got)
+	t.Fatalf("currentRate never converged to 0 after the pipeline stalled for over two window closes; last value = %s", got)
 }
 
 // TestCountTickerDropsCountsMissedTicks is finding 13's regression test for
