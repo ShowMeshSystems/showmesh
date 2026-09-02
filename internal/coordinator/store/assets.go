@@ -63,12 +63,14 @@ var ErrAssetExists = errors.New("store: asset identity already exists")
 
 // AssetIdentityExistsError is returned by [Store.CreateAsset]/
 // [Tx.CreateAsset], carrying the pre-existing row, when (ShowID,
-// SequenceID, TargetKind, TargetID, ContentHash) already has a row — the
-// schemaV8 assets_identity unique index's key. Re-uploading identical
-// bytes for an identity already registered is the idempotent case spec
-// §3.3 requires ("200 with the existing asset, no new row, no new blob"):
-// the caller reads Existing off this error rather than issuing a second
-// lookup, mirroring [DuplicateMacroRunError]'s exact shape in
+// SequenceID, TargetKind, TargetID, MediaType, ContentHash) already has a
+// row: the schemaV28-widened assets_identity unique index's key (ADR-028
+// decision 1's amendment adds MediaType; schemaV8's original key was
+// ShowID/SequenceID/TargetKind/TargetID/ContentHash alone). Re-uploading
+// identical bytes for an identity already registered is the idempotent
+// case spec §3.3 requires ("200 with the existing asset, no new row, no
+// new blob"): the caller reads Existing off this error rather than issuing
+// a second lookup, mirroring [DuplicateMacroRunError]'s exact shape in
 // macro_runs.go.
 type AssetIdentityExistsError struct {
 	Existing AssetRecord

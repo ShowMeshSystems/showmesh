@@ -166,6 +166,54 @@ func TestMigrateV28WidensAssetsCurrentToAllowBothMediaTypes(t *testing.T) {
 	}
 }
 
+// TestMigrateV28WidensAssetsIdentityToKeyOnMediaTypeToo proves the OTHER
+// index this migration widens: assets_identity keyed on content_hash alone
+// (pre-v28) would reject a second row that reuses an already-registered
+// content hash under the same (show, sequence, target) even when its
+// media type differs, which is exactly the row store/assets.go's
+// getAssetByIdentity (scoped to media_type since this migration) expects
+// to be insertable, not a duplicate identity. Superseded here, not
+// current, so this proves the widened UNIQUE index itself (assets_current
+// only constrains superseded_at IS NULL rows, and this insert deliberately
+// avoids exercising that one).
+func TestMigrateV28WidensAssetsIdentityToKeyOnMediaTypeToo(t *testing.T) {
+	db := openDatabaseAtV27(t)
+	seedPreV28Asset(t, db, "asset-1", "halloween-2026", "opening", "node", "render-01", "fseq", "sha256:shared", "Opening.fseq")
+
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	now := timeToDB(time.Now())
+	// asset-1 is marked superseded first, so this insert exercises
+	// assets_identity alone: under the pre-v28 shape, reusing
+	// sha256:shared for the same tuple would violate assets_identity
+	// (content_hash alone, ignoring media_type) regardless of superseded_at.
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE assets SET superseded_at = ? WHERE id = 'asset-1'`, now); err != nil {
+		t.Fatalf("mark asset-1 superseded: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO assets (
+			id, show_id, sequence_id, target_kind, target_id, media_type, content_hash,
+			runtime_filename, size_bytes, backend, storage_key, created_at,
+			created_by_principal_id, created_by_principal_name, superseded_at
+		) VALUES ('asset-2', 'halloween-2026', 'opening', 'node', 'render-01', 'audio', 'sha256:shared', 'Opening.wav', 1024, 'volume', 'sha256:shared', ?, 'principal-1', 'operator', NULL)
+	`, now); err != nil {
+		t.Fatalf("insert an audio row reusing asset-1's content hash under a different media_type: %v (widened assets_identity should allow this)", err)
+	}
+
+	var total int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM assets WHERE content_hash = 'sha256:shared'`,
+	).Scan(&total); err != nil {
+		t.Fatalf("count rows sharing the content hash: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("rows sharing sha256:shared = %d, want 2 (the superseded fseq row and the new current audio row)", total)
+	}
+}
+
 // TestMigrateV28ThenStoreLayerScopesSupersessionByMediaType proves the
 // migrated database is immediately usable through this package's own
 // CreateAsset: uploading an audio asset for a sequence that already holds a

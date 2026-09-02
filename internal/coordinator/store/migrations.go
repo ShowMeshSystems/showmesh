@@ -1022,13 +1022,16 @@ CREATE TABLE macro_run_steps (
 // This is a pure-addition migration — nothing from schemaV1 through
 // schemaV7 is touched.
 //
-// assets_identity (ADR-028 decision 1: "identity is show plus logical
-// sequence plus target plus content hash") is the permanent, never-pruned
-// identity of an artifact — it has no WHERE clause, so re-registering a
-// hash already seen under that identity never inserts a second row.
-// assets.go's createAsset resolves the hit two ways: still current is the
-// idempotent no-op (ErrAssetExists); superseded is ADR-028 decision 10's
-// rollback, which un-supersedes that row instead of inserting a new one.
+// assets_identity (ADR-028 decision 1, in its original text: "identity is
+// show plus logical sequence plus target plus content hash") is the
+// permanent, never-pruned identity of an artifact: it has no WHERE
+// clause, so re-registering a hash already seen under that identity never
+// inserts a second row. assets.go's createAsset resolves the hit two ways:
+// still current is the idempotent no-op (ErrAssetExists); superseded is
+// ADR-028 decision 10's rollback, which un-supersedes that row instead of
+// inserting a new one. Widened by schemaV28 to also key on media_type,
+// alongside assets_current; this original shape is left as documentation
+// of what a pre-v28 database carries.
 //
 // assets_current is the structural half of that same decision: at most one
 // row per (show_id, sequence_id, target_kind, target_id) may have
@@ -1077,7 +1080,10 @@ CREATE TABLE assets (
     superseded_at              TEXT
 );
 
--- ADR-028 decision 1: identity is show + logical sequence + target + content hash.
+-- ADR-028 decision 1's original text: identity is show + logical sequence +
+-- target + content hash. Widened by schemaV28 to also key on media_type;
+-- this original shape is left as documentation of what a pre-v28 database
+-- carries.
 CREATE UNIQUE INDEX assets_identity
     ON assets (show_id, sequence_id, target_kind, target_id, content_hash);
 
@@ -1553,35 +1559,63 @@ DROP TABLE audio_sessions;
 ALTER TABLE audio_sessions_v27 RENAME TO audio_sessions;
 `
 
-// schemaV28 widens assets_current (schemaV8) to include media_type: at most
-// one CURRENT row per (show_id, sequence_id, target_kind, target_id,
-// media_type), rather than per (show_id, sequence_id, target_kind,
-// target_id) alone. ADR-028 decision 1's original text named identity as
+// schemaV28 widens BOTH schemaV8 unique indexes on assets to include
+// media_type, because ADR-028 decision 1's original text named identity as
 // "show plus logical sequence plus target plus content hash" and never
-// mentioned media type, so an FSEQ and an audio asset uploaded under the
-// same sequence id competed for the one assets_current slot the old index
-// allowed: the second upload superseded the first regardless of media type,
-// and a later render or audio resolution (assetsync/cuecatalog.go's
+// mentioned media type: an FSEQ and an audio asset uploaded under the same
+// sequence id competed for the one assets_current slot the old index
+// allowed, so the second upload superseded the first regardless of media
+// type, and a later render or audio resolution (assetsync/cuecatalog.go's
 // resolveAssetFor, sorting every current asset for the sequence by content
-// hash with no media-type filter) could then hand a cue's render output the
-// audio file's name, or vice versa, decided by hash sort order rather than
-// by what the output actually needed. ADR-028 decision 1 is amended
+// hash with no media-type filter) could then hand a cue's render output
+// the audio file's name, or vice versa, decided by hash sort order rather
+// than by what the output actually needed. ADR-028 decision 1 is amended
 // alongside this migration: media type joins identity.
 //
-// This is a pure widening, not a data fix. Every row the old assets_current
-// index already accepted has exactly one media type per (show, sequence,
-// target) tuple by construction, since the old index allowed nothing else
-// to stay current, so every existing current row still satisfies the new,
-// more permissive index unchanged; SQLite rebuilds the index against the
-// existing table in place, no ALTER TABLE and no data migration is needed,
-// and TestMigrateV28FromPreV28DatabaseWithExistingRows proves it against a
-// seeded pre-v28 database.
+// assets_current: at most one CURRENT row per (show_id, sequence_id,
+// target_kind, target_id, media_type), rather than per (show_id,
+// sequence_id, target_kind, target_id) alone, so an FSEQ and an audio
+// asset for one sequence may both be current at once.
+//
+// assets_identity: store/assets.go's getAssetByIdentity (createAsset's
+// step 1, the idempotent-reupload and rollback precheck) is scoped to
+// media_type alongside this migration, so its query and this index must
+// agree on what counts as one identity or the precheck stops matching
+// what the index actually enforces. Left disagreeing, registering the
+// identical bytes under the same tuple but a different media type (an
+// operator's mediaType form field error re-submitting a file already
+// uploaded under the other type, not a sha256 collision) would pass the
+// precheck, since getAssetByIdentity would find nothing under the stated
+// media type, and then fail the INSERT on the OLD index's bare
+// show/sequence/target/hash key: a raw UNIQUE constraint violation
+// surfaced to the operator instead of the documented idempotent-no-op or
+// rollback response. Widening this index alongside assets_current keeps
+// store/assets.go's own "the identity check above already ruled out an
+// assets_identity collision" invariant (createAsset's step-3 comment)
+// true regardless of media type, rather than leaving it true only by
+// the accident of every existing upload happening to use distinct bytes
+// per media type.
+//
+// Both widenings are pure, not a data fix, for the identical reason:
+// every row either old index already accepted has exactly one media type
+// per (show, sequence, target[, content hash]) tuple by construction,
+// since neither old index allowed anything else to coexist under it, so
+// every existing current or historical row still satisfies its new, more
+// permissive index unchanged. SQLite rebuilds each index against the
+// existing table in place, no ALTER TABLE and no data migration is
+// needed, and TestMigrateV28FromPreV28DatabaseWithExistingRows proves it
+// against a seeded pre-v28 database.
 const schemaV28 = `
 DROP INDEX assets_current;
 
 CREATE UNIQUE INDEX assets_current
     ON assets (show_id, sequence_id, target_kind, target_id, media_type)
     WHERE superseded_at IS NULL;
+
+DROP INDEX assets_identity;
+
+CREATE UNIQUE INDEX assets_identity
+    ON assets (show_id, sequence_id, target_kind, target_id, media_type, content_hash);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across

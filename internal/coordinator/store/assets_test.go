@@ -208,6 +208,58 @@ func TestCreateAssetDoesNotSupersedeAcrossMediaTypes(t *testing.T) {
 	}
 }
 
+// TestCreateAssetSameContentHashUnderDifferentMediaTypesAreDistinctIdentities
+// proves getAssetByIdentity's media_type scoping and the schemaV28-widened
+// assets_identity unique index agree. getAssetByIdentity now queries
+// (show, sequence, target, media_type, content_hash), so it must find
+// nothing for a media type no row yet holds, even when the SAME content
+// hash already exists under this tuple for a DIFFERENT media type; the
+// createAsset insert that follows must then succeed as a genuinely new
+// row rather than fail the INSERT against an assets_identity index that
+// still keys on content_hash alone. Left mismatched, this exact case (an
+// operator's mediaType form field resubmitting bytes already registered
+// under the other type) would pass the precheck and then fail the insert
+// as a raw UNIQUE constraint violation, reported as an ID collision it is
+// not.
+func TestCreateAssetSameContentHashUnderDifferentMediaTypesAreDistinctIdentities(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	fseq := newTestAsset("asset-fseq", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:shared", "Thriller.fseq")
+	if _, _, err := st.CreateAsset(ctx, fseq); err != nil {
+		t.Fatalf("create fseq: %v", err)
+	}
+
+	audio := newTestAsset("asset-audio", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:shared", "Thriller.wav")
+	audio.MediaType = "audio"
+	rec, rolledBack, err := st.CreateAsset(ctx, audio)
+	if err != nil {
+		t.Fatalf("create audio with the SAME content hash as the current fseq: %v, want success (distinct identity under the widened assets_identity index)", err)
+	}
+	if rolledBack {
+		t.Fatalf("rolledBack = true, want false: this is a genuinely new identity, not a rollback of the fseq row")
+	}
+	if rec.ID != "asset-audio" {
+		t.Fatalf("created asset id = %q, want asset-audio (a new row, not the fseq row returned back)", rec.ID)
+	}
+
+	gotFSEQ, err := st.GetAsset(ctx, "asset-fseq")
+	if err != nil {
+		t.Fatalf("get fseq: %v", err)
+	}
+	if gotFSEQ.SupersededAt != nil {
+		t.Fatalf("fseq asset SupersededAt = %v, want nil: registering the audio identity must not touch it", gotFSEQ.SupersededAt)
+	}
+
+	current, err := st.ListCurrentAssetsForTarget(ctx, "halloween-2026", AssetTargetKindNode, "render-01")
+	if err != nil {
+		t.Fatalf("list current: %v", err)
+	}
+	if len(current) != 2 {
+		t.Fatalf("current assets = %+v, want both rows current despite sharing one content hash", current)
+	}
+}
+
 // TestCreateAssetRollsBackSupersededIdentity proves the rollback path
 // (ADR-028 decision 10): rolledBack=true, no third row inserted.
 func TestCreateAssetRollsBackSupersededIdentity(t *testing.T) {
