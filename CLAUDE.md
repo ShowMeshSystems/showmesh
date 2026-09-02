@@ -204,6 +204,25 @@ handoff, not an investigation log.
 - Keep `docs/private/` untracked. Nothing from a private overlay becomes public
   fact until it is independently suitable and verified for the public record.
 
+### Operator UI
+
+- `docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md` is normative and
+  wins a tie. The `.dc.html` mocks beside it are the pixel tie-breaker where the
+  guide is silent, and the rulings in `docs/ui-rebuild/OPEN-DECISIONS.md` amend
+  both.
+- `ui/src/kit` is the only stylesheet tree. Every screen composes from the kit;
+  an element the kit lacks is added to the kit with a specimen entry, never
+  written as a screen-local variant.
+- One page width. `--page-max` is set once in `ui/src/kit/styles/shell.css` and
+  no screen overrides it.
+- Never drop a control. A control with no home in a mock goes to
+  `OPEN-DECISIONS.md` for a ruling. Invented design ships inert and stamped with
+  the kit's `NotWired`; a fabricated number is dropped, because there is no
+  honest way to show one.
+- Verify a UI change in a browser against a running coordinator, not in jsdom
+  alone. Layout, route parameters and CSS ordering defects all pass the unit
+  suite.
+
 ## Private maintainer overlays
 
 A private overlay may add internal issue workflow, current priorities, owner

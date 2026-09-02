@@ -8,8 +8,9 @@ Format: each entry states what is unresolved, why it matters now, the options,
 my recommendation, and what the answer unblocks. Answered entries move to
 "Settled" at the bottom with the ruling and the date.
 
-Every entry D-001 to D-019 is ruled. D-018 and D-019 were both raised during
+Every entry, D-001 to D-029, is ruled. D-018 and D-019 were both raised during
 a build, self-ruled so the screen could ship, and Eric later ruled on each.
+D-020 onward were ruled directly by Eric during the 2026-09-01 review rounds.
 The index below is the working list; the entries keep their full reasoning.
 
 ## Ruling index
@@ -35,6 +36,16 @@ The index below is the working list; the entries keep their full reasoning.
 | D-017 | **B.** Build action creation, action editing and macro creation | `Object Creation.dc.html` sections 3, 4 and 5 |
 | D-018 | **B.** A playlist draft asks for the first entry the contract requires | `Object Creation.dc.html` section 2, amended by `api/openapi.yaml` |
 | D-019 | **B.** Add an Administration group to the selected principal's section, with typed confirmation | `Access.tsx` Administration group |
+| D-020 | The show pill and the mode badge open a popover, not a modal or a link | Kit `Popover`, the rebuilt pickers in `Layout.tsx` |
+| D-021 | The two-pane inspector becomes a floating right-side drawer | Kit `Drawer` |
+| D-022 | `Panes` renders its aside inside `Drawer`, every screen adopts it at once | `Panes` retired as a two-column layout |
+| D-023 | Node detail moves into a wide drawer over Monitor › Fleet | `/monitor/fleet/node/:nodeId` renders Fleet with the drawer open |
+| D-024 | One page width, no per-screen exceptions, Access included | Every per-page `.sm-main` cap deleted; `--page-max` in `shell.css` is the only one |
+| D-025 | Show Night and Live Control render one lifecycle element | `LifecycleCommands` from one shared spec builder |
+| D-026 | Live Control's playlist is a select over imported FPP playlist definitions | `GET /integrations/fpp/playlist-definitions`, typed name only when none are known |
+| D-027 | The audio session transport lives in one drawer | One button on Live Control opens it |
+| D-028 | Cut architecture prose and fabricated examples from operator copy | Design guide section 5 applied across `screens/` and `app/` |
+| D-029 | The per-node signal rows stay, in the drawer | `nodeSignalGroups` in `monitorModel.ts`, a Signals section after Identity |
 
 `Object Creation.dc.html` (added 2026-08-30) is the drawn answer to D-011 and
 D-017 and is normative for every creation surface, Settings and Access included.
@@ -883,3 +894,111 @@ checked and do not use `Panes`; nothing there changed. `Panes` itself is
 retired as a two-column layout as of this pass.
 
 **Unblocks.** Nothing further; the D-021 follow-up is closed.
+
+## Ruled by Eric 2026-09-01, round three
+
+Seven rulings given live during the third review round. Each was ruled directly,
+with no options weighed, and each is already applied on the branch; the commit
+that applied it is named in its entry.
+
+### D-023 Node detail moves into a wide drawer over Monitor › Fleet
+
+**What.** Node detail rendered as a full page pinned to a 760px column, which cut
+off the surface Apply/Clear/Restart pipeline row and forced its tables to scroll
+horizontally inside themselves. D-021 and D-022 had already made the floating
+right-side drawer the inspector everywhere else.
+
+**Ruling:** move the same node content into the drawer.
+`/monitor/fleet/node/:nodeId` renders Monitor › Fleet with a 960px `Drawer` open
+on that node. Deep links still work, a stale id resolves through Monitor's own
+not-found handling, and clicking a Fleet row navigates client side so the drawer
+opens without a page swap. Every existing link target (Dashboard, Manifest,
+Shows › Presentation) keeps working unchanged. The compact per-node preview the
+fleet inspector used before is replaced by the full node content and removed.
+
+**Unblocks.** Applied in `d5d5d6e`.
+
+### D-024 One page width, and no screen has an exception
+
+**What.** Screens had grown their own `.sm-main` width caps (Monitor, Assets,
+Live Control, Settings, Resolume Config, Access), and a separate stylesheet used
+`!important` to fight them. The result was a different measure per screen and no
+rule anyone could state.
+
+**Ruling:** one width for every page. `--page-max` in
+`ui/src/kit/styles/shell.css` is the only cap, every per-page override in
+`blocks.css` is deleted (Monitor, Assets, Live Control, Settings, Resolume
+Config and Access) along with the `layout.css` `!important` hack that fought
+them. A screen may adjust its own padding; it may not set a width.
+
+**Unblocks.** Applied in `edbc70d` and folded in `51646ed`.
+
+### D-025 Show Night and Live Control render one lifecycle element
+
+**What.** Show Night had its own flat grid of night commands and Live Control had
+another, so the Prepare, Start and End cells, and the late-start option, could
+drift between the two screens that operators use to run a night.
+
+**Ruling:** both screens build their `LifecycleCommands` groups from one shared
+spec builder, in the mock's cell order. A command's option, such as Start
+night's skip-the-enter-show-lead checkbox, renders inside that command's own
+cell under its consequence line, never beside the button.
+
+**Unblocks.** Applied in `ed7d3db`, cell order fixed in `0b7677b`, folded in
+`94d6032`.
+
+### D-026 Live Control's playlist is a select over imported FPP playlist definitions
+
+**What.** The playlist to start was typed by hand. The coordinator holds an
+archive of FPP playlist definitions that were published to it, and there is no
+endpoint that reads FPP's live playlist catalog.
+
+**Ruling:** the field is a `Select` populated from
+`GET /integrations/fpp/playlist-definitions` for the instance in question. It is
+an archive of imported definitions, not FPP's live catalog, and it falls back to
+a typed name only when no definition is known for that instance. This is not a
+fake picker: it is fed by a field the API does return.
+
+**Unblocks.** Applied in `ed7d3db`, folded in `94d6032`.
+
+### D-027 The audio session transport lives in one drawer
+
+**What.** Live Control's audio session controls were spread inline across the
+section and duplicated inside a second drawer.
+
+**Ruling:** collapse them into one `Drawer` behind a single button, holding the
+target, the known sessions, the session id, the revision and the transport
+controls. The section itself keeps a one-line summary of how many sessions are
+known and which one is open.
+
+**Unblocks.** Applied in `ed7d3db`, folded in `94d6032`.
+
+### D-028 Cut architecture prose and fabricated examples from operator copy
+
+**What.** Page ledes and field helpers had picked up namespace, ownership and
+storage-model explanations, and the mocks' invented show names had been shipped
+as example copy.
+
+**Ruling:** apply design guide section 5 across `screens/` and `app/`. Remove the
+architecture explanations next to inputs and in page ledes (Shows, ShowDraft,
+Show Night, Settings, Node detail), drop the fabricated example show names, trim
+a caveat block to its one load-bearing fact, and delete a caveat that a nearby
+section already states. A helper line is one sentence, and a screen carries at
+most one required caveat.
+
+**Unblocks.** Applied in `3fac82d`, folded in `f47cf2e`.
+
+### D-029 The per-node signal rows stay, in the drawer
+
+**What.** Moving node detail into the drawer (D-023) dropped the fleet
+inspector's render and audio observation rows, which carried a value, a
+staleness chip and a reason, and pointed the signal count at the unfiltered
+global list.
+
+**Ruling:** restore them. A control or a piece of evidence is never dropped as a
+side effect of a layout change. The row logic returns to `monitorModel.ts` as
+`nodeSignalGroups`, reusing the previous inspector's arithmetic rather than
+reinventing it, and renders as a Signals section directly after Identity, with
+the signal count kept as its caption and scoped to the node.
+
+**Unblocks.** Applied in `64a602f`.

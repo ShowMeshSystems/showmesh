@@ -32,9 +32,17 @@ back to the design tool; this folder holds the results.
 
 ## Status
 
-**The mock files are not in this folder yet.** They could not be fetched: `DesignSync`
-requires an interactive `/design-login`, and the updated bundle had not been downloaded when
-this was written. The four features remain mounted and working at their pre-overhaul routes
-so no control is unreachable in the meantime.
+The four mock files are in this folder. Checked against `ui/src` on 2026-09-01,
+one of the four features is built as drawn and three are not:
 
-To land them: run `/design-login`, or unzip the updated bundle here.
+- **Show Night Session** is built. It is the sixth Shows workspace tab, at
+  `/shows/:id/night-session`, with the definitions editor in a wide drawer.
+- **Shows › Assets** has no sequence-coverage roll-up. The tab renders the same
+  asset surface the `/assets` library uses.
+- **Settings › Node routing** picks one audio node from a `<select>` and edits
+  it. It is not list-then-detail, and it has no derived not-declared group or
+  Declare action.
+- **Monitor › Fleet** has no "Playlist definitions received" block.
+
+The three unbuilt items are drawn work with no home in the build. They are not
+rulings, and nothing in `ui/src` claims they exist.

@@ -1,7 +1,10 @@
 # Operator UI rebuild plan
 
-Status: active. Started 2026-08-29 on `feature/operator-ui-overhaul-2`.
-Phase 0 (the element kit) is committed. Phase 1 starts at Dashboard.
+Status: built. Started 2026-08-29 on `feature/operator-ui-overhaul-2`. Phase 0
+(the element kit), Phase 1 (every screen) and Phase 2 (deleting the old system)
+are on the branch, and three owner review rounds were applied on 2026-09-01.
+`main` was merged into the branch the same day at `a257ad8`. The branch waits on
+a pull request to `main`, which the owner opens. `HANDOFF.md` holds the state.
 
 Normative sources, in this order:
 
@@ -63,9 +66,9 @@ exists only in a deleted file and I cannot source it, it goes on the
 
 ## Ground rules
 
-- Base on `feature/operator-ui-overhaul-2`. Do not merge or rebase `main` into
-  this branch; it is deliberately behind. The coordinator and `api/openapi.yaml`
-  work already on this branch stays.
+- Base on `feature/operator-ui-overhaul-2`. The rule that held `main` out of this
+  branch ended on 2026-09-01, when `main` was merged in at `a257ad8`; the branch
+  is now ahead of `main` and not behind it. Never rebase it.
 - One PR per screen, run in order, sequentially in this worktree. You can reject
   one screen without unwinding the rest.
 - No old design element survives. If a rebuilt screen imports a `ui/src/styles`
@@ -107,8 +110,14 @@ visual language.
 | Phase 2: delete the old system and lock it out | Done | #217 |
 | Track C: the per-asset sync verdict (D-016 item 2) | Done | #218 |
 | Track C: the FPP-sequence staleness signal (D-016 item 1) | Waiting on Eric | SM-383 |
+| Owner review round one | Done | `3734b72` |
+| Owner review round two | Done | `1e03010` to `208c82e` |
+| Owner review round three (D-023 to D-029) | Done | `d5d5d6e` to `ec3991a` |
+| Merge `main` into the branch | Done | `a257ad8` |
+| Pull request to `main` | Waiting on Eric | none open |
 
-Each PR is stacked on the one before it, so its diff is only its own screen.
+Each per-screen PR is stacked on the one before it, so its diff is only its own
+screen. The review rounds are commits on the branch, not PRs.
 
 ## Phase 1: rebuild screens, one screen at a time
 
