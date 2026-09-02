@@ -27,88 +27,41 @@ The **Current state** block at the top of this file is overwritten each session:
 ```
 
 ---
-
 ## Current state
 
-> **`main` was at `ff56233`** (2026-08-28) when Lane 21 folded Track E phase 2
-> onto it as pull request #178. The lanes recorded in the dated entries below
-> are Lane 16's ten Track H defect fixes (`85ed4bc`..`629754e`), Lane 19's three
-> node-agent and audio-node fixes (`f2d13e6`, `7c7129a`, `1528203`), Lane 15's
-> five defect fixes (`85ed4bc`..`d297c05`), Lane 20's identifier reservation
-> (`ccd83b7`), Track I's research and reservations (`9157e26`, `ff56233`), and
-> Lane 21's FPP Connect fold. **`dev/fpp-connect` is now on `main`**; one
-> integration branch is still deliberately off it, `dev/multi-audio` (Lane 20's
-> ADR-045 and its `audio_sessions` re-key, which renumbers from v20 to v21 when
-> that branch takes `main`).
+> **`main` is at `b4a60ae`** (2026-09-01 evening). Thirty pull requests merged
+> to `main` on 2026-09-01: the morning wave recorded in the first 2026-09-01
+> entry below (the multi-node audio fold and its siblings, through #285), and
+> the evening wave recorded in the entry above it (#278 through #297, details
+> there). The plugin repository's `main` is at `7d270c9` after its #18 and #19.
+> Every merge in the evening wave carried a full green GitHub check rollup
+> (12 of 12, or 8 of 8 in the plugin repository) verified against its final
+> head commit at merge time; no post-merge CI run on `main` itself has been
+> read for this block.
 >
-> **CI on `main` at `629754e` is red, on two known pre-existing failures, neither
-> caused by these merges.** `test (1.26.6)` failed on the audio engine's
-> `TestCloseTearsDownThreeConcurrentPlayingBranches` with the deferred-teardown
-> warnings that SM-252 describes; nothing in `6da29d6..629754e` touches
-> `internal/agent/audio`. `integration` was killed by its own timeout at 9m0s
-> while still running tests, with **zero assertion failures**, which is the same
-> gate-under-its-own-ceiling failure recorded against unmodified `main` the day
-> before. The same instability shows on other branches with different tests on
-> different legs: pull request #169's run passed `test (1.26.6)` and failed
-> `test (1.25.0)` on `TestLTCResumeRealignsAudioToNewPosition`, on a diff that
-> changes one test file, a shell comment and a Makefile comment. Both need
-> owner decisions rather than a fix chosen here: the audio-engine teardown flake
-> is filed and carries a `Needs decision` label, and the integration timeout was
-> deliberately closed as not worth fixing when it was believed to be a build-VM
-> problem, before it started failing on GitHub's own runners. One half of that
-> integration failure now has a fix open as pull request #171 and **not yet on
-> `main`**: the suite built its three binaries inside its own 8m timeout, and
-> that build has moved into the scripts ahead of the clock. See the 2026-08-27
-> entry below.
+> **Three branches are deliberately off `main`.**
+> `feature/operator-ui-overhaul-2` is 176 ahead and 17 behind: the wholesale
+> Operator UI rebuild, owner-driven; the owner opens its fold pull request
+> himself and runs a reconcile pass afterward, and until then UI work is held.
+> `dev/multi-audio` is 12 ahead and 64 behind and is **superseded as a
+> branch**: its content was rebuilt directly onto `main` and merged as #280 on
+> 2026-09-01, so the branch remains only as history and must not be folded.
+> `dev/clock-sync` holds Lane 22's seam I1 and is 1 ahead, 101 behind,
+> unchanged since 2026-08-28.
 >
-> **Track H has H1 through H6 merged, and H7's defect list is now closed
-> except for three follow-ups.** The chain was assembled and run end to end for
-> the first time on 2026-08-26, on a containerized FPP 10.0, a coordinator and a
-> node agent all on one laptop, and the multi-sequence swap works. Every defect
-> that run filed against this repository is now fixed on `main`: the shutdown
-> panic (`4d4fb2d`), render content identity (`e2d6274`), its own follow-up
-> SM-292 (`cc2f9f8`), the per-cue asset gate (`f6923ed`), render assignment
-> readiness (`533bbf2`), catalog-deploy establishment (`fa6cec9`), the superseded
-> render verdict (`5e178a9`), and four readiness conditions (`795c48e`,
-> `629754e`). Three follow-ups the lane filed rather than fixed remain open:
-> `assets-missing` readiness (now unblocked), the coordinator/node disagreement
-> about a never-uploaded sequence, and the intermittent supervisor-test race that
-> reddens the Go 1.25 leg on unrelated branches. **No hardware, NDI,
-> audio-hardware or wall evidence exists for any of it.** The bench and its
-> case-by-case record are at `f404ebd`: `bench/track-h-chain/` and
-> [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md).
+> **Schema versions on `main` run to v28.** v28 (media type joins asset
+> identity, both `assets_current` and `assets_identity` widened) shipped in
+> #294 with ADR-028 amended in the same commit. v27 remains reserved for the
+> `audio_sessions` re-key. v29 onward is free.
+> [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is the register; builders
+> never edit it.
 >
-> **Readiness now checks nine ordered conditions, and the list is still growing.**
-> `internal/coordinator/fppreconcile/readiness.go`'s `ReadinessCondition` const
-> list is the authoritative one; nothing else, including `api/openapi.yaml`,
-> restates a count. Two concurrent branches each wrote a different total into the
-> same API description before this rule existed.
->
-> **A Raspberry Pi 3B+ has been proven as an audio node.** The node agent
-> installs from a prebuilt arm64 tarball with no build toolchain on the host
-> (`f2d13e6`), `make package-node-agent` names the tarball for the platform it
-> actually built (`7c7129a`), and a two-output interface can be declared as a
-> program-only `audio.node` with no LTC (`1528203`). This is the first real
-> hardware evidence in the node-install path. The Pi needs reinstalling from
-> `main` to pick up all three.
->
-> **Schema versions on `main` run to v20, and v20 is not the version the
-> register reserved it for.** #185 minted v20 for the `audio.settings` backfill
-> while the register held v20 for the `dev/multi-audio` `audio_sessions` re-key,
-> which had already shipped under that number on its own branch. The register now
-> records #185's migration as v20 and reserves v21 for the re-key; the branch
-> renumbers when it takes `main`.
-> [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is the register. **Builders
-> never edit it**, a rule three builders broke in one lane, and **nothing
-> enforces the reservation either**: this collision reached `main` with both
-> sides green.
->
-> **The repository hygiene sweep covers private references in shipped source.**
-> `TestNoLinearIssueReferencesInShippedSource` matches the tracker key, a tracker
-> URL and a build-lane label, and sweeps `cmd`, `internal`, `pkg`, `test`,
-> `ui/src`, `deploy`, `api/openapi.yaml`, the `Dockerfile` and the `Makefile`.
-> `docs/` is deliberately excluded and may cite internal history.
->
+> **No hardware, deployed-fleet, browser, or live-show verification was
+> performed for anything merged on 2026-09-01.** The stated acceptance gaps
+> (the `ldd -r` mechanism against a real library regression, the media-type
+> rig reproduction, prepare-ahead's audible effect at a cue transition, and
+> expiry behaviour over a real fleet reconnect) are the owner's and remain
+> open; each dated entry names its own.
 > ---
 >
 > *The paragraphs below describe earlier lanes and are kept for continuity.*
@@ -138,6 +91,58 @@ The **Current state** block at the top of this file is overwritten each session:
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
 
 ---
+
+## 2026-09-01 (evening wave: ctl parity, catalog-deploy and render-restart hardening, audio wire deadlines and signal freshness, media-type asset identity v28, cue prepare-ahead, macro refusal outcome, session expiry; `main` `998d4a6` to `b4a60ae`; plugin repo #18/#19)
+
+**Goal:** land the evening's queue of independently-scoped pull requests, following the morning's multi-node audio fold, covering `showmeshctl` response parity, catalog-deploy and render-restart defect fixes, a preflight/install hardening pair, audio session wire deadlines and signal freshness, asset identity's media-type gap (schema v28), coordinator-scheduled audio prepare-ahead, macro refusal-outcome documentation, and night-session expiry cleanup; plus two plugin-repository fixes.
+
+**Completed:**
+
+- #278 closed six response-parity gaps in `showmeshctl`'s GET decoding: `node.audio`, `snapshot.macroRuns`, `snapshot.auditStore`, night session authorization, Resolume recovery's `resolumeConfigured`, and observation entries' `resource` were silently dropped. `resolumeConfigured` absent now decodes to `*bool` nil rather than the bool zero value (which had rendered "not configured" for a coordinator that never said so), and the explicit-false path no longer skips the recovery record and last restore. `getResponseFieldExemptions` is now empty. Merged at `998d4a6`.
+- #289 fixed `resolveCueCatalogDeployReplay` discarding two `json.Unmarshal` errors and `store.CallerIntentPayload`'s discarded bool on the replay path, which let a row that failed to decode return a confidently wrong, zero-valued Show/Generation/Revision instead of a visible failure. Both decode failures now produce a 409 conflict. A second pass added positive-evidence detection: a non-empty `commands.caller_intent` payload that decodes to no show, no generation, and no revision at all (an untagged wrong-family row landing without a decode error) is refused the same way, since this route's own writer never leaves all three blank. This narrows, but does not close, the underlying family-overlap gap for a wrong-family row carrying plausible non-zero values. Merged at `f5b47b7`.
+- #291 added `getJSONKeepingRaw` and `printJSONBody` so `-output json` for `nodes`, `node <id>`, `snapshot`, `night status`, and `resolume recovery status` prints the coordinator's own response bytes instead of re-serializing a decoded struct, so a field the contract grows reaches a scripted consumer immediately. **Breaking change, owner-approved:** `showmeshctl node <id> --output json` no longer prints the bare node object; it prints the wrapped response (`{"serverTime": ..., "node": {...}}`). The PR body flagged this explicitly as needing an owner decision on sequencing before merge. Merged at `08f579a`.
+- #287 stopped a mid-show catalog deploy that leaves the running Cue's resolved sequence and content hash unchanged from forcing a visible stop-then-start restart of the render frame writer: `surfaceAlreadyActivated` no longer gates on `CatalogRevision`, only `Show` and `Generation`; an empty content hash on either side of the comparison never counts as agreement, forcing the safe (restart) path instead. Persists the refreshed authorization tuple with no writer restart so a later reboot's boot-clearing rule does not wrongly discard it as unauthorized. A second commit added a mutex to the test helper `fakeClock` after the race detector caught concurrent unlocked access between a test goroutine and a frame writer's own tick, and routed the package's remaining direct `clock.t` reads through the locked accessor. Merged at `597b86d`.
+- #282 exercised `install.sh`'s actual `preflight.sh --runtime-only` branch, unprivileged, with a normal login PATH, rather than only the build-host mode the bench previously ran as root (whose PATH already includes `/usr/sbin`, hiding that `ldconfig` lives there off an unprivileged user's PATH). The bench now runs the runtime-only branch twice: once with the runtime library present (must pass, naming `libltc.so.11` specifically) and once with it moved out of every `ld.so.conf` directory (must fail, naming it). Merged at `102c9a5`.
+- #284 added an `ldd -r` runtime-library version-floor check to `install.sh`, replacing plain `ldd`'s presence-only check. Plain `ldd` only resolves sonames; a library present under the right name but too old (missing a symbol the binary needs) resolves cleanly under plain `ldd` and only fails later at load with an undefined-symbol error. `ldd -r` additionally resolves relocations and reports "undefined symbol" for that case. `ldd` itself stays optional (warns and proceeds if absent, like the installer's other soft checks). **The mechanism was proven against a synthetic library pair built with one symbol present and removed under the same soname**, not against a real GStreamer/GLib regression. Merged at `cf32953`.
+- #292 set `CmdPayload.Deadline` for the nine classified `audio.session.*` commands (advance, apply, clear, pause, prepare, resume, seek, start, stop) via a new positive list, `audioCommandDeadlineActions`, with a 60-second generous deadline. Before this, the coordinator never set the deadline for these commands, so the agent's own staleness guard in `command.go` was dead code for all of them. An action not on the list, including one that does not exist yet, is unaffected. Merged at `cf1338a`.
+- #293 fixed `node.audio.device`, `.program`, and `.outputs` signals being stamped with the agent's one-time startup probe time (`DiscoveredAt`) instead of the report tick's own evidence time (`ObservedAt`), which aged them out of the coordinator's 45s validity window shortly after agent start and kept them stale for the life of the process. Also changed `node.audio.ltc.state` to derive from the LTC generator's own live, per-tick state instead of a one-time startup capability probe run before the engine bound its LTC channel (which could read "unavailable" for a node actively emitting LTC). Scope confirmed as `internal/coordinator/collector/nodeaudio` only; `internal/agent/audio` and `pkg/mqttproto`'s wire fields are untouched. A follow-up commit added `TestPollDiscoveryCachedSignalsAllUseObservedAtNotDiscoveredAt`, which found three of seven signals (program, device reason, outputs enumerated/truncated) were not actually protected by the pre-existing evidence-time test because the test fixture set both timestamps equal. Merged at `a7d7a67`.
+- #294 made media type part of asset identity (schema v28): `assets_current` and `assets_identity` both widen to key on `media_type`, so an FSEQ and its own audio uploaded under the same show/sequence/target no longer compete for one slot (the second upload had silently superseded the first, with a cue's render or audio resolution then handed the wrong file, decided by content-hash sort order). `store/assets.go`'s supersession, identity-match, and current-asset lookups, plus `assetsync/cuecatalog.go`'s `resolveAssetFor` and `assetsync/showmeshaudio.go`'s `resolveAssetForWithSize`, now take a caller-stated media type rather than resolving blind, matching `renderdispatch.go`'s already-merged sibling fix for render apply. ADR-028 decision 1 amended in-commit to record the widened identity. `docs/build/IDENTIFIER-REGISTER.md`'s v28 row records both widened indexes. **Unit and fixture level only; the rig reproduction (uploading audio for a sequence on the rehearsal rig and watching the render survive) was not performed and is the maintainer's**, per the PR's stated acceptance gap. Merged at `2398fdb`.
+- #295 added `Manager.Promote` and a staging session identity (`PrepareStagingSessionID`) so a coordinator-scheduled prepare-ahead can move an already-loaded engine handle from a temporary staging session onto the show session and start it there, skipping the media load `Start` would otherwise do, closing the video-leads-audio gap at cue transitions. `activateAudio` now attempts `Manager.Promote` against the staging session before falling back to the ordinary Apply/Prepare/Start sequence. At cue N's activation the coordinator dispatches a staging `audio.session.apply` carrying cue N+1's resolved media (found via the playlist's own ordered entries) followed by a bare `audio.session.prepare` against the staging session id; this is deliberately not an authorization decision, since `Promote`'s own identity check at real activation time gates whether staged content is ever used. The dispatch path is best-effort with a recover so a panic there cannot crash the tick loop or affect cue N's own already-dispatched activation. Merged at `8e26718`.
+- #296 documented, at the two existing collapse sites (`mapResolumeActionResult`, `mapAudioSessionCommandResult`), why a refused macro step reports outcome `failed` rather than `refused`: `OnFailure` is the only per-step continuation policy a macro step has, and a deliberate refusal needs the same abort/continue answer an unexpected failure does. No behavior changed; both mappers gained unit tests asserting on `outcome` and that the refusal's own reason survives into `outcomeReason`. Merged at `ce52a94`.
+- #297 added an agent-computed expiry deadline to a background-audio bed session's desired state, closing the unreachable half of end-session's bed cleanup: when the coordinator cannot reach a node at end-session (dispatch error, refusal, or an outcome that never confirms), the `audio.session.clear` never lands, the agent's persisted session record survives, and `RestoreAll` had resurrected the orphaned bed at every agent start indefinitely. The coordinator sends a relative TTL (`expiresInMs`) on every apply and periodically re-affirms it while a bed plays steadily, piggybacked on the existing per-tick advance; the agent converts the TTL to an absolute deadline on its own clock at receipt, so the two sides' clocks never have to agree. `RestoreAll` retires a session only once its deadline has passed, never as live teardown of a playing session. A record with no expiry ever set is never retired on that account, so upgrading a fleet with existing sessions does not mass-retire them. `expiresInMs` is opt-in on apply; the field already existed on the wire in practice and `schema.d.ts` is now regenerated to match. Merged at `b4a60ae`.
+- Plugin repository (`ShowMeshSystems/showmesh-fpp-plugin`): #18 moved the C++ canonicalization parser's container-depth check from the top of `parseValue` (which never ran for an empty container, since `parseValue` is only called for a container's first element) to container entry in `parseArray`/`parseObject`, matching the Go coordinator's own check and catching an empty 201st container the C++ side had missed; also added byte-level UTF-8 validation to `parseString`, since the parser previously copied unescaped multi-byte UTF-8 bytes into output without validating them, letting a lone continuation byte, a truncated sequence, or an over-long encoding canonicalize to a different hash than the coordinator (which refuses all three). Vendored `test/fixtures/fpp/canonicalization.json` verbatim from the merged coordinator `main` (`ShowMeshSystems/showmesh@e342bde8`), confirmed byte-identical by sha256 on both sides. Merged at `a37cbd0`. #19 added `-count=1` to the Makefile's `test` and `test-race` targets and to the CI Test step, since `go test ./...` and `go test -race ./...` trust Go's test result cache and can report `(cached)` for an unchanged package instead of re-running it; the CI step restores the build cache via `actions/setup-go`'s `cache: true` and can hit the same stale-result risk. Merged at `7d270c9`.
+
+**Decisions made:** #291's node single-get response re-nesting was put to the owner before merge and ruled: convert to true passthrough now, since no scripted consumers exist and the CLI is pre-release; the passthrough shape is the pattern for the remaining GET commands. The owner also ruled media type into asset identity (#294, ADR-028 amendment) and the opt-in expiry design (#297) during this wave; both are recorded in their entries.
+
+**Questions raised with the owner:** the system-wide wire-deadline question (whether every coordinator command should carry one, and what an elapsed deadline does on the render and cue paths) was filed for owner decision during #292's work and remains open.
+
+**Deferred:**
+
+- #289 narrows but does not close the underlying `commands.caller_intent` family-overlap gap: a wrong-family row carrying plausible non-zero values is still undefended, and waits on the requested_revision/caller_intent discriminator work tracked separately.
+- #291's `showmeshctl` GET passthrough covers five commands only (`nodes`, `node <id>`, `snapshot`, `night status`, `resolume recovery status`); the remaining GET commands (audit, events, principals, tokens, FPP instances, Resolume instances, macro runs, audio settings, and the rest) and every write/command-dispatch path are unconverted, left for a follow-up. `fppconnect status <node>` and `render status <node>` carry the identical re-nesting risk if ever converted and were deliberately left alone.
+- #294's rig reproduction (uploading audio for a sequence on the rehearsal rig, watching the render survive) is the maintainer's and was not run this session.
+- #295's real prepare-ahead effect (whether the video-leads-audio gap actually closes at a cue transition) has no hardware or rehearsal-rig evidence from this session.
+- #297's hardware acceptance (an actually-unreachable node at end-session, observed over a real fleet reconnect) is the maintainer's and was not run this session.
+
+**Verification gates:** state as recorded in each pull request's own body; none of it re-run in this session by this entry's author. Every pull request in this wave shows all 12 GitHub checks green on its final merged commit, confirmed by the merge-time status rollup (`changed-files`, `integration`, `integration-fppmqtt`, `integration-broker`, `fpp-plugin-release`, `test (1.25.0)`, `test (1.26.6)`, `lint`, `ui`, `vuln`, `docker`, `test-gate`, all `SUCCESS`), and the plugin repository's two PRs show all 8 of its checks green (`go (1.25.0)`, `go (1.26.0)`, `lint`, `native-core (g++)`, `native-core (clang++)`, `fpp-adapters (fpp9)`, `fpp-adapters (fpp10)`, `release-artifacts`).
+
+- #278: an earlier local `make check` run at the pushed commit failed on `TestFollowMacroRunJSONModePrintsEveryPollEvenWhenUnchanged` (untouched by this branch); a second run against the identical commit passed clean. GitHub's `test (1.25.0)` leg separately red on that same commit on `TestFrameWriterKeepsRenderingWhenFilenameMatches`, a hard-fenced, untouched path; `cmd/showmeshctl` itself passed on both Go versions on GitHub. Both reds are recorded as unretired/unexplained by the PR body; the merge-time rollup shows all 12 checks green. Mutation proof covers all four fixed decode paths; no mutation survived.
+- #289: local gate history recorded four runs against the final commit, including one blocked by a lock-file misuse (`lockf` missing `-k`) and one hitting a known, unrelated TypeScript flake (a Go-only diff cannot reach it); the fourth run passed clean through every phase. Mutation proof: both decode-error checks and all four clauses of the new all-zero guard independently confirmed red when reverted, green on restore.
+- #291: `make check` passed at the pushed commit (all phases); `go test ./cmd/showmeshctl/...`, `gofmt -l`, `go vet` all clean. Four mutation proofs (nil-check, negation, early-return suppression, audit-store nil-check), none survived. Text-mode-unchanged asserted by diff (no text-rendering function line changed) rather than solely by test. Integration not run locally per branch instruction; GitHub CI is the stated arbiter.
+- #287: local gate red on `TestFrameWriterRateDropsToZeroAfterPipelineStalls` under a measured ~266 1-minute load average; the touched package (`internal/agent/pipeline`) is byte-identical between main and the branch, and the same test passed 6/6 on both in an unloaded clone. GitHub's `ui` job was named as arbiter for phases the loaded local run never reached; merge-time rollup shows all 12 green.
+- #282: shell syntax check and shellcheck clean; bench run (`sm-node-install:dev` container) passed all checks including the new 6b.i/6b.ii unprivileged runtime-only cases. Integration not run (shell-script-only change).
+- #284: shell syntax and shellcheck clean; bench run against the post-merge head passed all 15 named checks. Mechanism proof against a synthetic present/removed-symbol library pair under one soname, plus a regression check confirming reverting to plain `ldd` reproduces the failure the bench is meant to catch. Integration not run (shell-script-only change).
+- #288: `go test ./internal/coordinator/api/... -run TestNightPrepareSite -count=1` passed. Two mutation proofs (unbounded dispatch, silently-uncounted skip) both caught by distinct assertions (dispatch count, warning log). Integration not run (test-only change).
+- #292: `go test ./internal/coordinator/api/... -run TestAudio -count=1`, the pre-existing past-deadline-refusal test, `go test ./internal/agent/audio -count=1`, `gofmt -l`, `go vet` all passed/clean at the pushed commit. `make check` explicitly not run this branch (needed a lane-manager gate slot). Three per-clause mutation proofs on the new condition and its computed value, none survived. Integration not run (unit-level audio-session change, FPP suite does not cover it).
+- #293: package-scoped `go test`, `gofmt -l`, `go vet` all clean; full `make check` passed (55 Go packages, 0 FAIL, 90 UI test files / 1119 tests), `make pr-ready-check` PASS, 12 GitHub checks. Six mutations (five ObservedAt/DiscoveredAt stamps plus one ValidFor bypass) each independently caught, run twice (author and lane manager, against both the prior and current commit); three of the six had survived against the first pushed commit before the added coverage closed the gap.
+- #294: `make check` passed at the pushed commit despite a measured load spike (1-minute load average 16.91 to 270.06 across the run), 55 Go packages ok, 90 UI test files / 1119 tests. Narrow package tests (`store`, `assetsync`, `api`), `gofmt -l`, `go vet` all clean. 12 GitHub checks passed. Integration not run (not required by the changed subsystem; local gate already covers full Go and UI suites). Acceptance gap stated explicitly in the PR body: rig reproduction not performed, migration proven against a seeded pre-v28 database only.
+- #295: `/build/bin/showmesh-check` (the `showmesh-dev-01` build VM gate) passed, EXIT_CODE 0. Integration not run (scheduling/session-handling change covered by the local gate's own unit and race-mode coverage; no FPP or broker-backed target run).
+- #296: `make check` passed (55 Go packages, 0 FAIL, 90 UI test files); package-scoped `gofmt -l`, `go vet`, `go test -count=1` all clean; 12 GitHub checks. Four mutation rows (resolume and audio refusal outcome/reason, each independently run by builder and a certifier), all caught.
+- #297: `make check` passed under a `lockf`-guarded gate run, 0 FAIL/panic/DATA RACE lines, tree clean before and after. A separate merged-tree check (merging `origin/main`, including #295's `8e26718`, into a detached copy) confirmed no conflicts, a clean `go build ./...`, and a race-mode run over the shared audio/coordinator packages with 0 DATA RACE lines. `make pr-ready-check` PASS, 12 GitHub checks.
+- Plugin #18: fixture vendored byte-identical (sha256-verified) from the coordinator's merged `main`. No standalone gate table quoted in the commit message; the plugin repository's own 8-check CI rollup is green on the merge commit.
+- Plugin #19: mechanical CI/Makefile change (`-count=1` at three call sites); the plugin repository's own 8-check CI rollup is green on the merge commit.
+
+No hardware, deployed-fleet, browser, or live-show verification was performed for any item in this wave; every claim above is container/unit-level or CI-observed. #284's `ldd -r` mechanism is proven against a synthetic library pair, not a real GStreamer/GLib version regression. #294's rig reproduction, #295's hardware prepare-ahead effect, and #297's live-fleet-unreachable-node acceptance remain the maintainer's, per each PR's own stated acceptance gap.
 
 ## 2026-09-01
 
