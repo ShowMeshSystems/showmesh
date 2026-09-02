@@ -2,7 +2,7 @@
 // Fails when any file under ui/src contains a NUL byte. Standard text tools
 // (grep, ripgrep) classify such a file as binary and skip it silently, so a
 // search that should have found a symbol instead returns nothing, and looks
-// identical to a search that correctly found no match (SM-481).
+// identical to a search that correctly found no match.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
