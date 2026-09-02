@@ -88,11 +88,10 @@ describe('Shows · list', () => {
     vi.restoreAllMocks()
   })
 
-  it('names the page and the one-active fact', async () => {
+  it('names the page', async () => {
     stubs.listConfigObjects = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show', objects: [] })
     renderShows()
     expect(screen.getByRole('heading', { level: 1, name: 'Shows' })).toBeInTheDocument()
-    expect(screen.getByText('One active')).toBeInTheDocument()
   })
 
   it('shows the loading absence before the list read completes', () => {

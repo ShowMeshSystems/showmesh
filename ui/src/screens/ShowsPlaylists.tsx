@@ -696,11 +696,7 @@ function AudioPlaylistEditor({
       <div className="sm-attn">
         <span className="sm-strip__label">Authority</span>
         <div>
-          <p className="sm-strip__fact">ShowMesh decides what plays next</p>
-          <p className="sm-small sm-muted">
-            This order is authored here. ShowMesh owns progression, repeat, and the audio playhead. No LTC is emitted
-            unless a cue declares it.
-          </p>
+          <p className="sm-strip__fact">No LTC is emitted unless a cue declares it.</p>
         </div>
       </div>
 

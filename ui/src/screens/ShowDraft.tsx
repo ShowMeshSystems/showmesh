@@ -76,19 +76,13 @@ export function ShowDraft() {
           <Field label="Name" help="What the show picker and every heading shows. Editable forever.">
             {(props) => <Input {...props} value={name} onChange={(e) => onNameChange(e.target.value)} />}
           </Field>
-          <Field
-            label="Id"
-            help="Immutable once created. Its cues, playlists, surfaces and assets are keyed by it, and nothing outside the show can reference them."
-          >
+          <Field label="Id" help="Immutable once created.">
             {(props) => <Input {...props} className="sm-data" value={id} onChange={(e) => onIdChange(e.target.value)} />}
           </Field>
           <Field label="Notes · optional">
             {(props) => <Textarea {...props} value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />}
           </Field>
         </div>
-        <p className="sm-small sm-faint">
-          Nothing else. A show is a namespace: playlists, cues and macros are authored in its workspace tabs once it exists.
-        </p>
       </Section>
 
       {taken && (

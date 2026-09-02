@@ -353,7 +353,6 @@ export function NodeDetail() {
             <h1 className="sm-page__title">{node.label ?? node.nodeId}</h1>
             <StatusPair tone={CONTROL_TONE[node.controlPlane.state]} label={controlLabel} />
           </div>
-          <p className="sm-page__lede">Everything configured about this box, in one place.</p>
         </div>
         <ButtonRow>
           <Button onClick={runDiscoveryClick} disabled={runningDiscovery || !gate.allowed} title={gate.allowed ? undefined : gate.reason}>

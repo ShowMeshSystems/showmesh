@@ -256,16 +256,7 @@ export function Shows() {
 
   return (
     <div className="sm-shows">
-      <PageTitle
-        title="Shows"
-        lede="A show is a namespace. Its cues, playlists, surfaces and assets reference only each other, nothing crosses between shows, at authoring time or at runtime."
-      />
-
-      <RuledStrip
-        absence="empty"
-        label="One active"
-        fact="Only the active show can affect the running system. That is why next season's show can be prepared without touching tonight, and why a Hallowed Hollow sequence playing in FPP will not activate its audio while Winter Ridge is active."
-      />
+      <PageTitle title="Shows" />
 
       <ShowActivation objects={objects} />
 
