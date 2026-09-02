@@ -182,6 +182,48 @@ func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	}
 }
 
+// TestPollDiscoveryCachedSignalsAllUseObservedAtNotDiscoveredAt is the
+// certification-round follow-up to
+// TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes, which only
+// checked device.state: samplePayload sets DiscoveredAt and ObservedAt to
+// the same value, so every other signal this fix moved was blind to which
+// field it was actually stamped from, and reverting the move on any one
+// of them signal-by-signal passed every test in this package. This test
+// sets the two times apart and checks every signal the fix touched, one
+// table entry per signal, so a mutation on any of them is caught here by
+// name.
+func TestPollDiscoveryCachedSignalsAllUseObservedAtNotDiscoveredAt(t *testing.T) {
+	st := NewStore()
+	discoveredAt := time.Unix(1000, 0).UTC() // the one-shot startup probe
+	observedAt := time.Unix(9000, 0).UTC()   // a much later report tick
+	payload := samplePayload()
+	payload.DiscoveredAt = &discoveredAt
+	payload.ObservedAt = &observedAt
+	payload.LTCGeneratorState = "running"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalDeviceState,
+		SignalDeviceReason,
+		SignalOutputsCount,
+		SignalProgramState,
+		SignalOutputsEnumerated,
+		SignalOutputsTruncated,
+		SignalLTCState,
+	} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt == nil || !o.ObservedAt.Equal(observedAt) {
+			t.Errorf("%s ObservedAt = %v, want the report tick time %v", sig, o.ObservedAt, observedAt)
+		}
+		if o.ObservedAt != nil && o.ObservedAt.Equal(discoveredAt) {
+			t.Errorf("%s ObservedAt equals the startup probe time %v; the agent republishes this evidence every tick, so it must never share DiscoveredAt's evidence", sig, discoveredAt)
+		}
+	}
+}
+
 // TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
 // half of ADR-011: a payload with a zero ObservedAt (never sent by a
 // well-formed report, since mqttproto.AudioPayload.Validate requires it
