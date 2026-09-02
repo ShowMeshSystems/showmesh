@@ -308,7 +308,7 @@ export function currentRunsAbsence(model: Model): 'loading' | 'unavailable' | nu
 /**
  * A real source of a session id, either an observed `audio_session`
  * resource this coordinator has seen, or an authored show.action's own
- * `audioSessionId` target. Never a fake picker (SM-269 design section 3).
+ * `audioSessionId` target. Never a fake picker.
  */
 export type AudioSessionOption = { sessionId: string; origin: string }
 

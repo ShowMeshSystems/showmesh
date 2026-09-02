@@ -140,7 +140,7 @@ export type CueCatalogDeployResult = components['schemas']['CueCatalogDeployResu
 // separately so NodeDetail.tsx and the dashboard attention list can
 // import it directly rather than indexing through Node.
 export type ObservationEntry = components['schemas']['ObservationEntry']
-// GET /observations (SM-269): the flat list of every ObservationEntry
+// GET /observations: the flat list of every ObservationEntry
 // this coordinator currently holds, optionally filtered.
 export type ObservationsResponse = components['schemas']['ObservationsResponse']
 // The first audio-dispatch slice: pause/resume/stop/output.mute/

@@ -452,9 +452,10 @@ Playwright against the running app, not jsdom alone.
   before the first navigation.
 - Wait on `{ waitUntil: 'load' }` plus an explicit wait for the content. **`networkidle` never fires
   here**: the model holds an open SSE stream for the life of the page.
-- `ui/package.json` declares a `visual:review` script for this. Its runner,
-  `ui/scripts/capture-visual.mjs`, is not committed, so write or restore it before relying on the
-  script name.
+- `npm run visual:review` (from `ui/`) runs `ui/scripts/capture-visual.mjs`: every route at 1440 and
+  1100 wide into `ui/visual-artifacts/`. Point it at a build with `SHOWMESH_VISUAL_BASE_URL` and sign
+  it in with `SHOWMESH_VISUAL_TOKEN_FILE`, a file holding an API token. `compare-visual.mjs` renders
+  each route beside its mock and `visual-image-diff.py` diffs the pair.
 - Check at 1280 in dark, light and contrast. When the browser cannot be driven in the session,
   record the check as unverified rather than claiming it.
 

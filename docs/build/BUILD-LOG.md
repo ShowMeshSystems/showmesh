@@ -113,7 +113,6 @@ The **Current state** block at the top of this file is overwritten each session:
 **Deferred:**
 
 - The pull request to `main`, and the reconcile pass after it. Both are the owner's.
-- `ui/package.json` declares a `visual:review` script whose runner, `ui/scripts/capture-visual.mjs`, is not tracked in git, so a fresh checkout cannot run it. Recorded in the design guide's section 9 rather than fixed here.
 - Three of the four `design/revision1` features are drawn but not built (the Shows › Assets sequence-coverage roll-up, list-then-detail node routing with a Declare action, and Monitor › Fleet's playlist-definitions block). Recorded in that folder's README; no ruling exists for them.
 
 **Verification gates:** run in this session in a worktree of the branch at `a257ad8`, with a clean tree apart from untracked `ui/node_modules`. UI gates only; the diff this session produced is documentation.

@@ -315,7 +315,7 @@ describe('Resolume config', () => {
     expect(unknownLabels.length).toBeGreaterThan(0)
   })
 
-  it('renders recovery from model.resolumeRecovery when present, re-rendering live without a reload (SM-462)', async () => {
+  it('renders recovery from model.resolumeRecovery when present, re-rendering live without a reload', async () => {
     // The REST read never resolves here: if the recovery block were still
     // reading recoveryState.kind === 'loading' from a pending fetch, the
     // "Reading" absence strip would render, not the live record.

@@ -291,7 +291,7 @@ export function fppInspector(instance: FPPInstance, nowIso: string | null): { ti
 
 // ---------------------------------------------------------------------
 // FPP inspector: the fallback-program readiness group (ADR-048, Track
-// J's J1 / SM-460). Read-only: acknowledgement is the installed FPP
+// J's J1). Read-only: acknowledgement is the installed FPP
 // plugin's own evidence, never a value an operator credential may type.
 // ---------------------------------------------------------------------
 

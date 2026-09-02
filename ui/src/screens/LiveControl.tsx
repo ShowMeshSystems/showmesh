@@ -797,7 +797,7 @@ function audioSessionSignal(observations: ObservationEntry[], sessionId: string,
 }
 
 /**
- * SM-269 design section 3, collapsed per 2026-09-01 owner feedback: the
+ * Collapsed per 2026-09-01 owner feedback: the
  * block itself is just the target picker (node, then a real session id).
  * The gloved transport row, seek, gain set/fade, mute/unmute, and the
  * typed clear confirmation live in a floating inspector opened from here.

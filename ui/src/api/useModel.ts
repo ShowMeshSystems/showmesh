@@ -539,7 +539,7 @@ export function probeRenderTransport(nodeId: string, surfaceId: string): Promise
   return store.probeRenderTransport(nodeId, surfaceId)
 }
 
-// SM-269: GET /observations, the flat evidence list used to discover a
+// GET /observations, the flat evidence list used to discover a
 // real audio session id and its desired_revision. Same thin
 // pass-through pattern as every method above.
 export function listObservations(

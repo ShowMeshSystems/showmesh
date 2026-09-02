@@ -90,7 +90,7 @@ export type {
   // Track B seam B2b-front: the three render.* dispatch endpoints.
   ObservationEntry,
   RenderCommandResult,
-  // SM-269: GET /observations, the flat evidence list.
+  // GET /observations, the flat evidence list.
   ObservationsResponse,
   // The first audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
   AudioSessionCommandResult,

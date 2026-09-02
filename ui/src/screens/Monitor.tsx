@@ -446,7 +446,7 @@ type FallbackProgramDetailState =
   | { kind: 'ready'; detail: FallbackProgramResponse }
 
 /**
- * SM-460: read-only fallback-program readiness evidence for one FPP host.
+ * Read-only fallback-program readiness evidence for one FPP host.
  * No acknowledge control — the installed FPP plugin reports that itself
  * (ADR-048), and a human typing what only the plugin can honestly know
  * would let a wrong acknowledgement read as show-ready before a show.

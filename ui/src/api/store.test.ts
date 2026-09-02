@@ -2693,7 +2693,7 @@ describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
   })
 })
 
-// ADR-048, Track J's J1 (SM-460): the fallback-program readiness reads.
+// ADR-048: the fallback-program readiness reads.
 // Both are plain ApiClient.getJson pass-throughs, same as
 // getFPPEndpointsConfig above, so they are proven the same way. Neither
 // touches store.connect() / the SSE read loop.
@@ -3755,7 +3755,7 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     })
   })
 
-  it('applies a resolumeRecovery.changed frame as a whole-object replace of model.resolumeRecovery (SM-462)', async () => {
+  it('applies a resolumeRecovery.changed frame as a whole-object replace of model.resolumeRecovery', async () => {
     const changed = {
       seq: 1,
       serverTime: new Date().toISOString(),
@@ -3824,7 +3824,7 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     })
   })
 
-  it('a stream.reset clears model.resolumeRecovery back to null, matching model.nightSession (SM-462)', async () => {
+  it('a stream.reset clears model.resolumeRecovery back to null, matching model.nightSession', async () => {
     const changed = {
       seq: 1,
       serverTime: new Date().toISOString(),

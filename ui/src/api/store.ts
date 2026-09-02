@@ -178,7 +178,7 @@ type SchemaAudioSessionParams =
   | components['schemas']['AudioSessionGainParams']
   | components['schemas']['AudioSessionGainFadeParams']
   | components['schemas']['AudioSessionNoParamsRequest']['params']
-// SM-269: GET /observations, the flat evidence list an operator uses to
+// GET /observations, the flat evidence list an operator uses to
 // discover a real audio session id (resourceKind=audio_session) and its
 // desired_revision, since the API lists no sessions any other way.
 type SchemaObservationsResponse = components['schemas']['ObservationsResponse']

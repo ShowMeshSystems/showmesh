@@ -213,7 +213,7 @@ describe('Monitor · Fleet', () => {
   })
 })
 
-// SM-460: the read-only "Fallback program" group in the FPP inspector.
+// The read-only "Fallback program" group in the FPP inspector.
 describe('Monitor · Fleet · FPP inspector · Fallback program', () => {
   beforeEach(() => {
     fallbackStubs.listFallbackPrograms = () => PENDING()
