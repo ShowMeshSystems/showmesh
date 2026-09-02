@@ -519,13 +519,20 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 // THE TRADE: a clear delayed past the coordinator's own await deadline
 // (audioCommandConfirmDeadline in internal/coordinator/api/audiodispatch.go)
 // can now land after a newer start already re-established this session,
-// tearing the newer session down. There is no bound at any layer on how
-// late that delayed clear can arrive: the command it carries has no
-// deadline of its own (mqttproto.CmdPayload never sets one for an audio
-// session command), so internal/agent/command.go's own
-// deadline-already-elapsed check never fires for it, and this agent
-// handles one goroutine per inbound PUBLISH with no ordering promise
-// across them. What orders the common case is a coordinator-side
+// tearing the newer session down. For a clear that arrives as a DISPATCHED
+// command over the wire, that window is now bounded rather than
+// open-ended: audio.session.clear is one of the actions listed in
+// audioCommandDeadlineActions (internal/coordinator/api/audiodispatch.go),
+// so the command carries its own wire deadline and internal/agent/
+// command.go's deadline-already-elapsed check refuses it once that
+// deadline passes. This is a separate protection from the stale-revision
+// exemption below, not a replacement for it: an IN-PROCESS caller of
+// Manager.Clear never goes through command.go at all, so this wire
+// deadline does not apply to it, and the exemption remains necessary,
+// on its own terms, for that path. This agent still handles one goroutine
+// per inbound PUBLISH with no ordering promise across them, so a
+// dispatched clear that lands within its deadline can still arrive after
+// a newer start. What orders the common case is a coordinator-side
 // property, not a wire one: the coordinator publishes and awaits one
 // command's result before publishing the next for that session, so the
 // only realistic window is a clear whose confirmation timed out while
