@@ -812,14 +812,7 @@ a.sm-tile:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .sm-lifecycle-commands > div,
-  .sm-lifecycle-commands > .sm-lifecycle-command--request-final-show,
-  .sm-lifecycle-commands > .sm-lifecycle-command--fade-out-night,
-  .sm-lifecycle-commands > .sm-lifecycle-command--power-down-presentation,
-  .sm-lifecycle-commands > .sm-lifecycle-command--start-night,
-  .sm-lifecycle-commands > .sm-lifecycle-command--prepare-site,
-  .sm-lifecycle-commands > .sm-lifecycle-command--start-preshow,
-  .sm-lifecycle-commands > .sm-lifecycle-command--end-session {
+  .sm-lifecycle-commands > div {
     grid-column: auto;
   }
 }
