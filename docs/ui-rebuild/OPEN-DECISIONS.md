@@ -968,8 +968,9 @@ section and duplicated inside a second drawer.
 
 **Ruling:** collapse them into one `Drawer` behind a single button, holding the
 target, the known sessions, the session id, the revision and the transport
-controls. The section itself keeps a one-line summary of how many sessions are
-known and which one is open.
+controls. The section itself keeps a one-line count of known sessions; which
+one is open is drawer state, not a coordinator fact, so the caption does not
+claim it.
 
 **Unblocks.** Applied in `ed7d3db`, folded in `94d6032`.
 

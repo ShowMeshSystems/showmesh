@@ -25,9 +25,10 @@ three owner review rounds have been applied on top of it since:
 first time `main` and this branch have met. The branch is 177 commits ahead of
 `main` at `289806e` and 0 behind it.
 
-**What it is waiting on: a pull request to `main`, which the owner opens.** No
-PR from this branch is open, and a session does not open or merge one unless
-Eric says so in that session.
+**Pull request #301 to `main` was opened on 2026-09-01 on Eric's instruction**,
+after his click-through of the deployed round-three build. He also authorised
+the merge in the same session; the reconcile pass for controls added on `main`
+since the branch diverged is deferred to the sessions that follow.
 
 The UI gates were re-run against `a257ad8` on 2026-09-01 and are recorded in the
 operator-UI entry of that date in `docs/build/BUILD-LOG.md`. The Go gates were
@@ -78,8 +79,9 @@ and Track C's per-asset sync verdict landed as #218. `OPEN-DECISIONS.md` opens
 with the ruling index and now runs to D-029; `REBUILD-PLAN.md` carries the
 per-screen state. What is left:
 
-1. The pull request to `main`. The owner opens it and runs the reconcile pass
-   afterward.
+1. Merge #301, then the reconcile pass for the controls `main` gained while the
+   branch was held (emergency stop, the newer audio commands), one screen at a
+   time in later sessions.
 2. Track C's FPP-sequence staleness signal, the other half of D-016. It leaves
    UI-only scope and is a question for Eric rather than a build.
 

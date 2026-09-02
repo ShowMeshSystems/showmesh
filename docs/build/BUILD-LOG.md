@@ -42,8 +42,9 @@ The **Current state** block at the top of this file is overwritten each session:
 > **Three branches are deliberately off `main`.**
 > `feature/operator-ui-overhaul-2` is 177 ahead and 0 behind after `main` was
 > merged into it at `a257ad8` on 2026-09-01: the wholesale Operator UI rebuild,
-> owner-driven; the owner opens its fold pull request himself and runs a
-> reconcile pass afterward, and until then UI work is held. Three owner review
+> owner-driven; its fold pull request #301 was opened on 2026-09-01 on the
+> owner's instruction, with the reconcile pass for controls added on `main`
+> deferred to later sessions. Three owner review
 > rounds are applied on it; the dated entry below records the branch state and
 > the UI gates run against `a257ad8`.
 > `dev/multi-audio` is 12 ahead and 64 behind and is **superseded as a
@@ -102,7 +103,7 @@ The **Current state** block at the top of this file is overwritten each session:
 **Completed:**
 
 - **Three owner review rounds are applied on the branch**, on top of the 2026-08-30 per-screen stack. Round one is `3734b72` (timecode offsets, terse copy, the transport row, now-playing absence, signed-out plates, the issued credential). Round two runs `1e03010` to `208c82e` (macro step editing, the chrome-bar show and mode pickers, fallback-program evidence, principal administration, the audio session transport, the kit `Drawer`, every inspector floated into it, and a layout pass). Round three runs `d5d5d6e` to `ec3991a` (node detail into a 960px drawer over Monitor › Fleet, one page width with every per-screen cap deleted, inline chip alignment, the `ReorderButtons` pattern, Live Control rebuilt on the kit with one `LifecycleCommands` element and a playlist select fed by imported FPP playlist definitions, the audio session drawer, and a copy pass that cut architecture prose and fabricated example names).
-- **`main` was merged into the branch** at `a257ad8`, the first time the two have met. The branch is 177 commits ahead of `main` at `289806e` and 0 behind it. No pull request from the branch is open; the owner opens it.
+- **`main` was merged into the branch** at `a257ad8`, the first time the two have met. The branch is 177 commits ahead of `main` at `289806e` and 0 behind it. Pull request #301 was opened on 2026-09-01 on the owner's instruction after his click-through of the round-three build.
 - The seven round-three rulings are recorded as **D-023 to D-029** in [docs/ui-rebuild/OPEN-DECISIONS.md](../ui-rebuild/OPEN-DECISIONS.md), with the commit that applied each.
 - Documentation brought into line with the code: [UI-DESIGN-GUIDE.md](../design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md) rewritten from `ui/src` (tokens against `kit/styles/tokens.css`, layout against `shell.css` and `drawer.css`, the screen map against `app/App.tsx`, the component rules against the kit, and the pre-PR checklist gaining the defect classes that pass jsdom and fail in a browser); `AGENTS.md` and `CLAUDE.md` now point UI work at the guide and the kit rule; `docs/ui-rebuild/HANDOFF.md` and `REBUILD-PLAN.md` state the branch's real position; `CONTROL-INVENTORY.md` marks three node rows as not carried into the drawer, with the reason for each.
 
