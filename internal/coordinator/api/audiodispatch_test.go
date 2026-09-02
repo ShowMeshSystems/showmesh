@@ -1033,3 +1033,84 @@ func TestAudioOutcomeShouldPersistRejectsUnrecognisedOutcomes(t *testing.T) {
 		}
 	}
 }
+
+// evidenceResult builds a mqttproto.ResultPayload carrying the given
+// outcome/reason pair as node evidence, the shape mapResultOutcome reads
+// its finer-grained outcome from.
+func evidenceResult(outcome string, reason any) mqttproto.ResultPayload {
+	return mqttproto.ResultPayload{
+		CommandID: "irrelevant", IdempotencyKey: "irrelevant", Action: "audio.session.stop",
+		Outcome: mqttproto.OutcomeUnconfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.audio_session.stop",
+			Value:  map[string]any{"outcome": outcome, "reason": reason},
+		},
+	}
+}
+
+// TestMapResultOutcomeRejectsReasonlessRequiredOutcome proves the
+// coordinator's fix for each of the three outcomes pkgaudio.
+// OutcomeResult.Validate requires a reason for: the coordinator keeps
+// the node's own outcome
+// word and replaces a blank reason with its own statement of the
+// violation, asserted exactly so a mutation that swaps the outcome word
+// into the wrong message, or reuses one outcome's text for another, is
+// caught.
+func TestMapResultOutcomeRejectsReasonlessRequiredOutcome(t *testing.T) {
+	for _, outcome := range []string{"refused", "failed", "unconfirmable"} {
+		gotOutcome, gotReason := mapResultOutcome(evidenceResult(outcome, ""))
+		if gotOutcome != outcome {
+			t.Errorf("mapResultOutcome(%q, reason=\"\") outcome = %q, want %q (verdict must survive)", outcome, gotOutcome, outcome)
+		}
+		wantReason := fmt.Sprintf("node reported outcome %q with no reason; the coordinator did not receive one and the outcome requires one", outcome)
+		if gotReason != wantReason {
+			t.Errorf("mapResultOutcome(%q, reason=\"\") reason = %q, want %q", outcome, gotReason, wantReason)
+		}
+	}
+}
+
+// TestMapResultOutcomeLeavesReasonedRefusalUntouched is the acceptance
+// test for this fix: enforcement must never rewrite a reason the node
+// actually supplied. A refusal that already carries a reason must pass
+// through byte for byte, because an over-eager fix that rewrites good
+// reasons is a worse bug than the gap it closes.
+func TestMapResultOutcomeLeavesReasonedRefusalUntouched(t *testing.T) {
+	const reason = "downstream device reported input already in use by another session"
+	gotOutcome, gotReason := mapResultOutcome(evidenceResult("refused", reason))
+	if gotOutcome != "refused" {
+		t.Fatalf("outcome = %q, want refused", gotOutcome)
+	}
+	if gotReason != reason {
+		t.Fatalf("reason = %q, want %q unchanged", gotReason, reason)
+	}
+}
+
+// TestMapResultOutcomeLeavesUnrequiredOutcomeReasonEmpty proves
+// enforcement does not leak onto outcomes outcomesRequiringReason does
+// not cover. "started" is an observation, not a failure; an empty
+// reason on it is not a violation and must stay empty.
+func TestMapResultOutcomeLeavesUnrequiredOutcomeReasonEmpty(t *testing.T) {
+	gotOutcome, gotReason := mapResultOutcome(evidenceResult("started", ""))
+	if gotOutcome != "started" {
+		t.Fatalf("outcome = %q, want started", gotOutcome)
+	}
+	if gotReason != "" {
+		t.Fatalf("reason = %q, want empty (started does not require a reason)", gotReason)
+	}
+}
+
+// TestMapResultOutcomeTreatsNonStringReasonAsMissing proves the
+// unchecked type assertion on v["reason"] (r, _ := v["reason"].(string))
+// does not let a non-string reason read as satisfied, or panic: a
+// refusal whose "reason" field is a number must be treated exactly like
+// a refusal with no "reason" field at all.
+func TestMapResultOutcomeTreatsNonStringReasonAsMissing(t *testing.T) {
+	gotOutcome, gotReason := mapResultOutcome(evidenceResult("refused", 42))
+	if gotOutcome != "refused" {
+		t.Fatalf("outcome = %q, want refused", gotOutcome)
+	}
+	wantReason := `node reported outcome "refused" with no reason; the coordinator did not receive one and the outcome requires one`
+	if gotReason != wantReason {
+		t.Fatalf("reason = %q, want %q", gotReason, wantReason)
+	}
+}
