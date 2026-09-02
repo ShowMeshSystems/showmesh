@@ -90,6 +90,11 @@
   flex-wrap: wrap;
 }
 
+/* Controls carry no top margin of their own, unlike tables and strips. */
+.sm-section__head + :is(.sm-btn-row, .sm-field, .sm-field-grid) {
+  margin-top: var(--s-3);
+}
+
 /* Section eyebrow. Legal above an h2; never above the page h1. */
 .sm-eyebrow {
   margin: 0 0 var(--s-2);
