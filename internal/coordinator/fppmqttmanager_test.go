@@ -321,6 +321,43 @@ func TestFPPMQTTCollectorStateMapsNotSilentToRunning(t *testing.T) {
 	}
 }
 
+// TestFPPMQTTManagerCollectorStatusesConfiguredWithZeroHostsStillEmitsOneRow
+// pins a state that reconcile itself cannot produce: both
+// config.ValidateFPPMQTTConfigKind (write time) and fppmqtt.New (construction
+// time, independent of the store-side check) refuse a broker configured
+// with no hosts, so m.bundle can never actually hold one through the real
+// reconcile path. The bundle is built directly here, bypassing reconcile,
+// specifically to prove CollectorStatuses does not let that guarantee's
+// loss make this collector silently vanish from the snapshot: ranging over
+// an empty host map would otherwise produce zero rows, and an absent
+// collector is a worse failure than a wrong one, the exact shape of
+// failure a per-host status row exists to prevent one layer up. The
+// collector field is left nil deliberately: this branch must return
+// before ever touching it.
+func TestFPPMQTTManagerCollectorStatusesConfiguredWithZeroHostsStillEmitsOneRow(t *testing.T) {
+	mgr, _ := newTestFPPMQTTManager(t)
+
+	mgr.mu.Lock()
+	mgr.bundle = &fppMQTTBundle{
+		cfg: config.FPPMQTTConfig{BrokerURL: "tcp://127.0.0.1:1", Hosts: map[string]string{}},
+	}
+	mgr.mu.Unlock()
+
+	statuses, err := mgr.CollectorStatuses(context.Background())
+	if err != nil {
+		t.Fatalf("CollectorStatuses: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("len(statuses) = %d, want exactly 1: a configured collector must never vanish from the snapshot", len(statuses))
+	}
+	if statuses[0].ID != fppMQTTCollectorSourceID {
+		t.Errorf("ID = %q, want the bare collector id %q (no host to qualify it with)", statuses[0].ID, fppMQTTCollectorSourceID)
+	}
+	if statuses[0].Reason == nil || *statuses[0].Reason == "" {
+		t.Errorf("Reason = %v, want it set naming the odd zero-hosts state", statuses[0].Reason)
+	}
+}
+
 // TestFPPMQTTManagerCollectorStatusesOneRowPerHost is the acceptance test
 // at the manager layer: three configured hosts produce three rows, each
 // with its own host-qualified id, none of them silent (the broker is

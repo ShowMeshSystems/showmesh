@@ -273,6 +273,19 @@ func (m *fppMQTTManager) CollectorStatuses(context.Context) ([]api.CollectorStat
 		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorNotConfigured), Reason: &reason}}, nil
 	}
 
+	// A bundle with zero hosts should be unreachable through reconcile:
+	// both config.ValidateFPPMQTTConfigKind (write time) and fppmqtt.New
+	// itself (construction time, independent of the store-side check)
+	// refuse a broker configured with no hosts. Guarded anyway, because a
+	// ranging loop over an empty map silently produces zero rows, which
+	// would make this collector vanish from the snapshot entirely if that
+	// guarantee is ever lost, and an absent collector is the exact shape
+	// of failure this method exists to make visible instead.
+	if len(bundle.cfg.Hosts) == 0 {
+		reason := "fpp.mqtt broker is configured but names no hosts to poll"
+		return []api.CollectorState{{ID: fppMQTTCollectorSourceID, State: string(api.CollectorRunning), Reason: &reason}}, nil
+	}
+
 	ids := make([]string, 0, len(bundle.cfg.Hosts))
 	for id := range bundle.cfg.Hosts {
 		ids = append(ids, id)
