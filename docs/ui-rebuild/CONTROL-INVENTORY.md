@@ -136,8 +136,9 @@ lifecycle and the two notices are the candidates with no home.
 | Action editor, including Resolume deck and clip pickers and audio node selection | `config:write` | `putShowAction`, `useResolumeComposition` |
 | Revision history, last run | `config:write` | `getShowActionRevisions`, `getShowMacroRevisions` |
 
-Guide §10 item 6: `integration: 'audio'` exists in the schema and the current
-action form does not offer it. The mock designs it in.
+Audio action authoring, which the pre-rebuild action form did not offer, is
+built: Shows › Automation offers `integration: 'audio'` in both the new-action
+and edit-action forms, with its own target editor.
 
 ---
 
@@ -170,13 +171,18 @@ action form does not offer it. The mock designs it in.
 
 ### `/monitor/fleet/node/:id` and `/fpp/:id` → `Node.dc.html`
 
+Node detail is now a 960px drawer over Monitor › Fleet (D-023). Three rows below
+are marked **not carried**: they are not in that drawer, and the reason is given
+beside each. Checked against `ui/src/screens/NodeDetail.tsx` on 2026-09-01.
+
 | Control / section | Scope | Behind it |
 |---|---|---|
 | Identity, control-plane evidence, capabilities | — | model |
-| Cue catalog, Reload, deploy | `cuecatalog:deploy` | `getNodeCueCatalog`, `deployNodeCueCatalog` |
+| Cue catalog, deploy | `cuecatalog:deploy` | `getNodeCueCatalog`, `deployNodeCueCatalog` |
+| Cue catalog Reload | | **Not carried.** The catalog is read when the drawer opens and re-read after a deploy, so there is no separate Reload control. |
 | Surfaces on this node: apply, clear | `config:write`, `render:command` | `applyRenderSurface`, `clearRenderSurface` |
-| Render settings panel and revisions | `config:write` | `getRenderSettingsConfig`, `putRenderSettingsConfig` |
-| Audio section | `config:write` | audio node config |
+| Render settings panel and revisions | `config:write` | **Not carried.** Render settings and their revision history live on Settings › Render recovery. |
+| Audio section | `config:write` | **Not carried.** Audio node configuration lives on Settings › Node routing. The drawer states only that a node advertising no `audio.*` capability has no audio routing to configure. |
 | Assets held locally, Re-sync all | `config:write` | `getNodeAssetManifest` |
 | Remove this node | `config:write` | `deleteNodeDeclaration` |
 | FPP detail: commands, recovery, warnings, pixel ports, observations, current playback | `fpp:command` | see Live Control FPP rows |

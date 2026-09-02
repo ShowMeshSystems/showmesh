@@ -5,19 +5,34 @@ Read this, then `REBUILD-PLAN.md`, then `OPEN-DECISIONS.md`.
 
 ## What state the work is in
 
-**The whole rebuild is integrated on `feature/operator-ui-overhaul-2` at
-`3695cb7`, 44 commits, merged as a fast-forward of the entire stack on
-2026-08-30.** `main` was not touched and is not involved.
+**The whole rebuild is integrated on `feature/operator-ui-overhaul-2`.** The
+per-screen stack was merged as a fast-forward on 2026-08-30 at `3695cb7`, and
+three owner review rounds have been applied on top of it since:
 
-`make check` passes on the integrated branch, which was the first time all
-twenty PRs existed together. Every PR passed all ten of its own GitHub checks
-before the merge.
+- **Round one** (`3734b72`, 2026-09-01): timecode offsets, terse copy, the
+  transport row, now-playing absence, signed-out plates, the issued credential.
+- **Round two** (`1e03010` to `208c82e`, 2026-09-01): macro step editing, the
+  chrome-bar show and mode pickers (D-020), fallback-program evidence, principal
+  administration (D-019 B), the audio session transport, the kit `Drawer`, every
+  inspector floated into it (D-021, D-022), and a layout pass.
+- **Round three** (`d5d5d6e` to `ec3991a`, 2026-09-01): node detail into a wide
+  drawer over Monitor › Fleet, one page width with no per-screen exceptions,
+  inline chip alignment, the `ReorderButtons` pattern, Live Control rebuilt on
+  the kit with one `LifecycleCommands` element and a playlist select, and the
+  copy pass. These are D-023 to D-029 in `OPEN-DECISIONS.md`.
 
-GitHub could only auto-close #196, because every other PR targeted its parent
-branch rather than the feature branch, and it refuses to retarget a PR whose
-commits are already in the new base. The rest were closed with a comment
-naming the merge commit. Their branches, diffs and bodies all remain readable;
-nothing was discarded.
+**`main` was merged into the branch on 2026-09-01** at `a257ad8`, which is the
+first time `main` and this branch have met. The branch is 177 commits ahead of
+`main` at `289806e` and 0 behind it.
+
+**What it is waiting on: a pull request to `main`, which the owner opens.** No
+PR from this branch is open, and a session does not open or merge one unless
+Eric says so in that session.
+
+The UI gates were re-run against `a257ad8` on 2026-09-01 and are recorded in the
+operator-UI entry of that date in `docs/build/BUILD-LOG.md`. The Go gates were
+not re-run during the review rounds, whose diffs were `ui/`-only, and the merge
+of `main` has not been gated end to end.
 
 ## How the stack was built
 
@@ -46,9 +61,11 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/retrofit` | #217 | Guard retrofit, folded addresses, Phase 2 |
 | `track-c/asset-sync-verdict` | #218 | Track C: the per-asset sync verdict |
 
-#196 to #200 were green on all ten checks when they were opened; re-check the
-later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
-session does not merge for him unless he says so in that session.
+The table above is history: every branch in it is folded into the feature
+branch, and none of it is on `main`. #196 to #200 were green on all ten checks
+when they were opened; re-check the later ones rather than assuming. Eric
+reviews and merges to `main`, and a session does not merge for him unless he
+says so in that session.
 
 #199 carries two things rather than one. The rulings commit landed on that
 branch by mistake and Eric ruled "leave it" rather than pay for a force-push to
@@ -56,15 +73,15 @@ split it.
 
 ## What to do next
 
-Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
-`OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
-order. In short:
+Every screen is rebuilt, the stale-write retrofit and Phase 2 landed as #217,
+and Track C's per-asset sync verdict landed as #218. `OPEN-DECISIONS.md` opens
+with the ruling index and now runs to D-029; `REBUILD-PLAN.md` carries the
+per-screen state. What is left:
 
-1. The stale-write guard (D-014 B) retrofitted onto the shipped editors, the
-   four folded addresses the not-found map is missing, and Phase 2: delete the
-   old system and add the check that keeps it deleted.
-3. Track C: the API facts D-016 asks for. This one leaves UI-only scope, and
-   its FPP-staleness half is a question for Eric, not a build.
+1. The pull request to `main`. The owner opens it and runs the reconcile pass
+   afterward.
+2. Track C's FPP-sequence staleness signal, the other half of D-016. It leaves
+   UI-only scope and is a question for Eric rather than a build.
 
 ## Verifying against a real coordinator, not the fixture
 
@@ -283,8 +300,10 @@ needs an administrator, and creating one is the step an agent does not take, so
 every save, create, refusal, upload, issue and revoke in this rebuild rests on
 unit tests alone. No real nodes, no real FPP instance, no real Resolume
 instance and no real night session have been involved at any point. Every browser check
-so far was Chrome against the fixture, and no browser check at all was run for
-#199's rulings work or #200. Hardware and deployment evidence is Eric's, and
+recorded per PR was Chrome against the fixture, and no browser check at all was run for
+#199's rulings work or #200. The three 2026-09-01 review rounds were driven in a browser
+against a rehearsal-coordinator deployment, but no capture from those runs was handed to
+this record, so nothing here rests on them. Hardware and deployment evidence is Eric's, and
 none of it has been collected for this branch.
 
 **The 1280 gate needs a workaround on this machine.** Chrome ignores
