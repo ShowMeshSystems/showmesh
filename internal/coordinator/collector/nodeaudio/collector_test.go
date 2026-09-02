@@ -472,6 +472,55 @@ func TestPollDeviceStateGoesStaleWhenTheNodeGenuinelyStopsReporting(t *testing.T
 	}
 }
 
+// TestPollSessionStateGoesStaleWhenTheNodeGenuinelyStopsReporting is
+// buildValue's two hardware siblings above, carried down to the session
+// path: [Store] keeps only a node's most recent report and nothing
+// evicts it, so a session signal must age to stale once the node stops
+// reporting, exactly like engine.state and device.state. sess.CollectedAt
+// is left nil, so this exercises the same single-clock ObservedAt path
+// the hardware tests use, not the session's own CollectedAt fallback
+// (TestStaleSessionSignalsUseTheSessionsOwnCollectedAt covers that
+// separately). SignalSessionStale is deliberately excluded: it always
+// stamps the tick's own current time regardless of value, so it cannot
+// prove anything about the window this test protects; SignalSessionState
+// is asserted instead, with sess.Stale left false so the wire flag plays
+// no part in the result.
+//
+// Both a recent and an hour-old report are asserted, not only the stale
+// one: a test that only checks "ages to stale" would keep passing even
+// if session signals could never read current at all, which would be a
+// guard that protects nothing in the other direction.
+func TestPollSessionStateGoesStaleWhenTheNodeGenuinelyStopsReporting(t *testing.T) {
+	cases := []struct {
+		name string
+		age  time.Duration
+		want observation.State
+	}{
+		{name: "recent report", age: time.Second, want: observation.StateCurrent},
+		{name: "hour-old report", age: time.Hour, want: observation.StateStale},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := NewStore()
+			lastTick := time.Now().Add(-tc.age)
+			payload := samplePayloadWithSession(mqttproto.AudioSessionReport{
+				SessionID: "sess-1", State: "playing", Fault: "none", Stale: false,
+			})
+			payload.ObservedAt = &lastTick
+			st.Put("audio-01", payload, lastTick)
+
+			c := New(st)
+			obs, _ := c.Poll(context.Background())
+			state := findSessionObs(t, obs, SignalSessionState)
+
+			now := time.Now()
+			if got := state.StateAt(now); got != tc.want {
+				t.Errorf("age=%s: audio_session.state StateAt(now) = %v, want %v", tc.age, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestLTCStateMapping proves the full generator-state-to-ltc-state mapping
 // finding 2's fix relies on: running and stopped (both proof an LTC
 // channel is bound and drivable) read usable, unsupported and failed read
