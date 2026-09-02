@@ -19,3 +19,8 @@
 .sm-node-surface-cell .sm-btn-row {
   max-width: 360px;
 }
+
+/* The wide drawer has room for whole signal keys; the 150px column was sized for the 420px inspector. */
+.sm-node-drawer .sm-inspector__row {
+  grid-template-columns: 280px minmax(0, 1fr);
+}
