@@ -102,9 +102,9 @@ func mapAudioSessionCommandResult(result v1.AudioSessionCommandResult) stepResul
 	case pkgaudio.OutcomeUnconfirmable:
 		res.outcome = outcomeUnconfirmable
 	default:
-		// Refused and every other/unrecognized word both land here,
-		// mirroring mapResolumeActionResult's identical "refused is this
-		// package's own failed" collapse one file over.
+		// Refused and every other word collapse to this package's own
+		// failed: OnFailure is the only per-step continuation policy. The
+		// refusal survives for a human in outcomeReason, not outcomeState.
 		res.outcome = outcomeFailed
 	}
 
