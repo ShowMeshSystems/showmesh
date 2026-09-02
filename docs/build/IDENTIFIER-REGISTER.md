@@ -536,6 +536,7 @@ after shipping a breaking change to stored history.
 | `audio.media.probe` | reserved | Track C seam C2 |
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
+| `audio.node.silence` | shipped | SM-494: the installation-wide emergency stop's node-scoped, unconditional per-node audio silence, no sessionId, no revision |
 | `node.clock.configure` | reserved | Track I seam I1: the coordinator pushing the node's `node.clock` object over the existing MQTT command path, on write and on hello, exactly as `audio.node.configure` does. Payload schema string `showmesh.node.clock.config/v1` (ADR-044); the retained `observed/clock` payload is `showmesh.node.clock/v1` |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
@@ -897,6 +898,16 @@ closest-available bucket, not verified evidence. `qos_drops` is live
 evidence once the sink's `qos` property is enabled (done as part of this
 change), independent of the xrun question. See gstengine's own
 `classifyWarningDomain` doc comment.
+
+**One more node-level signal, SM-494.** `audio.node.silence`'s own
+result reports a per-session outcome and count directly in its
+`OperationResult.Value`, not through a retained observation, so it mints
+no per-session signal of its own; this is the operation's node-level
+report signal only.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.silence` | shipped | SM-494 |
 
 **Lane 18a signal reservations, 2026-08-28.** Reserved by the lane before
 its builders start, so that two branches cannot mint two spellings for the

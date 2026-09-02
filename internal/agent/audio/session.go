@@ -591,23 +591,25 @@ func (s *Session) dispatchLocked(invocation pkgaudio.InvocationID, revision pkga
 
 	result := exec()
 	s.rememberExecutedResultLocked(invocation, result)
-	// A command that ran but could not be durably recorded must not be
-	// reported as if it had: on the next crash, this session recovers
-	// from whatever the LAST successful persist held, which is not this
-	// outcome, so telling the caller it succeeded would be a claim this
-	// process cannot back up. The command may well have
-	// taken effect (e.g. the engine actually started) — that evidence is
-	// not erased — but the OUTCOME reported, and cached for a replay of
-	// this same invocation, is the persistence failure, not a success
-	// this store cannot survive.
+	result = s.persistOrFailLocked(result)
+	s.rememberExecutedResultLocked(invocation, result)
+	return dispatchedResult{outcome: result, executed: true}
+}
+
+// persistOrFailLocked persists s's current state and, on failure,
+// rewrites outcome to Failed: a command that ran but could not be
+// durably recorded must not be reported as if it had, since a later
+// crash recovers only whatever the last successful persist held.
+// Shared by [Session.dispatchLocked] and [Manager.SilenceAll]. Caller
+// holds s.mu.
+func (s *Session) persistOrFailLocked(outcome pkgaudio.OutcomeResult) pkgaudio.OutcomeResult {
 	if err := s.persistLocked(); err != nil {
-		result = pkgaudio.OutcomeResult{
+		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeFailed,
 			Reason:  "operation executed but could not be durably persisted: " + err.Error(),
 		}
-		s.rememberExecutedResultLocked(invocation, result)
 	}
-	return dispatchedResult{outcome: result, executed: true}
+	return outcome
 }
 
 // prepareLocked probes item's readiness — a missing, changed, or
