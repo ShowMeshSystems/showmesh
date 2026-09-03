@@ -3411,6 +3411,8 @@ export interface components {
         CurrentReconciliation: {
             state: string;
             reason: string;
+            /** @description Absent unless `state` is one of the four contradicting outcomes (`stale-import`, `unknown-entry`, `evidence-mismatch`, `cross-show`) H0.2 collapses into an operator-visible mismatch; a one-sentence, operator-facing notice naming both remedies (restart FPP, or re-import the playlist so the coordinator's binding and FPP agree) otherwise. Reported additively, the collapsed form of FPPPlaylistEntryReconciliationResponse's own `operatorInstruction`. A notice only: it never changes the configured mismatch policy's own dispatch effect. */
+            operatorInstruction?: string;
         };
         CurrentRunActivation: {
             show: string;
@@ -4961,6 +4963,8 @@ export interface components {
              * @description Absent whenever this instance's stored observation is believed to still be corroborated, and the moment a sequence-regression refusal was recorded for it otherwise. Reported additively alongside outcome/reason, never collapsed into them: this route states both what was computed from the row's own content and that the row's continuity separately broke. GET /current-runs reports the collapsed, one-word-per-run form of this same fact (`reconciliation.state` = `evidence-broken`) for the glanceable Show Night surface.
              */
             evidenceBrokenAt?: string;
+            /** @description Absent unless `outcome` is one of `stale-import`, `unknown-entry`, `evidence-mismatch`, or `cross-show`; a one-sentence, operator-facing notice naming both remedies (restart FPP, or re-import the playlist so the coordinator's binding and FPP agree) otherwise. Reported additively alongside outcome/reason, following `evidenceBrokenAt`'s own precedent above: a notice only, never a change to which mismatch policy applies or what that policy dispatches. GET /current-runs carries the same fact, under the same name, on its own CurrentReconciliation. */
+            operatorInstruction?: string;
             /** Format: date-time */
             serverTime: string;
         };

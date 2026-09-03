@@ -66,6 +66,10 @@ type Freshness struct {
 type Reconciliation struct {
 	State  string
 	Reason string
+
+	// OperatorInstruction is empty unless State is a mismatched outcome; see
+	// v1.CurrentReconciliation.OperatorInstruction's own doc comment.
+	OperatorInstruction string
 }
 
 type Target struct {

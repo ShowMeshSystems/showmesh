@@ -78,6 +78,30 @@ const (
 	OutcomeResolved Outcome = "resolved"
 )
 
+// IsMismatch reports whether o is one of the four contradicting outcomes
+// H0.2's own text collapses into the operator-visible "mismatched" state:
+// OutcomeStaleImport, OutcomeUnknownEntry, OutcomeEvidenceMismatch, and
+// OutcomeCrossShow. This is the same outcome set cueactivate.Decide routes
+// through its mismatch handling once an active-show binding is found;
+// restated here because this package's own read routes report Outcome
+// directly, with no dependency on cueactivate.
+func (o Outcome) IsMismatch() bool {
+	switch o {
+	case OutcomeStaleImport, OutcomeUnknownEntry, OutcomeEvidenceMismatch, OutcomeCrossShow:
+		return true
+	default:
+		return false
+	}
+}
+
+// OperatorMismatchInstruction is the one-sentence, operator-facing notice
+// GET /current-runs and the reconciliation route surface whenever
+// [Outcome.IsMismatch] is true. It is a notice only: it names both
+// remedies without claiming the coordinator did anything about the
+// mismatch itself, and does not change the configured mismatch policy's
+// own effect (hold/blackAndSilence/safeCue).
+const OperatorMismatchInstruction = "Restart FPP, or re-import the playlist so the coordinator's binding and FPP agree."
+
 // Result is [Reconcile]'s return value: the outcome it reached, plus every
 // piece of observed and matched evidence a caller (the read route, a
 // future activation seam) needs to explain it — never a bare error, per

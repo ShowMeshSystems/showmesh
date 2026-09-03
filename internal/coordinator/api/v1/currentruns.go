@@ -54,6 +54,15 @@ type CurrentRunFreshness struct {
 type CurrentReconciliation struct {
 	State  string `json:"state"`
 	Reason string `json:"reason"`
+
+	// OperatorInstruction is absent whenever State is not a mismatched
+	// outcome, and a one-sentence, operator-facing notice naming both
+	// remedies (restart FPP, or re-import the playlist) otherwise. Reported
+	// ADDITIVELY, the collapsed form of FPPPlaylistEntryReconciliationResponse.
+	// OperatorInstruction (fppreconciliation.go), matching that field's own
+	// EvidenceBrokenAt precedent: a notice only, never a change to the
+	// configured mismatch policy's own dispatch effect.
+	OperatorInstruction string `json:"operatorInstruction,omitempty"`
 }
 
 type CurrentRunActivation struct {

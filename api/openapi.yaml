@@ -9882,6 +9882,18 @@ components:
       properties:
         state: {type: string}
         reason: {type: string}
+        operatorInstruction:
+          type: string
+          description: >-
+            Absent unless `state` is one of the four contradicting outcomes
+            (`stale-import`, `unknown-entry`, `evidence-mismatch`,
+            `cross-show`) H0.2 collapses into an operator-visible mismatch;
+            a one-sentence, operator-facing notice naming both remedies
+            (restart FPP, or re-import the playlist so the coordinator's
+            binding and FPP agree) otherwise. Reported additively, the
+            collapsed form of FPPPlaylistEntryReconciliationResponse's own
+            `operatorInstruction`. A notice only: it never changes the
+            configured mismatch policy's own dispatch effect.
     CurrentRunActivation:
       type: object
       required: [show, generation, playlistId, revision, runner]
@@ -13899,6 +13911,19 @@ components:
             reports the collapsed, one-word-per-run form of this same fact
             (`reconciliation.state` = `evidence-broken`) for the glanceable
             Show Night surface.
+        operatorInstruction:
+          type: string
+          description: >-
+            Absent unless `outcome` is one of `stale-import`,
+            `unknown-entry`, `evidence-mismatch`, or `cross-show`; a
+            one-sentence, operator-facing notice naming both remedies
+            (restart FPP, or re-import the playlist so the coordinator's
+            binding and FPP agree) otherwise. Reported additively
+            alongside outcome/reason, following `evidenceBrokenAt`'s own
+            precedent above: a notice only, never a change to which
+            mismatch policy applies or what that policy dispatches. GET
+            /current-runs carries the same fact, under the same name, on
+            its own CurrentReconciliation.
         serverTime:
           type: string
           format: date-time
