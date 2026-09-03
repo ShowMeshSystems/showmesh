@@ -1,0 +1,339 @@
+name: Release
+
+# Publishes ShowMesh Core (coordinator, operator UI, node agent) from a
+# pushed release tag. workflow_dispatch runs the same pipeline as a proof
+# run: it builds and packages everything but does not create a GitHub
+# release or publish under a version-shaped tag.
+#
+# `v*` already does not match the FPP plugin's own `fpp-plugin-v<VERSION>`
+# tag shape (it does not start with "v"), and the exclusion pattern below
+# is kept anyway as an explicit, checked-in statement of that boundary
+# rather than relying on the coincidence.
+on:
+  push:
+    tags:
+      - 'v*'
+      - '!fpp-plugin-v*'
+  workflow_dispatch:
+
+# Default to read-only; only the jobs that publish escalate.
+permissions:
+  contents: read
+
+# A publish in progress must not be cancelled by a later push; each tag
+# (or dispatch run) already gets its own group via github.ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.26.6"
+  COORDINATOR_IMAGE: ghcr.io/showmeshsystems/showmesh-coordinator
+  UI_IMAGE: ghcr.io/showmeshsystems/showmesh-ui
+
+jobs:
+  resolve:
+    # Determines the version, commit, build date and release mode once, so
+    # every other job reads the same values instead of re-deriving them.
+    # This is also where the tag/VERSION/CHANGELOG agreement is enforced,
+    # before anything is built or published.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.derive.outputs.mode }}
+      version: ${{ steps.derive.outputs.version }}
+      image_tag: ${{ steps.derive.outputs.image_tag }}
+      commit: ${{ steps.derive.outputs.commit }}
+      build_date: ${{ steps.derive.outputs.build_date }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Derive version, commit and release mode
+        id: derive
+        run: |
+          set -euo pipefail
+          commit="${{ github.sha }}"
+          short_sha="${commit:0:7}"
+          file_version="$(tr -d '[:space:]' < VERSION)"
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            mode=release
+            tag="${GITHUB_REF#refs/tags/}"
+            version="${tag#v}"
+            if [ "$version" != "$file_version" ]; then
+              echo "::error::tag '$tag' does not agree with VERSION ('$file_version'); refusing to publish a release from a mismatched cut." >&2
+              exit 1
+            fi
+            image_tag="$version"
+          else
+            mode=dispatch
+            version="$file_version"
+            image_tag="0.0.0-dispatch.${short_sha}"
+            echo "::notice::workflow_dispatch proof run: building and packaging everything for VERSION=$version, publishing images only under the non-release tag $image_tag. No GitHub release or release asset is created."
+          fi
+
+          {
+            echo "mode=$mode"
+            echo "version=$version"
+            echo "image_tag=$image_tag"
+            echo "commit=$commit"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Extract the CHANGELOG.md section for this version
+        # Required in both modes: a dispatch run proves this extraction
+        # works, a release run also uses its output as the release body.
+        # The heading shape is `## <VERSION> - <YYYY-MM-DD>` per
+        # docs/RELEASING.md; matched as a whole heading, not a substring,
+        # so "0.1.0" cannot accidentally match a "0.1.10" section.
+        run: |
+          set -euo pipefail
+          version="${{ steps.derive.outputs.version }}"
+          awk -v ver="$version" '
+            /^## / {
+              if (found) exit
+              if ($0 ~ ("^## " ver "( |$)")) { found = 1; next }
+              next
+            }
+            found { print }
+          ' CHANGELOG.md > changelog-section.md
+          if [ ! -s changelog-section.md ]; then
+            echo "::error::CHANGELOG.md has no '## $version - <date>' section; a release tag and a proof run both require one." >&2
+            exit 1
+          fi
+          echo "--- CHANGELOG.md section for $version ---"
+          cat changelog-section.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: changelog-section
+          path: changelog-section.md
+          retention-days: 7
+
+  images:
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # The coordinator's Dockerfile cross-compiles via --platform=$BUILDPLATFORM
+      # with CGO disabled (see its own comment), so linux/amd64 and
+      # linux/arm64 both build without QEMU. The UI image stays amd64 only:
+      # its build stage runs `npm ci`/`npm run build` under Node, which has
+      # no equivalent cross-compile trick, and an emulated arm64 npm build
+      # is not worth the runtime cost for a static SPA nginx already serves
+      # multi-arch. Revisit if an arm64 UI image is ever actually needed.
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          coord="${{ env.COORDINATOR_IMAGE }}:${{ needs.resolve.outputs.image_tag }}"
+          ui="${{ env.UI_IMAGE }}:${{ needs.resolve.outputs.image_tag }}"
+          if [ "${{ needs.resolve.outputs.mode }}" = "release" ]; then
+            coord="$coord"$'\n'"${{ env.COORDINATOR_IMAGE }}:${{ needs.resolve.outputs.commit }}"
+            ui="$ui"$'\n'"${{ env.UI_IMAGE }}:${{ needs.resolve.outputs.commit }}"
+          fi
+          {
+            echo "coordinator<<EOF"
+            echo "$coord"
+            echo "EOF"
+            echo "ui<<EOF"
+            echo "$ui"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the coordinator image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.coordinator }}
+          build-args: |
+            VERSION=${{ needs.resolve.outputs.version }}
+            COMMIT=${{ needs.resolve.outputs.commit }}
+            BUILD_DATE=${{ needs.resolve.outputs.build_date }}
+
+      - name: Build and push the operator UI image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./ui
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.ui }}
+
+  node-agent-amd64:
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    # Debian 13 for the same reason CI's `test`/`lint`/`vuln` jobs use it:
+    # ubuntu-latest ships GStreamer 1.24 and the agent's cgo backend needs
+    # 1.26+. This container runs as the runner's own amd64, no emulation.
+    container:
+      image: debian:trixie
+    timeout-minutes: 15
+    steps:
+      - name: Install the C toolchain and the agent's C dependencies
+        run: |
+          set -eux
+          apt-get update -o Acquire::Retries=2
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config \
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev
+          git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build and package the node agent (amd64)
+        run: make package-node-agent NODE_AGENT_VERSION=${{ needs.resolve.outputs.version }}
+
+      # Only the tarball: package-node-agent also writes a
+      # showmesh-node-agent_<VERSION>_SHA256SUMS in this same directory,
+      # but that filename carries no platform label and each of the two
+      # legs would produce one covering only its own tarball. Uploading it
+      # here would collide across legs when the release job merges both
+      # artifacts into one directory. The release job recomputes one
+      # SHA256SUMS once both tarballs are staged together.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-agent-amd64
+          path: dist/node-agent/*.tar.gz
+          retention-days: 7
+
+  node-agent-arm64:
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # The native agent links go-gst and libltc (CGO_ENABLED=1), which
+      # cannot cross-compile the way the CGo-free FPP plugin does: it has
+      # to be built by a compiler and linker that target arm64 for real.
+      # Emulate the target under QEMU instead, run a real debian:trixie
+      # userspace inside it, and build there with `make package-node-agent`
+      # so the packaging step (naming, SHA256SUMS, self-verify) stays the
+      # exact same code path as the FPP plugin's and the amd64 leg's.
+      - name: Build and package the node agent (arm64, under QEMU)
+        run: |
+          set -eux
+          mkdir -p dist/node-agent
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD":/src -w /src \
+            -e NODE_AGENT_VERSION="${{ needs.resolve.outputs.version }}" \
+            -e GO_VERSION="${{ env.GO_VERSION }}" \
+            debian:trixie bash -euxo pipefail -c '
+              apt-get update -o Acquire::Retries=2
+              apt-get install -y --no-install-recommends \
+                ca-certificates curl git build-essential pkg-config \
+                gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+                gstreamer1.0-plugins-bad gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
+                libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev
+              git config --global --add safe.directory "*"
+              # Trixies own golang-go package trails the go.mod floor
+              # (deploy/node/README.md), so install the pinned toolchain
+              # from upstream instead of the distro package.
+              curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz" -o /tmp/go.tgz
+              tar -C /usr/local -xzf /tmp/go.tgz
+              export PATH="/usr/local/go/bin:$PATH"
+              go version
+              make package-node-agent NODE_AGENT_VERSION="$NODE_AGENT_VERSION"
+            '
+
+      # See node-agent-amd64's own comment: only the tarball, the release
+      # job computes one combined SHA256SUMS once both are staged.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-agent-arm64
+          path: dist/node-agent/*.tar.gz
+          retention-days: 7
+
+  # There is deliberately no node-agent-armv7 job. It was built and tested
+  # against a real linux/arm/v7 debian:trixie container under QEMU: the
+  # GStreamer 1.26/libltc dev packages this leg needs all install cleanly,
+  # but the cgo build itself fails independent of packaging or CI plumbing:
+  #
+  #   internal/agent/audio/ltcgen/ltcgen_cgo.go:144:19: constant
+  #   18446744073709551615 overflows _Ctype_size_t
+  #
+  # That is a 32-bit-target C portability bug (a 64-bit-only constant
+  # assigned to size_t, which is 32 bits on armv7), not a missing
+  # development package, and fixing it is a Go source change outside this
+  # workflow's own scope. Ship amd64 and arm64 only until it is fixed;
+  # falling back to a CGo-free build here would ship a silent agent with
+  # no audio engine, which is worse than shipping fewer platforms.
+
+  release:
+    # Only a tag push creates a GitHub release; workflow_dispatch is a
+    # proof run and stops after the packages above are built and verified.
+    # An explicit `if:` replaces the implicit `if: success()` a plain
+    # `needs:` would carry (see ci.yml's own `test-gate`/`ui` comments for
+    # this exact trap), so success() is spelled out here too: without it,
+    # this job would still run and publish a release from an incomplete
+    # set of images or packages after any of the jobs above failed.
+    if: success() && needs.resolve.outputs.mode == 'release'
+    needs: [resolve, images, node-agent-amd64, node-agent-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          pattern: node-agent-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: changelog-section
+          path: .
+
+      - name: Write and verify one SHA256SUMS covering both platforms
+        # Each leg already self-verified its own single-platform tarball;
+        # this is the point both are staged together (per the release
+        # contract the amd64 and arm64 legs otherwise share), so this is
+        # where the real, all-platform manifest is written, using the same
+        # sha256sum invocation package-node-agent itself uses. There is no
+        # armv7 tarball to stage: see the note above this job.
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          cd dist-artifacts
+          ls showmesh-node-agent_${version}_linux_amd64.tar.gz
+          ls showmesh-node-agent_${version}_linux_arm64.tar.gz
+          sha256sum showmesh-node-agent_${version}_*.tar.gz > "showmesh-node-agent_${version}_SHA256SUMS"
+          sha256sum -c "showmesh-node-agent_${version}_SHA256SUMS"
+
+      - name: Create the GitHub pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.resolve.outputs.version }}
+          name: v${{ needs.resolve.outputs.version }}
+          body_path: changelog-section.md
+          prerelease: true
+          files: dist-artifacts/*

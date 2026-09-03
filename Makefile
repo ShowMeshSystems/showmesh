@@ -267,6 +267,23 @@ deploy-up:
 	SHOWMESH_VERSION=$(VERSION) SHOWMESH_COMMIT=$(COMMIT) SHOWMESH_BUILD_DATE=$(BUILD_DATE) \
 		$(DOCKER) compose -f deploy/docker-compose.yml up -d --build
 
+# deploy-up-published runs the deploy/ Compose bundle from published GHCR
+# images (see deploy/docker-compose.published.yml) instead of building
+# from source. SHOWMESH_VERSION/COMMIT/BUILD_DATE are still set here, to
+# unused placeholder values: Compose interpolates each `-f` file's
+# variables on its own before merging them, so the base file's required
+# build-arg checks run even though the override's `build: !reset null`
+# then drops that whole block from the merged config.
+.PHONY: deploy-up-published
+deploy-up-published:
+	@if [ -z "$(SHOWMESH_RELEASE_VERSION)" ]; then \
+		echo "deploy-up-published: set SHOWMESH_RELEASE_VERSION to the published image tag to run, e.g. 'make deploy-up-published SHOWMESH_RELEASE_VERSION=0.1.0'." >&2; \
+		exit 1; \
+	fi
+	SHOWMESH_RELEASE_VERSION=$(SHOWMESH_RELEASE_VERSION) \
+		SHOWMESH_VERSION=unused SHOWMESH_COMMIT=unused SHOWMESH_BUILD_DATE=unused \
+		$(DOCKER) compose -f deploy/docker-compose.yml -f deploy/docker-compose.published.yml up -d
+
 # --- FPP plugin release artifacts (Step 9) ---
 #
 # The deployed fleet spans both ARM word sizes (a Raspberry Pi 3 B+, a

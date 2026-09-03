@@ -80,10 +80,10 @@ services:
         VERSION: ${SHOWMESH_VERSION:?SHOWMESH_VERSION is required. Use 'make deploy-up' or 'make deploy-build' from the repo root, which set it automatically; see deploy/README.md.}
         COMMIT: ${SHOWMESH_COMMIT:?SHOWMESH_COMMIT is required. Use 'make deploy-up' or 'make deploy-build' from the repo root, which set it automatically; see deploy/README.md.}
         BUILD_DATE: ${SHOWMESH_BUILD_DATE:?SHOWMESH_BUILD_DATE is required. Use 'make deploy-up' or 'make deploy-build' from the repo root, which set it automatically; see deploy/README.md.}
-    # Once published images exist, prefer pulling instead of building
-    # locally on every `up`. Uncomment and set the tag, and drop `build:`
-    # above if you never intend to build from source on this host.
-    # image: ghcr.io/showmeshsystems/showmesh-coordinator:${SHOWMESH_VERSION:-latest}
+    # To run from a published GHCR image instead of building from source,
+    # use docker-compose.published.yml as a Compose override rather than
+    # editing this file (see deploy/README.md "Running from published
+    # images"); it replaces this build: block with the matching image:.
     restart: unless-stopped
     # Shutdown budget: the coordinator's own shutdown path allocates 10s
     # shared between draining the HTTP server and disconnecting from MQTT.

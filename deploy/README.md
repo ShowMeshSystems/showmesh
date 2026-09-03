@@ -176,7 +176,26 @@ The named data volume persists across this untouched. SQLite schema migrations i
 
 Do not set `SHOWMESH_VERSION` expecting it to select which code runs; it only labels whatever is in the working tree at build time, and `/version` will report that label even if it does not match the tree. `/version`'s `commit` field is not a label: `make deploy-build`/`make deploy-up` set it to the actual checked-out git ref, so it always matches the tree that was built.
 
-**Once published images exist** (not yet available), the intended workflow is a pure image-tag change: set `SHOWMESH_VERSION` in `.env` to the desired published tag, uncomment the `image:` line and remove/comment the `build:` block in `docker-compose.yml`, and run `docker compose up -d`. Rollback becomes setting `SHOWMESH_VERSION` back to the previous known-good tag and re-running the same command, still subject to the same forward-only migration constraint above. This paragraph describes intent, not current behavior; do not follow it until images are actually published.
+**Published images**, once a release tag has been pushed, are the alternative to the from-source path above: see "Running from published images" below. Rolling forward or back with published images is a pure image-tag change (set `SHOWMESH_RELEASE_VERSION` to the desired tag and re-run), still subject to the same forward-only migration constraint above.
+
+## Running from published images
+
+`.github/workflows/release.yml` publishes the coordinator and operator UI images to GHCR on every pushed `v<VERSION>` release tag: `ghcr.io/showmeshsystems/showmesh-coordinator` and `ghcr.io/showmeshsystems/showmesh-ui`, each tagged with the bare version (for example `0.1.0`) and the full commit SHA. See [`docs/RELEASING.md`](../docs/RELEASING.md) for what a release tag produces in full, including the node agent packages.
+
+To run the bundle from a published version instead of building from source, add the `docker-compose.published.yml` override, which replaces both services' `build:` with the matching `image:`:
+
+```sh
+make -C .. deploy-up-published SHOWMESH_RELEASE_VERSION=0.1.0
+```
+
+or directly with Compose:
+
+```sh
+SHOWMESH_RELEASE_VERSION=0.1.0 SHOWMESH_VERSION=unused SHOWMESH_COMMIT=unused SHOWMESH_BUILD_DATE=unused \
+  docker compose -f docker-compose.yml -f docker-compose.published.yml up -d
+```
+
+The three `unused` values are needed only because Compose validates each `-f` file's own required variables before merging them; the override's `build: !reset null` then drops the base file's build args from the merged configuration entirely, so nothing is ever built and those three values are never read. `docker-compose.yml` itself is unchanged and still builds from source by default; `make deploy-build` and `make deploy-up` keep working exactly as before.
 
 ## Preparing for an offline install
 
