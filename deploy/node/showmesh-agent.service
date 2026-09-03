@@ -33,6 +33,12 @@ StateDirectoryMode=0750
 Restart=on-failure
 RestartSec=2s
 
+# Raspberry Pi hosts (the expected audio node hardware) default to a 1024
+# file-descriptor limit. This unit sets an explicit margin above that
+# default rather than inheriting it; it is defense in depth, not a fix for
+# any descriptor leak the agent itself may have.
+LimitNOFILE=65536
+
 # Grants the one privilege the agent's FPP Connect HTTP compatibility
 # listener needs to bind port 80 (ADR-044 decision 5): xLights hardcodes
 # port 80 in both the discovery and upload URLs it builds, so moving the
