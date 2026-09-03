@@ -125,14 +125,21 @@ export function uploadFileWithProgress<T>(
 
     xhr.onload = () => {
       cleanup()
-      try {
-        checkApiVersionHeaderValue(xhr.getResponseHeader(API_VERSION_HEADER))
-      } catch (err) {
-        reject(err)
-        return
-      }
 
+      // Status classified BEFORE the version header: an infrastructure
+      // error response (nginx's own 413 page, a 502) carries no
+      // ShowMesh-API-Version header because ShowMesh never produced it,
+      // and reporting that as "no version header" points the operator at
+      // the wrong system. Mirrors client.ts's ApiClient.request, which
+      // checks response.ok via throwForFailedResponse before
+      // checkVersionHeader runs at all.
       if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          checkApiVersionHeaderValue(xhr.getResponseHeader(API_VERSION_HEADER))
+        } catch (err) {
+          reject(err)
+          return
+        }
         try {
           resolve(JSON.parse(xhr.responseText) as T)
         } catch {
