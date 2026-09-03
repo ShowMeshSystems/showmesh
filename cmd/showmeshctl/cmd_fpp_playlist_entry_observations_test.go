@@ -96,6 +96,48 @@ func TestCmdFPPPlaylistEntryReconciliation(t *testing.T) {
 	}
 }
 
+func TestCmdFPPPlaylistEntryReconciliationRendersOperatorInstruction(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","instanceUuid":"u1","outcome":"stale-import",
+			"reason":"the observation's playlistHash differs from the binding's",
+			"playlistId":"playlist-1","playlistRevision":1,"definitionAvailable":false,
+			"operatorInstruction":"Restart FPP, or re-import the playlist so the coordinator's binding and FPP agree."}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"playlist-entry-observations", "reconciliation", "--server", ts.URL, "u1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Restart FPP, or re-import the playlist so the coordinator's binding and FPP agree.") {
+		t.Errorf("stdout = %q, want it to print the operator instruction", stdout.String())
+	}
+}
+
+func TestCmdFPPPlaylistEntryReconciliationOmitsOperatorInstructionLineWhenAbsent(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","instanceUuid":"u1","outcome":"resolved",
+			"reason":"the observation names exactly one Playlist, entry, and Cue",
+			"playlistId":"playlist-1","playlistRevision":1,"entryId":"entry-1","cueId":"cue-1","cueRevision":1,
+			"definitionAvailable":true}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"playlist-entry-observations", "reconciliation", "--server", ts.URL, "u1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Instruction:") {
+		t.Errorf("stdout = %q, want no Instruction line for a resolved (non-mismatched) outcome", stdout.String())
+	}
+}
+
 func TestCmdFPPPlaylistEntryObservationsUsage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdFPP([]string{"playlist-entry-observations"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))

@@ -58,6 +58,18 @@ type FPPPlaylistEntryReconciliationResponse struct {
 	// currentruns.go's fppEvidenceBrokenReconciliation).
 	EvidenceBrokenAt *string `json:"evidenceBrokenAt,omitempty"`
 
+	// OperatorInstruction is absent whenever Outcome is not one of the four
+	// contradicting outcomes fppreconcile.Outcome.IsMismatch names
+	// (stale-import, unknown-entry, evidence-mismatch, cross-show), and a
+	// one-sentence, operator-facing notice naming both remedies (restart
+	// FPP, or re-import the playlist so the coordinator's binding and FPP
+	// agree) otherwise. Reported ADDITIVELY alongside Outcome/Reason,
+	// following EvidenceBrokenAt's own precedent above: it is a notice
+	// only and changes nothing about which mismatch policy applies or what
+	// that policy dispatches. GET /current-runs carries the same fact,
+	// under the same name, on its own CurrentReconciliation.
+	OperatorInstruction string `json:"operatorInstruction,omitempty"`
+
 	ServerTime string `json:"serverTime"`
 }
 

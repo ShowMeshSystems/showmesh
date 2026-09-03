@@ -13,6 +13,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -290,6 +291,131 @@ func TestCurrentRunsFPPRunReportsEvidenceBrokenReconciliationState(t *testing.T)
 	}
 	if run.Reconciliation.Reason == "" {
 		t.Error("reconciliation.reason is empty, want it to name the discontinuity")
+	}
+}
+
+// TestCurrentRunsFPPRunReportsOperatorInstructionForMismatch is the
+// GET /current-runs half of the mismatch-notice ruling: a playlist edited
+// mid-show without an FPP restart reconciles to stale-import (one of
+// H0.2's four mismatch outcomes), and this route's reconciliation must
+// carry the same operatorInstruction the reconciliation route does. A
+// notice only -- dispatch is untouched by this test.
+func TestCurrentRunsFPPRunReportsOperatorInstructionForMismatch(t *testing.T) {
+	reader, st := newFPPCurrentRunsProductionReader(t)
+	ctx := context.Background()
+
+	// The playlist was edited mid-show without an FPP restart: a hash that
+	// does not match the bound hash64ForTest("a1") observed for the entry.
+	staleHash := hash64ForTest("edited")
+	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{
+		InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: staleHash, Section: "mainPlaylist", Position: 0,
+	})
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	if err := st.PutFPPPlaylistEntryObservation(ctx, store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "inst-1", SchemaVersion: 1, Sequence: 1, Action: "playing",
+		PlaylistName: "Main", PlaylistHash: staleHash,
+		Section: "mainPlaylist", Position: 0, EntryKey: entryKey,
+		ObservedAt: testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+
+	snap, err := reader.Snapshot(ctx, testNow)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	run := currentRunsAudioRun(t, snap, "fpp:inst-1")
+	if run.Reconciliation.State != "stale-import" {
+		t.Fatalf("reconciliation.state = %q, want stale-import", run.Reconciliation.State)
+	}
+	const wantInstruction = "Restart FPP, or re-import the playlist so the coordinator's binding and FPP agree."
+	if run.Reconciliation.OperatorInstruction != wantInstruction {
+		t.Fatalf("reconciliation.operatorInstruction = %q, want %q", run.Reconciliation.OperatorInstruction, wantInstruction)
+	}
+
+	// Assert the wire shape too, field name and all, not just the internal
+	// currentrun.Reconciliation struct.
+	v1run := mapCurrentRun(run)
+	if v1run.Reconciliation.OperatorInstruction != wantInstruction {
+		t.Fatalf("v1.CurrentReconciliation.OperatorInstruction = %q, want %q", v1run.Reconciliation.OperatorInstruction, wantInstruction)
+	}
+}
+
+// TestCurrentRunsFPPRunOmitsOperatorInstructionWhenResolved proves the
+// additive field stays absent for a resolved (non-mismatched) run, on the
+// wire, field name and all.
+func TestCurrentRunsFPPRunOmitsOperatorInstructionWhenResolved(t *testing.T) {
+	reader, st := newFPPCurrentRunsProductionReader(t)
+	ctx := context.Background()
+
+	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{
+		InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1"), Section: "mainPlaylist", Position: 0,
+	})
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	if err := st.PutFPPPlaylistEntryObservation(ctx, store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "inst-1", SchemaVersion: 1, Sequence: 1, Action: "playing",
+		PlaylistName: "Main", PlaylistHash: hash64ForTest("a1"),
+		Section: "mainPlaylist", Position: 0, EntryKey: entryKey,
+		ObservedAt: testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+
+	snap, err := reader.Snapshot(ctx, testNow)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	run := currentRunsAudioRun(t, snap, "fpp:inst-1")
+	if run.Reconciliation.State != "resolved" {
+		t.Fatalf("reconciliation.state = %q, want resolved", run.Reconciliation.State)
+	}
+	if run.Reconciliation.OperatorInstruction != "" {
+		t.Fatalf("reconciliation.operatorInstruction = %q, want empty for a resolved run", run.Reconciliation.OperatorInstruction)
+	}
+
+	raw, err := json.Marshal(mapCurrentRun(run).Reconciliation)
+	if err != nil {
+		t.Fatalf("marshal reconciliation: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal reconciliation: %v", err)
+	}
+	if _, present := decoded["operatorInstruction"]; present {
+		t.Fatalf("operatorInstruction present in serialized JSON for a resolved run: %s", raw)
+	}
+}
+
+// TestCurrentRunsAudioRunOmitsOperatorInstructionWhenItsOwnStaleImportIsUnrelatedToFPP
+// is manager review's own finding on 51e8536: the showmesh-audio path
+// (audioSessionReconciliation) independently reports State = "stale-import"
+// for its own, unrelated playlist-revision check, sharing only the string
+// with fppreconcile.OutcomeStaleImport. That run must never carry
+// operatorInstruction: "restart FPP" would be fabricated advice for a
+// showmesh-audio session.
+func TestCurrentRunsAudioRunOmitsOperatorInstructionWhenItsOwnStaleImportIsUnrelatedToFPP(t *testing.T) {
+	at := testNow.Add(-2 * time.Second)
+	observations := []observation.Observation{
+		currentRunsAudioObservation(t, "background", "audio_session.source_role", "background", at),
+		// The active "background" playlist is revision 1 (newCurrentRunsProductionReader);
+		// observing revision 0 is the audio-side mismatch this test needs.
+		currentRunsAudioObservation(t, "background", "audio_session.playlist.revision", int64(0), at),
+		currentRunsAudioObservation(t, "background", "audio_session.state", "playing", at),
+	}
+	snapshot, err := newCurrentRunsProductionReader(t, observations).Snapshot(context.Background(), testNow)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	run := currentRunsAudioRun(t, snapshot, "showmesh-audio:audio-01:background")
+	if run.Reconciliation.State != "stale-import" {
+		t.Fatalf("reconciliation.state = %q, want stale-import", run.Reconciliation.State)
+	}
+	if run.Reconciliation.OperatorInstruction != "" {
+		t.Fatalf("reconciliation.operatorInstruction = %q, want empty for a showmesh-audio run's own stale-import", run.Reconciliation.OperatorInstruction)
 	}
 }
 

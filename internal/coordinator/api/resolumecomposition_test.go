@@ -518,6 +518,17 @@ func TestResolumeCompositionUploadOverLimitRefusedWithoutFullBuffering(t *testin
 	if m["type"] != ProblemTypeResolumeCompositionTooLarge {
 		t.Errorf("problem type = %v, want %q", m["type"], ProblemTypeResolumeCompositionTooLarge)
 	}
+	// payloadTooLargeProblem is now shared with assets.go's own too-large
+	// case (TestAssetUploadOverConfiguredMaxUploadBytesNamesConfiguredBound
+	// below), this route must still report its OWN fixed 16 MiB bound and
+	// its own composition-specific wording, unaffected by that
+	// parameterization, and with no em-dash (this coordinator's own
+	// convention).
+	wantDetail := "the uploaded file exceeds this coordinator's 16777216 byte upload limit for a Resolume composition file; " +
+		"nothing was stored. Real composition files are typically well under 3 MB, check that the correct file was selected."
+	if m["detail"] != wantDetail {
+		t.Errorf("detail = %q, want %q", m["detail"], wantDetail)
+	}
 
 	// The load-bearing assertion: the server must not have read anywhere
 	// near the full oversized body. http.MaxBytesReader stops erroring
