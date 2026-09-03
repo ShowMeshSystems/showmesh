@@ -262,6 +262,13 @@ type SchemaConfigNightSessionActive = components['schemas']['ConfigNightSessionA
 type SchemaNightSessionActiveConfigResponse = components['schemas']['NightSessionActiveConfigResponse']
 type SchemaCurrentRunsResponse = components['schemas']['CurrentRunsResponse']
 type SchemaCurrentRunsChangedEvent = components['schemas']['CurrentRunsChangedEvent']
+// The three-level emergency stop and its hard-stop arm/fire deliberate-intent
+// gate (api/openapi.yaml's four /emergency-stop/* routes).
+type SchemaEmergencyStopRequest = components['schemas']['EmergencyStopRequest']
+type SchemaEmergencyStopResponse = components['schemas']['EmergencyStopResponse']
+type SchemaEmergencyStopArmRequest = components['schemas']['EmergencyStopArmRequest']
+type SchemaEmergencyStopArmResponse = components['schemas']['EmergencyStopArmResponse']
+type SchemaEmergencyStopFireRequest = components['schemas']['EmergencyStopFireRequest']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -3076,6 +3083,99 @@ export class ApiStore {
    */
   async setFPPVolume(instanceId: string, volume: number): Promise<FPPCommandResult> {
     return this.dispatchFPPCommand(instanceId, { action: 'setVolume', params: { volume } })
+  }
+
+  /**
+   * `POST /api/v1/emergency-stop/stop` (level 1). Mints its own
+   * idempotency key. Reuses [ACTION_INVOKE_REQUEST_TIMEOUT_MS]: the
+   * coordinator dispatches "Stop Now" to every configured FPP instance
+   * concurrently, then runs this level's own configured follow-up
+   * `show.action`s sequentially, and a follow-up dispatch shares
+   * `POST /actions/{id}/invocations`' own write budget.
+   */
+  async emergencyStop(): Promise<SchemaEmergencyStopResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaEmergencyStopResponse>(
+        '/emergency-stop/stop',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/emergency-stop/stop-power-down` (level 2): everything
+   * [emergencyStop] does, plus forcing an active night session straight
+   * into its own graceful-shutdown sequence. See that method's own doc
+   * comment for the shared request budget.
+   */
+  async emergencyStopPowerDown(): Promise<SchemaEmergencyStopResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaEmergencyStopResponse>(
+        '/emergency-stop/stop-power-down',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/emergency-stop/hard-stop/arm` (level 3, call 1 of 2).
+   * No side effect on the show; mints a single-use token the caller must
+   * present to [fireEmergencyStopHardStop] within `expiresAt`. Arming
+   * again before that deadline invalidates this token immediately, so a
+   * caller must not arm speculatively ahead of an operator's own
+   * deliberate act.
+   */
+  async armEmergencyStopHardStop(): Promise<SchemaEmergencyStopArmResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopArmRequest = { idempotencyKey: randomUUIDv4() }
+      return await this.client.postJson<SchemaEmergencyStopArmResponse>(
+        '/emergency-stop/hard-stop/arm',
+        body,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/emergency-stop/hard-stop/fire` (level 3, call 2 of 2).
+   * Requires the `armToken` [armEmergencyStopHardStop] returned, still
+   * unexpired and unconsumed: an unknown, expired, or already-consumed
+   * token is refused with a `409` (`ApiError`), which the caller must
+   * report rather than retry silently: this method never re-arms on the
+   * caller's behalf. See [emergencyStop]'s own doc comment for the
+   * shared request budget.
+   */
+  async fireEmergencyStopHardStop(armToken: string): Promise<SchemaEmergencyStopResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopFireRequest = { idempotencyKey: randomUUIDv4(), armToken }
+      const resp = await this.client.postJson<SchemaEmergencyStopResponse>(
+        '/emergency-stop/hard-stop/fire',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
   }
 
   /**

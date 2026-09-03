@@ -375,6 +375,17 @@ export type CurrentRunActivation = components['schemas']['CurrentRunActivation']
 export type CurrentRunTarget = components['schemas']['CurrentRunTarget']
 export type CurrentRunNext = components['schemas']['CurrentRunNext']
 
+// The three-level emergency stop's own result shape (level, per-instance
+// stopOutcomes, optional nightSession, and best-effort followUps),
+// aliased for the identical reason as every type above. The hard-stop
+// arm/fire gate's own arm response is aliased separately: it carries no
+// nested result, only the token and its expiry.
+export type EmergencyStopResult = components['schemas']['EmergencyStopResult']
+export type EmergencyStopInstanceOutcome = components['schemas']['EmergencyStopInstanceOutcome']
+export type EmergencyStopFollowUpResult = components['schemas']['EmergencyStopFollowUpResult']
+export type EmergencyStopNightSessionOutcome = components['schemas']['EmergencyStopNightSessionOutcome']
+export type EmergencyStopArmResponse = components['schemas']['EmergencyStopArmResponse']
+
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
 // verdicts, aliased for the identical reason as every type above
 // (ADR-015). Neither is part of `Model`: plain on-demand side calls,

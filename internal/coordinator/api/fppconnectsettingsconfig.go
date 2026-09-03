@@ -127,6 +127,12 @@ func (h *handlers) handlePutFPPConnectSettingsConfig(w http.ResponseWriter, r *h
 	ctx := r.Context()
 	ac := authFromContext(ctx)
 
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxFPPConnectSettingsConfigRequestBodyBytes+1))
 	if err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("reading request body: %v", err)))
@@ -154,11 +160,16 @@ func (h *handlers) handlePutFPPConnectSettingsConfig(w http.ResponseWriter, r *h
 		nextRevisionNo int64
 	)
 	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		currentRevision := int64(0)
 		nextRevisionNo = 1
 		if obj, gerr := tx.GetConfigObject(ctx, config.FPPConnectSettingsConfigKind, config.FPPConnectSettingsConfigObjectID); gerr == nil {
+			currentRevision = obj.CurrentRevision
 			nextRevisionNo = obj.CurrentRevision + 1
 		} else if !errors.Is(gerr, store.ErrConfigObjectNotFound) {
 			return identity.AuditEntry{}, gerr
+		}
+		if err := checkRevisionPrecondition(config.FPPConnectSettingsConfigKind, config.FPPConnectSettingsConfigObjectID, precondition, currentRevision); err != nil {
+			return identity.AuditEntry{}, err
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
@@ -183,6 +194,11 @@ func (h *handlers) handlePutFPPConnectSettingsConfig(w http.ResponseWriter, r *h
 		}, nil
 	})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write fppconnect.settings config revision", writeErr)
 		return
 	}

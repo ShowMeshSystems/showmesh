@@ -918,3 +918,107 @@ func TestAuthorizeRefusesASequenceThatWasNeverUploaded(t *testing.T) {
 		t.Fatalf("reason = %q, want it to name the sequence (never-uploaded-seq), the node (node-1) and the cue (cue-1)", reason)
 	}
 }
+
+// --- StateEvidenceBroken: owner ruling 2026-09-02, cue-deactivate-on-jump ---
+
+// TestDecideEvidenceBrokenOutranksResolvedOutcome proves the marker's own
+// precedence rule (StateEvidenceBroken's own doc comment): with
+// obs.EvidenceBrokenAt set, Decide reaches StateEvidenceBroken even though
+// result.Outcome is OutcomeResolved, and Decision.EvidenceBroken carries
+// exactly the SAME per-node identity decideResolved would have built from
+// this same frozen result — the Cue this coordinator actually activated
+// before evidence broke — never Decision.Activations.
+func TestDecideEvidenceBrokenOutranksResolvedOutcome(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	putFreshReport(t, st, "node-1", now)
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
+	obs := baseObservation("inst-1")
+	brokenAt := time.Unix(3500, 0).UTC()
+	obs.EvidenceBrokenAt = &brokenAt
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateEvidenceBroken {
+		t.Fatalf("State = %q, want %q (the marker must outrank OutcomeResolved)", dec.State, StateEvidenceBroken)
+	}
+	if len(dec.Activations) != 0 {
+		t.Fatalf("Activations = %+v, want empty: an evidence-broken decision must never be dispatched as a cue.activate", dec.Activations)
+	}
+	if len(dec.ClearNodes) != 0 {
+		t.Fatalf("ClearNodes = %+v, want empty: this is not an H0.2 mismatch effect", dec.ClearNodes)
+	}
+	act, ok := dec.EvidenceBroken["node-1"]
+	if !ok {
+		t.Fatalf("no EvidenceBroken entry for node-1; EvidenceBroken = %+v", dec.EvidenceBroken)
+	}
+	if act.CueID != "cue-1" || act.Show != "show-1" {
+		t.Errorf("EvidenceBroken[node-1] = %+v, want the Cue actually resolved before evidence broke (cue-1/show-1)", act)
+	}
+	if !strings.Contains(dec.Reason, "sequence-regression") {
+		t.Errorf("Reason = %q, want it to name the sequence-regression discontinuity", dec.Reason)
+	}
+}
+
+// TestDecideEvidenceBrokenOutranksIdentityUnavailable proves the marker
+// check runs before EVEN the identity-unavailable/unbound early returns,
+// not merely before the mismatch/resolved routing further down.
+func TestDecideEvidenceBrokenOutranksIdentityUnavailable(t *testing.T) {
+	st := openTestStore(t)
+	result := fppreconcile.Result{Outcome: fppreconcile.OutcomeIdentityUnavailable, Reason: "FPP could not establish identity"}
+	obs := baseObservation("inst-1")
+	brokenAt := time.Unix(3500, 0).UTC()
+	obs.EvidenceBrokenAt = &brokenAt
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateEvidenceBroken {
+		t.Fatalf("State = %q, want %q", dec.State, StateEvidenceBroken)
+	}
+	if len(dec.EvidenceBroken) != 0 {
+		t.Fatalf("EvidenceBroken = %+v, want empty: OutcomeIdentityUnavailable never resolved a Cue to undo", dec.EvidenceBroken)
+	}
+}
+
+// TestDecideEvidenceBrokenWithNonResolvedOutcomeHasNothingToUndo proves the
+// "nothing was cleanly activated to begin with" case: a broken marker on a
+// row whose own last resolution was a mismatch outcome (never resolved to
+// an authorized Cue) reaches StateEvidenceBroken with an empty
+// EvidenceBroken map, not an error and not a guess.
+func TestDecideEvidenceBrokenWithNonResolvedOutcomeHasNothingToUndo(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := fppreconcile.Result{
+		Outcome: fppreconcile.OutcomeStaleImport, Reason: "the FPP playlist was edited and re-imported",
+		PlaylistID: "playlist-1", PlaylistRevision: 1, Show: "show-1",
+	}
+	obs := baseObservation("inst-1")
+	brokenAt := time.Unix(3500, 0).UTC()
+	obs.EvidenceBrokenAt = &brokenAt
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateEvidenceBroken {
+		t.Fatalf("State = %q, want %q", dec.State, StateEvidenceBroken)
+	}
+	if len(dec.EvidenceBroken) != 0 {
+		t.Fatalf("EvidenceBroken = %+v, want empty: nothing was resolved from this evidence before it broke", dec.EvidenceBroken)
+	}
+}

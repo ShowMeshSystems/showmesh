@@ -1247,14 +1247,14 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                       {(p) => (
                         <Select
                           {...p}
-                          value={`${item.sequence} ${item.target}`}
+                          value={audioAssets.find((asset) => asset.sequence === item.sequence && asset.target === item.target)?.id ?? ''}
                           onChange={(e) => {
-                            const [selectedSequence = '', selectedTarget = ''] = e.target.value.split(' ')
-                            updateBackgroundAudioItem(index, { show: draft.show, sequence: selectedSequence, target: selectedTarget, itemId: item.itemId || selectedSequence })
+                            const selectedAsset = audioAssets.find((asset) => asset.id === e.target.value)
+                            updateBackgroundAudioItem(index, { show: draft.show, sequence: selectedAsset?.sequence ?? '', target: selectedAsset?.target ?? '', itemId: item.itemId || (selectedAsset?.sequence ?? '') })
                           }}
                         >
-                          <option value=" ">Select an audio asset…</option>
-                          {audioAssets.map((asset) => <option key={asset.id} value={`${asset.sequence} ${asset.target}`}>{asset.sequence} · {asset.target}</option>)}
+                          <option value="">Select an audio asset…</option>
+                          {audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.sequence} · {asset.target}</option>)}
                         </Select>
                       )}
                     </Field>

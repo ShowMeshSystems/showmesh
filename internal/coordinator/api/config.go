@@ -285,6 +285,18 @@ func decodeFPPEndpointsConfigPutBody(body io.Reader) ([]config.FPPEndpoint, erro
 //     so this refusal is unreachable in exactly the case the boot-time
 //     check does not fire either — see that field's own doc comment.
 //
+// This operation carries a SECOND, unrelated 409 cause: an opt-in
+// If-Match/If-None-Match revision precondition (parseRevisionPrecondition,
+// showconfig.go), parsed immediately after Defect 3a above and still
+// before the body is read. The two never race for which one is checked
+// first — Defect 3a is an environment-variable refusal that has nothing
+// to do with the request's own headers, so it always runs first and
+// unconditionally, exactly as before this precondition existed; the
+// revision precondition, when the caller sent one, is enforced only once
+// Defect 3a has already let the request through. Its own detail text
+// (configRevisionConflictProblem) tells the two 409s apart from a stale
+// revision refusal.
+//
 // ADR-009 requires invalid configuration be REJECTED BEFORE ACTIVATION,
 // and this function's ordering is what makes that literally true: decoding
 // and both validation passes all run and can all fail BEFORE
@@ -317,6 +329,12 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 			return
 		}
 		writeProblem(w, h.logger, now, fppEndpointsEnvVarSetProblem())
+		return
+	}
+
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
 		return
 	}
 
@@ -423,11 +441,16 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 		// what makes "read current revision, then create the next one"
 		// race-free against a second concurrent PUT, with no extra locking
 		// this package would otherwise have to invent.
+		currentRevision := int64(0)
 		nextRevisionNo = 1
 		if obj, gerr := tx.GetConfigObject(ctx, config.FPPEndpointsConfigKind, config.FPPEndpointsConfigObjectID); gerr == nil {
+			currentRevision = obj.CurrentRevision
 			nextRevisionNo = obj.CurrentRevision + 1
 		} else if !errors.Is(gerr, store.ErrConfigObjectNotFound) {
 			return identity.AuditEntry{}, gerr
+		}
+		if err := checkRevisionPrecondition(config.FPPEndpointsConfigKind, config.FPPEndpointsConfigObjectID, precondition, currentRevision); err != nil {
+			return identity.AuditEntry{}, err
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
@@ -478,6 +501,11 @@ func (h *handlers) handlePutFPPEndpointsConfig(w http.ResponseWriter, r *http.Re
 		// already establishes as this codebase's convention for "an
 		// AuditedWrite closure failed" (its `case err != nil:` branch, no
 		// special case for ErrAuditWrite).
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write fpp.endpoints config revision", writeErr)
 		return
 	}

@@ -203,6 +203,96 @@ func currentRunsAudioRun(t *testing.T, snap currentrun.Snapshot, id string) curr
 	return currentrun.Run{}
 }
 
+// --- FPP runs: schemaV29's marker outranks Reconcile (owner ruling 2026-09-02) ---
+
+// newFPPCurrentRunsProductionReader wires a real store through appendFPPRuns
+// exactly as the production route does: FPPObservations and
+// FPPReconciliation both real, mirroring failToBlackComposedSetup's own
+// FPP-side wiring one file over.
+func newFPPCurrentRunsProductionReader(t *testing.T) (currentRunsReader, *store.Store) {
+	t.Helper()
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "db"), nil, store.WithClock(fixedClock(testNow)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	putShowForTest(t, st, "halloween", "Halloween")
+	putActiveShowForTest(t, st, "halloween")
+	putAudioOnlyCueForTest(t, st, "cue-1", "halloween")
+	putPlaylistForTest(t, st, "playlist-1", config.ShowPlaylistPayload{
+		Show: "halloween", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: "cue-1",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	})
+	deps := Dependencies{
+		Config: st, FPP: &fakeFPPLister{}, FPPObservations: st,
+		FPPReconciliation: StoreFPPReconciliation{Store: st},
+		Nodes:             &fakeNodeLister{}, Audio: currentRunsAudioListerFake{},
+	}.withDefaults()
+	return currentRunsReader{deps: deps}, st
+}
+
+// TestCurrentRunsFPPRunReportsEvidenceBrokenReconciliationState is #301's
+// own primary Show Night surface (cue-deactivate-on-jump proposal §0a):
+// once schemaV29's marker is set, GET /current-runs's per-run
+// reconciliation collapses to "evidence-broken", outranking whatever
+// fppreconcile.Reconcile would otherwise report for the same
+// (now-possibly-stale) row — the identical precedence rule
+// cueactivate.Decide applies for dispatch, restated here for display.
+func TestCurrentRunsFPPRunReportsEvidenceBrokenReconciliationState(t *testing.T) {
+	reader, st := newFPPCurrentRunsProductionReader(t)
+	ctx := context.Background()
+
+	entryKey, err := config.DerivePlaylistEntryKey(config.ShowPlaylistPayload{
+		Show: "halloween", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		FPP: &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: "cue-1",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}, "entry-1")
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	if err := st.PutFPPPlaylistEntryObservation(ctx, store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "inst-1", SchemaVersion: 1, Sequence: 1, Action: "playing",
+		PlaylistName: "Main", PlaylistHash: hash64ForTest("a1"),
+		Section: "mainPlaylist", Position: 0, EntryKey: entryKey,
+		ObservedAt: testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+
+	before, err := reader.Snapshot(ctx, testNow)
+	if err != nil {
+		t.Fatalf("snapshot before marking evidence broken: %v", err)
+	}
+	if run := currentRunsAudioRun(t, before, "fpp:inst-1"); run.Reconciliation.State != "resolved" {
+		t.Fatalf("precondition failed: reconciliation.state = %q, want resolved before marking evidence broken", run.Reconciliation.State)
+	}
+
+	brokenAt := testNow.Add(time.Second)
+	if err := st.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, "inst-1", brokenAt); err != nil {
+		t.Fatalf("mark evidence broken: %v", err)
+	}
+
+	after, err := reader.Snapshot(ctx, testNow)
+	if err != nil {
+		t.Fatalf("snapshot after marking evidence broken: %v", err)
+	}
+	run := currentRunsAudioRun(t, after, "fpp:inst-1")
+	if run.Reconciliation.State != "evidence-broken" {
+		t.Fatalf("reconciliation.state = %q, want evidence-broken", run.Reconciliation.State)
+	}
+	if run.Reconciliation.Reason == "" {
+		t.Error("reconciliation.reason is empty, want it to name the discontinuity")
+	}
+}
+
 func TestCurrentRunsProductionSeparatesConcurrentBackgroundAndAnnouncement(t *testing.T) {
 	old := testNow.Add(-2 * time.Second)
 	observations := []observation.Observation{

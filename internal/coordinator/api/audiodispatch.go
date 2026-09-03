@@ -55,7 +55,12 @@ import (
 
 var scopeAudioCommand = identity.ScopeAudioCommand
 
-var audioSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+// A colon is admitted because this coordinator mints session ids that
+// carry one (pkg/cueactivation's four cue-activation ids); refusing it
+// here left those sessions addressable by the coordinator itself but by
+// no operator. The id reaches the node as a JSON params value on a
+// per-node topic, never as a path or topic segment.
+var audioSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$`)
 
 // audioSafetyExemptActions is this file's own audience-audio equivalent of
 // ADR-024 decision 11's blackout/stop/power-off safety class: muting the

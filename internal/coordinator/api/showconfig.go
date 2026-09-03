@@ -704,6 +704,33 @@ func configRevisionConflictProblem(e *errConfigRevisionPreconditionFailed) v1.Pr
 	}
 }
 
+// checkRevisionPrecondition is writeShowConfigRevision's own precondition
+// switch below, pulled out so every OTHER PUT handler in this package -
+// the ten singleton kinds, each with its own inline AuditedWrite closure
+// rather than a shared write helper - can call it as ONE line per closure
+// instead of copying this switch ten times over. currentRevision must come
+// from the SAME GetConfigObject read that closure already performed to
+// compute its own nextRevisionNo, never a second read: see
+// writeShowConfigRevision's own doc comment for why that is what makes the
+// check race-free under this store's single-writer-lock design. Returns
+// nil when the write may proceed, or errConfigRevisionPreconditionFailed
+// (as a plain error, so callers assign it straight into an `error`-typed
+// return without a typed-nil footgun) when it may not - always checked,
+// and always returned, BEFORE tx.CreateConfigRevision runs.
+func checkRevisionPrecondition(kind, id string, precondition revisionPrecondition, currentRevision int64) error {
+	switch precondition.Mode {
+	case revisionPreconditionIfMatch:
+		if currentRevision != precondition.Revision {
+			return &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
+		}
+	case revisionPreconditionIfNoneMatchCreate:
+		if currentRevision != 0 {
+			return &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
+		}
+	}
+	return nil
+}
+
 // writeShowConfigRevision is handlePutShowAction/handlePutShowMacro's
 // shared write core, mirroring handlePutFPPEndpointsConfig's own
 // AuditedWrite closure (config.go) exactly: the next revision number is
@@ -736,15 +763,8 @@ func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac au
 			return identity.AuditEntry{}, gerr
 		}
 
-		switch precondition.Mode {
-		case revisionPreconditionIfMatch:
-			if currentRevision != precondition.Revision {
-				return identity.AuditEntry{}, &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
-			}
-		case revisionPreconditionIfNoneMatchCreate:
-			if currentRevision != 0 {
-				return identity.AuditEntry{}, &errConfigRevisionPreconditionFailed{kind: kind, id: id, precondition: precondition, actualRevision: currentRevision}
-			}
+		if err := checkRevisionPrecondition(kind, id, precondition, currentRevision); err != nil {
+			return identity.AuditEntry{}, err
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{

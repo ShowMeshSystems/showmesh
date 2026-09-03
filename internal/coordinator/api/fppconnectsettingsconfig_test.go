@@ -114,3 +114,48 @@ func TestGetFPPConnectSettingsRevisionsListsWrittenRevisions(t *testing.T) {
 		t.Fatalf("revisions list missing revision 1; body: %s", body)
 	}
 }
+
+// TestPutFPPConnectSettingsConfigRevisionPreconditionWiring is a smoke
+// test proving handlePutFPPConnectSettingsConfig actually threads the
+// shared revision precondition through to its own call site. The full
+// behavioural matrix lives once, on the representative kind
+// fpp.endpoints (config_test.go).
+func TestPutFPPConnectSettingsConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(enabled bool, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		body := `{"enabled":false,"maxFileBytes":1073741824,"maxAssetDirBytes":10737418240}`
+		if enabled {
+			body = `{"enabled":true,"maxFileBytes":1073741824,"maxAssetDirBytes":10737418240}`
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fppconnect.settings", body, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := put(false, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put(true, map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put(false, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/fppconnect.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["enabled"] != true {
+		t.Errorf("payload.enabled = %v, want true (the matching-If-Match writer's value, which must have survived the refused stale write); body: %s", payload["enabled"], getBody)
+	}
+}

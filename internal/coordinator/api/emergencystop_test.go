@@ -474,3 +474,41 @@ func TestEmergencyStopHardStopArmingAgainInvalidatesThePreviousArmForFire(t *tes
 		t.Fatalf("FPP commands sent = %d, want 0", got)
 	}
 }
+
+// TestPutEmergencyStopConfigRevisionPreconditionWiring is a smoke test
+// proving handlePutEmergencyStopConfig actually threads the shared
+// revision precondition through to its own call site. The full
+// behavioural matrix lives once, on the representative kind
+// fpp.endpoints (config_test.go).
+func TestPutEmergencyStopConfigRevisionPreconditionWiring(t *testing.T) {
+	now := time.Now()
+	f := newEmergencyStopFixture(t, now)
+
+	put := func(body string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + f.adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.emergencystop", body, h)
+		return doRawRequest(t, f.api.Handler, req)
+	}
+
+	if resp, body := put(emergencyStopEmptyLevelsBody(), nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put(emergencyStopWorklightsOnStopBody(), map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put(emergencyStopEmptyLevelsBody(), map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+
+	getResp, getBody := doRequest(t, f.api.Handler, "GET", "/api/v1/config/show.emergencystop", map[string]string{"Authorization": "Bearer " + f.adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	if !containsAll(string(getBody), `"worklights-on"`) {
+		t.Errorf("the matching-If-Match writer's action should have survived the refused stale write; body: %s", getBody)
+	}
+}
