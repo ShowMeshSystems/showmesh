@@ -547,6 +547,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/audio/silence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch audio.node.silence to a node (unconditional per-node emergency stop)
+         * @description Behind `audio:command`. Stops every playback session the node's agent currently holds, regardless of what this coordinator itself knew about any of them - no `sessionId`, no `revision`. Idempotent: silencing an already-silent node is a success reporting zero or more already-stopped sessions, never an error. A `200` response is never itself success: `command.outcome` is the only place that is decided, and a node whose agent predates this operation reports `"refused"` with that agent's own refusal reason, never a generic failure. See AudioNodeSilenceResult.outcome.
+         */
+        post: operations["dispatchAudioNodeSilence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/{instanceId}/commands": {
         parameters: {
             query?: never;
@@ -3309,6 +3329,50 @@ export interface components {
             /** Format: date-time */
             resolvedAt: string | null;
             /** @description True when this command's dispatch could not write its audit entry atomically with the command and proceeded anyway under the `audio.session.stop`/`audio.session.clear`/ `audio.output.mute` safety-class exemption (ADR-024 decision 11), with a degraded, stderr-only attribution record. */
+            attributionDegraded: boolean;
+        };
+        /** @description The body of POST /nodes/{nodeId}/audio/silence. audio.node.silence takes no params of its own, so idempotencyKey is the only field - unlike AudioSessionNoParamsRequest, there is no revision here. */
+        AudioNodeSilenceRequest: {
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same node) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused against a DIFFERENT node. */
+            idempotencyKey?: string;
+        };
+        /** @description The body of a successful (200) response from POST /nodes/{nodeId}/audio/silence. */
+        AudioNodeSilenceResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["AudioNodeSilenceResult"];
+        };
+        /** @description One session's own outcome, as the node's agent reported it (internal/agent/audio.Manager.SilenceAll). */
+        AudioNodeSilenceSessionResult: {
+            sessionId: string;
+            /** @description The session engine's own outcome word for this session (e.g. "stopped"); the same vocabulary AudioSessionCommandResult. outcome's "started"/"position"/"stopped"/"completed" members draw from, since silencing a session runs the identical session-level stop. */
+            outcome: string;
+            reason: string;
+        };
+        /** @description What happened to one dispatched (or replayed) audio.node.silence command. Unlike AudioSessionCommandResult, this is node-scoped, not session-scoped: outcome/reason are the wire-level result the node's agent itself reported, and sessions/sessionsFound carry what happened to every session that node was holding. A node whose agent predates this operation reports `outcome: "refused"` with that agent's own refusal reason in `reason`, never a generic failure. */
+        AudioNodeSilenceResult: {
+            commandId: string;
+            idempotencyKey: string;
+            /** @enum {string} */
+            action: "audio.node.silence";
+            nodeId: string;
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request - it is the ORIGINAL command's already-recorded result. */
+            replay: boolean;
+            /**
+             * @description The wire-level result the node's own agent reported for this command as a whole (mqttproto.ResultPayload.outcome), not a per-session outcome word - read `sessions` for what happened to each one. Empty only for a REPLAY response returned before the original request's own dispatch has finished, matching AudioSessionCommandResult.outcome's identical accepted-empty case. "refused" carries the node's own refusal reason verbatim - including an older agent that does not know this operation - never flattened into a generic failure.
+             * @enum {string}
+             */
+            outcome: "confirmed" | "unconfirmed" | "refused" | "failed" | "unconfirmable" | "";
+            /** @description Required whenever outcome is not "confirmed"; empty for "confirmed". */
+            reason: string;
+            /** @description How many sessions the node's agent reported, matching `sessions`' own length. Zero for a node holding no sessions, or when outcome carries no evidence (e.g. "refused"). */
+            sessionsFound: number;
+            sessions: components["schemas"]["AudioNodeSilenceSessionResult"][];
+            /** Format: date-time */
+            dispatchedAt: string;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            /** @description True when this command's dispatch could not write its audit entry atomically with the command and proceeded anyway under the `audio.node.silence` safety-class exemption (ADR-024 decision 11), with a degraded, stderr-only attribution record. */
             attributionDegraded: boolean;
         };
         /** @description The body of a successful (200) response from POST /fpp/{instanceId}/commands. */
@@ -7164,6 +7228,48 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAudioNodeSilence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AudioNodeSilenceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioNodeSilenceResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action against a DIFFERENT node - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
