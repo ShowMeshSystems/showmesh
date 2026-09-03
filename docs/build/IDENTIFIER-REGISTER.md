@@ -1319,17 +1319,21 @@ rather than a merge-week edit. Discard and recreate branch dev databases.
 The deployed local dev stack is at v8 and is unaffected: a merged binary
 sees 8 and applies v9 then v10 in order.
 
-## FPP plugin warning ids
+## FPP plugin warning messages
 
-The `id` the ShowMesh FPP plugin passes to FPP's `WarningHolder` when it
-raises a warning into the player's own notification center. The id and the
-message text are visible in FPP's web interface, and FPP deduplicates and
-clears on the exact `(id, message, plugin)` triple, so two features sharing an
-id would clear each other's warnings.
+What the ShowMesh FPP plugin passes to FPP's `WarningHolder` when it raises a
+warning into the player's own notification center. FPP's numeric warning ids
+are FPP's, defined in its `warnings-definitions.json`; a plugin has no
+allocation authority there and raises under the unknown-warning id `0`, the
+same way FPP's own ad hoc plugin-sourced warnings do. FPP deduplicates and
+clears on the exact `(id, message, plugin)` triple, so with the id fixed at
+`0` and the plugin name constant, the MESSAGE string is the identity. Two
+features sharing a message would clear each other's warnings, so message
+strings are registered here.
 
-| Warning id | Status | Owner |
+| Warning message | Status | Owner |
 |---|---|---|
-| `ShowMesh_PlaylistMismatch` | reserved | pre-release notice: the bound playlist's on-disk content changed after it started, message text is the coordinator's operator mismatch instruction |
+| the coordinator's operator mismatch instruction (`fppreconcile.OperatorMismatchInstruction`, one constant shared by the raise and the clear) | reserved | pre-release notice: the bound playlist's on-disk content changed after it started; raised under id `0`, plugin name constant, C++ constant `ShowMesh_PlaylistMismatch` names the id in the plugin source |
 
 ## Change stream event kinds
 
