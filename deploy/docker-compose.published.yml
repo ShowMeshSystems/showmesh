@@ -1,0 +1,22 @@
+# Override that runs the coordinator and operator UI from published GHCR
+# images instead of building them from source. See deploy/README.md
+# "Running from published images".
+#
+# Usage:
+#   SHOWMESH_RELEASE_VERSION=0.1.0 docker compose \
+#     -f docker-compose.yml -f docker-compose.published.yml up -d
+#
+# `build: !reset null` removes the base file's `build:` block entirely
+# (a plain override cannot do this: Compose deep-merges mapping keys, so
+# without `!reset` this file's `image:` would sit alongside the base
+# file's `build:` rather than replacing it, and `up` would still build).
+# `!reset` needs Docker Compose v2.24.0 or newer.
+
+services:
+  coordinator:
+    build: !reset null
+    image: ghcr.io/showmeshsystems/showmesh-coordinator:${SHOWMESH_RELEASE_VERSION:?SHOWMESH_RELEASE_VERSION is required, e.g. SHOWMESH_RELEASE_VERSION=0.1.0. See deploy/README.md.}
+
+  ui:
+    build: !reset null
+    image: ghcr.io/showmeshsystems/showmesh-ui:${SHOWMESH_RELEASE_VERSION:?SHOWMESH_RELEASE_VERSION is required, e.g. SHOWMESH_RELEASE_VERSION=0.1.0. See deploy/README.md.}

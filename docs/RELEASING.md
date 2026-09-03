@@ -29,23 +29,44 @@ and versions in its own repository, `ShowMeshSystems/fpp-showmesh`.
    distinction is the reason this scheme exists: conflating the two is the
    mistake it prevents.
 
-## What a pre-release cut is, today
+## What a pre-release cut produces
 
-A pre-release cut is a tagged commit on `main` and nothing more. Cutting one
-does not build or publish anything; there is no release workflow, no GHCR
-image, and no release asset produced by this repository yet. Building and
-publishing artifacts from a tag is a following change, not part of this
-procedure.
+Pushing a `v<VERSION>` tag runs `.github/workflows/release.yml`, which
+verifies the tag agrees with `VERSION` and `CHANGELOG.md` (see "Cutting a
+pre-release" below), then publishes, with no manual step:
 
-An early tester who is given a pre-release today receives a commit reference:
-the tag name (`v0.1.0`) and, through it, the exact commit on `main` it points
-to. They build from source at that commit using the instructions in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) (`make build`). `VERSION` in an
-unversioned local build stays `dev`; a build that wants the real version
-string passes `VERSION=` on the `make` command line explicitly, since the
-Makefile's `VERSION ?= dev` default is not overridden by this procedure.
-Wiring a tag's version automatically into a CI build through `ldflags` is a
-separate, later change.
+- The coordinator and operator UI images on GHCR, tagged with the bare
+  version and the full commit SHA (no `latest` tag):
+  `ghcr.io/showmeshsystems/showmesh-coordinator` and
+  `ghcr.io/showmeshsystems/showmesh-ui`. The coordinator image is built with
+  the release version, commit, and build date as its `-ldflags`, so a
+  deployed coordinator's `GET /version` reports the real cut instead of
+  `version=dev commit=none`.
+- The node agent, packaged for amd64 and arm64, as GitHub release assets
+  (`showmesh-node-agent_<VERSION>_linux_<amd64|arm64>.tar.gz`, plus a
+  `showmesh-node-agent_<VERSION>_SHA256SUMS` covering both). There is no
+  armv7 asset yet: the cgo build fails on that target with a 32-bit C
+  portability defect, a 64-bit-only constant in
+  `internal/agent/audio/ltcgen/ltcgen_cgo.go` overflowing `size_t`. That is a
+  source defect rather than release plumbing, and it is not fixed here.
+- A GitHub pre-release entry whose body is the matching `CHANGELOG.md`
+  section for that version.
+
+An early tester who is given a pre-release today can either pull the
+published images and the node agent asset for their platform, or build from
+source at the tagged commit using the instructions in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) (`make build`); both paths remain
+supported. `deploy/docker-compose.yml` still builds from source by default;
+run it against published images instead with `deploy/docker-compose.published.yml`
+(see [`deploy/README.md`](../deploy/README.md)). `VERSION` in an unversioned
+local build stays `dev`; a build that wants the real version string passes
+`VERSION=` on the `make` command line explicitly, since the Makefile's
+`VERSION ?= dev` default is not overridden by this procedure.
+
+`workflow_dispatch` runs the same pipeline as a proof run on a branch, before
+any tag exists: it builds and packages everything and publishes the two
+images under the non-release tag `0.0.0-dispatch.<short sha>`, but creates no
+GitHub release and uploads no release asset.
 
 ## Cutting a pre-release
 
@@ -69,6 +90,8 @@ Steps, in order:
    and push the tag.
 
 Steps 2 through 6 are manual today: there is no automation that bumps
-`VERSION`, edits `CHANGELOG.md`, or creates the tag. A build-and-publish
-pipeline that acts on a pushed tag is planned as a following change and is out
-of scope for this document.
+`VERSION`, edits `CHANGELOG.md`, or creates the tag. Step 6, the tag push,
+is what triggers `.github/workflows/release.yml` and produces everything
+described in "What a pre-release cut produces" above; the release workflow
+enforces step 4's agreement itself and fails the run before publishing
+anything if the tag, `VERSION`, and `CHANGELOG.md` disagree.
