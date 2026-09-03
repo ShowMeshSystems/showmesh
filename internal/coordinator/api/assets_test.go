@@ -439,6 +439,7 @@ func TestPostAssetUploadValidation(t *testing.T) {
 type v1ProblemForTest struct {
 	Type   string `json:"type"`
 	Status int    `json:"status"`
+	Detail string `json:"detail"`
 }
 
 // showTargetedAssetIsAccepted proves the "show" branch of targetKind is a
@@ -594,6 +595,62 @@ func TestPostAssetUploadTooLarge(t *testing.T) {
 	_ = json.Unmarshal(body, &p)
 	if p.Type != ProblemTypeResolumeCompositionTooLarge {
 		t.Errorf("problem type = %q, want the shared payload-too-large type %q", p.Type, ProblemTypeResolumeCompositionTooLarge)
+	}
+	// The load-bearing assertion for this test's own name: the detail must
+	// name THIS route's configured bound (4, deliberately distinctive from
+	// maxResolumeCompositionUploadBytes' 16 MiB so a hardcoded 16777216
+	// cannot pass this by coincidence), never the Resolume composition
+	// route's own fixed bound, and must call the uploaded thing an asset,
+	// not a Resolume composition file.
+	wantDetail := "the uploaded file exceeds this coordinator's 4 byte upload limit for an uploaded asset; nothing was stored."
+	if p.Detail != wantDetail {
+		t.Errorf("detail = %q, want %q", p.Detail, wantDetail)
+	}
+}
+
+// TestAssetUploadOverConfiguredMaxUploadBytesNamesConfiguredBound is
+// TestPostAssetUploadTooLarge's sibling for the OTHER too-large call site
+// in assets.go: assetstore.ErrTooLarge, returned by AssetBackend.Put
+// itself rather than by http.MaxBytesReader. Both call sites went through
+// the identical unparameterized helper before this change; this proves
+// the second one was fixed too, not only the first.
+type fakeTooLargeBackend struct{}
+
+func (fakeTooLargeBackend) Put(context.Context, io.Reader, int64) (assetstore.Blob, error) {
+	return assetstore.Blob{}, assetstore.ErrTooLarge
+}
+func (fakeTooLargeBackend) Open(context.Context, string) (io.ReadSeekCloser, int64, error) {
+	return nil, 0, assetstore.ErrNotFound
+}
+func (fakeTooLargeBackend) Stat(context.Context, string) (int64, error) {
+	return 0, assetstore.ErrNotFound
+}
+
+func TestAssetUploadOverConfiguredMaxUploadBytesNamesConfiguredBound(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	// Distinctive and far from both maxResolumeCompositionUploadBytes
+	// (16777216) and TestPostAssetUploadTooLarge's own 4, so this test
+	// cannot pass by reusing either.
+	const configuredBound = 777_216
+	deps.AssetSettings = &fakeAssetSettingsSource{maxUploadBytes: configuredBound}
+	deps.AssetBackend = fakeTooLargeBackend{}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", []byte("x"), auth)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", resp.StatusCode, body)
+	}
+	var p v1ProblemForTest
+	_ = json.Unmarshal(body, &p)
+	wantDetail := fmt.Sprintf("the uploaded file exceeds this coordinator's %d byte upload limit for an uploaded asset; nothing was stored.", configuredBound)
+	if p.Detail != wantDetail {
+		t.Errorf("detail = %q, want %q", p.Detail, wantDetail)
 	}
 }
 

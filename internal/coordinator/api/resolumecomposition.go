@@ -95,6 +95,16 @@ const resolumeCompositionSourceAPI = "api"
 // one bound, one message, rather than two limits that could disagree.
 const maxResolumeCompositionUploadBytes = 16 * 1024 * 1024
 
+// resolumeCompositionUploadNoun and resolumeCompositionUploadAdvice are this
+// route's own arguments to [payloadTooLargeProblem], kept as named
+// constants (rather than inlined at each of this file's two call sites)
+// so the wording only needs to change in one place. No comma before
+// "check": this reads as one continuous sentence, matching this
+// coordinator's own no-em-dash convention rather than the em-dash the
+// text originally used to join the two clauses.
+const resolumeCompositionUploadNoun = "a Resolume composition file"
+const resolumeCompositionUploadAdvice = " Real composition files are typically well under 3 MB, check that the correct file was selected."
+
 // ProblemTypeResolumeCompositionTooLarge is this endpoint's own 413 class
 // (Track D seam D-2a). Defined here rather than in problem.go: this seam
 // owns resolumecomposition.go and its own minimal edits to api.go,
@@ -104,20 +114,27 @@ const maxResolumeCompositionUploadBytes = 16 * 1024 * 1024
 // keeps this seam's diff to files it was asked to touch.
 const ProblemTypeResolumeCompositionTooLarge = problemBaseURI + "payload-too-large"
 
-// resolumeCompositionTooLargeProblem is [ProblemTypeResolumeCompositionTooLarge]'s
+// payloadTooLargeProblem is [ProblemTypeResolumeCompositionTooLarge]'s
 // constructor, matching this package's standing per-class-constructor
 // convention (problem.go's resourceNotFoundProblem, invalidParameterProblem,
-// and friends).
-func resolumeCompositionTooLargeProblem() v1.Problem {
+// and friends). Shared by every route that enforces its own upload-size
+// bound (this file's own composition upload, assets.go's asset upload):
+// each caller passes ITS OWN configured maxBytes, ITS OWN noun for what was
+// being uploaded, and an optional trailing advice sentence (empty when
+// there is none), never a value hardcoded here, which is exactly the
+// defect this parameterization exists to close: assets.go used to call
+// this constructor with no arguments at all, so an asset upload rejected
+// against assets.settings' own configured maxUploadBytes was reported to
+// the operator as having exceeded maxResolumeCompositionUploadBytes, a
+// completely different bound belonging to a completely different route.
+func payloadTooLargeProblem(maxBytes int64, noun, advice string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeResolumeCompositionTooLarge,
 		Title:  "Payload too large",
 		Status: http.StatusRequestEntityTooLarge,
 		Detail: fmt.Sprintf(
-			"the uploaded file exceeds this coordinator's %d byte upload limit for a Resolume composition file; "+
-				"nothing was stored. Real composition files are typically well under 3 MB — check that the correct "+
-				"file was selected.",
-			maxResolumeCompositionUploadBytes,
+			"the uploaded file exceeds this coordinator's %d byte upload limit for %s; nothing was stored.%s",
+			maxBytes, noun, advice,
 		),
 	}
 }
@@ -271,7 +288,7 @@ func (h *handlers) handlePostResolumeCompositionUpload(w http.ResponseWriter, r 
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeProblem(w, h.logger, now, resolumeCompositionTooLargeProblem())
+			writeProblem(w, h.logger, now, payloadTooLargeProblem(maxResolumeCompositionUploadBytes, resolumeCompositionUploadNoun, resolumeCompositionUploadAdvice))
 			return
 		}
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
@@ -288,7 +305,7 @@ func (h *handlers) handlePostResolumeCompositionUpload(w http.ResponseWriter, r 
 			// falls through to the generic "could not be parsed" message
 			// below for what is really the same size refusal readResolumeCompositionFilePart
 			// already handles.
-			writeProblem(w, h.logger, now, resolumeCompositionTooLargeProblem())
+			writeProblem(w, h.logger, now, payloadTooLargeProblem(maxResolumeCompositionUploadBytes, resolumeCompositionUploadNoun, resolumeCompositionUploadAdvice))
 			return
 		}
 		// ADR-032 decision 7: the parse result is reported in terms an
