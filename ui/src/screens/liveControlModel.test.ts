@@ -55,7 +55,7 @@ describe('deriveAudioSessionRevision', () => {
    * The defect this guards: a cue-activation session's desired_revision is
    * UnixNano-scale (pkg/cueactivation.AudioSessionRevision) and arrives
    * here as an exact decimal string once bigint.ts's parser has done its
-   * job — well beyond Number.MAX_SAFE_INTEGER. `observed + 1` computed in
+   * job, well beyond Number.MAX_SAFE_INTEGER. `observed + 1` computed in
    * JS `number` arithmetic on a value this size is a silent no-op
    * (`observed + 1 === observed`), which is exactly what let every
    * transport command against a cue-activation session get refused as
@@ -98,8 +98,8 @@ describe('parseExactRevisionInput', () => {
     expect(parseExactRevisionInput('12.5')).toBeNull()
   })
 
-  it('accepts a negative integer', () => {
-    expect(parseExactRevisionInput('-3')).toBe(-3n)
+  it('rejects a negative integer: api/openapi.yaml declares revision minimum 0', () => {
+    expect(parseExactRevisionInput('-3')).toBeNull()
   })
 })
 

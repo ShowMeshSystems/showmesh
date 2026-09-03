@@ -838,10 +838,20 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   const trimmedSessionId = sessionId.trim()
   const revisionInfo = trimmedSessionId === '' ? null : deriveAudioSessionRevision(observations, trimmedSessionId)
   const overrideValue = revisionOverride === null ? null : parseExactRevisionInput(revisionOverride)
+  const overrideError =
+    revisionOverride !== null && revisionOverride.trim() !== '' && overrideValue === null
+      ? 'Not a valid revision. Type a whole number, 0 or greater.'
+      : null
   const effectiveRevision = overrideValue ?? revisionInfo?.next ?? 1n
   const nodeId = selectedNodeId ?? ''
-  const canDispatch = gate.allowed && nodeId !== '' && trimmedSessionId !== ''
-  const dispatchTitle = !gate.allowed ? gate.reason : nodeId === '' || trimmedSessionId === '' ? 'Choose a node and a session id first.' : undefined
+  const canDispatch = gate.allowed && nodeId !== '' && trimmedSessionId !== '' && overrideError === null
+  const dispatchTitle = !gate.allowed
+    ? gate.reason
+    : nodeId === '' || trimmedSessionId === ''
+      ? 'Choose a node and a session id first.'
+      : overrideError !== null
+        ? overrideError
+        : undefined
 
   const positionMs =
     position.trim() === '' ? null : timecodeToMillis(position, frameRateState.kind === 'loaded' ? frameRateState.fps : null)
@@ -998,13 +1008,17 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                 </Button>
               </ButtonRow>
             ) : (
-              <Field label="Revision override" help="For a wedged ledger. Overrides the value above. A full int64, so typed as digits, not a number spinner.">
+              <Field
+                label="Revision override"
+                help="For a wedged ledger. Overrides the value above. A full int64, so typed as digits, not a number spinner."
+                error={overrideError ?? undefined}
+              >
                 {(props) => (
                   <Input
                     {...props}
                     type="text"
                     inputMode="numeric"
-                    pattern="-?[0-9]+"
+                    pattern="[0-9]+"
                     value={revisionOverride}
                     onChange={(event) => setRevisionOverride(event.target.value)}
                   />

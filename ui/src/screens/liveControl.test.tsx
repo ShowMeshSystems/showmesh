@@ -624,6 +624,48 @@ describe('Live Control', () => {
     expect(await within(region).findByText('Started')).toBeInTheDocument()
   })
 
+  it('dispatches with the exact bigint revision derived from an observed value above Number.MAX_SAFE_INTEGER', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () =>
+      Promise.resolve({
+        observations: [observation('audio_session.desired_revision', '1788358834726046721', 'current', 'audio_session', 'bg-holiday-01')],
+      })
+    stubs.pauseAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.pause' })))
+    renderScreen({ session: audioAllowedSession })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Pause' }))
+
+    expect(stubs.pauseAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1788358834726046722n)
+  })
+
+  it('shows an error and disables dispatch for a revision override that does not parse', async () => {
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.click(within(region).getByRole('button', { name: 'Set revision' }))
+    fireEvent.change(within(region).getByLabelText('Revision override'), { target: { value: 'not-a-number' } })
+
+    expect(within(region).getByText(/Not a valid revision/)).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: 'Pause' })).toBeDisabled()
+  })
+
+  it('rejects a negative revision override, disabling dispatch with the same error', async () => {
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.click(within(region).getByRole('button', { name: 'Set revision' }))
+    fireEvent.change(within(region).getByLabelText('Revision override'), { target: { value: '-5' } })
+
+    expect(within(region).getByText(/Not a valid revision/)).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: 'Pause' })).toBeDisabled()
+  })
+
   it('sends seek in milliseconds parsed from the typed timecode at the read LTC frame rate', async () => {
     stubs.seekAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.seek', outcome: 'position' })))
     const region = await renderAudioSessionsReady({ fps: 30 })
@@ -775,5 +817,28 @@ describe('Live Control', () => {
     expect(within(dialog).getByText('playing')).toBeInTheDocument()
     expect(within(dialog).getByText('night-bg')).toBeInTheDocument()
     expect(within(dialog).getByText(/playing \(stale/)).toBeInTheDocument()
+  })
+
+  it('does not render a stale position as the live playhead', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () =>
+      Promise.resolve({
+        observations: [
+          observation('audio_session.state', 'playing', 'current', 'audio_session', 'bg-holiday-01'),
+          observation('audio_session.position_ms', 90000, 'stale', 'audio_session', 'bg-holiday-01'),
+        ],
+      })
+    renderScreen({ session: audioAllowedSession })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    const dialog = await screen.findByRole('dialog')
+
+    expect(await within(dialog).findByText('bg-holiday-01')).toBeInTheDocument()
+    expect(within(dialog).getByText('Not reported')).toBeInTheDocument()
+    expect(within(dialog).queryByText('1:30')).not.toBeInTheDocument()
   })
 })

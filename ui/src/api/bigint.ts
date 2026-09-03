@@ -84,7 +84,7 @@ function quoteOversizedIntegers(text: string): string {
 
 /**
  * `JSON.stringify`, except a `bigint` anywhere in `value` (nested) is
- * emitted as its own bare decimal digits — a JSON number literal, never a
+ * emitted as its own bare decimal digits, as a JSON number literal, never a
  * quoted string, matching `int64` wire fields like an audio session
  * command's `revision`. Every non-bigint value defers to the platform's
  * own `JSON.stringify`, so this produces byte-identical output for any

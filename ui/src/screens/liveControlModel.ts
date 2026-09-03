@@ -359,10 +359,15 @@ export function deriveAudioSessionRevision(
   return { next: observed === null ? 1n : observed + 1n, observed }
 }
 
-/** A typed revision override, or `null` for anything that is not a plain decimal integer. */
+/**
+ * A typed revision override, or `null` for anything that is not a plain
+ * non-negative decimal integer. api/openapi.yaml declares `revision`
+ * minimum 0 for every audio session request body, so a leading minus is
+ * rejected here rather than dispatched.
+ */
 export function parseExactRevisionInput(text: string): bigint | null {
   const trimmed = text.trim()
-  if (!/^-?\d+$/.test(trimmed)) return null
+  if (!/^\d+$/.test(trimmed)) return null
   try {
     return BigInt(trimmed)
   } catch {
@@ -408,9 +413,9 @@ export function audioSessionSummaries(
     return {
       sessionId: option.sessionId,
       origin: option.origin,
-      tone: EVIDENCE_TONE[evidenceState],
+      tone: stateValue === null ? EVIDENCE_TONE.not_collected : EVIDENCE_TONE[evidenceState],
       stateLabel,
-      positionLabel: positionMs === null ? null : formatPosition(positionMs / 1000),
+      positionLabel: positionMs === null || positionEntry?.state !== 'current' ? null : formatPosition(positionMs / 1000),
     }
   })
 }
