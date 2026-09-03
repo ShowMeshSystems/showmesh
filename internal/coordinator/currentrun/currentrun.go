@@ -67,8 +67,11 @@ type Reconciliation struct {
 	State  string
 	Reason string
 
-	// OperatorInstruction is empty unless State is a mismatched outcome; see
-	// v1.CurrentReconciliation.OperatorInstruction's own doc comment.
+	// OperatorInstruction is empty unless this Reconciliation was built for
+	// an fpp-runner run from a mismatched fppreconcile.Outcome; see
+	// v1.CurrentReconciliation.OperatorInstruction's own doc comment for why
+	// State alone (shared, as plain strings, with the showmesh-audio path's
+	// own unrelated staleness check) is not enough to tell.
 	OperatorInstruction string
 }
 

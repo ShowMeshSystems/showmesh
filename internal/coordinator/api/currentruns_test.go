@@ -390,6 +390,35 @@ func TestCurrentRunsFPPRunOmitsOperatorInstructionWhenResolved(t *testing.T) {
 	}
 }
 
+// TestCurrentRunsAudioRunOmitsOperatorInstructionWhenItsOwnStaleImportIsUnrelatedToFPP
+// is manager review's own finding on 51e8536: the showmesh-audio path
+// (audioSessionReconciliation) independently reports State = "stale-import"
+// for its own, unrelated playlist-revision check, sharing only the string
+// with fppreconcile.OutcomeStaleImport. That run must never carry
+// operatorInstruction: "restart FPP" would be fabricated advice for a
+// showmesh-audio session.
+func TestCurrentRunsAudioRunOmitsOperatorInstructionWhenItsOwnStaleImportIsUnrelatedToFPP(t *testing.T) {
+	at := testNow.Add(-2 * time.Second)
+	observations := []observation.Observation{
+		currentRunsAudioObservation(t, "background", "audio_session.source_role", "background", at),
+		// The active "background" playlist is revision 1 (newCurrentRunsProductionReader);
+		// observing revision 0 is the audio-side mismatch this test needs.
+		currentRunsAudioObservation(t, "background", "audio_session.playlist.revision", int64(0), at),
+		currentRunsAudioObservation(t, "background", "audio_session.state", "playing", at),
+	}
+	snapshot, err := newCurrentRunsProductionReader(t, observations).Snapshot(context.Background(), testNow)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	run := currentRunsAudioRun(t, snapshot, "showmesh-audio:audio-01:background")
+	if run.Reconciliation.State != "stale-import" {
+		t.Fatalf("reconciliation.state = %q, want stale-import", run.Reconciliation.State)
+	}
+	if run.Reconciliation.OperatorInstruction != "" {
+		t.Fatalf("reconciliation.operatorInstruction = %q, want empty for a showmesh-audio run's own stale-import", run.Reconciliation.OperatorInstruction)
+	}
+}
+
 func TestCurrentRunsProductionSeparatesConcurrentBackgroundAndAnnouncement(t *testing.T) {
 	old := testNow.Add(-2 * time.Second)
 	observations := []observation.Observation{

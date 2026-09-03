@@ -3411,7 +3411,7 @@ export interface components {
         CurrentReconciliation: {
             state: string;
             reason: string;
-            /** @description Absent unless `state` is one of the four contradicting outcomes (`stale-import`, `unknown-entry`, `evidence-mismatch`, `cross-show`) H0.2 collapses into an operator-visible mismatch; a one-sentence, operator-facing notice naming both remedies (restart FPP, or re-import the playlist so the coordinator's binding and FPP agree) otherwise. Reported additively, the collapsed form of FPPPlaylistEntryReconciliationResponse's own `operatorInstruction`. A notice only: it never changes the configured mismatch policy's own dispatch effect. */
+            /** @description Present only for an fpp-runner run whose FPP reconciliation outcome is one of the four contradicting outcomes (`stale-import`, `unknown-entry`, `evidence-mismatch`, `cross-show`) H0.2 collapses into an operator-visible mismatch; absent for every other run. `state` alone does not decide this: a showmesh-audio run's own, unrelated playlist-revision check can independently report `state` = `stale-import`, and that run never carries this field, since "restart FPP" would be fabricated advice for it. A one-sentence, operator-facing notice naming both remedies (restart FPP, or re-import the playlist so the coordinator's binding and FPP agree) when present. Reported additively, the collapsed form of FPPPlaylistEntryReconciliationResponse's own `operatorInstruction`. A notice only: it never changes the configured mismatch policy's own dispatch effect. */
             operatorInstruction?: string;
         };
         CurrentRunActivation: {
