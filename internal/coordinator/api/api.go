@@ -1601,6 +1601,11 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/mute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputMute))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputUnmute))
 
+	// Dispatch the agent's one node-scoped audio.* operation,
+	// audio.node.silence (audionodesilence.go): the unconditional
+	// per-node emergency stop, no sessionId. Same audio:command scope.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/silence", h.writeGuard(&scopeAudioCommand, h.handleAudioNodeSilence))
+
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))
 	mux.HandleFunc("GET /api/v1/stream", h.readGuardAll(readAllScopes, hub.ServeHTTP))

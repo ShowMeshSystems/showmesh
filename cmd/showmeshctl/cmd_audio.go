@@ -94,6 +94,8 @@ func cmdAudio(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdAudioGain(rest, stdout, stderr, clock)
 	case "output":
 		return cmdAudioOutput(rest, stdout, stderr, clock)
+	case "silence":
+		return cmdAudioSilence(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio: unknown subcommand %q\n\n", sub)
 		printAudioUsage(stderr)
@@ -124,6 +126,9 @@ Subcommands:
                                 "showmeshctl audio gain --help")
   output mute|unmute           dispatch audio.output.mute/audio.output.unmute
                                 (see "showmeshctl audio output --help")
+  silence <node-id>            dispatch audio.node.silence: the unconditional
+                                per-node emergency stop (see
+                                "showmeshctl audio silence --help")
 
 Run "showmeshctl audio <subcommand> --help" for flags specific to one
 subcommand.
