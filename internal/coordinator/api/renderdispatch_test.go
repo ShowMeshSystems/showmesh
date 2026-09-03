@@ -48,8 +48,9 @@ type fakeRenderPublisher struct {
 // RenderPublisher interface exactly.
 type mqttCmdEnvelopeForTest struct {
 	Payload struct {
-		Action string         `json:"action"`
-		Params map[string]any `json:"params"`
+		Action   string         `json:"action"`
+		Params   map[string]any `json:"params"`
+		Deadline *time.Time     `json:"deadline"`
 	} `json:"payload"`
 }
 
@@ -881,6 +882,41 @@ func TestRenderDispatchReportsUnconfirmedWithoutEvidence(t *testing.T) {
 	}
 	if result.Command.Outcome != "unconfirmed" {
 		t.Fatalf("outcome = %q, want unconfirmed", result.Command.Outcome)
+	}
+}
+
+// TestRenderApplyDispatchSetsWireDeadline proves executeRenderDispatch
+// populates CmdPayload.Deadline on every dispatch, anchored to the
+// dispatch clock by exactly renderCommandWireDeadline, not merely
+// non-nil.
+func TestRenderApplyDispatchSetsWireDeadline(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", `{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	got := setup.pub.payload[0].Payload.Deadline
+	if got == nil {
+		t.Fatalf("Deadline = nil, want set")
+	}
+	want := testNow.Add(renderCommandWireDeadline)
+	if !got.Equal(want) {
+		t.Fatalf("Deadline = %v, want %v (testNow + renderCommandWireDeadline)", got, want)
 	}
 }
 

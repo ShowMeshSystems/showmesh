@@ -68,6 +68,11 @@ const auditActionCueCatalogDeploy = "cuecatalog.deploy"
 // (renderdispatch.go); no runtime configuration ever reassigns it.
 var cueCatalogDeployConfirmDeadline = 15 * time.Second
 
+// cueCatalogDeployWireDeadline bounds how stale a deploy may be before the
+// agent refuses it: nothing else retriggers a deploy automatically, so a
+// stale one landing after a newer one would silently persist until redeployed.
+const cueCatalogDeployWireDeadline = 60 * time.Second
+
 // maxCueCatalogDeployRequestBodyBytes bounds this endpoint's request body
 // — it carries only an optional idempotencyKey, mirroring
 // maxRenderCommandRequestBodyBytes's identical reasoning.
@@ -241,11 +246,13 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		h.writeInternalError(w, now, "build result topic", err)
 		return
 	}
+	deadline := now.Add(cueCatalogDeployWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: issuerID, PrincipalName: issuerName},
 		ConfirmationMethod: "evidence",
+		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, nodeID, payload)
 	if err != nil {
