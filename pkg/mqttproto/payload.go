@@ -347,25 +347,16 @@ type CmdPayload struct {
 	// A nil Deadline is a legitimate, valid state: [CmdPayload.Validate]
 	// deliberately performs no required-ness check on this field.
 	//
-	// Every non-test CmdPayload construction site's Deadline decision, so a
-	// reviewer can see all of them at once instead of hunting call sites
-	// (each site's own comment carries the full reasoning):
+	// Every non-test CmdPayload construction site's Deadline decision (see
+	// each site's own comment for the reasoning):
 	//
-	//   - internal/coordinator/api/audiodispatch.go: set, for the nine
-	//     actions in audioCommandDeadlineActions.
-	//   - internal/coordinator/api/renderdispatch.go: set, always
-	//     (renderCommandWireDeadline).
-	//   - internal/coordinator/api/cuecatalogdeploy.go: set, always
-	//     (cueCatalogDeployWireDeadline).
-	//   - internal/coordinator/api/cueactivationdispatch.go: set, always
-	//     (cueActivationWireDeadline).
-	//   - internal/coordinator/assetsync/sync.go: left nil, a stale
-	//     asset.fetch is wasteful, not harmful, and self-corrects.
-	//   - internal/coordinator/audioconfigpush/push.go: left nil, a
-	//     convergent config push that self-corrects on the next hello or
-	//     write.
-	//   - internal/coordinator/fppconnectpush/push.go: left nil, same
-	//     convergent-push reasoning one package over.
+	//   - api/audiodispatch.go: set (audioCommandDeadlineActions list).
+	//   - api/renderdispatch.go: set (renderCommandWireDeadline).
+	//   - api/cuecatalogdeploy.go: set (cueCatalogDeployWireDeadline).
+	//   - api/cueactivationdispatch.go: set (cueActivationWireDeadline).
+	//   - assetsync/sync.go: nil, recomputed fresh every tick.
+	//   - audioconfigpush/push.go: nil, revision-keyed and re-pushed.
+	//   - fppconnectpush/push.go: nil, content-hash-keyed and re-pushed.
 	Deadline *time.Time `json:"deadline"`
 }
 

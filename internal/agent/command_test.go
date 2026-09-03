@@ -514,21 +514,9 @@ func TestHandleMessagePastDeadlineRefusedWithoutExecuting(t *testing.T) {
 	}
 }
 
-// TestHandleMessageDeadlineDoesNotAbortInFlightOperation proves the
-// durable constraint this seam's own wire deadline must satisfy: a
-// deadline may only ever suppress DELIVERY of a stale command, never
-// expire or tear down work a node already holds and is performing.
-// HandleMessage's deadline check (branch 8 in its own doc comment) runs
-// exactly once, before the allowlisted operation is ever invoked, and is
-// never re-checked afterward, so an operation already running when its
-// deadline passes must run to completion and report its own real outcome,
-// not a deadline refusal. This is constructed deterministically with
-// blockingOp: the deadline is valid at receipt (in the future), the
-// operation is let in and holds there, the fake clock is then advanced
-// past the deadline while the operation is still "holding the work," and
-// only then is it released, reproducing exactly the timing a real
-// wedged-but-still-running operation would present, not a race dependent
-// on wall-clock luck.
+// TestHandleMessageDeadlineDoesNotAbortInFlightOperation proves a
+// deadline never aborts work already in flight: blockingOp holds the
+// operation open while the fake clock is advanced past it, deterministically.
 func TestHandleMessageDeadlineDoesNotAbortInFlightOperation(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)}
 	op := newBlockingOp()

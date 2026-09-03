@@ -81,18 +81,9 @@ var renderCommandConfirmDeadline = 15 * time.Second
 // test-only-override rule as renderCommandConfirmDeadline.
 var renderCommandPollInterval = 250 * time.Millisecond
 
-// renderCommandWireDeadline bounds how stale a wire command may be before
-// the agent refuses it (CmdPayload.Deadline; internal/agent/command.go's
-// guard), mirroring audioCommandWireDeadline's identical reasoning one
-// file over (audiodispatch.go): commands publish QoS 1/Retain false and an
-// offline agent's MQTT session (and its subscriptions) ends with the
-// connection, so the only real staleness this can catch is a command
-// sitting behind other work on an already-connected agent, a scheduling-
-// sized delay, not a network one. A late render command is genuinely
-// harmful (it would apply visibly out of sync with operator intent), so
-// unlike the convergent config-push dispatchers this file's sibling is
-// classified for a deadline; the value stays generous so it fires only on
-// genuine pathology, never on a loaded machine's ordinary scheduling.
+// renderCommandWireDeadline bounds how stale a wire render command may be
+// before the agent refuses it (CmdPayload.Deadline): a late apply would
+// visibly diverge from operator intent, so this stays generous but set.
 const renderCommandWireDeadline = 60 * time.Second
 
 const (

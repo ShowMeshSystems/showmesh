@@ -166,15 +166,9 @@ func publish(ctx context.Context, pub Publisher, now func() time.Time, nodeID, a
 		return err
 	}
 	t := now()
-	// No CmdPayload.Deadline: applying this config out of order leaves
-	// nodeID on an older revision's values, never a torn-down or invalid
-	// state (it is a plain field-by-field apply, not a start/stop
-	// trigger). IdempotencyKey is keyed to THIS revision (rev-%d above),
-	// so it never masks a later one; ToNode reads the config store's
-	// CURRENT CurrentRevision fresh at call time and is re-invoked (never
-	// from a stale snapshot) on every future write to this node's
-	// audio.node/audio.settings and every future hello, which repushes
-	// whatever is actually current and corrects a regressed apply.
+	// No CmdPayload.Deadline: IdempotencyKey is revision-keyed, and ToNode
+	// re-reads and re-pushes the current revision on this node's every
+	// future hello or write, correcting a regressed apply.
 	cmd := mqttproto.CmdPayload{
 		CommandID: uuid.NewString(), IdempotencyKey: idempotencyKey, Action: action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,

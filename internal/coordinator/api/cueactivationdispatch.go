@@ -53,18 +53,9 @@ import (
 // reassigns it.
 var cueActivationConfirmDeadline = 15 * time.Second
 
-// cueActivationWireDeadline bounds how stale a wire command may be before
-// the agent refuses it (CmdPayload.Deadline; internal/agent/command.go's
-// guard), mirroring audioCommandWireDeadline's identical reasoning
-// (audiodispatch.go): the only real staleness this can catch is a command
-// sitting behind other work on an already-connected agent, a scheduling-
-// sized delay, not a network one. cue.activate directly triggers
-// show-visible playback, so a late activation is genuinely harmful, a
-// real desync from operator/show-timeline intent, which is exactly this
-// file's own "stale-catalog" refusal category one layer up
-// (cueActivationNodeOutcomeAuthorized's doc comment); this wire deadline
-// stops a badly stale command before that check even runs. The value
-// stays generous so it fires only on genuine pathology.
+// cueActivationWireDeadline bounds how stale a cue.activate may be before
+// the agent refuses it: a late activation directly desyncs show-visible
+// playback from operator/timeline intent.
 const cueActivationWireDeadline = 60 * time.Second
 
 // cueActivationNodeOutcomeAuthorized is the exact string
