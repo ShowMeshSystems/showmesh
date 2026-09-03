@@ -46,7 +46,23 @@ type FPPPlaylistEntryObservationResponse struct {
 	// Replay is Accepted's inverse, carried explicitly rather than left
 	// for a client to compute, matching this API's standing "state the
 	// fact, never make the client derive it" convention.
-	Replay     bool   `json:"replay"`
+	Replay bool `json:"replay"`
+
+	// Reconciliation is this instance's current reconciliation outcome
+	// (fppreconcile.Outcome's wire spelling), the same value GET
+	// .../reconciliation returns, computed through that identical
+	// resolution so the two routes cannot disagree. Additive and
+	// optional: an unchanged client sees a byte-identical response to
+	// before this field existed whenever it is empty. Carried on a
+	// replay too, not only on an accepted observation, because the
+	// plugin polls by re-posting and would otherwise be blind to the
+	// verdict on every request where nothing changed.
+	Reconciliation string `json:"reconciliation,omitempty"`
+	// OperatorInstruction is fppreconcile.OperatorMismatchInstruction,
+	// present only when Reconciliation is one of the four outcomes
+	// fppreconcile.Outcome.IsMismatch reports true for.
+	OperatorInstruction string `json:"operatorInstruction,omitempty"`
+
 	ServerTime string `json:"serverTime"`
 }
 

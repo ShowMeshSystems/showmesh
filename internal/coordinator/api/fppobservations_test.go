@@ -51,6 +51,11 @@ func (s *fppObservationTestSetup) deps() Dependencies {
 		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
 		Identity: s.svc, FPPObservations: s.st,
+		// The POST handler resolves its reconciliation verdict through
+		// this dependency unconditionally (fppobservations.go), so it
+		// must be wired even for tests that never call the dedicated
+		// GET .../reconciliation route.
+		FPPReconciliation: StoreFPPReconciliation{Store: s.st},
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
@@ -404,14 +405,38 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		h.deps.CueActivationNudger.Nudge()
 	}
 
+	// Resolve the SAME reconciliation verdict GET .../reconciliation
+	// computes (mapFPPPlaylistEntryReconciliation, fppreconciliation.go),
+	// reusing that route's resolution rather than a second one that could
+	// disagree. Read the just-written row back rather than reconciling rec
+	// directly, so a replay (which does not carry EntryOccurrenceSequence
+	// or EvidenceBrokenAt) reconciles from the same stored state GET does.
+	var reconciliation, operatorInstruction string
+	stored, err := h.deps.FPPObservations.GetFPPPlaylistEntryObservation(ctx, rec.InstanceUUID)
+	if err != nil {
+		h.writeInternalError(w, now, "get fpp playlist entry observation for reconciliation", err)
+		return
+	}
+	result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, stored)
+	if err != nil {
+		h.writeInternalError(w, now, "reconcile fpp playlist entry observation", err)
+		return
+	}
+	reconciliation = string(result.Outcome)
+	if result.Outcome.IsMismatch() {
+		operatorInstruction = fppreconcile.OperatorMismatchInstruction
+	}
+
 	jsonWrite(w, v1.FPPPlaylistEntryObservationResponse{
-		SchemaVersion: req.SchemaVersion,
-		InstanceUUID:  rec.InstanceUUID,
-		Sequence:      rec.Sequence,
-		EntryKey:      rec.EntryKey,
-		Accepted:      !replay,
-		Replay:        replay,
-		ServerTime:    formatTime(now),
+		SchemaVersion:       req.SchemaVersion,
+		InstanceUUID:        rec.InstanceUUID,
+		Sequence:            rec.Sequence,
+		EntryKey:            rec.EntryKey,
+		Accepted:            !replay,
+		Replay:              replay,
+		Reconciliation:      reconciliation,
+		OperatorInstruction: operatorInstruction,
+		ServerTime:          formatTime(now),
 	})
 }
 

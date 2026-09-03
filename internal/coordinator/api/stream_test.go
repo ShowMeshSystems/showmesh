@@ -1695,7 +1695,7 @@ func TestStreamFPPPlaylistEntryChangedIncludesEndpointID(t *testing.T) {
 	api := newStreamTestAPI(Dependencies{
 		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
-		Identity: svc, FPPObservations: st,
+		Identity: svc, FPPObservations: st, FPPReconciliation: StoreFPPReconciliation{Store: st},
 	})
 
 	scheduler := mustCreatePrincipal(t, svc, "scheduler-bot", identity.RoleScheduler)

@@ -4885,7 +4885,7 @@ export interface components {
             /** @enum {string} */
             unavailable?: "missing_instance_uuid" | "missing_playlist_name" | "missing_definition" | "unsupported_definition_shape" | "negative_position" | "truncated_identity_field";
         };
-        /** @description The 200 response of POST /integrations/fpp/playlist-entry-observations (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.6 step 10): what was decided, not an echo of the request. accepted is true when this observation changed the stored state; false only for an idempotent replay, which stores nothing and publishes nothing. replay is accepted's inverse. */
+        /** @description The 200 response of POST /integrations/fpp/playlist-entry-observations (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.6 step 10): what was decided, not an echo of the request. accepted is true when this observation changed the stored state; false only for an idempotent replay, which stores nothing and publishes nothing. replay is accepted's inverse. reconciliation and operatorInstruction are additive and optional, computed through the same resolution GET .../reconciliation uses (never a second one), and reported on a replay as well as on an accepted observation so a plugin that polls by re-posting is not blind on requests where nothing changed. */
         FPPPlaylistEntryObservationResponse: {
             schemaVersion: number;
             instanceUuid: string;
@@ -4893,6 +4893,13 @@ export interface components {
             entryKey: string;
             accepted: boolean;
             replay: boolean;
+            /**
+             * @description This instance's current reconciliation outcome, the same wire spelling `FPPPlaylistEntryReconciliationResponse.outcome` uses.
+             * @enum {string}
+             */
+            reconciliation?: "identity-unavailable" | "unbound" | "stale-import" | "unknown-entry" | "evidence-mismatch" | "cross-show" | "resolved";
+            /** @description Absent unless `reconciliation` is one of `stale-import`, `unknown-entry`, `evidence-mismatch`, or `cross-show`; the same text `FPPPlaylistEntryReconciliationResponse.operatorInstruction` carries otherwise. */
+            operatorInstruction?: string;
             /** Format: date-time */
             serverTime: string;
         };
