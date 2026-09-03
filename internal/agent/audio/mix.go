@@ -649,6 +649,16 @@ func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID p
 	t.persistBestEffortLocked("state change")
 }
 
+// dropDuckerMembershipLocked removes duckerID from t's ducking set with
+// no gain fade, unlike [Manager.removeDuckerLocked]. Used only by
+// [Manager.SilenceAll]: every session in that call, t included, is
+// being silenced too, so fading t back up here would make the emergency
+// stop audibly louder, if only for the round trip until the loop
+// reaches t itself. Caller holds t.mu.
+func (m *Manager) dropDuckerMembershipLocked(t *Session, duckerID pkgaudio.SessionID) {
+	delete(t.duckedByAll, duckerID)
+}
+
 // otherSessions returns every live session except exclude, snapshotted
 // under m.mu so the subsequent per-session locking in
 // [Manager.duckLowerPriority]/[Manager.restoreDucked] never holds m.mu

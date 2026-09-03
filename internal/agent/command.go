@@ -259,6 +259,9 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 	for action, op := range audioNodeConfigureOperations(binding) {
 		ops[action] = op
 	}
+	for action, op := range audioNodeSilenceOperations(audioMgr) {
+		ops[action] = op
+	}
 	for action, op := range fppConnectOperations(fppConnect, assetDir, logger) {
 		ops[action] = op
 	}
