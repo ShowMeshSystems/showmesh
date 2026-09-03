@@ -74,6 +74,7 @@ import { effectiveServerTimeIso, millisToTimecode, parseIsoMs, timecodeToMillis 
 import {
   audioRows,
   audioSessionOptions,
+  audioSessionSummaries,
   classifyStartPlaylistConflict,
   currentRunsAbsence,
   deriveAudioSessionRevision,
@@ -83,6 +84,7 @@ import {
   fppPlaylistNames,
   nightLifecycleGroups,
   outputRows,
+  parseExactRevisionInput,
   reportedPlaylistName,
   transportState,
   type CommandOutcome,
@@ -790,7 +792,7 @@ export function LiveControl() {
         <Outcome outcome={nightOutcome} />
       </Section>
 
-      <AudioSessionsBlock gate={audioGate} show={show} />
+      <AudioSessionsBlock gate={audioGate} show={show} nowIso={nowIso} />
 
       <RunList
         id="lc-macros"
@@ -1078,7 +1080,7 @@ function audioSessionSignal(observations: ObservationEntry[], sessionId: string,
  * `apply` is deliberately excluded — loading media into a session is
  * authoring, not live control.
  */
-function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null }) {
+function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string | null; nowIso: string | null }) {
   const nodesState = useAudioNodes()
   const actionsState = useAudioActionSessions(show)
   const [reloadKey, setReloadKey] = useState(0)
@@ -1106,16 +1108,24 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
   const observations = observationsState.kind === 'loaded' ? observationsState.observations : []
   const actions = actionsState.kind === 'loaded' ? actionsState.actions : []
   const options = audioSessionOptions(observations, actions)
+  const summaries = audioSessionSummaries(observations, actions, nowIso)
   const trimmedSessionId = sessionId.trim()
   const revisionInfo = trimmedSessionId === '' ? null : deriveAudioSessionRevision(observations, trimmedSessionId)
-  const overrideValue =
-    revisionOverride !== null && revisionOverride.trim() !== '' && !Number.isNaN(Number(revisionOverride))
-      ? Number(revisionOverride)
+  const overrideValue = revisionOverride === null ? null : parseExactRevisionInput(revisionOverride)
+  const overrideError =
+    revisionOverride !== null && revisionOverride.trim() !== '' && overrideValue === null
+      ? 'Not a valid revision. Type a whole number, 0 or greater.'
       : null
-  const effectiveRevision = overrideValue ?? revisionInfo?.next ?? 1
+  const effectiveRevision = overrideValue ?? revisionInfo?.next ?? 1n
   const nodeId = selectedNodeId ?? ''
-  const canDispatch = gate.allowed && nodeId !== '' && trimmedSessionId !== ''
-  const dispatchTitle = !gate.allowed ? gate.reason : nodeId === '' || trimmedSessionId === '' ? 'Choose a node and a session id first.' : undefined
+  const canDispatch = gate.allowed && nodeId !== '' && trimmedSessionId !== '' && overrideError === null
+  const dispatchTitle = !gate.allowed
+    ? gate.reason
+    : nodeId === '' || trimmedSessionId === ''
+      ? 'Choose a node and a session id first.'
+      : overrideError !== null
+        ? overrideError
+        : undefined
 
   const positionMs =
     position.trim() === '' ? null : timecodeToMillis(position, frameRateState.kind === 'loaded' ? frameRateState.fps : null)
@@ -1212,6 +1222,40 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
                 )}
               </Field>
             )}
+            {summaries.length > 0 && (
+              <TableWrap label="Known sessions' observed state, scrollable">
+                <Table minWidth={420}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Session</th>
+                      <th scope="col">State</th>
+                      <th scope="col">Position</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summaries.map((summary) => (
+                      <tr key={summary.sessionId}>
+                        <td>
+                          <span className="sm-data">{summary.sessionId}</span>
+                          <br />
+                          <span className="sm-small sm-faint">{summary.origin}</span>
+                        </td>
+                        <td>
+                          <StatusPair tone={summary.tone} label={summary.stateLabel} />
+                        </td>
+                        <td>
+                          {summary.positionLabel === null ? (
+                            <span className="sm-small sm-faint">Not reported</span>
+                          ) : (
+                            <span className="sm-data">{summary.positionLabel}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            )}
             {options.length === 0 && (
               <RuledStrip
                 absence="unobserved"
@@ -1238,12 +1282,17 @@ function AudioSessionsBlock({ gate, show }: { gate: Gate; show: string | null })
                 </Button>
               </ButtonRow>
             ) : (
-              <Field label="Revision override" help="For a wedged ledger. Overrides the value above.">
+              <Field
+                label="Revision override"
+                help="For a wedged ledger. Overrides the value above. A full int64, so typed as digits, not a number spinner."
+                error={overrideError ?? undefined}
+              >
                 {(props) => (
                   <Input
                     {...props}
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]+"
                     value={revisionOverride}
                     onChange={(event) => setRevisionOverride(event.target.value)}
                   />

@@ -780,15 +780,57 @@ describe('Live Control', () => {
     fireEvent.click(within(region).getByRole('button', { name: 'Mute' }))
     fireEvent.click(within(region).getByRole('button', { name: 'Unmute' }))
 
-    expect(stubs.prepareAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
-    expect(stubs.startAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
-    expect(stubs.pauseAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
-    expect(stubs.resumeAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
-    expect(stubs.advanceAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
-    expect(stubs.stopAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
-    expect(stubs.muteAudioSessionOutput).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
-    expect(stubs.unmuteAudioSessionOutput).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.prepareAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    expect(stubs.startAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    expect(stubs.pauseAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    expect(stubs.resumeAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    expect(stubs.advanceAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    expect(stubs.stopAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    expect(stubs.muteAudioSessionOutput).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    expect(stubs.unmuteAudioSessionOutput).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
     expect(await within(region).findByText('Started')).toBeInTheDocument()
+  })
+
+  it('dispatches with the exact bigint revision derived from an observed value above Number.MAX_SAFE_INTEGER', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () =>
+      Promise.resolve({
+        observations: [observation('audio_session.desired_revision', '1788358834726046721', 'current', 'audio_session', 'bg-holiday-01')],
+      })
+    stubs.pauseAudioSession = vi.fn(() => Promise.resolve(audioCommandResult({ action: 'audio.session.pause' })))
+    renderScreen({ session: audioAllowedSession })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Session id'), { target: { value: 'bg-holiday-01' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Pause' }))
+
+    expect(stubs.pauseAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1788358834726046722n)
+  })
+
+  it('shows an error and disables dispatch for a revision override that does not parse', async () => {
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.click(within(region).getByRole('button', { name: 'Set revision' }))
+    fireEvent.change(within(region).getByLabelText('Revision override'), { target: { value: 'not-a-number' } })
+
+    expect(within(region).getByText(/Not a valid revision/)).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: 'Pause' })).toBeDisabled()
+  })
+
+  it('rejects a negative revision override, disabling dispatch with the same error', async () => {
+    const region = await renderAudioSessionsReady()
+
+    fireEvent.click(within(region).getByRole('button', { name: 'Set revision' }))
+    fireEvent.change(within(region).getByLabelText('Revision override'), { target: { value: '-5' } })
+
+    expect(within(region).getByText(/Not a valid revision/)).toBeInTheDocument()
+    expect(within(region).getByRole('button', { name: 'Pause' })).toBeDisabled()
   })
 
   it('sends seek in milliseconds parsed from the typed timecode at the read LTC frame rate', async () => {
@@ -799,7 +841,7 @@ describe('Live Control', () => {
     fireEvent.change(within(region).getByLabelText('Position'), { target: { value: '00:01:30' } })
     fireEvent.click(within(region).getByRole('button', { name: 'Seek' }))
 
-    expect(stubs.seekAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, 90000)
+    expect(stubs.seekAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n, 90000)
   })
 
   it('sends gain set in decibels', async () => {
@@ -809,7 +851,7 @@ describe('Live Control', () => {
     fireEvent.change(within(region).getByLabelText('Gain'), { target: { value: '-6' } })
     fireEvent.click(within(region).getByRole('button', { name: 'Set' }))
 
-    expect(stubs.setAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, -6)
+    expect(stubs.setAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n, -6)
   })
 
   it('sends gain fade with the target dB and an optional duration in milliseconds', async () => {
@@ -820,7 +862,7 @@ describe('Live Control', () => {
     fireEvent.change(within(region).getByLabelText('Over'), { target: { value: '2000' } })
     fireEvent.click(within(region).getByRole('button', { name: 'Fade' }))
 
-    expect(stubs.fadeAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, -12, 2000)
+    expect(stubs.fadeAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n, -12, 2000)
   })
 
   it('leaves the fade duration off the call when the operator leaves it empty', async () => {
@@ -830,7 +872,7 @@ describe('Live Control', () => {
     fireEvent.change(within(region).getByLabelText('Fade to'), { target: { value: '-12' } })
     fireEvent.click(within(region).getByRole('button', { name: 'Fade' }))
 
-    expect(stubs.fadeAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, -12, undefined)
+    expect(stubs.fadeAudioSessionGain).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n, -12, undefined)
   })
 
   it('keeps Clear disabled until the session id is typed to confirm, then sends it', async () => {
@@ -844,7 +886,7 @@ describe('Live Control', () => {
     expect(clearButton).not.toBeDisabled()
 
     fireEvent.click(clearButton)
-    expect(stubs.clearAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1)
+    expect(stubs.clearAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
   })
 
   it('disables every audio session control with the audio:command reason when the scope is missing', async () => {
@@ -914,5 +956,56 @@ describe('Live Control', () => {
     expect(within(dialog).getByRole('button', { name: 'Prepare' })).toBeInTheDocument()
     // The caption states a count only; it never grows an "open" clause, reachable or not.
     expect(within(region).getByText('1 known session.')).toBeInTheDocument()
+  })
+
+  it('reports a known session as playing, and another as stale, before the operator has picked or typed any session id', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () =>
+      Promise.resolve({
+        observations: [
+          observation('audio_session.state', 'playing', 'current', 'audio_session', 'bg-holiday-01'),
+          observation('audio_session.state', 'playing', 'stale', 'audio_session', 'night-bg'),
+        ],
+      })
+    renderScreen({ session: audioAllowedSession })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    const dialog = await screen.findByRole('dialog')
+
+    // No session id has been picked or typed yet.
+    expect(within(dialog).getByLabelText('Session id')).toHaveValue('')
+    expect(within(dialog).queryByRole('button', { name: 'Prepare' })).not.toBeInTheDocument()
+
+    expect(await within(dialog).findByText('bg-holiday-01')).toBeInTheDocument()
+    expect(within(dialog).getByText('playing')).toBeInTheDocument()
+    expect(within(dialog).getByText('night-bg')).toBeInTheDocument()
+    expect(within(dialog).getByText(/playing \(stale/)).toBeInTheDocument()
+  })
+
+  it('does not render a stale position as the live playhead', async () => {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'audio.node') return Promise.resolve({ objects: [{ id: 'audio-node-01', label: 'Front porch node' }] })
+      return Promise.resolve({ objects: [] })
+    }) as never
+    stubs.listObservations = () =>
+      Promise.resolve({
+        observations: [
+          observation('audio_session.state', 'playing', 'current', 'audio_session', 'bg-holiday-01'),
+          observation('audio_session.position_ms', 90000, 'stale', 'audio_session', 'bg-holiday-01'),
+        ],
+      })
+    renderScreen({ session: audioAllowedSession })
+
+    const region = await screen.findByRole('region', { name: 'Audio sessions' })
+    fireEvent.click(within(region).getByRole('button', { name: /Audio sessions…/ }))
+    const dialog = await screen.findByRole('dialog')
+
+    expect(await within(dialog).findByText('bg-holiday-01')).toBeInTheDocument()
+    expect(within(dialog).getByText('Not reported')).toBeInTheDocument()
+    expect(within(dialog).queryByText('1:30')).not.toBeInTheDocument()
   })
 })

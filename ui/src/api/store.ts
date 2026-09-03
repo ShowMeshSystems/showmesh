@@ -1459,12 +1459,12 @@ export class ApiStore {
     nodeId: string,
     sessionId: string,
     path: string,
-    revision: number,
+    revision: bigint,
     params?: Record<string, unknown>,
   ): Promise<AudioSessionCommandResult> {
     const controller = this.beginSideCall()
     try {
-      const body: { revision: number; idempotencyKey: string; params?: SchemaAudioSessionParams } = {
+      const body: { revision: bigint; idempotencyKey: string; params?: SchemaAudioSessionParams } = {
         revision,
         idempotencyKey: randomUUIDv4(),
       }
@@ -1484,47 +1484,47 @@ export class ApiStore {
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/pause`. Requires audio:command. */
-  async pauseAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async pauseAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'pause', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/resume`. Requires audio:command. */
-  async resumeAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async resumeAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'resume', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/stop`. Requires audio:command. */
-  async stopAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async stopAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'stop', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/mute`. Requires audio:command. */
-  async muteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async muteAudioSessionOutput(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/mute', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute`. Requires audio:command. */
-  async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/unmute', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare`. Requires audio:command. */
-  async prepareAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async prepareAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'prepare', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command. */
-  async startAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async startAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/advance`. Requires audio:command. */
-  async advanceAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async advanceAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'advance', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/clear`. Requires audio:command. Releases the session entirely on the node; destructive, matching stop's own "never refused for want of node evidence" posture. */
-  async clearAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async clearAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'clear', revision)
   }
 
@@ -1532,7 +1532,7 @@ export class ApiStore {
   async seekAudioSession(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     positionMs: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'seek', revision, { positionMs })
@@ -1542,7 +1542,7 @@ export class ApiStore {
   async setAudioSessionGain(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     gainDb: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gainDb })
@@ -1552,7 +1552,7 @@ export class ApiStore {
   async applyAudioSession(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     params?: Record<string, unknown>,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'apply', revision, params)
@@ -1562,7 +1562,7 @@ export class ApiStore {
   async fadeAudioSessionGain(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     targetGainDb: number,
     durationMs?: number,
   ): Promise<AudioSessionCommandResult> {

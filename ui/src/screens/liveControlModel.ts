@@ -12,7 +12,7 @@ import type {
   ObservationEntry,
 } from '../api'
 import type { LifecycleCommandGroup, LifecycleCommandSpec, Tone } from '../kit'
-import { EVIDENCE_TONE } from '../domain/evidence'
+import { EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 
 /** Gate shape shared by every night-lifecycle command surface. */
@@ -331,19 +331,103 @@ export function audioSessionOptions(
 
 const AUDIO_SESSION_DESIRED_REVISION_SIGNAL = 'audio_session.desired_revision'
 
+/**
+ * A cue-activation session's `desired_revision` is UnixNano-scale (see
+ * pkg/cueactivation.AudioSessionRevision) and routinely exceeds
+ * Number.MAX_SAFE_INTEGER, so the client's own JSON parser (bigint.ts)
+ * carries it as an exact decimal string rather than a rounded `number`.
+ * This turns either shape into an exact `bigint`, never losing a digit.
+ */
+export function exactAudioSessionRevisionValue(value: unknown): bigint | null {
+  if (typeof value === 'number' && Number.isInteger(value)) return BigInt(value)
+  if (typeof value === 'string' && /^-?\d+$/.test(value)) return BigInt(value)
+  return null
+}
+
 /** Derive, don't ask (guide §7): observed desired revision plus one, or 1 for a session never observed. */
 export function deriveAudioSessionRevision(
   observations: readonly ObservationEntry[],
   sessionId: string,
-): { next: number; observed: number | null } {
+): { next: bigint; observed: bigint | null } {
   const entry = observations.find(
     (candidate) =>
       candidate.resource.kind === 'audio_session' &&
       candidate.resource.id === sessionId &&
       candidate.signal === AUDIO_SESSION_DESIRED_REVISION_SIGNAL,
   )
-  const observed = typeof entry?.value === 'number' ? entry.value : null
-  return { next: observed === null ? 1 : observed + 1, observed }
+  const observed = entry === undefined ? null : exactAudioSessionRevisionValue(entry.value)
+  return { next: observed === null ? 1n : observed + 1n, observed }
+}
+
+/**
+ * A typed revision override, or `null` for anything that is not a plain
+ * non-negative decimal integer. api/openapi.yaml declares `revision`
+ * minimum 0 for every audio session request body, so a leading minus is
+ * rejected here rather than dispatched.
+ */
+export function parseExactRevisionInput(text: string): bigint | null {
+  const trimmed = text.trim()
+  if (!/^\d+$/.test(trimmed)) return null
+  try {
+    return BigInt(trimmed)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Every known session's observed `audio_session.state` (and position,
+ * where reported) so Live Control can say what is playing before the
+ * operator has picked or typed a session id. A session with no observed
+ * state reads as unobserved, never as a fabricated "stopped".
+ */
+export type AudioSessionSummary = {
+  sessionId: string
+  origin: string
+  tone: Tone
+  stateLabel: string
+  positionLabel: string | null
+}
+
+export function audioSessionSummaries(
+  observations: readonly ObservationEntry[],
+  actions: readonly { id: string; label: string; audioSessionId: string }[],
+  nowIso: string | null,
+): AudioSessionSummary[] {
+  return audioSessionOptions(observations, actions).map((option) => {
+    const stateEntry = findAudioSessionSignal(observations, option.sessionId, 'audio_session.state')
+    const positionEntry = findAudioSessionSignal(observations, option.sessionId, 'audio_session.position_ms')
+    const evidenceState = stateEntry?.state ?? 'not_collected'
+    const stateValue =
+      stateEntry !== undefined && stateEntry.value !== null && typeof stateEntry.value !== 'boolean'
+        ? String(stateEntry.value)
+        : null
+    const age = ageMs(stateEntry?.observedAt ?? null, nowIso)
+    const stateLabel =
+      stateValue === null
+        ? EVIDENCE_LABEL.not_collected
+        : evidenceState === 'current'
+          ? stateValue
+          : `${stateValue} (${EVIDENCE_LABEL[evidenceState].toLowerCase()}${age === null ? '' : `, ${formatDuration(age)} ago`})`
+    const positionMs = typeof positionEntry?.value === 'number' ? positionEntry.value : null
+    return {
+      sessionId: option.sessionId,
+      origin: option.origin,
+      tone: stateValue === null ? EVIDENCE_TONE.not_collected : EVIDENCE_TONE[evidenceState],
+      stateLabel,
+      positionLabel: positionMs === null || positionEntry?.state !== 'current' ? null : formatPosition(positionMs / 1000),
+    }
+  })
+}
+
+function findAudioSessionSignal(
+  observations: readonly ObservationEntry[],
+  sessionId: string,
+  signal: string,
+): ObservationEntry | undefined {
+  return observations.find(
+    (candidate) => candidate.resource.kind === 'audio_session' && candidate.resource.id === sessionId && candidate.signal === signal,
+  )
 }
 
 const AUDIO_SESSION_GOOD_OUTCOMES = new Set(['started', 'position', 'stopped', 'completed'])

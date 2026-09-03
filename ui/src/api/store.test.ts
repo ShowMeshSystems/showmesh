@@ -4074,3 +4074,75 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     expect(store.getSnapshot().macroRuns.some((r) => r.id === 'run-new')).toBe(true)
   })
 })
+
+describe('ApiStore: exact int64 audio session revisions', () => {
+  /**
+   * The defect this guards: a cue-activation session's desired_revision
+   * is UnixNano-scale and exceeds Number.MAX_SAFE_INTEGER. Sending it as
+   * a JS `number` either rounds it or (via a naive JSON.stringify of a
+   * bigint) throws; the wire contract (api/openapi.yaml: `revision`,
+   * `format: int64`) needs a bare, exact JSON number literal.
+   */
+  it('pauseAudioSession() sends an oversized revision as a bare, exact JSON number literal, never a rounded number or a quoted string', async () => {
+    const bigRevision = 1788358834726046721n
+    let gotBody = ''
+    const s = await server((req, res) => {
+      void (async () => {
+        const chunks: Buffer[] = []
+        for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        respondJson(res, 200, {
+          command: {
+            commandId: 'c1',
+            idempotencyKey: 'k1',
+            action: 'audio.session.pause',
+            nodeId: 'audio-node-01',
+            sessionId: 'cue-activation:show',
+            replay: false,
+            outcome: 'started',
+            reason: '',
+            dispatchedAt: null,
+            resolvedAt: null,
+            attributionDegraded: false,
+          },
+        })
+      })()
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.pauseAudioSession('audio-node-01', 'cue-activation:show', bigRevision)
+
+    expect(gotBody).toContain(`"revision":${bigRevision.toString()}`)
+    expect(gotBody).not.toContain(`"revision":"${bigRevision.toString()}"`)
+  })
+
+  /**
+   * The other half of the defect: `response.json()` rounds an oversized
+   * integer the moment it parses it, before the UI ever sees it. This
+   * asserts listObservations() preserves the exact digits instead,
+   * matching what was actually observed on a rehearsal coordinator.
+   */
+  it('listObservations() preserves an observed desired_revision beyond Number.MAX_SAFE_INTEGER as an exact decimal string', async () => {
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/observations')) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'ShowMesh-API-Version': '1' })
+        // Spliced in as raw text: 1788358834726046720 would already round
+        // to a different double the moment it is written as a JS number
+        // literal in this test file, before the response is ever sent.
+        res.end(
+          '{"observations":[{"resource":{"kind":"audio_session","id":"cue-activation:show"},' +
+            '"signal":"audio_session.desired_revision","value":1788358834726046720,"unit":null,' +
+            '"state":"current","reason":null,"observedAt":"2026-09-01T21:00:00Z",' +
+            '"collectedAt":"2026-09-01T21:00:00Z","source":"agent","quality":"direct","validForSeconds":null}]}',
+        )
+        return
+      }
+      res.writeHead(404).end()
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.listObservations('audio_session')
+
+    expect(resp.observations[0]?.value).toBe('1788358834726046720')
+  })
+})
