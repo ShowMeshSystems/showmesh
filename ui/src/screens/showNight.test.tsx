@@ -976,6 +976,119 @@ describe('Show Night', () => {
     expect(backgroundAudio.repeat).toBe('item')
   })
 
+  const audioAsset = (id: string, sequence: string, target: string) =>
+    ({
+      id,
+      show: 'winter-ridge',
+      sequence,
+      targetKind: 'node',
+      target,
+      mediaType: 'audio',
+      contentHash: `sha256:${'a'.repeat(64)}`,
+      runtimeFilename: `${id}.mp3`,
+      sizeBytes: 1,
+      createdAt: '2026-08-28T00:00:00Z',
+      createdByPrincipalId: null,
+      createdByPrincipalName: null,
+      supersededAt: null,
+      current: true,
+    }) as never
+
+  it('shows the audio asset matching the item sequence and target selected by id', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () =>
+      Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01'), audioAsset('asset-2', 'other-seq', 'audio-02')] })
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(await screen.findByLabelText('Audio asset')).toHaveValue('asset-1')
+  })
+
+  it('selecting a real asset sets sequence and target from the chosen asset', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    stubs.listAssets = () =>
+      Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01'), audioAsset('asset-2', 'other-seq', 'audio-02')] })
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const select = await screen.findByLabelText('Audio asset')
+    fireEvent.change(select, { target: { value: 'asset-2' } })
+    expect(select).toHaveValue('asset-2')
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    const item = ((captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>).items as Record<string, unknown>[]
+    expect(item[0]).toMatchObject({ sequence: 'other-seq', target: 'audio-02', itemId: 'bed-1' })
+  })
+
+  it('selecting a real asset defaults a blank item id to the asset sequence', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects()
+    const blankItemIdResponse = fullDefinitionResponse('Winter Ridge')
+    ;((blankItemIdResponse.payload.resting.backgroundAudio as Record<string, unknown>).items as Record<string, unknown>[])[0]!.itemId = ''
+    stubs.getNightSessionConfig = () => Promise.resolve(blankItemIdResponse)
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(blankItemIdResponse)
+    }
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    fireEvent.change(await screen.findByLabelText('Audio asset'), { target: { value: 'asset-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    const item = ((captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>).items as Record<string, unknown>[]
+    expect(item[0]).toMatchObject({ itemId: 'bed-seq' })
+  })
+
+  it('selecting the placeholder clears the item to empty sequence and target', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    const putSpy = vi.fn(() => Promise.resolve(fullDefinitionResponse('Winter Ridge')))
+    stubs.putNightSessionConfig = putSpy
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const select = await screen.findByLabelText('Audio asset')
+    expect(select).toHaveValue('asset-1')
+    fireEvent.change(select, { target: { value: '' } })
+    expect(select).toHaveValue('')
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    // itemId ('bed-1') survives the clear, so a now-blank sequence/target is what trips this
+    // validation error rather than the unrelated "needs at least one item" check.
+    expect(await screen.findByText('Background audio item 1 needs an item id, show, sequence, and target node.')).toBeInTheDocument()
+    expect(putSpy).not.toHaveBeenCalled()
+  })
+
+  it('clearing a blank-item-id item to the placeholder leaves the item id blank, not the stale sequence', async () => {
+    mockListConfigObjects()
+    const blankItemIdResponse = fullDefinitionResponse('Winter Ridge')
+    ;((blankItemIdResponse.payload.resting.backgroundAudio as Record<string, unknown>).items as Record<string, unknown>[])[0]!.itemId = ''
+    stubs.getNightSessionConfig = () => Promise.resolve(blankItemIdResponse)
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const select = await screen.findByLabelText('Audio asset')
+    expect(select).toHaveValue('asset-1')
+    fireEvent.change(select, { target: { value: '' } })
+    // Exercises the item-id line's own selectedAsset?.sequence ?? '' fallback (a placeholder select
+    // with a blank item id), independent of the identical-looking fallback on the sequence field itself.
+    expect(screen.getByLabelText('Item id')).toHaveValue('')
+  })
+
+  it('shows nothing selected when the stored sequence and target match no current asset', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'a-different-seq', 'audio-01')] })
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(await screen.findByLabelText('Audio asset')).toHaveValue('')
+  })
+
   it('sends the site control subsection with its authored bindings', async () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
