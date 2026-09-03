@@ -3156,7 +3156,7 @@ export class ApiStore {
   /**
    * `POST /api/v1/emergency-stop/hard-stop/fire` (level 3, call 2 of 2).
    * Requires the `armToken` [armEmergencyStopHardStop] returned, still
-   * unexpired and unconsumed — an unknown, expired, or already-consumed
+   * unexpired and unconsumed: an unknown, expired, or already-consumed
    * token is refused with a `409` (`ApiError`), which the caller must
    * report rather than retry silently: this method never re-arms on the
    * caller's behalf. See [emergencyStop]'s own doc comment for the

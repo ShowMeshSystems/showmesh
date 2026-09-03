@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
@@ -378,6 +378,51 @@ describe('Live Control', () => {
     expect(await screen.findByText(/Hard stop was refused/)).toBeInTheDocument()
     expect(stubs.fireEmergencyStopHardStop).toHaveBeenCalledTimes(1)
     expect(stubs.armEmergencyStopHardStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders an already-expired arm response as expired and leaves Fire disabled', async () => {
+    stubs.armEmergencyStopHardStop = vi.fn(() =>
+      Promise.resolve({ serverTime: '2026-08-28T21:07:00Z', armToken: 'token-1', expiresAt: '2026-08-28T21:06:00Z' }),
+    )
+    renderScreen({ serverTime: '2026-08-28T21:07:00Z', session: emergencyAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Arm hard stop' }))
+    expect(await screen.findByText(/The arm token expired\. Arm again, then fire promptly\./)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Fire hard stop' })).toBeDisabled()
+  })
+
+  it('lets a live arm token be replaced by re-arming, and fires with the newest token', async () => {
+    let armCount = 0
+    stubs.armEmergencyStopHardStop = vi.fn(() => {
+      armCount += 1
+      return Promise.resolve({
+        serverTime: '2026-08-28T21:07:00Z',
+        armToken: `token-${armCount}`,
+        expiresAt: new Date(Date.now() + 10_000).toISOString(),
+      })
+    })
+    stubs.fireEmergencyStopHardStop = vi.fn((armToken: string) =>
+      Promise.resolve({
+        level: 'hard-stop',
+        idempotencyKey: 'k3',
+        stopOutcomes: [{ instanceId: 'main-player', outcome: 'confirmed', outcomeReason: `Stopped (${armToken}).`, dispatchedAt: null, replay: false }],
+        noInstancesConfigured: false,
+        nightSession: { present: false },
+        followUps: [],
+      }),
+    )
+    renderScreen({ session: emergencyAllowedSession })
+    const arm = screen.getByRole('button', { name: 'Arm hard stop' })
+
+    fireEvent.click(arm)
+    await screen.findByText(/Armed\. Fire within/)
+    expect(arm).not.toBeDisabled()
+
+    fireEvent.click(arm)
+    await waitFor(() => expect(stubs.armEmergencyStopHardStop).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fire hard stop' }))
+    expect(await screen.findByText('No night session was active.')).toBeInTheDocument()
+    expect(stubs.fireEmergencyStopHardStop).toHaveBeenCalledExactlyOnceWith('token-2')
   })
 
   it('draws the mock’s Fire button, warns that it is not wired, and leaves it inert', async () => {

@@ -170,7 +170,7 @@ const EMERGENCY_LEVEL_LABEL: Record<EmergencyLevel, string> = {
 /** [emergencyStop]/[emergencyStopPowerDown]/[fireEmergencyStopHardStop] share one result shape and one refusal path. */
 type EmergencyOutcomeState =
   | { kind: 'result'; level: EmergencyLevel; result: EmergencyStopResult }
-  | { kind: 'error'; level: EmergencyLevel; message: string }
+  | { kind: 'error'; level: EmergencyLevel; message: string; hadHttpStatus: boolean }
 
 function instanceOutcomeTone(outcome: string): Tone {
   if (outcome === 'confirmed') return 'good'
@@ -190,12 +190,15 @@ function followUpOutcomeTone(outcome: string | undefined): Tone {
  * Renders exactly what the coordinator reported: every FPP instance's own
  * outcome, the night-session step where the level has one, and every
  * configured follow-up action's own outcome. Partial success stays
- * partial success — there is no combined pass/fail rollup.
+ * partial success: there is no combined pass/fail rollup.
  */
 function EmergencyStopOutcome({ outcome }: { outcome: EmergencyOutcomeState | null }) {
   if (outcome === null) return null
   if (outcome.kind === 'error') {
-    return <Notice tone="bad" headline={`${EMERGENCY_LEVEL_LABEL[outcome.level]} was refused: ${outcome.message}`} />
+    const headline = outcome.hadHttpStatus
+      ? `${EMERGENCY_LEVEL_LABEL[outcome.level]} was refused: ${outcome.message}`
+      : `${EMERGENCY_LEVEL_LABEL[outcome.level]}: the coordinator reported no outcome: ${outcome.message}`
+    return <Notice tone="bad" headline={headline} />
   }
   const { level, result } = outcome
   return (
@@ -309,7 +312,14 @@ export function LiveControl() {
     setEmergencyBusy(level)
     call()
       .then((result) => setEmergencyOutcome({ kind: 'result', level, result }))
-      .catch((err: unknown) => setEmergencyOutcome({ kind: 'error', level, message: describeApiError(err) }))
+      .catch((err: unknown) =>
+        setEmergencyOutcome({
+          kind: 'error',
+          level,
+          message: describeApiError(err),
+          hadHttpStatus: err instanceof ApiError && err.status !== undefined,
+        }),
+      )
       .finally(() => setEmergencyBusy(false))
   }, [])
 
@@ -641,7 +651,7 @@ export function LiveControl() {
             <ButtonRow>
               <Button
                 size="gloved"
-                disabled={!emergencyGate.allowed || hardStopArmBusy || (hardStopArm !== null && !armExpired)}
+                disabled={!emergencyGate.allowed || hardStopArmBusy}
                 title={emergencyGate.allowed ? undefined : emergencyGate.reason}
                 onClick={armHardStop}
               >
@@ -680,7 +690,7 @@ export function LiveControl() {
             <p className="sm-small sm-muted">
               <strong>Hard stop</strong> does everything Stop and power down does, plus abandons an active night
               session immediately with no wait. Arm mints a short-lived, single-use token; Fire consumes it. No
-              confirmation dialog — arm, then fire.
+              confirmation dialog: arm, then fire.
             </p>
           </div>
 
