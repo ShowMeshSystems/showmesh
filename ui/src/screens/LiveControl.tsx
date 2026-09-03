@@ -3,10 +3,14 @@ import { Link } from 'react-router-dom'
 import {
   ApiError,
   advanceAudioSession,
+  armEmergencyStopHardStop,
   blackoutResolume,
   clearAudioSession,
   dispatchNightCommand,
+  emergencyStop,
+  emergencyStopPowerDown,
   fadeAudioSessionGain,
+  fireEmergencyStopHardStop,
   getAudioSettingsConfig,
   getShowAction,
   getShowCue,
@@ -35,6 +39,7 @@ import {
   unmuteAudioSessionOutput,
   type AudioSessionCommandResult,
   type ConfigObjectSummary,
+  type EmergencyStopResult,
   type FPPCommandResult,
   type FPPPlaylistDefinitionMetadata,
   type NightCommandName,
@@ -51,6 +56,7 @@ import {
   Field,
   Input,
   LifecycleCommands,
+  Notice,
   NotWired,
   NotWiredBanner,
   RuledStrip,
@@ -60,10 +66,11 @@ import {
   StatusPair,
   Table,
   TableWrap,
+  type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { effectiveServerTimeIso, millisToTimecode, timecodeToMillis } from '../domain/time'
+import { effectiveServerTimeIso, millisToTimecode, parseIsoMs, timecodeToMillis } from '../domain/time'
 import {
   audioRows,
   audioSessionOptions,
@@ -152,6 +159,125 @@ function Outcome({ outcome }: { outcome: CommandOutcome | null }) {
   )
 }
 
+type EmergencyLevel = 'stop' | 'stop-power-down' | 'hard-stop'
+
+const EMERGENCY_LEVEL_LABEL: Record<EmergencyLevel, string> = {
+  stop: 'Stop',
+  'stop-power-down': 'Stop and power down',
+  'hard-stop': 'Hard stop',
+}
+
+/** [emergencyStop]/[emergencyStopPowerDown]/[fireEmergencyStopHardStop] share one result shape and one refusal path. */
+type EmergencyOutcomeState =
+  | { kind: 'result'; level: EmergencyLevel; result: EmergencyStopResult }
+  | { kind: 'error'; level: EmergencyLevel; message: string; hadHttpStatus: boolean }
+
+function instanceOutcomeTone(outcome: string): Tone {
+  if (outcome === 'confirmed') return 'good'
+  if (outcome === 'unconfirmed') return 'warn'
+  return 'bad' // refused | failed
+}
+
+function followUpOutcomeTone(outcome: string | undefined): Tone {
+  if (outcome === undefined) return 'unknown'
+  if (outcome === 'confirmed') return 'good'
+  if (outcome === 'unconfirmed') return 'warn'
+  if (outcome === 'unconfirmable') return 'unknown'
+  return 'bad' // refused | failed
+}
+
+/**
+ * Renders exactly what the coordinator reported: every FPP instance's own
+ * outcome, the night-session step where the level has one, and every
+ * configured follow-up action's own outcome. Partial success stays
+ * partial success: there is no combined pass/fail rollup.
+ */
+function EmergencyStopOutcome({ outcome }: { outcome: EmergencyOutcomeState | null }) {
+  if (outcome === null) return null
+  if (outcome.kind === 'error') {
+    const headline = outcome.hadHttpStatus
+      ? `${EMERGENCY_LEVEL_LABEL[outcome.level]} was refused: ${outcome.message}`
+      : `${EMERGENCY_LEVEL_LABEL[outcome.level]}: the coordinator reported no outcome: ${outcome.message}`
+    return <Notice tone="bad" headline={headline} />
+  }
+  const { level, result } = outcome
+  return (
+    <div className="sm-lc-emergency__outcome">
+      <p className="sm-small">
+        <strong>{EMERGENCY_LEVEL_LABEL[level]}</strong> was dispatched.
+      </p>
+      {result.noInstancesConfigured ? (
+        <RuledStrip
+          absence="empty"
+          label="No FPP instances"
+          fact="No FPP instance is configured on this coordinator, so nothing was stopped."
+        />
+      ) : (
+        <TableWrap label="Emergency stop, per FPP instance">
+          <Table minWidth={480}>
+            <thead>
+              <tr>
+                <th scope="col">FPP instance</th>
+                <th scope="col">Outcome</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.stopOutcomes.map((row) => (
+                <tr key={row.instanceId}>
+                  <td>
+                    <span className="sm-data">{row.instanceId}</span>
+                  </td>
+                  <td>
+                    <StatusPair tone={instanceOutcomeTone(row.outcome)} label={row.outcome} />
+                    <p className="sm-small sm-muted">{row.outcomeReason}</p>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableWrap>
+      )}
+      {result.nightSession !== undefined && (
+        <p className="sm-small sm-muted">
+          {result.nightSession.present
+            ? `Night session: ${result.nightSession.outcome ?? 'no outcome reported'}${
+                result.nightSession.error === undefined ? '' : ` (${result.nightSession.error})`
+              }.`
+            : 'No night session was active.'}
+        </p>
+      )}
+      {result.followUpConfigError !== undefined && result.followUpConfigError !== '' && (
+        <Notice tone="warn" live="status" headline={`Follow-up actions were not run: ${result.followUpConfigError}`} />
+      )}
+      {result.followUps.length > 0 && (
+        <TableWrap label="Emergency stop, follow-up actions">
+          <Table minWidth={480}>
+            <thead>
+              <tr>
+                <th scope="col">Follow-up action</th>
+                <th scope="col">Outcome</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.followUps.map((row) => (
+                <tr key={row.actionId}>
+                  <td>
+                    <span className="sm-data">{row.label ?? row.actionId}</span>
+                  </td>
+                  <td>
+                    <StatusPair tone={followUpOutcomeTone(row.outcome)} label={row.outcome ?? 'unresolved'} />
+                    <p className="sm-small sm-muted">{row.outcomeReason}</p>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </TableWrap>
+      )}
+    </div>
+  )
+}
+
 export function LiveControl() {
   const model = useModelContext()
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
@@ -161,6 +287,7 @@ export function LiveControl() {
   const configGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const resolumeGate = evaluateScope(model.session, model.sessionFetchFailed, 'resolume:action')
   const audioGate = evaluateScope(model.session, model.sessionFetchFailed, 'audio:command')
+  const emergencyGate = evaluateScope(model.session, model.sessionFetchFailed, 'show:emergencystop:invoke')
 
   const [selected, setSelected] = useState<string | null>(null)
   const instance = model.fpp.find((entry) => entry.instanceId === selected) ?? model.fpp[0]
@@ -171,9 +298,62 @@ export function LiveControl() {
   const [startRepeat, setStartRepeat] = useState(false)
   const [startState, setStartState] = useState<StartPlaylistState>({ kind: 'idle' })
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
+  const [emergencyOutcome, setEmergencyOutcome] = useState<EmergencyOutcomeState | null>(null)
+  const [emergencyBusy, setEmergencyBusy] = useState<EmergencyLevel | false>(false)
+  const [hardStopArm, setHardStopArm] = useState<{ armToken: string; expiresAt: string } | null>(null)
+  const [hardStopArmBusy, setHardStopArmBusy] = useState(false)
+  const [hardStopArmError, setHardStopArmError] = useState<string | null>(null)
+  const [armTick, setArmTick] = useState(0)
 
   const macros = useConfigList('show.macro', show)
   const actions = useConfigList('show.action', show)
+
+  const runEmergencyStop = useCallback((level: EmergencyLevel, call: () => Promise<EmergencyStopResult>) => {
+    setEmergencyBusy(level)
+    call()
+      .then((result) => setEmergencyOutcome({ kind: 'result', level, result }))
+      .catch((err: unknown) =>
+        setEmergencyOutcome({
+          kind: 'error',
+          level,
+          message: describeApiError(err),
+          hadHttpStatus: err instanceof ApiError && err.status !== undefined,
+        }),
+      )
+      .finally(() => setEmergencyBusy(false))
+  }, [])
+
+  const armHardStop = useCallback(() => {
+    setHardStopArmBusy(true)
+    setHardStopArmError(null)
+    armEmergencyStopHardStop()
+      .then((response) => setHardStopArm({ armToken: response.armToken, expiresAt: response.expiresAt }))
+      .catch((err: unknown) => setHardStopArmError(describeApiError(err)))
+      .finally(() => setHardStopArmBusy(false))
+  }, [])
+
+  // Ticks once a second only while a token is live, so the countdown and its
+  // own expiry (armExpired below) stay current without polling the server.
+  useEffect(() => {
+    if (hardStopArm === null) return
+    const id = setInterval(() => setArmTick((tick) => tick + 1), 1000)
+    return () => clearInterval(id)
+  }, [hardStopArm])
+  // Falls back to the browser clock when no server time has been heard yet
+  // (before the first snapshot): a missing countdown is worse than one
+  // measured against an uncorrected clock for a ~10s window.
+  const armNowMs = parseIsoMs(effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())) ?? Date.now()
+  const armExpiresMs = hardStopArm === null ? null : parseIsoMs(hardStopArm.expiresAt)
+  const armRemainingMs = armExpiresMs === null || armNowMs === null ? null : armExpiresMs - armNowMs
+  const armExpired = armRemainingMs !== null && armRemainingMs <= 0
+  void armTick // triggers the recompute above; the value itself is unused
+
+  const fireHardStop = useCallback(() => {
+    if (hardStopArm === null) return
+    const armToken = hardStopArm.armToken
+    setHardStopArm(null)
+    runEmergencyStop('hard-stop', () => fireEmergencyStopHardStop(armToken))
+  }, [hardStopArm, runEmergencyStop])
 
   const run = useCallback((action: string, call: () => Promise<FPPCommandResult>) => {
     call()
@@ -422,6 +602,100 @@ export function LiveControl() {
           <strong>Stop now</strong> halts this player only; projection and audio hold their last state until their own
           cues run.
         </p>
+      </Section>
+
+      <Section
+        id="lc-emergency"
+        title="Emergency stop"
+        detail="Every configured FPP instance, independent of which one is selected above. Resolume blackout, below, is the separate, per-instance visual path."
+      >
+        <div className="sm-lc-emergency">
+          <ButtonRow>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!emergencyGate.allowed || emergencyBusy !== false}
+              title={emergencyGate.allowed ? undefined : emergencyGate.reason}
+              onClick={() => {
+                if (!window.confirm('Stop every configured FPP instance now? This does not affect projection or audio.')) return
+                runEmergencyStop('stop', emergencyStop)
+              }}
+            >
+              Stop
+            </Button>
+            <Button
+              variant="danger"
+              size="gloved"
+              disabled={!emergencyGate.allowed || emergencyBusy !== false}
+              title={emergencyGate.allowed ? undefined : emergencyGate.reason}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    'Stop every configured FPP instance and force an active night session straight into its own graceful power-down, now?',
+                  )
+                )
+                  return
+                runEmergencyStop('stop-power-down', emergencyStopPowerDown)
+              }}
+            >
+              Stop and power down
+            </Button>
+          </ButtonRow>
+          <p className="sm-small sm-muted">
+            <strong>Stop</strong> halts every configured FPP instance. <strong>Stop and power down</strong> does the
+            same, plus forces an active night session into the standard power-down sequence immediately rather than
+            waiting for it.
+          </p>
+
+          <div className="sm-lc-emergency__hardstop">
+            <ButtonRow>
+              <Button
+                size="gloved"
+                disabled={!emergencyGate.allowed || hardStopArmBusy}
+                title={emergencyGate.allowed ? undefined : emergencyGate.reason}
+                onClick={armHardStop}
+              >
+                Arm hard stop
+              </Button>
+              <Button
+                variant="danger"
+                size="gloved"
+                disabled={!emergencyGate.allowed || hardStopArm === null || armExpired || emergencyBusy !== false}
+                title={
+                  !emergencyGate.allowed
+                    ? emergencyGate.reason
+                    : hardStopArm === null
+                      ? 'Arm hard stop first.'
+                      : armExpired
+                        ? 'The arm token expired. Arm again, then fire promptly.'
+                        : undefined
+                }
+                onClick={fireHardStop}
+              >
+                Fire hard stop
+              </Button>
+            </ButtonRow>
+            {hardStopArmError !== null && <Notice tone="bad" headline={`Arm was refused: ${hardStopArmError}`} />}
+            {hardStopArm !== null && armRemainingMs !== null && (
+              <Notice
+                tone="warn"
+                live="status"
+                headline={
+                  armExpired
+                    ? 'The arm token expired. Arm again, then fire promptly.'
+                    : `Armed. Fire within ${Math.max(0, Math.ceil(armRemainingMs / 1000))}s, or arm again to reset the window.`
+                }
+              />
+            )}
+            <p className="sm-small sm-muted">
+              <strong>Hard stop</strong> does everything Stop and power down does, plus abandons an active night
+              session immediately with no wait. Arm mints a short-lived, single-use token; Fire consumes it. No
+              confirmation dialog: arm, then fire.
+            </p>
+          </div>
+
+          <EmergencyStopOutcome outcome={emergencyOutcome} />
+        </div>
       </Section>
 
       <Section
