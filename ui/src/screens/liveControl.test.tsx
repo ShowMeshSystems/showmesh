@@ -914,7 +914,7 @@ describe('Live Control', () => {
     armApply(region)
     fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
 
-    expect(stubs.applyAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, { sourceRole: 'primary' })
+    expect(stubs.applyAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n, { sourceRole: 'primary' })
     expect(await within(region).findByText('Completed')).toBeInTheDocument()
   })
 
@@ -925,7 +925,7 @@ describe('Live Control', () => {
     armApply(region)
     fireEvent.click(within(region).getByRole('button', { name: 'Apply' }))
 
-    expect(stubs.applyAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1, undefined)
+    expect(stubs.applyAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n, undefined)
   })
 
   it('reports malformed JSON locally, says nothing was sent, and never dispatches Apply', async () => {
