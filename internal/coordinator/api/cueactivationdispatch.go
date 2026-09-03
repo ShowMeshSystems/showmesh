@@ -53,6 +53,20 @@ import (
 // reassigns it.
 var cueActivationConfirmDeadline = 15 * time.Second
 
+// cueActivationWireDeadline bounds how stale a wire command may be before
+// the agent refuses it (CmdPayload.Deadline; internal/agent/command.go's
+// guard), mirroring audioCommandWireDeadline's identical reasoning
+// (audiodispatch.go): the only real staleness this can catch is a command
+// sitting behind other work on an already-connected agent, a scheduling-
+// sized delay, not a network one. cue.activate directly triggers
+// show-visible playback, so a late activation is genuinely harmful, a
+// real desync from operator/show-timeline intent, which is exactly this
+// file's own "stale-catalog" refusal category one layer up
+// (cueActivationNodeOutcomeAuthorized's doc comment); this wire deadline
+// stops a badly stale command before that check even runs. The value
+// stays generous so it fires only on genuine pathology.
+const cueActivationWireDeadline = 60 * time.Second
+
 // cueActivationNodeOutcomeAuthorized is the exact string
 // internal/agent/cueactivationops.go's activate reports (in its
 // node.cue_activation.outcome evidence Value's own "outcome" field) when
@@ -223,11 +237,13 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 	if err != nil {
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("build result topic for node %q: %w", nodeID, err)}
 	}
+	deadline := now.Add(cueActivationWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: act.ActivationID, Action: "cue.activate",
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName},
 		ConfirmationMethod: "evidence",
+		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, nodeID, payload)
 	if err != nil {

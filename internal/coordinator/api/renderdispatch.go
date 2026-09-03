@@ -81,6 +81,20 @@ var renderCommandConfirmDeadline = 15 * time.Second
 // test-only-override rule as renderCommandConfirmDeadline.
 var renderCommandPollInterval = 250 * time.Millisecond
 
+// renderCommandWireDeadline bounds how stale a wire command may be before
+// the agent refuses it (CmdPayload.Deadline; internal/agent/command.go's
+// guard), mirroring audioCommandWireDeadline's identical reasoning one
+// file over (audiodispatch.go): commands publish QoS 1/Retain false and an
+// offline agent's MQTT session (and its subscriptions) ends with the
+// connection, so the only real staleness this can catch is a command
+// sitting behind other work on an already-connected agent, a scheduling-
+// sized delay, not a network one. A late render command is genuinely
+// harmful (it would apply visibly out of sync with operator intent), so
+// unlike the convergent config-push dispatchers this file's sibling is
+// classified for a deadline; the value stays generous so it fires only on
+// genuine pathology, never on a loaded machine's ordinary scheduling.
+const renderCommandWireDeadline = 60 * time.Second
+
 const (
 	// renderHandlerWriteDeadlineMargin is added to
 	// renderCommandConfirmDeadline for the HTTP response write deadline,
@@ -714,11 +728,13 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	if err != nil {
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("build cmd topic: %w", err)
 	}
+	deadline := now.Add(renderCommandWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: in.NodeID}, Params: in.Params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: in.IssuerID, PrincipalName: in.IssuerName},
 		ConfirmationMethod: "evidence",
+		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, in.NodeID, payload)
 	if err != nil {

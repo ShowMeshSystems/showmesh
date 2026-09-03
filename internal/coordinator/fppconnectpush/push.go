@@ -501,6 +501,17 @@ func publish(ctx context.Context, pub Publisher, now func() time.Time, nodeID, a
 		return err
 	}
 	t := now()
+	// No CmdPayload.Deadline: this is a plain field-by-field apply
+	// (channel ranges, active show, show names, byte caps), not a
+	// start/stop trigger, so an out-of-order apply leaves nodeID on
+	// stale-but-valid advertised state, never torn down. idempotencyKeyFor
+	// hashes the resolved content plus each contributing object's own
+	// current revision, so a later operator write that changes anything
+	// this depends on (including assets.settings' contentBaseUrl, which
+	// this package does not itself watch) is picked up the next time
+	// ToNode/BestEffort fires for this node: its next hello, or a write to
+	// any of the four watched config kinds (currentCoordinatorBaseURL's
+	// own doc comment).
 	cmd := mqttproto.CmdPayload{
 		CommandID: uuid.NewString(), IdempotencyKey: idempotencyKey, Action: action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,

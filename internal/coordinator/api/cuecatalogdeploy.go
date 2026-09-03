@@ -68,6 +68,21 @@ const auditActionCueCatalogDeploy = "cuecatalog.deploy"
 // (renderdispatch.go); no runtime configuration ever reassigns it.
 var cueCatalogDeployConfirmDeadline = 15 * time.Second
 
+// cueCatalogDeployWireDeadline bounds how stale a wire command may be
+// before the agent refuses it (CmdPayload.Deadline; internal/agent/
+// command.go's guard), mirroring audioCommandWireDeadline's identical
+// reasoning (audiodispatch.go): the only real staleness this can catch is
+// a command sitting behind other work on an already-connected agent, a
+// scheduling-sized delay, not a network one. Unlike audioconfigpush's or
+// fppconnectpush's convergent pushes, nothing retriggers a cuecatalog.
+// deploy automatically on a later hello or write; this route only ever
+// fires from an explicit operator/API call, so a stale deploy landing
+// after a newer one would silently leave the node on an outdated catalog
+// until the next explicit deploy, which is genuinely harmful, not merely
+// wasteful. The value stays generous so it fires only on genuine
+// pathology.
+const cueCatalogDeployWireDeadline = 60 * time.Second
+
 // maxCueCatalogDeployRequestBodyBytes bounds this endpoint's request body
 // — it carries only an optional idempotencyKey, mirroring
 // maxRenderCommandRequestBodyBytes's identical reasoning.
@@ -241,11 +256,13 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		h.writeInternalError(w, now, "build result topic", err)
 		return
 	}
+	deadline := now.Add(cueCatalogDeployWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: issuerID, PrincipalName: issuerName},
 		ConfirmationMethod: "evidence",
+		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, nodeID, payload)
 	if err != nil {

@@ -164,6 +164,35 @@ func TestCueCatalogDeployUnconfirmedDoesNotRecordAnAcknowledgement(t *testing.T)
 	}
 }
 
+// TestCueCatalogDeploySetsWireDeadline proves the dispatched
+// cuecatalog.deploy command carries a wire CmdPayload.Deadline, anchored
+// to the dispatch clock by exactly cueCatalogDeployWireDeadline, not
+// merely non-nil.
+func TestCueCatalogDeploySetsWireDeadline(t *testing.T) {
+	api, _, pub, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	pub.result = mqttproto.ResultPayload{Outcome: mqttproto.OutcomeRefused, Reason: "node refused for a test"}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy", `{}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST cue-catalog/deploy: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if len(pub.dispatched) != 1 {
+		t.Fatalf("dispatched count = %d, want 1", len(pub.dispatched))
+	}
+	got := pub.dispatched[0].Deadline
+	if got == nil {
+		t.Fatalf("Deadline = nil, want set")
+	}
+	want := testNow.Add(cueCatalogDeployWireDeadline)
+	if !got.Equal(want) {
+		t.Fatalf("Deadline = %v, want %v (testNow + cueCatalogDeployWireDeadline)", got, want)
+	}
+}
+
 // TestCueCatalogDeployReplayReturnsExistingOutcomeWithoutRepublishing
 // proves an idempotency key reused against the same node replays the
 // original command's own recorded result rather than dispatching a

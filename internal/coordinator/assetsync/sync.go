@@ -534,6 +534,13 @@ func (s *Service) dispatchFetch(ctx context.Context, nodeID string, asset Expect
 		return fmt.Errorf("build cmd topic: %w", err)
 	}
 
+	// No CmdPayload.Deadline: a late asset.fetch is wasteful, not harmful.
+	// syncNode recomputes m.Missing fresh from currently-desired versus
+	// currently-held content hashes on every tick, never from what was
+	// dispatched before, so a stale fetch either fills a hash still
+	// actually missing (correct) or one no longer wanted (inert extra
+	// cache, never read back as desired state by any later tick).
+	// Arrival order relative to a newer dispatch does not matter.
 	payload := mqttproto.CmdPayload{
 		CommandID:      commandID,
 		IdempotencyKey: uuid.NewString(),

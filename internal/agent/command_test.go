@@ -514,6 +514,69 @@ func TestHandleMessagePastDeadlineRefusedWithoutExecuting(t *testing.T) {
 	}
 }
 
+// TestHandleMessageDeadlineDoesNotAbortInFlightOperation proves the
+// durable constraint this seam's own wire deadline must satisfy: a
+// deadline may only ever suppress DELIVERY of a stale command, never
+// expire or tear down work a node already holds and is performing.
+// HandleMessage's deadline check (branch 8 in its own doc comment) runs
+// exactly once, before the allowlisted operation is ever invoked, and is
+// never re-checked afterward, so an operation already running when its
+// deadline passes must run to completion and report its own real outcome,
+// not a deadline refusal. This is constructed deterministically with
+// blockingOp: the deadline is valid at receipt (in the future), the
+// operation is let in and holds there, the fake clock is then advanced
+// past the deadline while the operation is still "holding the work," and
+// only then is it released, reproducing exactly the timing a real
+// wedged-but-still-running operation would present, not a race dependent
+// on wall-clock luck.
+func TestHandleMessageDeadlineDoesNotAbortInFlightOperation(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)}
+	op := newBlockingOp()
+	h := newTestHandler(map[string]OperationFunc{"agent.echo": op.run}, clock)
+	pub := newFakePublisher()
+
+	deadline := clock.t.Add(time.Second) // valid at receipt
+	cmd := baseEchoCmd("cmd-1", "idem-1")
+	cmd.Deadline = &deadline
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.HandleMessage(context.Background(), pub, topic, payload)
+	}()
+
+	select {
+	case <-op.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for the operation to be entered (deadline guard should have let a valid-at-receipt deadline through)")
+	}
+
+	// The operation is now "holding the work": HandleMessage already
+	// passed its one-and-only deadline check and will never check again.
+	// Advancing the clock here simulates the deadline elapsing while the
+	// node is mid-operation.
+	clock.advance(2 * time.Second)
+	if !clock.t.After(deadline) {
+		t.Fatalf("test setup bug: clock.t = %v is not after deadline = %v", clock.t, deadline)
+	}
+
+	close(op.unblock)
+	<-done
+
+	if got := op.callCount(); got != 1 {
+		t.Fatalf("op.callCount() = %d, want 1 (the operation must run to completion, not be aborted)", got)
+	}
+	calls := pub.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("len(calls) = %d, want 2 (result + observed echo, the same as an ordinary confirmed run); calls = %+v", len(calls), calls)
+	}
+	result := decodeResultFromCall(t, calls[0])
+	if result.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("Outcome = %q, want %q (a deadline that elapses mid-operation must never turn a completed operation's own outcome into a refusal)", result.Outcome, mqttproto.OutcomeConfirmed)
+	}
+}
+
 // TestHandleMessageMalformedPayloadDropsWithNoPublish is the actual test
 // (not merely a comment) proving that a structurally malformed message —
 // invalid JSON, or a literal JSON `null` payload — is logged and dropped

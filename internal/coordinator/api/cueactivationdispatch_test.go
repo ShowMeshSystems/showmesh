@@ -173,6 +173,41 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	}
 }
 
+// TestDispatchOneCueActivationSetsWireDeadline proves
+// dispatchOneCueActivation populates the dispatched command's
+// CmdPayload.Deadline, anchored to the dispatch clock by exactly
+// cueActivationWireDeadline, not merely non-nil.
+func TestDispatchOneCueActivationSetsWireDeadline(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if outcome.Err != nil {
+		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
+	}
+	if len(setup.pub.dispatched) != 1 {
+		t.Fatalf("dispatched count = %d, want 1", len(setup.pub.dispatched))
+	}
+	got := setup.pub.dispatched[0].Deadline
+	if got == nil {
+		t.Fatalf("Deadline = nil, want set")
+	}
+	want := now.Add(cueActivationWireDeadline)
+	if !got.Equal(want) {
+		t.Fatalf("Deadline = %v, want %v (now + cueActivationWireDeadline)", got, want)
+	}
+}
+
 // TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess
 // proves this seam's own defect fix directly: a node that refuses (e.g.
 // cross-show, or a stale catalog it independently detected) must NOT be
