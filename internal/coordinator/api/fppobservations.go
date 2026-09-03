@@ -411,20 +411,23 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 	// disagree. Read the just-written row back rather than reconciling rec
 	// directly, so a replay (which does not carry EntryOccurrenceSequence
 	// or EvidenceBrokenAt) reconciles from the same stored state GET does.
+	//
+	// Best effort, deliberately: the observation is already accepted and
+	// stored above, and the cue-activation nudger has already fired, so a
+	// failure here must never turn into a 500 for a write that already
+	// succeeded. Log and leave both fields at their zero value (omitted on
+	// the wire) instead: the same "coordinator unreachable or receipt aged
+	// out" shape the plugin already has to tolerate.
 	var reconciliation, operatorInstruction string
-	stored, err := h.deps.FPPObservations.GetFPPPlaylistEntryObservation(ctx, rec.InstanceUUID)
-	if err != nil {
-		h.writeInternalError(w, now, "get fpp playlist entry observation for reconciliation", err)
-		return
-	}
-	result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, stored)
-	if err != nil {
-		h.writeInternalError(w, now, "reconcile fpp playlist entry observation", err)
-		return
-	}
-	reconciliation = string(result.Outcome)
-	if result.Outcome.IsMismatch() {
-		operatorInstruction = fppreconcile.OperatorMismatchInstruction
+	if stored, err := h.deps.FPPObservations.GetFPPPlaylistEntryObservation(ctx, rec.InstanceUUID); err != nil {
+		h.logWarn("failed to read back fpp playlist entry observation for reconciliation", "instanceUuid", rec.InstanceUUID, "error", err)
+	} else if result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, stored); err != nil {
+		h.logWarn("failed to reconcile fpp playlist entry observation", "instanceUuid", rec.InstanceUUID, "error", err)
+	} else {
+		reconciliation = string(result.Outcome)
+		if result.Outcome.IsMismatch() {
+			operatorInstruction = fppreconcile.OperatorMismatchInstruction
+		}
 	}
 
 	jsonWrite(w, v1.FPPPlaylistEntryObservationResponse{

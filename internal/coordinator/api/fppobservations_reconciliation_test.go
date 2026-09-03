@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -179,5 +180,41 @@ func TestFPPObservationReplayCarriesReconciliation(t *testing.T) {
 	}
 	if _, present := m["operatorInstruction"]; !present {
 		t.Fatalf("operatorInstruction absent on a mismatched replay; body: %v", m)
+	}
+}
+
+// TestFPPObservationPostDegradesToReceiptOnReconciliationFailure proves
+// the verdict is best-effort decoration on the receipt, not part of its
+// contract: the observation is already accepted and stored by the time
+// reconciliation runs, so a failure resolving it must never turn the
+// response into an error for a write that already succeeded. It must
+// instead fall back to the original acceptance receipt with both new
+// fields wholly absent (not merely empty), the same "coordinator
+// unreachable or receipt aged out" shape the plugin already tolerates.
+func TestFPPObservationPostDegradesToReceiptOnReconciliationFailure(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	deps := setup.deps()
+	deps.FPPReconciliation = noFPPReconciliationStore{}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := fppObservationBody(t, "instance-1", 1, "showmesh-test", "main", 0)
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if accepted, _ := m["accepted"].(bool); !accepted {
+		t.Errorf("accepted = %v, want true", m["accepted"])
+	}
+	if _, present := m["reconciliation"]; present {
+		t.Errorf("reconciliation present after a reconcile failure, want absent; body: %v", m)
+	}
+	if _, present := m["operatorInstruction"]; present {
+		t.Errorf("operatorInstruction present after a reconcile failure, want absent; body: %v", m)
+	}
+
+	if _, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1"); err != nil {
+		t.Fatalf("observation was not stored despite the 200 receipt: %v", err)
 	}
 }

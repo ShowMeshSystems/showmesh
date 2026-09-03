@@ -13737,6 +13737,9 @@ components:
         .../reconciliation uses (never a second one), and reported on a
         replay as well as on an accepted observation so a plugin that polls
         by re-posting is not blind on requests where nothing changed.
+        Both are best effort and may be absent even for an instance that
+        does have a verdict; a client must not read their absence as "no
+        mismatch."
       required: [schemaVersion, instanceUuid, sequence, entryKey, accepted, replay, serverTime]
       properties:
         schemaVersion:

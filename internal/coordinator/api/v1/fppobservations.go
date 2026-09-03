@@ -57,10 +57,16 @@ type FPPPlaylistEntryObservationResponse struct {
 	// replay too, not only on an accepted observation, because the
 	// plugin polls by re-posting and would otherwise be blind to the
 	// verdict on every request where nothing changed.
+	//
+	// Best effort: computed after the observation is already accepted and
+	// stored, so a failure resolving it never turns into an error response
+	// for a write that already succeeded. Both fields are left absent on
+	// that failure. Absent therefore means "unknown", never "resolved": a
+	// client must not read the absence of these fields as "no mismatch."
 	Reconciliation string `json:"reconciliation,omitempty"`
 	// OperatorInstruction is fppreconcile.OperatorMismatchInstruction,
-	// present only when Reconciliation is one of the four outcomes
-	// fppreconcile.Outcome.IsMismatch reports true for.
+	// present only when Reconciliation is present and one of the four
+	// outcomes fppreconcile.Outcome.IsMismatch reports true for.
 	OperatorInstruction string `json:"operatorInstruction,omitempty"`
 
 	ServerTime string `json:"serverTime"`
