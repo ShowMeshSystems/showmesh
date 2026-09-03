@@ -399,6 +399,11 @@ grep -q '^Restart=on-failure$' /etc/systemd/system/showmesh-agent.service
 echo "OK: unit sets Restart=on-failure"
 echo
 
+echo "=== 8b. Unit raises the file-descriptor limit above the Pi default ==="
+grep -q '^LimitNOFILE=65536$' /etc/systemd/system/showmesh-agent.service
+echo "OK: unit sets LimitNOFILE=65536"
+echo
+
 echo "=== 9. Upgrade path enforces the SHOWMESH_NODE_ID check ==="
 # This container has no PID 1 systemd, so install.sh's real
 # 'systemctl daemon-reload' probe fails and activation is skipped
