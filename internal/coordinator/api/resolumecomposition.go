@@ -96,12 +96,8 @@ const resolumeCompositionSourceAPI = "api"
 const maxResolumeCompositionUploadBytes = 16 * 1024 * 1024
 
 // resolumeCompositionUploadNoun and resolumeCompositionUploadAdvice are this
-// route's own arguments to [payloadTooLargeProblem], kept as named
-// constants (rather than inlined at each of this file's two call sites)
-// so the wording only needs to change in one place. No comma before
-// "check": this reads as one continuous sentence, matching this
-// coordinator's own no-em-dash convention rather than the em-dash the
-// text originally used to join the two clauses.
+// route's own arguments to [payloadTooLargeProblem], named so the wording
+// only needs to change in one place.
 const resolumeCompositionUploadNoun = "a Resolume composition file"
 const resolumeCompositionUploadAdvice = " Real composition files are typically well under 3 MB, check that the correct file was selected."
 
@@ -118,15 +114,9 @@ const ProblemTypeResolumeCompositionTooLarge = problemBaseURI + "payload-too-lar
 // constructor, matching this package's standing per-class-constructor
 // convention (problem.go's resourceNotFoundProblem, invalidParameterProblem,
 // and friends). Shared by every route that enforces its own upload-size
-// bound (this file's own composition upload, assets.go's asset upload):
-// each caller passes ITS OWN configured maxBytes, ITS OWN noun for what was
-// being uploaded, and an optional trailing advice sentence (empty when
-// there is none), never a value hardcoded here, which is exactly the
-// defect this parameterization exists to close: assets.go used to call
-// this constructor with no arguments at all, so an asset upload rejected
-// against assets.settings' own configured maxUploadBytes was reported to
-// the operator as having exceeded maxResolumeCompositionUploadBytes, a
-// completely different bound belonging to a completely different route.
+// bound: each caller passes its own configured maxBytes and its own noun
+// for what was being uploaded, plus an optional trailing advice sentence
+// (empty when there is none). Nothing here is hardcoded.
 func payloadTooLargeProblem(maxBytes int64, noun, advice string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeResolumeCompositionTooLarge,
