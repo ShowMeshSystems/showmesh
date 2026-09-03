@@ -165,7 +165,7 @@ Prefer the coordinator's own YAML export (ADR-009) for reviewable, secret-free c
 
 ## Upgrade and rollback
 
-No images are published yet (see ADR-012's consequences), so this bundle only ever builds the coordinator from source; `SHOWMESH_VERSION` currently does nothing but stamp the build's `-ldflags` version string, it does not select what gets built. `SHOWMESH_COMMIT` and `SHOWMESH_BUILD_DATE` are not meant to be set by hand at all: `make deploy-build`/`make deploy-up` (see Bring the stack up, above) derive them from the checked-out git ref automatically. Concretely, today, "upgrading" or "rolling back" means checking out the corresponding git ref and rebuilding:
+Building from source, as `docker-compose.yml` does by default, means `SHOWMESH_VERSION` only stamps the build's `-ldflags` version string; it does not select what gets built. `SHOWMESH_COMMIT` and `SHOWMESH_BUILD_DATE` are not meant to be set by hand at all: `make deploy-build`/`make deploy-up` (see Bring the stack up, above) derive them from the checked-out git ref automatically. Concretely, on the from-source path, "upgrading" or "rolling back" means checking out the corresponding git ref and rebuilding:
 
 ```sh
 git checkout <ref>          # the version you want running
