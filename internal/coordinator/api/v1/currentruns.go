@@ -54,6 +54,21 @@ type CurrentRunFreshness struct {
 type CurrentReconciliation struct {
 	State  string `json:"state"`
 	Reason string `json:"reason"`
+
+	// OperatorInstruction is populated only for an fpp-runner run whose
+	// fppreconcile.Outcome.IsMismatch is true (State one of stale-import,
+	// unknown-entry, evidence-mismatch, cross-show), and absent for every
+	// other run -- including a showmesh-audio run, whose own State can
+	// independently read "stale-import" for an unrelated playlist-revision
+	// check (currentruns.go's audioSessionReconciliation) that carries no
+	// FPP-specific remedy and must never be told to "restart FPP". A
+	// one-sentence, operator-facing notice naming both remedies when
+	// present. Reported ADDITIVELY, the collapsed form of
+	// FPPPlaylistEntryReconciliationResponse.OperatorInstruction
+	// (fppreconciliation.go), matching that field's own EvidenceBrokenAt
+	// precedent: a notice only, never a change to the configured mismatch
+	// policy's own dispatch effect.
+	OperatorInstruction string `json:"operatorInstruction,omitempty"`
 }
 
 type CurrentRunActivation struct {

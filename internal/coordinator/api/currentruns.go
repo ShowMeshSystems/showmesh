@@ -13,6 +13,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -129,6 +130,9 @@ func (r currentRunsReader) appendFPPRuns(ctx context.Context, now time.Time, out
 				reconciliation = currentrun.Reconciliation{State: "unknown", Reason: reconcileErr.Error()}
 			} else {
 				reconciliation = currentrun.Reconciliation{State: string(result.Outcome), Reason: result.Reason}
+				if result.Outcome.IsMismatch() {
+					reconciliation.OperatorInstruction = fppreconcile.OperatorMismatchInstruction
+				}
 			}
 		}
 		pl := findFPPPlaylist(playlists, rec.InstanceUUID, rec.PlaylistHash, rec.PlaylistName)
@@ -530,7 +534,7 @@ func mapCurrentRun(r currentrun.Run) v1.CurrentRun {
 	return v1.CurrentRun{ID: r.ID, Runner: r.Runner, Show: r.Show, Generation: r.Generation, PlaylistID: r.PlaylistID, PlaylistRevision: r.PlaylistRevision, Status: r.Status, StatusReason: r.StatusReason,
 		Playback:       v1.CurrentPlayback{State: r.Playback.State, Reason: r.Playback.Reason, ItemID: r.Playback.ItemID, ItemIndex: r.Playback.ItemIndex, PositionMs: r.Playback.PositionMs, Media: r.Playback.Media, Evidence: pe},
 		Freshness:      v1.CurrentRunFreshness{State: r.Freshness.State, Reason: r.Freshness.Reason, ObservedAt: formatTimePtr(r.Freshness.ObservedAt), CollectedAt: formatTimePtr(r.Freshness.CollectedAt)},
-		Reconciliation: v1.CurrentReconciliation{State: r.Reconciliation.State, Reason: r.Reconciliation.Reason},
+		Reconciliation: v1.CurrentReconciliation{State: r.Reconciliation.State, Reason: r.Reconciliation.Reason, OperatorInstruction: r.Reconciliation.OperatorInstruction},
 		Activation:     v1.CurrentRunActivation{Show: r.Activation.Show, Generation: r.Activation.Generation, PlaylistID: r.Activation.PlaylistID, Revision: r.Activation.Revision, Runner: r.Activation.Runner}, Targets: targets, Next: next}
 }
 

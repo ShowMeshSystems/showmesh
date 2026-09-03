@@ -155,6 +155,10 @@ func fppEvidenceBrokenReconciliation(brokenAt time.Time) currentrun.Reconciliati
 // comment for why this route never collapses it into Outcome/Reason the way
 // fppEvidenceBrokenReconciliation does for GET /current-runs.
 func mapFPPPlaylistEntryReconciliation(result fppreconcile.Result, evidenceBrokenAt *time.Time, now time.Time) v1.FPPPlaylistEntryReconciliationResponse {
+	var operatorInstruction string
+	if result.Outcome.IsMismatch() {
+		operatorInstruction = fppreconcile.OperatorMismatchInstruction
+	}
 	return v1.FPPPlaylistEntryReconciliationResponse{
 		InstanceUUID: result.InstanceUUID,
 		Outcome:      string(result.Outcome),
@@ -182,6 +186,8 @@ func mapFPPPlaylistEntryReconciliation(result fppreconcile.Result, evidenceBroke
 		DefinitionAvailable: result.DefinitionAvailable,
 
 		EvidenceBrokenAt: formatTimePtr(evidenceBrokenAt),
+
+		OperatorInstruction: operatorInstruction,
 
 		ServerTime: formatTime(now),
 	}

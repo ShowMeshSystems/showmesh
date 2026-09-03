@@ -10,6 +10,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
 )
 
 // This file covers TRACK-H-H2-SPEC.md §5.1's recovery route (DELETE) and
@@ -331,6 +332,104 @@ func TestGetFPPPlaylistEntryReconciliationRendersResolved(t *testing.T) {
 	}
 	if cueID, _ := body["cueId"].(string); cueID != "cue-1" {
 		t.Fatalf("cueId = %q, want %q; body: %v", cueID, "cue-1", body)
+	}
+}
+
+// TestGetFPPPlaylistEntryReconciliationRendersOperatorInstructionForMismatch
+// is the coordinator half of the mismatch-notice ruling: a stale-import
+// outcome (one of the four contradicting outcomes H0.2 collapses into an
+// operator-visible mismatch) must carry operatorInstruction, naming both
+// remedies, on the wire. This is a notice only -- it asserts nothing about
+// dispatch, which cueactivate.Decide's own mismatch-policy tests already
+// cover unchanged.
+func TestGetFPPPlaylistEntryReconciliationRendersOperatorInstructionForMismatch(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.depsWithStore(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	putShowForTest(t, setup.st, "show-1", "Show One")
+	putActiveShowForTest(t, setup.st, "show-1")
+	putAudioOnlyCueForTest(t, setup.st, "cue-1", "show-1")
+
+	boundHash := hash64ForTest("bound")
+	playlistPayload := config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "instance-1", PlaylistName: "Main", PlaylistHash: boundHash},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: "cue-1",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	playlistJSON, err := config.EncodeShowPlaylistPayload(playlistPayload)
+	if err != nil {
+		t.Fatalf("encode show.playlist payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowPlaylistConfigKind, "playlist-1", playlistJSON)
+
+	// The FPP playlist was edited mid-show without an FPP restart: a NEW
+	// hash is observed, but the binding is held, not remapped, which is
+	// exactly stale-import.
+	staleHash := hash64ForTest("stale")
+	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{
+		InstanceUUID: "instance-1", PlaylistName: "Main", PlaylistHash: staleHash, Section: "mainPlaylist", Position: 0,
+	})
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	if err := setup.st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "instance-1", SchemaVersion: 1, Sequence: 1, Action: "playing",
+		PlaylistName: "Main", PlaylistHash: staleHash, Section: "mainPlaylist", Position: 0,
+		EntryKey: entryKey, ObservedAt: testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/fpp/playlist-entry-observations/instance-1/reconciliation", nil)
+	resp, raw := doRawRequest(t, api.Handler, req)
+	body := decodeMap(t, raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, body)
+	}
+	if outcome, _ := body["outcome"].(string); outcome != "stale-import" {
+		t.Fatalf("outcome = %q, want %q; body: %v", outcome, "stale-import", body)
+	}
+	const wantInstruction = "Restart FPP, or re-import the playlist so the coordinator's binding and FPP agree."
+	instruction, present := body["operatorInstruction"]
+	if !present {
+		t.Fatalf("operatorInstruction absent for a mismatched (stale-import) outcome; body: %v", body)
+	}
+	if s, ok := instruction.(string); !ok || s != wantInstruction {
+		t.Fatalf("operatorInstruction = %#v, want %q; body: %v", instruction, wantInstruction, body)
+	}
+}
+
+// TestGetFPPPlaylistEntryReconciliationOmitsOperatorInstructionWhenNotMismatched
+// proves the additive field stays absent, field name and all, for both a
+// resolved observation and an unbound one -- non-mismatch shapes must
+// serialize identically to before this field existed.
+func TestGetFPPPlaylistEntryReconciliationOmitsOperatorInstructionWhenNotMismatched(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.depsWithStore(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	if err := setup.st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "instance-1", SchemaVersion: 1, Sequence: 1, Action: "playing",
+		PlaylistName: "Main", PlaylistHash: playlistHash64, EntryKey: playlistHash64,
+		ObservedAt: testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/fpp/playlist-entry-observations/instance-1/reconciliation", nil)
+	resp, raw := doRawRequest(t, api.Handler, req)
+	body := decodeMap(t, raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, body)
+	}
+	if outcome, _ := body["outcome"].(string); outcome != "unbound" {
+		t.Fatalf("outcome = %q, want %q; body: %v", outcome, "unbound", body)
+	}
+	if _, present := body["operatorInstruction"]; present {
+		t.Fatalf("operatorInstruction present for an unbound (non-mismatched) outcome; body: %v", body)
 	}
 }
 
