@@ -120,6 +120,103 @@ func TestPutAndGetNightSessionRoundTrips(t *testing.T) {
 	}
 }
 
+// TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair
+// proves the response mapping gap this seam closes: siteControl,
+// interlocks, and resting.backgroundAudio's fadeOutMs/fadeInMs pair were
+// each fully decoded, validated, and stored by the write path already
+// (config.DecodeNightSessionPayload), but the wire response
+// (mapConfigNightSession/mapConfigNightSessionResting) silently dropped
+// all three, so an operator authoring them through PUT could never see
+// them come back on GET or on the PUT response itself.
+func TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, st, token := setupNightSessionFixture(t)
+	mustPutShowAction(t, api, token, "cooldown-check", validCooldownCheckActionBody)
+	mustPutShowAction(t, api, token, "thermal-profile", validShowActionFPPBody)
+	mustPutShowAction(t, api, token, "power-on", validShowActionFPPBody)
+	mustPutShowAction(t, api, token, "power-off", validShowActionFPPBody)
+	mustPutShowAction(t, api, token, "power-off-prep", validShowActionFPPBody)
+	mustCreateNightSessionAsset(t, st, "halloween-2026", "bg-track-1", "player-01")
+
+	body := `{
+		"show": "halloween-2026",
+		"label": "Halloween main loop",
+		"showPlaylist": {"fppInstanceId": "player-01", "playlist": "halloween-show"},
+		"resting": {
+			"fppInstanceId": "player-01",
+			"playlist": "halloween-resting",
+			"timelineAsset": {"show": "halloween-2026", "sequence": "resting-loop", "target": "player-01"},
+			"endOfNightRepeat": true,
+			"backgroundAudio": {
+				"items": [{"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "player-01"}],
+				"repeat": "playlist",
+				"resume": "resume",
+				"itemTransition": "sequential",
+				"maxGainDb": -10,
+				"fadeOutMs": 800,
+				"fadeInMs": 1200
+			}
+		},
+		"enterShow": {
+			"cues": [{"name": "lighting-fade", "role": "lighting", "action": "lighting-fade-out", "offsetMs": -20000, "barrier": true}],
+			"blackoutHoldMs": 6000
+		},
+		"enterResting": {"cues": [], "blackoutAfterShowMs": 6000},
+		"siteControl": {
+			"requestThermalProfile": "thermal-profile",
+			"presentationPowerOn": {"action": "power-on", "powerDomain": "presentation", "domainProvenance": "operator-declared"},
+			"presentationPowerOff": {
+				"action": "power-off", "powerDomain": "presentation", "domainProvenance": "operator-declared",
+				"removalPolicy": "after-actions",
+				"prerequisites": [{"kind": "action", "action": "power-off-prep"}]
+			}
+		},
+		"interlocks": [
+			{"name": "cooldown", "phase": "prepare-site", "posture": "block", "signal": "cooldown-check", "failureText": "not cool", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
+			{"name": "cooldown-watch", "phase": "run-readiness", "posture": "observe", "signal": "cooldown-check", "failureText": "not cool"},
+			{"name": "cooldown-off", "phase": "enter-resting", "posture": "disabled"}
+		]
+	}`
+
+	assertMatchesSchema(t, c, "ConfigNightSessionWrite", []byte(body))
+
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
+	putResp, putBody := doRawRequest(t, api.Handler, putReq)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+	}
+	assertMatchesSchema(t, c, "NightSessionConfigResponse", putBody)
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/night.session/halloween-main", map[string]string{"Authorization": "Bearer " + token})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	assertMatchesSchema(t, c, "NightSessionConfigResponse", getBody)
+
+	wantSubstrings := []string{
+		`"fadeOutMs":800`, `"fadeInMs":1200`,
+		`"requestThermalProfile":"thermal-profile"`,
+		`"presentationPowerOn":{"action":"power-on"`,
+		`"presentationPowerOff":{"action":"power-off"`,
+		`"removalPolicy":"after-actions"`,
+		`"prerequisites":[{"kind":"action","action":"power-off-prep"}]`,
+		`"name":"cooldown"`, `"phase":"prepare-site"`, `"posture":"block"`, `"onUnavailable":"block"`, `"overridePolicy":"authorized-operator"`,
+		`"name":"cooldown-watch"`, `"posture":"observe"`,
+		`"name":"cooldown-off"`, `"posture":"disabled"`,
+	}
+	for _, body := range []struct {
+		label string
+		json  string
+	}{
+		{"PUT response", string(putBody)},
+		{"GET response", string(getBody)},
+	} {
+		if !containsAllSubstrings(body.json, wantSubstrings...) {
+			t.Fatalf("%s did not round-trip the authored siteControl/interlocks/fade pair; body: %s", body.label, body.json)
+		}
+	}
+}
+
 // TestGetNightSessionRevisionReturnsPastPayload proves the
 // /revisions/{n} route returns a SPECIFIC, possibly non-current
 // revision's full payload, unlike GET .../night.session/{id} (always the

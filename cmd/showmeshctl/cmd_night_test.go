@@ -75,6 +75,63 @@ func TestCmdNightGetRendersDetail(t *testing.T) {
 	}
 }
 
+// nightSessionSampleJSONWithSiteControlAndInterlocks is
+// nightSessionSampleJSON plus an authored siteControl block and
+// interlocks list, proving showmeshctl's existing client types
+// (types_night.go) and print path (night_print.go) round-trip a real
+// server response that carries them: this command issues no request of
+// its own for these fields (they arrive however the coordinator sends
+// them), so this is coverage for the decode/print side of the same
+// response-mapping gap the coordinator API fix (mapConfigNightSession)
+// closes.
+const nightSessionSampleJSONWithSiteControlAndInterlocks = `{"serverTime":"2026-08-16T21:00:00Z","kind":"night.session","id":"halloween-main","revision":1,
+	"payload":{
+		"show":"halloween-2026","label":"Halloween main loop",
+		"showPlaylist":{"fppInstanceId":"player-01","playlist":"halloween-show"},
+		"resting":{
+			"fppInstanceId":"player-01","playlist":"halloween-resting","endOfNightPlaylist":"halloween-resting",
+			"timelineAsset":{"show":"halloween-2026","sequence":"resting-loop","target":"player-01"},
+			"endOfNightRepeat":true
+		},
+		"enterShow":{"cues":[{"name":"lighting-fade","role":"lighting","action":"lighting-fade-out","offsetMs":-20000,"barrier":true,"onFailure":"continue"}],"blackoutHoldMs":6000},
+		"enterResting":{"cues":[],"blackoutAfterShowMs":6000},
+		"announcementDefaultPolicy":"duck",
+		"siteControl":{
+			"requestThermalProfile":"thermal-profile",
+			"presentationPowerOn":{"action":"power-on","powerDomain":"presentation","domainProvenance":"operator-declared"},
+			"presentationPowerOff":{"action":"power-off","powerDomain":"presentation","domainProvenance":"operator-declared","removalPolicy":"after-actions","prerequisites":[{"kind":"action","action":"power-off-prep"}]}
+		},
+		"interlocks":[
+			{"name":"cooldown","phase":"prepare-site","posture":"block","signal":"cooldown-check","failureText":"not cool","onUnavailable":"block","overridePolicy":"authorized-operator"}
+		]
+	},
+	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+// TestCmdNightGetRendersSiteControlAndInterlocks proves showmeshctl parity
+// for the two Track F seam F6 blocks: "night get" decodes and prints an
+// authored siteControl binding and interlock rule from a real server
+// response, not just "not configured".
+func TestCmdNightGetRendersSiteControlAndInterlocks(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, nightSessionSampleJSONWithSiteControlAndInterlocks)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"get", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"thermal-profile", "power-on", "power-off", "after-actions", "power-off-prep", "cooldown", "prepare-site", "authorized-operator"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q; got: %s", want, out)
+		}
+	}
+}
+
 func TestCmdNightSetSendsFullReplacementBody(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody []byte

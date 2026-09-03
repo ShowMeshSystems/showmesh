@@ -32,7 +32,10 @@ type ConfigNightSessionBackgroundAudioItem struct {
 
 // ConfigNightSessionBackgroundAudio is
 // night.session.resting.backgroundAudio, present only when the deployment
-// configures background audio.
+// configures background audio. FadeOutMs and FadeInMs are the
+// show-boundary fade pair (config.NightSessionBackgroundAudio's own doc
+// comment): both nil means an instant cut, unchanged from before the pair
+// existed.
 type ConfigNightSessionBackgroundAudio struct {
 	Items          []ConfigNightSessionBackgroundAudioItem `json:"items"`
 	Repeat         string                                  `json:"repeat"`
@@ -40,6 +43,8 @@ type ConfigNightSessionBackgroundAudio struct {
 	ItemTransition string                                  `json:"itemTransition"`
 	CrossfadeMs    *int                                    `json:"crossfadeMs,omitempty"`
 	MaxGainDb      float64                                 `json:"maxGainDb"`
+	FadeOutMs      *int                                    `json:"fadeOutMs,omitempty"`
+	FadeInMs       *int                                    `json:"fadeInMs,omitempty"`
 }
 
 // ConfigNightSessionResting is night.session.resting.
@@ -77,9 +82,62 @@ type ConfigNightSessionEnterResting struct {
 	BlackoutAfterShowMs int                     `json:"blackoutAfterShowMs"`
 }
 
+// ConfigNightSessionPowerBinding is a configured power binding under
+// night.session.siteControl (RESTING-MODE.md §10.2, Track F seam F6).
+type ConfigNightSessionPowerBinding struct {
+	Action           string `json:"action"`
+	PowerDomain      string `json:"powerDomain"`
+	DomainProvenance string `json:"domainProvenance"`
+}
+
+// ConfigNightSessionPrerequisite is one entry of
+// siteControl.presentationPowerOff.prerequisites.
+type ConfigNightSessionPrerequisite struct {
+	Kind                string `json:"kind"`
+	Action              string `json:"action,omitempty"`
+	RequireConfirmation bool   `json:"requireConfirmation,omitempty"`
+	DelayMs             int    `json:"delayMs,omitempty"`
+}
+
+// ConfigNightSessionPresentationPowerOff is
+// night.session.siteControl.presentationPowerOff.
+type ConfigNightSessionPresentationPowerOff struct {
+	Action                   string                           `json:"action"`
+	PowerDomain              string                           `json:"powerDomain"`
+	DomainProvenance         string                           `json:"domainProvenance"`
+	RemovalPolicy            string                           `json:"removalPolicy"`
+	ImmediateSafeAttestation bool                             `json:"immediateSafeAttestation,omitempty"`
+	Prerequisites            []ConfigNightSessionPrerequisite `json:"prerequisites,omitempty"`
+}
+
+// ConfigNightSessionSiteControl is night.session.siteControl
+// (RESTING-MODE.md §10.2/§10.4, Track F seam F6): entirely optional, and
+// every field within it is independently optional too.
+type ConfigNightSessionSiteControl struct {
+	RequestThermalProfile string                                  `json:"requestThermalProfile,omitempty"`
+	PresentationPowerOn   *ConfigNightSessionPowerBinding         `json:"presentationPowerOn,omitempty"`
+	PresentationPowerOff  *ConfigNightSessionPresentationPowerOff `json:"presentationPowerOff,omitempty"`
+}
+
+// ConfigNightSessionInterlock is one entry of night.session.interlocks
+// (RESTING-MODE.md §10.1, Track F seam F6). OnUnavailable and
+// OverridePolicy are "" for posture "observe" or "disabled", matching
+// config.NightInterlockRule's own precedent.
+type ConfigNightSessionInterlock struct {
+	Name             string `json:"name"`
+	Phase            string `json:"phase"`
+	Posture          string `json:"posture"`
+	Signal           string `json:"signal,omitempty"`
+	FreshnessSeconds *int   `json:"freshnessSeconds,omitempty"`
+	FailureText      string `json:"failureText,omitempty"`
+	OnUnavailable    string `json:"onUnavailable,omitempty"`
+	OverridePolicy   string `json:"overridePolicy,omitempty"`
+}
+
 // ConfigNightSession is the "night.session" configuration kind's decoded
 // payload: the body PUT /config/night.session/{id} accepts and GET
-// returns.
+// returns. SiteControl and Interlocks are Track F seam F6's own optional
+// blocks, nil/empty on a deployment that configures neither.
 type ConfigNightSession struct {
 	Show                      string                         `json:"show"`
 	Label                     string                         `json:"label"`
@@ -88,6 +146,8 @@ type ConfigNightSession struct {
 	EnterShow                 ConfigNightSessionEnterShow    `json:"enterShow"`
 	EnterResting              ConfigNightSessionEnterResting `json:"enterResting"`
 	AnnouncementDefaultPolicy string                         `json:"announcementDefaultPolicy"`
+	SiteControl               *ConfigNightSessionSiteControl `json:"siteControl,omitempty"`
+	Interlocks                []ConfigNightSessionInterlock  `json:"interlocks,omitempty"`
 }
 
 // NightSessionConfigResponse is the body of GET and PUT

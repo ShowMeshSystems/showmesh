@@ -305,7 +305,61 @@ func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 		EnterShow:                 v1.ConfigNightSessionEnterShow{Cues: mapConfigNightSessionCues(p.EnterShow.Cues), BlackoutHoldMs: p.EnterShow.BlackoutHoldMs},
 		EnterResting:              v1.ConfigNightSessionEnterResting{Cues: mapConfigNightSessionCues(p.EnterResting.Cues), BlackoutAfterShowMs: p.EnterResting.BlackoutAfterShowMs},
 		AnnouncementDefaultPolicy: p.AnnouncementDefaultPolicy,
+		SiteControl:               mapConfigNightSessionSiteControl(p.SiteControl),
+		Interlocks:                mapConfigNightSessionInterlocks(p.Interlocks),
 	}
+}
+
+func mapConfigNightSessionPowerBinding(b config.NightPowerBinding) v1.ConfigNightSessionPowerBinding {
+	return v1.ConfigNightSessionPowerBinding{Action: b.Action, PowerDomain: b.PowerDomain, DomainProvenance: b.DomainProvenance}
+}
+
+func mapConfigNightSessionPrerequisites(prereqs []config.NightPrerequisite) []v1.ConfigNightSessionPrerequisite {
+	if prereqs == nil {
+		return nil
+	}
+	out := make([]v1.ConfigNightSessionPrerequisite, 0, len(prereqs))
+	for _, p := range prereqs {
+		out = append(out, v1.ConfigNightSessionPrerequisite{
+			Kind: p.Kind, Action: p.Action, RequireConfirmation: p.RequireConfirmation, DelayMs: p.DelayMs,
+		})
+	}
+	return out
+}
+
+func mapConfigNightSessionSiteControl(sc *config.NightSiteControl) *v1.ConfigNightSessionSiteControl {
+	if sc == nil {
+		return nil
+	}
+	out := &v1.ConfigNightSessionSiteControl{RequestThermalProfile: sc.RequestThermalProfile}
+	if sc.PresentationPowerOn != nil {
+		binding := mapConfigNightSessionPowerBinding(*sc.PresentationPowerOn)
+		out.PresentationPowerOn = &binding
+	}
+	if sc.PresentationPowerOff != nil {
+		off := sc.PresentationPowerOff
+		out.PresentationPowerOff = &v1.ConfigNightSessionPresentationPowerOff{
+			Action: off.Action, PowerDomain: off.PowerDomain, DomainProvenance: off.DomainProvenance,
+			RemovalPolicy: off.RemovalPolicy, ImmediateSafeAttestation: off.ImmediateSafeAttestation,
+			Prerequisites: mapConfigNightSessionPrerequisites(off.Prerequisites),
+		}
+	}
+	return out
+}
+
+func mapConfigNightSessionInterlocks(rules []config.NightInterlockRule) []v1.ConfigNightSessionInterlock {
+	if rules == nil {
+		return nil
+	}
+	out := make([]v1.ConfigNightSessionInterlock, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, v1.ConfigNightSessionInterlock{
+			Name: r.Name, Phase: r.Phase, Posture: r.Posture, Signal: r.Signal,
+			FreshnessSeconds: r.FreshnessSeconds, FailureText: r.FailureText,
+			OnUnavailable: r.OnUnavailable, OverridePolicy: r.OverridePolicy,
+		})
+	}
+	return out
 }
 
 func mapConfigNightSessionAssetRef(a config.NightSessionAssetRef) v1.ConfigNightSessionAssetRef {
@@ -328,6 +382,7 @@ func mapConfigNightSessionResting(r config.NightSessionResting) v1.ConfigNightSe
 			Items: items, Repeat: r.BackgroundAudio.Repeat, Resume: r.BackgroundAudio.Resume,
 			ItemTransition: r.BackgroundAudio.ItemTransition, CrossfadeMs: r.BackgroundAudio.CrossfadeMs,
 			MaxGainDb: r.BackgroundAudio.MaxGainDb,
+			FadeOutMs: r.BackgroundAudio.FadeOutMs, FadeInMs: r.BackgroundAudio.FadeInMs,
 		}
 	}
 	return out
