@@ -46,9 +46,9 @@ pre-release" below), then publishes, with no manual step:
   (`showmesh-node-agent_<VERSION>_linux_<amd64|arm64>.tar.gz`, plus a
   `showmesh-node-agent_<VERSION>_SHA256SUMS` covering both). There is no
   armv7 asset yet: the cgo build fails on that target with a 32-bit C
-  portability defect unrelated to release plumbing (a 64-bit-only constant
-  in `internal/agent/audio/ltcgen/ltcgen_cgo.go` overflowing `size_t`),
-  tracked as a source fix separate from this workflow.
+  portability defect, a 64-bit-only constant in
+  `internal/agent/audio/ltcgen/ltcgen_cgo.go` overflowing `size_t`. That is a
+  source defect rather than release plumbing, and it is not fixed here.
 - A GitHub pre-release entry whose body is the matching `CHANGELOG.md`
   section for that version.
 
