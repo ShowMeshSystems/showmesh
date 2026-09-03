@@ -59,6 +59,12 @@ const assetUploadFieldOverheadBytes = 64 * 1024
 // multi-kilobyte string.
 const assetUploadFieldValueLimit = 4096
 
+// assetUploadTooLargeNoun is this route's own noun argument to
+// [payloadTooLargeProblem] (resolumecomposition.go): naming what was
+// uploaded, never the fixed Resolume composition bound that constructor
+// used to report unconditionally regardless of which route called it.
+const assetUploadTooLargeNoun = "an uploaded asset"
+
 // --- POST /assets ---
 
 // assetUploadFields is what readAssetUploadFilePart collects from the
@@ -278,7 +284,7 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeProblem(w, h.logger, now, resolumeCompositionTooLargeProblem())
+			writeProblem(w, h.logger, now, payloadTooLargeProblem(maxUpload, assetUploadTooLargeNoun, ""))
 			return
 		}
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
@@ -299,7 +305,7 @@ func (h *handlers) handlePostAssetUpload(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, assetStorageFullProblem())
 		return
 	case errors.Is(err, assetstore.ErrTooLarge):
-		writeProblem(w, h.logger, now, resolumeCompositionTooLargeProblem())
+		writeProblem(w, h.logger, now, payloadTooLargeProblem(maxUpload, assetUploadTooLargeNoun, ""))
 		return
 	case err != nil:
 		h.writeInternalError(w, now, "stage asset upload", err)
