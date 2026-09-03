@@ -346,6 +346,17 @@ type CmdPayload struct {
 	// that, matching pkg/command.Envelope.Deadline's doc comment exactly.
 	// A nil Deadline is a legitimate, valid state: [CmdPayload.Validate]
 	// deliberately performs no required-ness check on this field.
+	//
+	// Every non-test CmdPayload construction site's Deadline decision (see
+	// each site's own comment for the reasoning):
+	//
+	//   - api/audiodispatch.go: set (audioCommandDeadlineActions list).
+	//   - api/renderdispatch.go: set (renderCommandWireDeadline).
+	//   - api/cuecatalogdeploy.go: set (cueCatalogDeployWireDeadline).
+	//   - api/cueactivationdispatch.go: set (cueActivationWireDeadline).
+	//   - assetsync/sync.go: nil, recomputed fresh every tick.
+	//   - audioconfigpush/push.go: nil, revision-keyed and re-pushed.
+	//   - fppconnectpush/push.go: nil, content-hash-keyed and re-pushed.
 	Deadline *time.Time `json:"deadline"`
 }
 

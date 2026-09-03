@@ -501,6 +501,9 @@ func publish(ctx context.Context, pub Publisher, now func() time.Time, nodeID, a
 		return err
 	}
 	t := now()
+	// No CmdPayload.Deadline: idempotencyKeyFor hashes the resolved
+	// content plus each contributing object's revision, so a later write
+	// is picked up on this node's next hello or watched-kind write.
 	cmd := mqttproto.CmdPayload{
 		CommandID: uuid.NewString(), IdempotencyKey: idempotencyKey, Action: action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,

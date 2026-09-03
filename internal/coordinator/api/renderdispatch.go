@@ -81,6 +81,11 @@ var renderCommandConfirmDeadline = 15 * time.Second
 // test-only-override rule as renderCommandConfirmDeadline.
 var renderCommandPollInterval = 250 * time.Millisecond
 
+// renderCommandWireDeadline bounds how stale a wire render command may be
+// before the agent refuses it (CmdPayload.Deadline): a late apply would
+// visibly diverge from operator intent, so this stays generous but set.
+const renderCommandWireDeadline = 60 * time.Second
+
 const (
 	// renderHandlerWriteDeadlineMargin is added to
 	// renderCommandConfirmDeadline for the HTTP response write deadline,
@@ -714,11 +719,13 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	if err != nil {
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("build cmd topic: %w", err)
 	}
+	deadline := now.Add(renderCommandWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: in.NodeID}, Params: in.Params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: in.IssuerID, PrincipalName: in.IssuerName},
 		ConfirmationMethod: "evidence",
+		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, in.NodeID, payload)
 	if err != nil {

@@ -166,6 +166,9 @@ func publish(ctx context.Context, pub Publisher, now func() time.Time, nodeID, a
 		return err
 	}
 	t := now()
+	// No CmdPayload.Deadline: IdempotencyKey is revision-keyed, and ToNode
+	// re-reads and re-pushes the current revision on this node's every
+	// future hello or write, correcting a regressed apply.
 	cmd := mqttproto.CmdPayload{
 		CommandID: uuid.NewString(), IdempotencyKey: idempotencyKey, Action: action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,
