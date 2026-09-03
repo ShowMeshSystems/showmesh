@@ -95,7 +95,7 @@ Operator guides, tutorials, integration usage, troubleshooting, public reference
 
 Do not copy this repository's `docs/` tree into the public site. Verify human-facing claims against code, tests that constrain the behavior, the OpenAPI contract, compiled CLI help, and captured running-system evidence; engineering prose can lag implementation. Public docs may summarize architecture but never supersede its engineering source.
 
-There is no linked-PR requirement, documentation release gate, or automated docs-update workflow yet. Those mechanisms are intentionally deferred until the first release process is defined.
+There is no linked-PR requirement, documentation release gate, or automated docs-update workflow yet. The release process itself is defined: see [`docs/RELEASING.md`](docs/RELEASING.md) for the versioning scheme and the cut procedure.
 
 Use the repository's pull-request template and keep its verification, review,
 and acceptance sections distinct. Run `make pr-ready-check` after pushing the
