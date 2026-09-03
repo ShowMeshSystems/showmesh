@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   ApiError,
   advanceAudioSession,
+  applyAudioSession,
   armEmergencyStopHardStop,
   blackoutResolume,
   clearAudioSession,
@@ -66,6 +67,7 @@ import {
   StatusPair,
   Table,
   TableWrap,
+  Textarea,
   type Tone,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
@@ -1073,12 +1075,34 @@ function audioSessionSignal(observations: ObservationEntry[], sessionId: string,
 }
 
 /**
- * Collapsed per 2026-09-01 owner feedback: the
- * block itself is just the target picker (node, then a real session id).
- * The gloved transport row, seek, gain set/fade, mute/unmute, and the
- * typed clear confirmation live in a floating inspector opened from here.
- * `apply` is deliberately excluded — loading media into a session is
- * authoring, not live control.
+ * Parses the Apply session textarea. Empty input maps to `undefined`, mirroring
+ * `applyAudioSession`'s own "omitted entirely, not sent as {}" contract and
+ * `showmeshctl audio session apply`'s optional positional argument. A parse
+ * or shape failure never reaches the network: it is reported locally.
+ */
+function parseAudioSessionApplyParams(raw: string): { params: Record<string, unknown> | undefined } | { error: string } {
+  const trimmed = raw.trim()
+  if (trimmed === '') return { params: undefined }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    return { error: `The payload was not sent. It is not valid JSON, so it never reached the coordinator: ${reason}.` }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    const kind = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : typeof parsed
+    return {
+      error: `The payload was not sent. It must be a JSON object (sourceRole, media, playlist, outputs, mixPolicy), not ${kind}.`,
+    }
+  }
+  return { params: parsed as Record<string, unknown> }
+}
+
+/**
+ * Collapsed per 2026-09-01 owner feedback into a target picker plus a floating inspector.
+ * `apply` was excluded here 2026-09-01 as authoring rather than live control, then restored
+ * 2026-09-02 by Eric's later owner placement ruling that this method belongs on Live Control.
  */
 function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string | null; nowIso: string | null }) {
   const nodesState = useAudioNodes()
@@ -1095,6 +1119,8 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   const [fadeTargetDb, setFadeTargetDb] = useState('')
   const [fadeDurationMs, setFadeDurationMs] = useState('')
   const [clearConfirm, setClearConfirm] = useState('')
+  const [applyPayload, setApplyPayload] = useState('')
+  const [applyConfirm, setApplyConfirm] = useState('')
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sessionOpen, setSessionOpen] = useState(false)
@@ -1446,6 +1472,46 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                     onClick={() => run('Clear', () => clearAudioSession(nodeId, trimmedSessionId, effectiveRevision))}
                   >
                     Clear
+                  </Button>
+                </ButtonRow>
+              </div>
+
+              <div className="sm-panel">
+                <h3 className="sm-subsection__title">Apply session</h3>
+                <p className="sm-small sm-muted">
+                  Replaces this session&rsquo;s definition on the node: sourceRole, media, playlist, outputs and mixPolicy. Mirrors the JSON
+                  <code className="sm-data"> showmeshctl audio session apply</code> takes as its params argument.
+                </p>
+                <Field label="Params (JSON)" help="Raw JSON object. Leave empty to apply with no params, matching the CLI's optional argument.">
+                  {(props) => (
+                    <Textarea
+                      {...props}
+                      className="sm-data"
+                      rows={4}
+                      value={applyPayload}
+                      onChange={(event) => setApplyPayload(event.target.value)}
+                      placeholder='{"sourceRole": "primary"}'
+                    />
+                  )}
+                </Field>
+                <Field label={trimmedSessionId === '' ? 'Type the session id to confirm applying' : `Type ${trimmedSessionId} to confirm applying`}>
+                  {(props) => <Input {...props} value={applyConfirm} onChange={(event) => setApplyConfirm(event.target.value)} />}
+                </Field>
+                <ButtonRow>
+                  <Button
+                    variant="danger"
+                    disabled={!canDispatch || applyConfirm !== trimmedSessionId}
+                    title={!canDispatch ? dispatchTitle : applyConfirm !== trimmedSessionId ? 'Type the session id exactly to enable this.' : undefined}
+                    onClick={() => {
+                      const parsed = parseAudioSessionApplyParams(applyPayload)
+                      if ('error' in parsed) {
+                        setOutcome({ tone: 'bad', label: 'Invalid JSON', detail: parsed.error })
+                        return
+                      }
+                      run('Apply', () => applyAudioSession(nodeId, trimmedSessionId, effectiveRevision, parsed.params))
+                    }}
+                  >
+                    Apply
                   </Button>
                 </ButtonRow>
               </div>
