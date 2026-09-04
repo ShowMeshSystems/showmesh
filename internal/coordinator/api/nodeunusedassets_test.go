@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -291,6 +293,68 @@ func TestPostRemoveNodeAssetDispatchesAndConfirms(t *testing.T) {
 	}
 	if !stillListed {
 		t.Fatalf("inventory no longer lists the removed hash - this test's own premise (the response does not update inventory) is now false; re-check RemoveNodeAssetResult's doc comment against reality")
+	}
+}
+
+// TestPostRemoveNodeAssetSurvivesServerWriteTimeout is this endpoint's own
+// version of TestCueCatalogDeploySurvivesServerWriteTimeout
+// (cuecatalogdeploy_test.go), the sibling route this file's own top
+// comment says this route is shaped like: a real *http.Server with a short
+// WriteTimeout, and a dispatch paced slower than it with NO reply ever
+// arriving, proving handlePostRemoveNodeAsset's own SetWriteDeadline
+// extension (assetRemoveHTTPWriteDeadline) is what lets the real
+// unconfirmed-outcome body reach the client rather than a severed
+// connection.
+func TestPostRemoveNodeAssetSurvivesServerWriteTimeout(t *testing.T) {
+	// A REAL current time - see TestCueCatalogDeploySurvivesServerWriteTimeout's
+	// identical doc comment for why a fixed-in-the-past testNow clock would
+	// make SetWriteDeadline's own absolute deadline already elapsed.
+	now := time.Now()
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(now))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	pub := &fakeAudioPublisher{}
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AudioPublisher = pub
+	api := New(deps, Options{Clock: fixedClock(now), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	// An asset no Cue references, matching TestPostRemoveNodeAssetDispatchesAndConfirms's
+	// own fixture: this route refuses outright (never dispatching) when a
+	// Cue still references the asset, which would prove nothing about the
+	// write-deadline extension.
+	leftover := uploadOneAsset(t, api, auth, "render-01", "orphan", "orphan.fseq", []byte("nobody references this"))
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01",
+		[]store.NodeAssetInventoryRecord{{NodeID: "render-01", ContentHash: leftover.ContentHash, RuntimeFilename: leftover.RuntimeFilename, SizeBytes: leftover.SizeBytes, VerifiedAt: now}},
+		store.NodeAssetReportRecord{ReportedAt: now, Complete: true}); err != nil {
+		t.Fatalf("seed inventory: %v", err)
+	}
+
+	// No reply ever arrives, paced past the server's own short WriteTimeout
+	// below, while staying comfortably inside this handler's own (much
+	// larger) real assetRemoveHTTPWriteDeadline.
+	pub.awaitErr = broker.ErrResponseDeadlineExceeded
+	pub.onAwaitResponse = func() { time.Sleep(300 * time.Millisecond) }
+
+	status, body := postThroughShortWriteTimeoutServer(t, api.Handler,
+		"/api/v1/nodes/render-01/assets/remove", `{"contentHash":"`+leftover.ContentHash+`"}`, auth)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a dispatch slower than the server's own WriteTimeout must still succeed); body: %s", status, body)
+	}
+
+	m := decodeMap(t, body)
+	result, ok := m["command"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no \"command\" object; body: %s", body)
+	}
+	if result["outcome"] != mqttproto.OutcomeUnconfirmed {
+		t.Fatalf("command.outcome = %v, want %q: the connection surviving the server's short WriteTimeout must have delivered the real unconfirmed body, not a fallback or an empty one; body: %s", result["outcome"], mqttproto.OutcomeUnconfirmed, body)
+	}
+	if reason, _ := result["reason"].(string); reason == "" {
+		t.Fatalf("command.reason = %q, want a non-empty explanation of the unconfirmed outcome; body: %s", reason, body)
 	}
 }
 

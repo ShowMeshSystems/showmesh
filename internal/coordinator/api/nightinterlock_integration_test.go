@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -375,6 +376,70 @@ func TestNightBoundInterlockDispatch_ExpiredBudgetDegradesEvidenceToUnavailable(
 	decision := h.nightEvaluateInterlockRuleLive(dispatchCtx, rule)
 	if decision.Health != nightHealthUnknown() {
 		t.Fatalf("live evaluation against an expired dispatch budget = %+v, want health=unknown (evidence-unavailable), even though the broker would have answered true", decision)
+	}
+}
+
+// TestNightCommandSurvivesServerWriteTimeout is this endpoint's own
+// version of TestCueCatalogDeploySurvivesServerWriteTimeout
+// (cuecatalogdeploy_test.go): a real *http.Server with a short
+// WriteTimeout, and prepare-site's own live interlock dispatch paced
+// slower than it but with NO reply ever arriving, proving
+// handleNightCommand's own SetWriteDeadline extension
+// (nightCommandHTTPWriteDeadline) is what lets the real withheld-gate
+// Problem body reach the client, not merely that the constant is large on
+// paper. Unlike the AwaitResponse-shaped routes this package's other
+// write-timeout tests cover, this route's own honest slow-dispatch answer
+// is a 409 naming the withholding interlock, never a 200 - proving that
+// answer is what asserts the extension actually worked here.
+func TestNightCommandSurvivesServerWriteTimeout(t *testing.T) {
+	// A REAL current time, deliberately NOT this file's own fixed testNow
+	// clock: SetWriteDeadline sets an ABSOLUTE deadline anchored to
+	// h.now(), so a fixed-in-the-past clock would make that deadline
+	// already elapsed before this test's real wall-clock write ever
+	// happens - see TestCueCatalogDeploySurvivesServerWriteTimeout's
+	// identical doc comment one file over.
+	now := time.Now()
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(now))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps, _ := nightControlTestDeps(svc, st)
+	backend := nightTestAssetBackend(t)
+	deps.AssetBackend = backend
+	brokers := &fakeMQTTBrokerRegistry{}
+	deps.MQTTBrokers = brokers
+
+	api := New(deps, Options{Clock: fixedClock(now), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
+	mustCreateNightSessionFSEQAsset(t, st, backend, "halloween-2026", "resting-loop", "player-01")
+	// phase "prepare-site", onUnavailable "block": prepare-site's own live
+	// interlock dispatch (nightPrepareSiteCommand, outside any transaction)
+	// is what this test paces past the server's short WriteTimeout.
+	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithCooldownInterlock("prepare-site", "block"))
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	// No reply ever arrives, paced past the server's own short
+	// WriteTimeout below, while staying comfortably inside this handler's
+	// own (much larger) real nightCommandHTTPWriteDeadline.
+	brokers.err = broker.ErrResponseDeadlineExceeded
+	brokers.delay = 300 * time.Millisecond
+
+	status, body := postThroughShortWriteTimeoutServer(t, api.Handler, "/api/v1/night/commands/prepare-site", "{}", auth)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (a withheld prepare-site interlock, evaluated slower than the server's own WriteTimeout, must still be reported honestly rather than severing the connection); body: %s", status, body)
+	}
+
+	var problem v1.Problem
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem: %v\nbody: %s", err, body)
+	}
+	if !strings.Contains(problem.Detail, "evidence source unavailable") {
+		t.Fatalf("problem.Detail = %q, want it to name the interlock's own real \"evidence source unavailable\" reason, not a generic transport error", problem.Detail)
 	}
 }
 

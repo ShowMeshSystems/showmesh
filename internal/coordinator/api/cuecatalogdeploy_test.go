@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -190,6 +192,66 @@ func TestCueCatalogDeploySetsWireDeadline(t *testing.T) {
 	want := testNow.Add(cueCatalogDeployWireDeadline)
 	if !got.Equal(want) {
 		t.Fatalf("Deadline = %v, want %v (testNow + cueCatalogDeployWireDeadline)", got, want)
+	}
+}
+
+// TestCueCatalogDeploySurvivesServerWriteTimeout is this endpoint's own
+// version of TestEmergencyStopSurvivesServerWriteTimeout
+// (emergencystop_writetimeout_test.go): a real *http.Server with a short
+// WriteTimeout, and a dispatch paced slower than it but with NO reply ever
+// arriving, proving handlePostNodeCueCatalogDeploy's own SetWriteDeadline
+// extension (cueCatalogDeployHTTPWriteDeadline) is what lets the real
+// unconfirmed-outcome body reach the client, not merely that the constant
+// is large on paper - before this extension existed, this route had none
+// at all, so a dispatch slower than the server's own WriteTimeout severed
+// the connection out from under a coordinator that was still correctly
+// reporting "unconfirmed".
+func TestCueCatalogDeploySurvivesServerWriteTimeout(t *testing.T) {
+	// A REAL current time, deliberately NOT newCueCatalogDeployFixture's own
+	// fixed testNow (a canned past timestamp): SetWriteDeadline sets an
+	// ABSOLUTE deadline anchored to h.now(), so a fixed-in-the-past clock
+	// would make that deadline already elapsed before this test's real
+	// wall-clock write ever happens, failing every request instantly
+	// regardless of the extension under test - matching
+	// TestEmergencyStopSurvivesServerWriteTimeout's identical real-time
+	// fixture one file over.
+	now := time.Now()
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(now))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	pub := &fakeAudioPublisher{}
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AudioPublisher = pub
+	api := New(deps, Options{Clock: fixedClock(now), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	// No reply ever arrives (the real "nothing responds" symptom this
+	// route's own AwaitResponse deadline exists to bound), paced past the
+	// server's own short WriteTimeout below, while staying comfortably
+	// inside this handler's own (much larger) real
+	// cueCatalogDeployHTTPWriteDeadline (real time, not testNow: see the
+	// fixture's own comment above).
+	pub.awaitErr = broker.ErrResponseDeadlineExceeded
+	pub.onAwaitResponse = func() { time.Sleep(300 * time.Millisecond) }
+
+	status, body := postThroughShortWriteTimeoutServer(t, api.Handler, "/api/v1/nodes/render-01/cue-catalog/deploy", "{}", auth)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a dispatch slower than the server's own WriteTimeout must still succeed); body: %s", status, body)
+	}
+
+	m := decodeMap(t, body)
+	result, ok := m["command"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no \"command\" object; body: %s", body)
+	}
+	if result["outcome"] != mqttproto.OutcomeUnconfirmed {
+		t.Fatalf("command.outcome = %v, want %q: the connection surviving the server's short WriteTimeout must have delivered the real unconfirmed body, not a fallback or an empty one; body: %s", result["outcome"], mqttproto.OutcomeUnconfirmed, body)
+	}
+	if reason, _ := result["reason"].(string); reason == "" {
+		t.Fatalf("command.reason = %q, want a non-empty explanation of the unconfirmed outcome; body: %s", reason, body)
 	}
 }
 

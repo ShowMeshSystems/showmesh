@@ -68,6 +68,23 @@ const auditActionCueCatalogDeploy = "cuecatalog.deploy"
 // (renderdispatch.go); no runtime configuration ever reassigns it.
 var cueCatalogDeployConfirmDeadline = 15 * time.Second
 
+// cueCatalogDeployHTTPWriteDeadlineMargin matches audioHandlerWriteDeadlineMargin
+// (audiodispatch.go), the closest sibling: this route's own AwaitResponse
+// shape is that file's, reused unchanged (this file's own top comment).
+const cueCatalogDeployHTTPWriteDeadlineMargin = 10 * time.Second
+
+// cueCatalogDeployHTTPWriteDeadline bounds this endpoint's own HTTP write
+// deadline, set before dispatch - mirroring audioHandlerWriteDeadline's
+// identical reasoning for the identical hazard: internal/coordinator/httpapi.
+// NewServer's shared http.Server.WriteTimeout would otherwise sever the
+// connection out from under a still-working AwaitResponse wait. Derived
+// from cueCatalogDeployConfirmDeadline itself, never a fixed constant, so a
+// larger test-shrunk (or, in principle, future-configured) value carries
+// through automatically.
+func cueCatalogDeployHTTPWriteDeadline() time.Duration {
+	return cueCatalogDeployConfirmDeadline + cueCatalogDeployHTTPWriteDeadlineMargin
+}
+
 // cueCatalogDeployWireDeadline bounds how stale a deploy may be before the
 // agent refuses it: nothing else retriggers a deploy automatically, so a
 // stale one landing after a newer one would silently persist until redeployed.
@@ -100,6 +117,7 @@ type cueCatalogDeployRequestBody struct {
 
 func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(cueCatalogDeployHTTPWriteDeadline()))
 	ctx := r.Context()
 	nodeID := r.PathValue("nodeId")
 
