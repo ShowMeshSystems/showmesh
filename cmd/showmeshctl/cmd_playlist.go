@@ -64,6 +64,8 @@ func cmdPlaylist(args []string, stdout, stderr io.Writer, clock func() time.Time
 		return cmdPlaylistSet(rest, stdout, stderr, clock)
 	case "revisions":
 		return cmdPlaylistRevisions(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdPlaylistDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl playlist: unknown subcommand %q\n\n", sub)
 		printPlaylistUsage(stderr)
@@ -86,6 +88,8 @@ Subcommands:
   set <id>               write a new playlist revision (write, full
                          replacement)
   revisions <id>         list revision history, newest first
+  delete --confirm <id>  tombstone this playlist (write); revision history
+                         stays readable via "revisions"
 
 Run "showmeshctl playlist <subcommand> --help" for flags specific to one
 subcommand.
@@ -326,6 +330,56 @@ func cmdPlaylistRevisions(args []string, stdout, stderr io.Writer, clock func() 
 		return exitOK
 	}
 	printConfigRevisionsTable(stdout, resp)
+	return exitOK
+}
+
+// cmdPlaylistDelete mirrors cmdCueDelete's own shape (cmd_cue.go):
+// --confirm is required and checked locally before any request is sent. A
+// tombstone, not a hard delete: revision history stays readable through
+// "playlist revisions" afterward.
+func cmdPlaylistDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl playlist delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this playlist")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl playlist delete --confirm <playlist-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a show.playlist object (DELETE /api/v1/config/show.playlist/{id}).")
+		_, _ = fmt.Fprintln(stderr, "A tombstone, not a hard delete: the object's revision history still")
+		_, _ = fmt.Fprintln(stderr, "reads through \"playlist revisions\" afterward. Requires config:write and")
+		_, _ = fmt.Fprintln(stderr, "--confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "playlist delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl playlist delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "playlist delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/show.playlist/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "playlist delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "playlist %s deleted\n", id)
 	return exitOK
 }
 

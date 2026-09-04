@@ -20,14 +20,22 @@ import (
 
 // ConfigObjectRecord is one row of the config_objects table: the mutable
 // pointer at a configuration object's currently-active revision.
-// CurrentRevision == 0 means "no revision has ever been activated" — see
-// migrations.go's schemaV6 doc comment.
+// CurrentRevision == 0 means "no revision has ever been activated": see
+// migrations.go's schemaV6 doc comment. DeletedAt is nil for a live
+// object, and set the moment [Store.TombstoneConfigObject]/
+// [Tx.TombstoneConfigObject] runs: see migrations.go's migrateV30AddConfigObjectDeletedAtColumn doc
+// comment. [Store.GetConfigObject]/[Tx.GetConfigObject] and
+// [Store.ListConfigObjects]/[Tx.ListConfigObjects] never return a
+// tombstoned row (DeletedAt is always nil on whatever they do return);
+// only [Store.GetConfigObjectIncludingDeleted]/
+// [Tx.GetConfigObjectIncludingDeleted] can observe it.
 type ConfigObjectRecord struct {
 	Kind            string
 	ID              string
 	CurrentRevision int64
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	DeletedAt       *time.Time
 }
 
 // ConfigRevisionRecord is one row of the config_revisions table: an
@@ -199,14 +207,15 @@ func (t *Tx) ListConfigRevisions(ctx context.Context, kind, objectID string) ([]
 
 // --- config_objects ---
 
-const configObjectColumns = `kind, id, current_revision, created_at, updated_at`
+const configObjectColumns = `kind, id, current_revision, created_at, updated_at, deleted_at`
 
 func scanConfigObject(row interface{ Scan(dest ...any) error }) (ConfigObjectRecord, error) {
 	var (
 		rec                  ConfigObjectRecord
 		createdAt, updatedAt string
+		deletedAt            sql.NullString
 	)
-	if err := row.Scan(&rec.Kind, &rec.ID, &rec.CurrentRevision, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&rec.Kind, &rec.ID, &rec.CurrentRevision, &createdAt, &updatedAt, &deletedAt); err != nil {
 		return ConfigObjectRecord{}, err
 	}
 	var err error
@@ -215,6 +224,9 @@ func scanConfigObject(row interface{ Scan(dest ...any) error }) (ConfigObjectRec
 	}
 	if rec.UpdatedAt, err = dbToTime(updatedAt); err != nil {
 		return ConfigObjectRecord{}, fmt.Errorf("store: parse config object updated_at: %w", err)
+	}
+	if rec.DeletedAt, err = dbToTimePtr(deletedAt); err != nil {
+		return ConfigObjectRecord{}, fmt.Errorf("store: parse config object deleted_at: %w", err)
 	}
 	return rec, nil
 }
@@ -259,8 +271,16 @@ func (t *Tx) CreateConfigObject(ctx context.Context, kind, id string) (ConfigObj
 	return createConfigObject(ctx, t.tx, kind, id, t.s.now())
 }
 
+// getConfigObject is the LIVE read: a tombstoned row (deleted_at NOT NULL)
+// reads back identically to no row at all, [ErrConfigObjectNotFound]. This
+// is deliberately the DEFAULT so that every present and future caller of
+// [Store.GetConfigObject]/[Tx.GetConfigObject] excludes a deleted object
+// without having to know this feature exists: see
+// [getConfigObjectIncludingDeleted] for the two call sites (the PUT
+// re-create path, and TombstoneConfigObject's own precondition/audit read)
+// that must see the true row instead.
 func getConfigObject(ctx context.Context, q querier, kind, id string) (ConfigObjectRecord, error) {
-	row := q.QueryRowContext(ctx, `SELECT `+configObjectColumns+` FROM config_objects WHERE kind = ? AND id = ?`, kind, id)
+	row := q.QueryRowContext(ctx, `SELECT `+configObjectColumns+` FROM config_objects WHERE kind = ? AND id = ? AND deleted_at IS NULL`, kind, id)
 	rec, err := scanConfigObject(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConfigObjectRecord{}, ErrConfigObjectNotFound
@@ -271,7 +291,13 @@ func getConfigObject(ctx context.Context, q querier, kind, id string) (ConfigObj
 	return rec, nil
 }
 
-// GetConfigObject returns (kind, id)'s pointer row, or [ErrConfigObjectNotFound].
+// GetConfigObject returns (kind, id)'s pointer row, or
+// [ErrConfigObjectNotFound], including when the row exists but is
+// tombstoned (migrateV30AddConfigObjectDeletedAtColumn's doc comment): a deleted object is absent from
+// every existence check and resolution path that already treats
+// [ErrConfigObjectNotFound] as "nothing here", with no per-caller change
+// required. See [Store.GetConfigObjectIncludingDeleted] for the narrow
+// exception.
 func (s *Store) GetConfigObject(ctx context.Context, kind, id string) (ConfigObjectRecord, error) {
 	guardNotInTx(ctx, "Store.GetConfigObject")
 	return getConfigObject(ctx, s.db, kind, id)
@@ -282,15 +308,51 @@ func (t *Tx) GetConfigObject(ctx context.Context, kind, id string) (ConfigObject
 	return getConfigObject(ctx, t.tx, kind, id)
 }
 
+// getConfigObjectIncludingDeleted is [getConfigObject] without the
+// deleted_at filter: the TRUE row, tombstoned or not. Named so nobody
+// reaches for it by accident in place of the live-only default.
+func getConfigObjectIncludingDeleted(ctx context.Context, q querier, kind, id string) (ConfigObjectRecord, error) {
+	row := q.QueryRowContext(ctx, `SELECT `+configObjectColumns+` FROM config_objects WHERE kind = ? AND id = ?`, kind, id)
+	rec, err := scanConfigObject(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ConfigObjectRecord{}, ErrConfigObjectNotFound
+	}
+	if err != nil {
+		return ConfigObjectRecord{}, fmt.Errorf("store: get config object (including deleted) %s/%s: %w", kind, id, err)
+	}
+	return rec, nil
+}
+
+// GetConfigObjectIncludingDeleted is [Store.GetConfigObject] without the
+// tombstone filter. Reach for this ONLY when the caller genuinely needs to
+// see a deleted row: today that is the PUT re-create path (which must
+// compute its next revision number from the object's true current_revision,
+// not from an object that looks absent) and [Store.TombstoneConfigObject]'s
+// own precondition/audit read. Every other read of "is this object live"
+// wants the plain [Store.GetConfigObject] instead.
+func (s *Store) GetConfigObjectIncludingDeleted(ctx context.Context, kind, id string) (ConfigObjectRecord, error) {
+	guardNotInTx(ctx, "Store.GetConfigObjectIncludingDeleted")
+	return getConfigObjectIncludingDeleted(ctx, s.db, kind, id)
+}
+
+// GetConfigObjectIncludingDeleted is [Store.GetConfigObjectIncludingDeleted]'s [Tx] form.
+func (t *Tx) GetConfigObjectIncludingDeleted(ctx context.Context, kind, id string) (ConfigObjectRecord, error) {
+	return getConfigObjectIncludingDeleted(ctx, t.tx, kind, id)
+}
+
+// listConfigObjects excludes a tombstoned row, for the identical reason
+// [getConfigObject] does: every list endpoint in this codebase already
+// treats this result as the full membership of a kind, with no per-caller
+// filter of its own to remember to add.
 func listConfigObjects(ctx context.Context, q querier, kind string) ([]ConfigObjectRecord, error) {
 	var (
 		rows *sql.Rows
 		err  error
 	)
 	if kind == "" {
-		rows, err = q.QueryContext(ctx, `SELECT `+configObjectColumns+` FROM config_objects ORDER BY kind, id`)
+		rows, err = q.QueryContext(ctx, `SELECT `+configObjectColumns+` FROM config_objects WHERE deleted_at IS NULL ORDER BY kind, id`)
 	} else {
-		rows, err = q.QueryContext(ctx, `SELECT `+configObjectColumns+` FROM config_objects WHERE kind = ? ORDER BY id`, kind)
+		rows, err = q.QueryContext(ctx, `SELECT `+configObjectColumns+` FROM config_objects WHERE kind = ? AND deleted_at IS NULL ORDER BY id`, kind)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: list config objects: %w", err)
@@ -324,14 +386,24 @@ func (t *Tx) ListConfigObjects(ctx context.Context, kind string) ([]ConfigObject
 	return listConfigObjects(ctx, t.tx, kind)
 }
 
+// activateConfigRevision's upsert unconditionally clears deleted_at, on
+// both the INSERT branch (a fresh row has no tombstone to begin with) and
+// the ON CONFLICT UPDATE branch (an existing row's deleted_at is set back
+// to NULL). This is what makes re-creating a tombstoned object a plain PUT
+// with no special-casing anywhere in the API layer: activating ANY
+// revision, including the very first one after a delete, is what "this
+// object is live again" means, and current_revision keeps climbing from
+// wherever it last stood (migrateV30AddConfigObjectDeletedAtColumn's doc comment), never resetting to 1
+// and never colliding with a revision this object already used.
 func activateConfigRevision(ctx context.Context, q querier, kind, id string, revision int64, now time.Time) (ConfigObjectRecord, error) {
 	nowStr := timeToDB(now)
 	_, err := q.ExecContext(ctx, `
-		INSERT INTO config_objects (kind, id, current_revision, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO config_objects (kind, id, current_revision, created_at, updated_at, deleted_at)
+		VALUES (?, ?, ?, ?, ?, NULL)
 		ON CONFLICT(kind, id) DO UPDATE SET
 			current_revision = excluded.current_revision,
-			updated_at       = excluded.updated_at
+			updated_at       = excluded.updated_at,
+			deleted_at       = NULL
 	`, kind, id, revision, nowStr, nowStr)
 	if err != nil {
 		return ConfigObjectRecord{}, fmt.Errorf("store: activate config revision %s/%s/%d: %w", kind, id, revision, err)
@@ -372,4 +444,51 @@ func (s *Store) ActivateConfigRevision(ctx context.Context, kind, id string, rev
 // its audit entry as one atomic unit via [identity.Service.AuditedWrite].
 func (t *Tx) ActivateConfigRevision(ctx context.Context, kind, id string, revision int64) (ConfigObjectRecord, error) {
 	return activateConfigRevision(ctx, t.tx, kind, id, revision, t.s.now())
+}
+
+// tombstoneConfigObject sets (kind, id)'s deleted_at to now, refusing (with
+// [ErrConfigObjectNotFound]) when no live row exists, whether because
+// nothing was ever created for (kind, id), or because it is already
+// tombstoned. Both read identically to the caller: a second DELETE of an
+// already-deleted object is refused the same way a DELETE of an object
+// that never existed is, matching [handleDeleteNodeDeclaration]'s existing
+// precedent for this codebase's one other hard-delete-shaped operation.
+// config_revisions is never touched: see migrations.go's migrateV30AddConfigObjectDeletedAtColumn doc
+// comment.
+func tombstoneConfigObject(ctx context.Context, q querier, kind, id string, now time.Time) (ConfigObjectRecord, error) {
+	nowStr := timeToDB(now)
+	res, err := q.ExecContext(ctx, `
+		UPDATE config_objects SET deleted_at = ?, updated_at = ?
+		WHERE kind = ? AND id = ? AND deleted_at IS NULL
+	`, nowStr, nowStr, kind, id)
+	if err != nil {
+		return ConfigObjectRecord{}, fmt.Errorf("store: tombstone config object %s/%s: %w", kind, id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return ConfigObjectRecord{}, fmt.Errorf("store: tombstone config object %s/%s: %w", kind, id, err)
+	}
+	if n == 0 {
+		return ConfigObjectRecord{}, ErrConfigObjectNotFound
+	}
+	return getConfigObjectIncludingDeleted(ctx, q, kind, id)
+}
+
+// TombstoneConfigObject deletes (kind, id) by tombstone. config_objects'
+// row is marked deleted_at, config_revisions is never touched, and the
+// object is immediately absent from [Store.GetConfigObject]/
+// [Store.ListConfigObjects] and from every resolution path built on them.
+// Returns [ErrConfigObjectNotFound] when (kind, id) has no live row to
+// delete. See migrations.go's migrateV30AddConfigObjectDeletedAtColumn doc comment.
+func (s *Store) TombstoneConfigObject(ctx context.Context, kind, id string) (ConfigObjectRecord, error) {
+	guardNotInTx(ctx, "Store.TombstoneConfigObject")
+	return tombstoneConfigObject(ctx, s.db, kind, id, s.now())
+}
+
+// TombstoneConfigObject is [Store.TombstoneConfigObject]'s [Tx] form: the
+// form the API layer actually calls, so the tombstone and its audit entry
+// land in one transaction via [identity.Service.AuditedWrite], exactly
+// like every other config write in this codebase (ADR-024 decision 11).
+func (t *Tx) TombstoneConfigObject(ctx context.Context, kind, id string) (ConfigObjectRecord, error) {
+	return tombstoneConfigObject(ctx, t.tx, kind, id, t.s.now())
 }

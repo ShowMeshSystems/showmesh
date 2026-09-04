@@ -47,6 +47,8 @@ func cmdMacro(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdMacroRun(rest, stdout, stderr, clock)
 	case "put":
 		return cmdMacroPut(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdMacroDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl macro: unknown subcommand %q\n\n", sub)
 		printMacroUsage(stderr)
@@ -70,6 +72,11 @@ Subcommands:
   run <id>     submit a run (write; accepted asynchronously, 202)
   put <id>     write a new show.macro configuration revision (reads a
                payload from --file, or from stdin if --file is not given)
+  delete --confirm <id>
+               tombstone this macro (write); its revision history is
+               preserved server-side. Nothing else in this codebase
+               references a show.macro id, so there is no other reference
+               to worry about
 
 "macro put" accepts a full show.macro JSON payload (show, label,
 description, steps). Validated before activation: an invalid payload, an
@@ -255,6 +262,55 @@ func cmdMacroPut(args []string, stdout, stderr io.Writer, clock func() time.Time
 	}
 	printShowMacroDetail(stdout, resp)
 	_, _ = fmt.Fprintf(stderr, "\nshowmeshctl macro put: revision %d is now active.\n", resp.Revision)
+	return exitOK
+}
+
+// cmdMacroDelete mirrors cmdActionDelete's own shape (cmd_action.go):
+// --confirm is required and checked locally before any request is sent. A
+// tombstone, not a hard delete: this object's revision history is
+// preserved server-side.
+func cmdMacroDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl macro delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this macro")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl macro delete --confirm <macro-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a show.macro object (DELETE /api/v1/config/show.macro/{id}).")
+		_, _ = fmt.Fprintln(stderr, "A tombstone, not a hard delete: its revision history is preserved")
+		_, _ = fmt.Fprintln(stderr, "server-side. Requires config:write (admin only) and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "macro delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl macro delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "macro delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/show.macro/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "macro delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "macro %s deleted\n", id)
 	return exitOK
 }
 

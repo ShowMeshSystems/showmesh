@@ -206,6 +206,54 @@ func (h *handlers) handleGetShowRevisions(w http.ResponseWriter, r *http.Request
 	h.handleGetShowConfigRevisions(w, r, config.ShowConfigKind)
 }
 
+// refuseShowIfActive is handleDeleteShow's own refuseIfActive
+// (showconfig.go's deleteConfigObjectRevision): show.active is the one
+// live "what is running now" pointer a show participates in, so deleting
+// the show it currently names is refused rather than left dangling. Every
+// OTHER reference to a show id (show.surface, show.action, show.macro,
+// show.cue, show.playlist, night.session, all namespaced under a show)
+// is an ordinary configuration reference, not a live selector, and is not
+// checked here: deleting a show does not cascade to them, and each of
+// those kinds already resolves its own "show" field through showExists
+// (GetConfigObject, tombstone-filtered) wherever that matters.
+func (h *handlers) refuseShowIfActive(showID string) func(ctx context.Context, tx *store.Tx) error {
+	return func(ctx context.Context, tx *store.Tx) error {
+		obj, err := tx.GetConfigObject(ctx, config.ShowActiveConfigKind, config.ShowActiveObjectID)
+		if errors.Is(err, store.ErrConfigObjectNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if obj.CurrentRevision == 0 {
+			return nil
+		}
+		rev, err := tx.GetConfigRevision(ctx, config.ShowActiveConfigKind, config.ShowActiveObjectID, obj.CurrentRevision)
+		if err != nil {
+			return err
+		}
+		var payload config.ShowActivePayload
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		if payload.Show != showID {
+			return nil
+		}
+		return &errConfigObjectCurrentlyActive{kind: config.ShowConfigKind, id: showID, activeKind: config.ShowActiveConfigKind}
+	}
+}
+
+// handleDeleteShow serves DELETE /api/v1/config/show/{id}: a tombstone,
+// not a hard delete, and not a cascade. show.surface, show.action,
+// show.macro, show.cue, show.playlist, and night.session objects
+// namespaced under this show are left in place, now naming a tombstoned
+// show id; each already resolves "show" through showExists wherever a
+// write depends on it, so the gap is visible there, never a crash.
+func (h *handlers) handleDeleteShow(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	h.handleDeleteShowConfigObject(w, r, config.ShowConfigKind, h.refuseShowIfActive(id))
+}
+
 func mapShowConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, p config.ShowPayload) v1.ShowConfigResponse {
 	return v1.ShowConfigResponse{
 		ServerTime: formatTime(now), Kind: config.ShowConfigKind, ID: obj.ID, Revision: rev.Revision,
@@ -404,6 +452,15 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 
 func (h *handlers) handleGetShowSurfaceRevisions(w http.ResponseWriter, r *http.Request) {
 	h.handleGetShowConfigRevisions(w, r, config.ShowSurfaceConfigKind)
+}
+
+// handleDeleteShowSurface serves DELETE /api/v1/config/show.surface/{id}:
+// a tombstone. Nothing in this codebase's reference graph names a
+// show.surface id from another configuration object (its own references
+// run outward, to a show and a declared node, never inward), so there is
+// no dangling reference to consider and no live selector to protect.
+func (h *handlers) handleDeleteShowSurface(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowSurfaceConfigKind, nil)
 }
 
 func mapConfigShowSurfaceOutput(o config.ShowSurfaceOutput) v1.ConfigShowSurfaceOutput {

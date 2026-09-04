@@ -103,6 +103,10 @@ var migrations = []migration{
 	// (migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn's own
 	// doc comment).
 	{version: 29, fn: migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn},
+	// v30 (owner ruling, tombstone delete for every configuration kind):
+	// adds config_objects.deleted_at, a nullable tombstone marker
+	// (migrateV30AddConfigObjectDeletedAtColumn's own doc comment).
+	{version: 30, fn: migrateV30AddConfigObjectDeletedAtColumn},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1697,6 +1701,54 @@ func migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn(ctx context.Co
 	}
 	if _, err := tx.ExecContext(ctx, `ALTER TABLE fpp_playlist_entry_observations ADD COLUMN evidence_broken_at_millis INTEGER`); err != nil {
 		return fmt.Errorf("add fpp_playlist_entry_observations.evidence_broken_at_millis: %w", err)
+	}
+	return nil
+}
+
+// migrateV30AddConfigObjectDeletedAtColumn (owner ruling, tombstone delete
+// for every configuration kind) adds config_objects.deleted_at: a nullable
+// RFC3339Nano timestamp, NULL for a live object, set the moment an
+// operator deletes a per-object configuration kind (audio.node, show,
+// show.surface, show.action, show.macro, show.cue, show.playlist,
+// night.session). config_revisions is untouched: a tombstone is a fact
+// about config_objects' mutable pointer, never a revision of its own, so
+// ADR-009's immutable revision history reads back unchanged before,
+// during, and after a delete.
+//
+// A pure addition: every existing row's deleted_at is implicitly NULL, so
+// every row this store already holds is a live object after this
+// migration runs, exactly as it was before it. No data fix follows.
+//
+// The twelve singleton configuration kinds (fpp.endpoints, resolume.
+// instances, fpp.mqtt, assets.settings, show.emergencystop, show.active,
+// show.mode, audio.settings, fppconnect.settings, render.settings,
+// resolume.recovery, night.session.active) never have this column set:
+// this store's own repository methods (config.go) never call
+// TombstoneConfigObject for them, because the API layer registers no
+// DELETE route for a singleton path at all.
+//
+// A Go function, not a plain ALTER TABLE (schemaV18's shape, which this
+// migration wrongly followed at first): internal/coordinator/audioconfigpush's
+// own tests rewind PRAGMA user_version and reopen the store to force every
+// later migration to run again, and a bare ALTER TABLE ... ADD COLUMN fails
+// outright on that second pass ("duplicate column name") once the column
+// already exists. Checking first and no-opping when it is already present
+// is what makes replay safe, exactly like migrateV29AddFPPPlaylistEntry
+// ObservationEvidenceBrokenColumn immediately above.
+func migrateV30AddConfigObjectDeletedAtColumn(ctx context.Context, tx *sql.Tx) error {
+	var hasColumn int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('config_objects') WHERE name = 'deleted_at'`,
+	).Scan(&hasColumn); err != nil {
+		return fmt.Errorf("check config_objects.deleted_at exists: %w", err)
+	}
+	if hasColumn > 0 {
+		// Already added: the one replay shape this function exists to
+		// tolerate.
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE config_objects ADD COLUMN deleted_at TEXT`); err != nil {
+		return fmt.Errorf("add config_objects.deleted_at: %w", err)
 	}
 	return nil
 }

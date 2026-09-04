@@ -392,6 +392,8 @@ func cmdAudioNode(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		return cmdAudioNodeSet(rest, stdout, stderr, clock)
 	case "revisions":
 		return cmdAudioNodeRevisions(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdAudioNodeDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio node: unknown subcommand %q\n\n", sub)
 		printAudioNodeUsage(stderr)
@@ -434,6 +436,8 @@ Subcommands:
                    replacement)
   revisions <node-id>
                    list revision history, newest first
+  delete <node-id> tombstone this object (write, requires --confirm; a
+                   later "set" on the same id un-deletes it)
 
 Run "showmeshctl audio node <subcommand> --help" for flags specific to one
 subcommand.
@@ -679,6 +683,58 @@ func cmdAudioNodeRevisions(args []string, stdout, stderr io.Writer, clock func()
 		return exitOK
 	}
 	printConfigRevisionsTable(stdout, resp)
+	return exitOK
+}
+
+// cmdAudioNodeDelete tombstones an audio.node object (DELETE
+// /api/v1/config/audio.node/{id}), mirroring cmdUndeclare's own
+// --confirm/deleteJSON shape (cmd_discovery.go): a mis-issued call cannot
+// quietly remove it, and this is the only path that removes one. Revision
+// history stays readable through "audio node revisions" afterward
+// (ADR-009); "audio node set" on the same id later un-deletes it.
+func cmdAudioNodeDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl audio node delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deleting this audio.node object")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node delete --confirm <node-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete an audio.node object (DELETE /api/v1/config/audio.node/{id}).")
+		_, _ = fmt.Fprintln(stderr, "A tombstone, not a hard delete: revision history stays readable through")
+		_, _ = fmt.Fprintln(stderr, "\"audio node revisions\", and a later \"audio node set\" on the same id")
+		_, _ = fmt.Fprintln(stderr, "un-deletes it. Requires config:write (admin only) and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "audio node delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "audio node delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/audio.node/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "audio node delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "audio.node %s deleted\n", id)
 	return exitOK
 }
 

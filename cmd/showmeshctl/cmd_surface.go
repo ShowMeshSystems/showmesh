@@ -91,6 +91,8 @@ func cmdSurface(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		return cmdSurfaceSet(rest, stdout, stderr, clock)
 	case "revisions":
 		return cmdSurfaceRevisions(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdSurfaceDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl surface: unknown subcommand %q\n\n", sub)
 		printSurfaceUsage(stderr)
@@ -115,10 +117,65 @@ Subcommands:
   set <id>             write a new surface revision (write, full
                         replacement)
   revisions <id>       list revision history, newest first
+  delete --confirm <id>
+                        tombstone this surface (write); revision history
+                        stays readable via "revisions"
 
 Run "showmeshctl surface <subcommand> --help" for flags specific to one
 subcommand.
 `)
+}
+
+// cmdSurfaceDelete mirrors cmdUndeclare's own shape (cmd_discovery.go):
+// --confirm is required and checked locally before any request is sent, so
+// a mis-issued call cannot quietly tombstone a surface. This is a
+// tombstone, not a hard delete (docs/decisions and IDENTIFIER-REGISTER.md
+// v30): revision history stays readable through "surface revisions" after
+// the delete.
+func cmdSurfaceDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl surface delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this surface")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl surface delete --confirm <surface-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a show.surface object (DELETE /api/v1/config/show.surface/{id}).")
+		_, _ = fmt.Fprintln(stderr, "This is a tombstone, not a hard delete: the object's revision history")
+		_, _ = fmt.Fprintln(stderr, "still reads through \"surface revisions\" afterward. Requires config:write")
+		_, _ = fmt.Fprintln(stderr, "and --confirm; a mis-issued call cannot quietly remove it.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "surface delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl surface delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "surface delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/show.surface/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "surface delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "surface %s deleted\n", id)
+	return exitOK
 }
 
 func cmdSurfaceList(args []string, stdout, stderr io.Writer, clock func() time.Time) int {

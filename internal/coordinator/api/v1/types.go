@@ -356,6 +356,17 @@ type DeleteNodeDeclarationRequest struct {
 	Confirm bool `json:"confirm"`
 }
 
+// ConfigObjectDeleteRequest is the required body of DELETE on a per-object
+// configuration kind's path (audio.node, show, show.surface, show.action,
+// show.macro, show.cue, show.playlist, night.session). Confirm must be
+// true, mirroring DeleteNodeDeclarationRequest's own rule immediately
+// above: a missing or false Confirm is rejected with 400 before anything
+// is tombstoned, in addition to, never instead of, any confirmation
+// dialog a UI client shows.
+type ConfigObjectDeleteRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
 // FPPInstance is one configured FPP instance's current representation: an
 // element of GET /api/v1/fpp, and the payload of an fpp.changed stream
 // event.

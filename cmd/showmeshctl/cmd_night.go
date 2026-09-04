@@ -48,6 +48,8 @@ func cmdNight(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdNightActivate(rest, stdout, stderr, clock)
 	case "deactivate":
 		return cmdNightDeactivate(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdNightDelete(rest, stdout, stderr, clock)
 	case "status":
 		return cmdNightLifecycleStatus(rest, stdout, stderr, clock)
 	case "prepare-site":
@@ -101,6 +103,11 @@ Subcommands:
   deactivate        clear the active night session back to unset (write;
                      the zero-to-one-and-back-to-zero transition ADR-039
                      rule 4 requires)
+  delete --confirm <id>
+                     tombstone this session (write); revision history
+                     stays readable via "revisions"/"revision". Refused
+                     with a conflict while this id is the active night
+                     session ("night active"); deactivate it first
 
 Lifecycle (RESTING-MODE.md, ADR-038 — the closed state machine and its
 seven commands; reads open, writes require night:command):
@@ -272,6 +279,60 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 	}
 	printNightSessionDetail(stdout, resp)
 	_, _ = fmt.Fprintf(stderr, "\nshowmeshctl night set: revision %d is now active.\n", resp.Revision)
+	return exitOK
+}
+
+// cmdNightDelete mirrors cmdShowDelete's own shape (cmd_show.go):
+// --confirm is required and checked locally before any request is sent. A
+// tombstone, not a hard delete: revision history stays readable through
+// "night revisions"/"night revision" afterward. The coordinator refuses
+// with a conflict while this id is the active night session; this command
+// does not special-case that, since reportError already maps a 409 to
+// exitConflict generically.
+func cmdNightDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl night delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this night session")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night delete --confirm <session-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a night.session object (DELETE /api/v1/config/night.session/{id}).")
+		_, _ = fmt.Fprintln(stderr, "A tombstone, not a hard delete: revision history stays readable via")
+		_, _ = fmt.Fprintln(stderr, "\"night revisions\"/\"night revision\" afterward. Refused if this session is")
+		_, _ = fmt.Fprintln(stderr, "currently active (\"night active\"); deactivate it first. Requires")
+		_, _ = fmt.Fprintln(stderr, "config:write and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "night delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl night delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "night delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/night.session/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "night delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "night session %s deleted\n", id)
 	return exitOK
 }
 

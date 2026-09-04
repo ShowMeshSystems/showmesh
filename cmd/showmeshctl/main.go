@@ -185,6 +185,8 @@ Commands:
   macro run <id> [--follow]           submit a macro run (write, 202 accepted; asynchronous unless --follow)
   macro put <id>                      write a new show.macro revision (write, full replacement,
                                        requires config:write)
+  macro delete --confirm <id>         tombstone this macro (write); revision history preserved
+                                       server-side
   run show <runId> [--follow]         show one macro run, including every step's outcome
   run list [--macro <id>] [--show <id>] [--state]
                                        list macro runs, most recent first
@@ -196,10 +198,15 @@ Commands:
                                        exits 29 if any checked binding is broken (read)
   action invoke <id>                  invoke one stored action outside of a macro run (write,
                                        requires show:action:invoke)
+  action delete --confirm <id>        tombstone this action (write); revision history preserved
+                                       server-side
   show list                           enumerate show objects
   show get <id>                       show one show's full definition
   show set <id>                       write a new show revision (write, full replacement)
   show revisions <id>                 list show revision history, newest first
+  show delete --confirm <id>          tombstone this show (write); refused 409 while "show
+                                       active" names it; never cascades to objects still
+                                       naming this show id
   show active                         print the currently active show (404 if none set)
   show activate <id>                  make <id> the active show (write, full replacement)
   show mode                           print the installation-wide operating mode, program or
@@ -211,19 +218,27 @@ Commands:
   surface get <id>                    show one surface's full definition
   surface set <id>                    write a new surface revision (write, full replacement)
   surface revisions <id>              list surface revision history, newest first
+  surface delete --confirm <id>       tombstone this surface (write); revision history stays
+                                       readable via "surface revisions"
   cue list [--show <id>]              enumerate show.cue objects, optionally by show
   cue get <id>                        show one cue's full definition
   cue set <id>                        write a new cue revision (write, full replacement)
   cue revisions <id>                  list cue revision history, newest first
+  cue delete --confirm <id>           tombstone this cue (write); revision history stays
+                                       readable via "cue revisions"
   playlist list [--show <id>]         enumerate show.playlist objects, optionally by show
   playlist get <id>                   show one playlist's full definition
   playlist set <id>                   write a new playlist revision (write, full replacement)
   playlist revisions <id>             list playlist revision history, newest first
+  playlist delete --confirm <id>      tombstone this playlist (write); revision history stays
+                                       readable via "playlist revisions"
   night list                          enumerate night.session objects
   night get <id>                      show one night session's full definition
   night set <id>                      write a new night.session revision (write, full replacement)
   night revisions <id>                list night.session revision history, newest first
   night revision <id> <n>             show one past revision's full payload
+  night delete --confirm <id>         tombstone this session (write); refused 409 while "night
+                                       active" names it
   night active                        print the currently active night session (404 if none set)
   night activate <id>                 make <id> the active night session (write, full replacement)
   night deactivate                    clear the active night session back to unset (write)
@@ -339,6 +354,8 @@ Commands:
                                         replacement; refused unless the node has already
                                         advertised both routes, requires config:write)
   audio node revisions <nodeId>        list audio.node revision history, newest first
+  audio node delete --confirm <nodeId> tombstone this object (write); a later "audio node
+                                       set" on the same id un-deletes it
   audio session apply <nodeId> <sessionId> [params-json]
                                         dispatch audio.session.apply (write, requires audio:command)
   audio session prepare <nodeId> <sessionId> [params-json]
