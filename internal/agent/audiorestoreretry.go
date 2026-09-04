@@ -124,10 +124,14 @@ func runAudioRestoreRetry(
 // attempt that will never happen. retry.exhausted guards the one-time
 // log line so a node stuck for hours does not spam it every poll.
 //
-// That status write reaches only sessions with a pending restore. With
-// nothing pending, exhaustion is visible in this node's log and in the
-// audio report's own live EngineAvailable/EngineReason, not in a
-// restore-retry field.
+// [audio.Manager.SetRestoreRetryStatus]'s own status write reaches only
+// sessions with a pending restore, so every call site here also calls
+// [audio.Manager.SetNodeRestoreRetryStatus]/
+// [audio.Manager.ClearNodeRestoreRetryStatus]: a node with no pending
+// session at all (a delivered audio.node binding, zero persisted
+// sessions) still gets node.audio.engine.restore.state/.attempts/
+// .next_attempt_ms/.last_reason on its own published report, whether
+// scheduled or exhausted.
 func runAudioRestoreRetryTick(
 	mgr *audio.Manager,
 	currentNode func() (audioNodeConfig, bool),
@@ -144,6 +148,7 @@ func runAudioRestoreRetryTick(
 		if retry.attempts != 0 || retry.exhausted {
 			*retry = audioRestoreRetryer{}
 			mgr.ClearRestoreRetryStatus()
+			mgr.ClearNodeRestoreRetryStatus()
 		}
 		return
 	}
@@ -179,6 +184,7 @@ func runAudioRestoreRetryTick(
 	if pending == 0 && available {
 		*retry = audioRestoreRetryer{}
 		mgr.ClearRestoreRetryStatus()
+		mgr.ClearNodeRestoreRetryStatus()
 		if logger != nil {
 			logger.Info("automatic audio restore retry resolved: no pending restore and the audio engine is available", "attempt", attemptsUsed)
 		}
@@ -203,6 +209,7 @@ func runAudioRestoreRetryTick(
 		retry.exhausted = true
 		retry.nextAttemptAt = time.Time{}
 		mgr.SetRestoreRetryStatus(retry.attempts, time.Time{}, reason)
+		mgr.SetNodeRestoreRetryStatus(audio.EngineRestoreExhausted, retry.attempts, time.Time{}, reason)
 		if logger != nil {
 			logger.Warn("automatic audio restore retry exhausted its bounded schedule; no further automatic attempts will run",
 				"attempts", retry.attempts, "pending", pending, "engine_available", available, "reason", reason)
@@ -213,6 +220,7 @@ func runAudioRestoreRetryTick(
 	delayIndex := retry.attempts - 1
 	retry.nextAttemptAt = now().Add(audioRestoreRetryDelays[delayIndex])
 	mgr.SetRestoreRetryStatus(retry.attempts, retry.nextAttemptAt, reason)
+	mgr.SetNodeRestoreRetryStatus(audio.EngineRestoreScheduled, retry.attempts, retry.nextAttemptAt, reason)
 	if logger != nil {
 		logger.Warn("automatic audio restore retry attempt did not fully resolve",
 			"attempt", retry.attempts, "pending", pending, "engine_available", available, "reason", reason, "next_attempt_at", retry.nextAttemptAt)

@@ -291,6 +291,50 @@ func TestAudioPayloadValidateAcceptsKnownGlitchCountsWithSince(t *testing.T) {
 	}
 }
 
+// TestAudioPayloadValidateAcceptsOmittedEngineRestoreFields proves the
+// omission this seam exists to support: a report from an agent built
+// before the engineRestore* fields existed leaves them all at their zero
+// value (EngineRestoreState "") and must still validate -- required so
+// that agent's existing reports never start failing Validate the moment
+// a coordinator upgrades.
+func TestAudioPayloadValidateAcceptsOmittedEngineRestoreFields(t *testing.T) {
+	p := validAudioPayload()
+	if p.EngineRestoreState != "" || p.EngineRestoreAttempts != 0 || p.EngineRestoreNextAttemptMs != 0 || p.EngineRestoreLastReason != "" {
+		t.Fatalf("validAudioPayload() engineRestore* = %+v, want all zero (this test proves the OMITTED case)", p)
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(engineRestoreState omitted) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsEachEngineRestoreState(t *testing.T) {
+	for _, state := range []string{"idle", "scheduled", "exhausted"} {
+		p := validAudioPayload()
+		p.EngineRestoreState = state
+		if err := p.Validate(); err != nil {
+			t.Errorf("Validate(engineRestoreState=%q) = %v, want nil", state, err)
+		}
+	}
+}
+
+func TestAudioPayloadValidateRejectsUnrecognizedEngineRestoreState(t *testing.T) {
+	p := validAudioPayload()
+	p.EngineRestoreState = "retrying"
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInvalidEngineRestoreState) {
+		t.Errorf("Validate(engineRestoreState=%q) = %v, want ErrPayloadInvalidEngineRestoreState", p.EngineRestoreState, err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresEngineRestoreLastReasonWhenAttemptsNonzero(t *testing.T) {
+	p := validAudioPayload()
+	p.EngineRestoreState = "scheduled"
+	p.EngineRestoreAttempts = 1
+	p.EngineRestoreLastReason = ""
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(engineRestoreAttempts=1, no last reason) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
 func TestNewAudioEnvelopeRejectsInvalidPayload(t *testing.T) {
 	bad := validAudioPayload()
 	bad.Routes = nil

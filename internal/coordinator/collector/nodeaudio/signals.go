@@ -71,6 +71,24 @@ const (
 	SignalEngineQosDrops         observation.SignalID = "node.audio.engine.qos_drops"
 )
 
+// SignalEngineRestoreState, SignalEngineRestoreAttempts,
+// SignalEngineRestoreNextAttemptMs, and SignalEngineRestoreLastReason
+// report internal/agent's own automatic restore-retry driver's status
+// for a node as a whole (mqttproto.AudioPayload.EngineRestoreState/
+// EngineRestoreAttempts/EngineRestoreNextAttemptMs/EngineRestoreLastReason)
+// -- the node-level counterpart to SignalSessionRestoreAttempts/
+// SignalSessionRestoreNextAttemptMs/SignalSessionRestoreLastReason below,
+// which only ever cover a session with a queued restore. State is one of
+// "idle", "scheduled", or "exhausted" -- see that field's own doc comment
+// for why a countdown or a boolean alone cannot make this distinction.
+// Minted identifiers, docs/build/IDENTIFIER-REGISTER.md.
+const (
+	SignalEngineRestoreState         observation.SignalID = "node.audio.engine.restore.state"
+	SignalEngineRestoreAttempts      observation.SignalID = "node.audio.engine.restore.attempts"
+	SignalEngineRestoreNextAttemptMs observation.SignalID = "node.audio.engine.restore.next_attempt_ms"
+	SignalEngineRestoreLastReason    observation.SignalID = "node.audio.engine.restore.last_reason"
+)
+
 // AllSignalIDs is every signal this package ever emits, in the order
 // [Collector.Poll] builds them for one node.
 var AllSignalIDs = []observation.SignalID{
@@ -95,6 +113,10 @@ var AllSignalIDs = []observation.SignalID{
 	SignalEngineWarningsResource,
 	SignalEngineWarningsOther,
 	SignalEngineQosDrops,
+	SignalEngineRestoreState,
+	SignalEngineRestoreAttempts,
+	SignalEngineRestoreNextAttemptMs,
+	SignalEngineRestoreLastReason,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one

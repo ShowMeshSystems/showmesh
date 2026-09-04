@@ -107,3 +107,96 @@ func (m *Manager) RestoreRetryStatus(id pkgaudio.SessionID, now time.Time) (atte
 	}
 	return attempts, nextAttempt, lastReason
 }
+
+// EngineRestoreState is internal/agent's own automatic restore-retry
+// driver's status for THIS NODE (node.audio.engine.restore.state,
+// docs/build/IDENTIFIER-REGISTER.md), independent of whether any session
+// on it currently has a restore queued: a delivered audio.node binding
+// with no persisted session has zero entries in m.pendingEngineRestore
+// and so nothing in restoreRetryStatusBySession above, which is exactly
+// the gap this type exists to close. Three values, not a countdown and
+// not a boolean -- see this package's restoreRetryStatus doc comment
+// above ("0 both before the driver's first attempt and once its bounded
+// schedule is exhausted"): a countdown alone cannot tell those two apart,
+// and neither can a boolean tell "never started" from "gave up".
+type EngineRestoreState string
+
+const (
+	// EngineRestoreIdle is the zero value and every Manager's starting
+	// state: no automatic restore attempt has ever been made on this
+	// node. Also what an unset/omitted engineRestoreState reads as on
+	// the wire (mqttproto.AudioPayload.Validate treats it as optional
+	// for exactly this reason).
+	EngineRestoreIdle EngineRestoreState = "idle"
+	// EngineRestoreScheduled is set on every attempt that did not fully
+	// resolve while the bounded schedule still has delays left: another
+	// automatic attempt WILL run.
+	EngineRestoreScheduled EngineRestoreState = "scheduled"
+	// EngineRestoreExhausted is set once the bounded schedule's last
+	// delay has been used and still did not resolve: no further
+	// automatic attempt will run on its own; a genuine audio.node.configure
+	// delivery is the only remaining path back to a working engine.
+	EngineRestoreExhausted EngineRestoreState = "exhausted"
+)
+
+// nodeRestoreRetryStatus is [Manager.nodeRestoreRetry]'s stored value --
+// [restoreRetryStatus]'s node-level counterpart, plus the state that
+// disambiguates "scheduled" from "exhausted" at node level, where
+// nothing forces every node to have a pending session to key off.
+type nodeRestoreRetryStatus struct {
+	state         EngineRestoreState
+	attempts      int
+	nextAttemptAt time.Time
+	lastReason    string
+}
+
+// SetNodeRestoreRetryStatus records internal/agent's own automatic
+// restore-retry driver's latest attempt at NODE level -- the counterpart
+// to [Manager.SetRestoreRetryStatus] that survives a node with no
+// pending session at all. state, attempts, nextAttemptAt, and lastReason
+// mean exactly what they mean on [Manager.SetRestoreRetryStatus]; state
+// additionally distinguishes "scheduled" (nextAttemptAt in the future)
+// from "exhausted" (schedule used up, nextAttemptAt the zero value) --
+// the distinction the per-session field cannot make on its own. Read
+// back by [Manager.NodeRestoreRetryStatus] as
+// node.audio.engine.restore.state/.attempts/.next_attempt_ms/.last_reason
+// (docs/build/IDENTIFIER-REGISTER.md).
+func (m *Manager) SetNodeRestoreRetryStatus(state EngineRestoreState, attempts int, nextAttemptAt time.Time, lastReason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nodeRestoreRetry = nodeRestoreRetryStatus{state: state, attempts: attempts, nextAttemptAt: nextAttemptAt, lastReason: lastReason}
+}
+
+// ClearNodeRestoreRetryStatus resets this node's automatic retry status
+// to [EngineRestoreIdle] once every deferred restore has resolved and the
+// engine reports available -- [Manager.ClearRestoreRetryStatus]'s
+// node-level counterpart, called alongside it at every call site.
+func (m *Manager) ClearNodeRestoreRetryStatus() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nodeRestoreRetry = nodeRestoreRetryStatus{}
+}
+
+// NodeRestoreRetryStatus is this node's own audio report's read of its
+// current automatic retry status -- [Manager.RestoreRetryStatus]'s
+// node-level counterpart, same nextAttemptAt-to-countdown translation.
+// A Manager that has never had SetNodeRestoreRetryStatus called on it
+// (never had an engine problem) reports [EngineRestoreIdle], never an
+// empty string and never [EngineRestoreExhausted].
+func (m *Manager) NodeRestoreRetryStatus(now time.Time) (state EngineRestoreState, attempts int, nextAttempt time.Duration, lastReason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := m.nodeRestoreRetry
+	state = status.state
+	if state == "" {
+		state = EngineRestoreIdle
+	}
+	attempts = status.attempts
+	lastReason = status.lastReason
+	if !status.nextAttemptAt.IsZero() {
+		if d := status.nextAttemptAt.Sub(now); d > 0 {
+			nextAttempt = d
+		}
+	}
+	return state, attempts, nextAttempt, lastReason
+}

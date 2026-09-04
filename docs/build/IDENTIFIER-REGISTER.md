@@ -891,6 +891,26 @@ alongside them.
 | `node.audio.engine.warnings.resource` | shipped | owner-confirmed 2026-08-26 |
 | `node.audio.engine.warnings.other` | shipped | owner-confirmed 2026-08-26 |
 | `node.audio.engine.qos_drops` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.restore.state` | shipped | SM-384 (`idle`/`scheduled`/`exhausted`; a node with a delivered `audio.node` binding and no persisted session has nothing in the per-session `audio_session.restore.*` fields, so this is its only remaining wire evidence that the automatic retry driver gave up) |
+| `node.audio.engine.restore.attempts` | shipped | SM-384 (node-level counterpart to `audio_session.restore.attempts`) |
+| `node.audio.engine.restore.next_attempt_ms` | shipped | SM-384 (node-level counterpart to `audio_session.restore.next_attempt_ms`; not_collected, not zero, once the state is not `scheduled`) |
+| `node.audio.engine.restore.last_reason` | shipped | SM-384 (node-level counterpart to `audio_session.restore.last_reason`) |
+
+**The four `node.audio.engine.restore.*` rows close a gap the widened
+retry driver opened, 2026-09-03.** `Manager.SetRestoreRetryStatus` only
+ever writes to sessions currently in `m.pendingEngineRestore`, so a node
+holding a delivered `audio.node` binding with NO persisted session has
+zero entries to write to: the driver's attempts, its countdown, and its
+eventual exhaustion all land in an empty map and are silently dropped,
+leaving only a `logger.Warn` line on the node as evidence that eight
+automatic attempts over roughly nineteen minutes ran and failed. `state`
+is a three-value string, not a countdown or a boolean, for the same
+reason `audio_session.restore.next_attempt_ms`'s own doc comment already
+gives: 0 means both "before the driver's first attempt" and "the bounded
+schedule is exhausted", and a boolean cannot separate "never started"
+from "gave up" either. All four fields on
+`mqttproto.AudioPayload` are optional; an agent built before they existed
+omits them, and an absent `engineRestoreState` reads as `idle`.
 
 **None of the five is confirmed to identify an ALSA xrun/underrun
 specifically.** alsasink logs a recovered xrun via `GST_WARNING_OBJECT`,

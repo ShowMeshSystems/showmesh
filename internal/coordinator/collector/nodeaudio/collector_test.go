@@ -746,6 +746,108 @@ func TestPollEngineGlitchCountsUnknownReportsNotCollected(t *testing.T) {
 	}
 }
 
+// TestPollEngineRestoreScheduledReportsAttemptsAndCountdown proves the
+// scheduled case: state, attempts, and the countdown all reach their own
+// signals with the payload's own values, while last_reason is collected
+// too because attempts is nonzero.
+func TestPollEngineRestoreScheduledReportsAttemptsAndCountdown(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.EngineRestoreState = "scheduled"
+	payload.EngineRestoreAttempts = 3
+	payload.EngineRestoreNextAttemptMs = 40_000
+	payload.EngineRestoreLastReason = "engine build refused: no advertised probe evidence for hw:1,0"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalEngineRestoreState)
+	if state.Value != "scheduled" {
+		t.Errorf("engine restore state = %v, want %q", state.Value, "scheduled")
+	}
+	attempts := findObs(t, obs, SignalEngineRestoreAttempts)
+	if v, ok := attempts.Value.(int64); !ok || v != 3 {
+		t.Errorf("engine restore attempts = %v, want int64(3)", attempts.Value)
+	}
+	next := findObs(t, obs, SignalEngineRestoreNextAttemptMs)
+	if v, ok := next.Value.(int64); !ok || v != 40_000 {
+		t.Errorf("engine restore next_attempt_ms = %v, want int64(40000)", next.Value)
+	}
+	reason := findObs(t, obs, SignalEngineRestoreLastReason)
+	if reason.Value != payload.EngineRestoreLastReason {
+		t.Errorf("engine restore last_reason = %v, want %q", reason.Value, payload.EngineRestoreLastReason)
+	}
+}
+
+// TestPollEngineRestoreExhaustedIsDistinguishableFromScheduled proves
+// the property this whole issue is about at the observation surface:
+// state reads "exhausted", distinct from "scheduled", and
+// next_attempt_ms reports not_collected with a reason rather than a
+// fabricated 0 that would look identical to "never started".
+func TestPollEngineRestoreExhaustedIsDistinguishableFromScheduled(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.EngineRestoreState = "exhausted"
+	payload.EngineRestoreAttempts = 8
+	payload.EngineRestoreNextAttemptMs = 0
+	payload.EngineRestoreLastReason = "engine build refused: no advertised probe evidence for hw:1,0"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalEngineRestoreState)
+	if state.Value != "exhausted" {
+		t.Errorf("engine restore state = %v, want %q (distinguishable from %q)", state.Value, "exhausted", "scheduled")
+	}
+	attempts := findObs(t, obs, SignalEngineRestoreAttempts)
+	if v, ok := attempts.Value.(int64); !ok || v != 8 {
+		t.Errorf("engine restore attempts = %v, want int64(8)", attempts.Value)
+	}
+	next := findObs(t, obs, SignalEngineRestoreNextAttemptMs)
+	if next.Absence != observation.StateNotCollected {
+		t.Errorf("engine restore next_attempt_ms absence = %q, want %q: exhausted must not report a fabricated countdown", next.Absence, observation.StateNotCollected)
+	}
+	reason := findObs(t, obs, SignalEngineRestoreLastReason)
+	if reason.Value != payload.EngineRestoreLastReason {
+		t.Errorf("engine restore last_reason = %v, want the final attempt's own reason preserved", reason.Value)
+	}
+}
+
+// TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty proves a
+// node that has never had an engine problem (samplePayload's own
+// EngineRestoreState left at its Go zero value, matching an older
+// agent's omitted field) reads "idle" -- never "exhausted" and never an
+// empty string -- with attempts/next_attempt_ms/last_reason all
+// not_collected rather than a fabricated zero.
+func TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	if payload.EngineRestoreState != "" {
+		t.Fatalf("samplePayload() EngineRestoreState = %q, want \"\" (this test proves the OMITTED/never-happened case)", payload.EngineRestoreState)
+	}
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalEngineRestoreState)
+	if state.Value != "idle" {
+		t.Errorf("engine restore state = %v, want %q (never \"exhausted\", never empty)", state.Value, "idle")
+	}
+	attempts := findObs(t, obs, SignalEngineRestoreAttempts)
+	if v, ok := attempts.Value.(int64); !ok || v != 0 {
+		t.Errorf("engine restore attempts = %v, want int64(0)", attempts.Value)
+	}
+	for _, sig := range []observation.SignalID{SignalEngineRestoreNextAttemptMs, SignalEngineRestoreLastReason} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s absence on an idle node = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+	}
+}
+
 func TestPollUnknownNodeProducesNoObservations(t *testing.T) {
 	st := NewStore()
 	c := New(st)
@@ -806,8 +908,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 21 {
-		t.Errorf("AllSignalIDs has %d entries, want 21", len(AllSignalIDs))
+	if len(AllSignalIDs) != 25 {
+		t.Errorf("AllSignalIDs has %d entries, want 25", len(AllSignalIDs))
 	}
 }
 

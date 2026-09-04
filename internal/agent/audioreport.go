@@ -20,6 +20,13 @@ const audioReportPublishTimeout = 5 * time.Second
 // zero sessions on every tick.
 type audioSessionSnapshotter interface {
 	Snapshot(ctx context.Context) []audio.SessionSnapshot
+
+	// NodeRestoreRetryStatus is [audio.Manager.NodeRestoreRetryStatus]'s
+	// own signature: internal/agent's automatic restore-retry driver's
+	// latest status for this node as a whole, live on every call -- see
+	// applyEngineRestoreStatus, which this report loop calls fresh on
+	// every tick, matching Snapshot's own live-not-cached rule.
+	NodeRestoreRetryStatus(now time.Time) (state audio.EngineRestoreState, attempts int, nextAttempt time.Duration, lastReason string)
 }
 
 // ltcObserver is the read side of this node's LTC generation — fresh
@@ -111,6 +118,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			applyLTCObservation(ctx, &payload, ltc)
 			applyEngineAvailability(&payload, engine)
 			applyEngineGlitchCounts(&payload, engine)
+			applyEngineRestoreStatus(&payload, mgr, tickAt)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
 	}
@@ -168,6 +176,26 @@ func applyEngineGlitchCounts(payload *mqttproto.AudioPayload, engine engineAvail
 	payload.EngineResourceWarningCount = counts.ResourceWarnings
 	payload.EngineOtherWarningCount = counts.OtherWarnings
 	payload.EngineQosDropCount = counts.QosEvents
+}
+
+// applyEngineRestoreStatus writes mgr's current node-level automatic
+// restore-retry status onto payload's four EngineRestore* fields, fresh
+// on every call -- the same "live, never cached" rule
+// [applyEngineAvailability] follows, for the identical reason: whether
+// this node's own driver is still retrying or has given up is a live
+// fact a cache would make stale. A nil mgr (no asset directory
+// configured on this node, matching this loop's other nil-safe optional
+// sources) leaves every field at its zero value, which reads as
+// [audio.EngineRestoreIdle] on the wire -- never a fabricated "exhausted".
+func applyEngineRestoreStatus(payload *mqttproto.AudioPayload, mgr audioSessionSnapshotter, now time.Time) {
+	if mgr == nil {
+		return
+	}
+	state, attempts, nextAttempt, lastReason := mgr.NodeRestoreRetryStatus(now)
+	payload.EngineRestoreState = string(state)
+	payload.EngineRestoreAttempts = int64(attempts)
+	payload.EngineRestoreNextAttemptMs = nextAttempt.Milliseconds()
+	payload.EngineRestoreLastReason = lastReason
 }
 
 // applyLTCObservation writes ltc's current evidence onto payload's four
