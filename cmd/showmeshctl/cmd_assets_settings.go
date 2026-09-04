@@ -166,6 +166,7 @@ func cmdAssetsSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	fs.Int64Var(&maxUploadBytes, "max-upload-bytes", 0, "the maximum size of a single asset upload, in bytes")
 	fs.DurationVar(&syncInterval, "sync-interval", 0, "how often the sync service recomputes every node's gap, e.g. 5m")
 	fs.DurationVar(&inventoryInterval, "inventory-interval", 0, "this coordinator's own copy of the agent's inventory-report cadence, e.g. 2m")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets settings set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new assets.settings configuration revision (requires config:write,")
@@ -174,6 +175,8 @@ func cmdAssetsSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 		_, _ = fmt.Fprintln(stderr, "invalid payload appends no revision (ADR-009).")
 		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): the live asset sync")
 		_, _ = fmt.Fprintln(stderr, "service follows within about ten seconds.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -219,8 +222,21 @@ func cmdAssetsSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/assets.settings"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r assetsSettingsConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "assets settings set", err)
+	}
+
 	var resp assetsSettingsConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/assets.settings", body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "assets settings set", err)
 	}
 

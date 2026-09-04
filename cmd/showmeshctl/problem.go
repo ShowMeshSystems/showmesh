@@ -48,6 +48,16 @@ const (
 	// replayed idempotency key reused against different action/target/params.
 	problemConflict = "https://showmesh.dev/problems/conflict"
 
+	// problemConfigRevisionPreconditionFailed:
+	// internal/coordinator/api/showconfig.go's
+	// ProblemTypeConfigRevisionPreconditionFailed: this config PUT's
+	// If-Match no longer names the object's current revision, because
+	// someone else wrote a newer one since this command last read it (or
+	// since the fresh read this command performed just before the PUT).
+	// Distinct from problemConflict: the remedy is specific and mechanical
+	// (re-read the object, then retry), not "figure out what changed".
+	problemConfigRevisionPreconditionFailed = "https://showmesh.dev/problems/config-revision-precondition-failed"
+
 	// problemFPPStartPlaylistEvidenceNotCurrent: "fpp start-playlist"
 	// ifBusy=refuse's OTHER 409 — the coordinator could not tell what is
 	// playing, rather than confirming a different playlist is. Shares
@@ -306,6 +316,8 @@ func exitCodeForProblem(status int, p *problem) int {
 			return exitForbidden
 		case problemTooManyRequests:
 			return exitRateLimited
+		case problemConfigRevisionPreconditionFailed:
+			return exitConflict
 		case problemConflict, problemFPPStartPlaylistEvidenceNotCurrent, problemFPPStartPlaylistBusy,
 			problemMacroRunAlreadyInFlight, problemMacroRunIdempotencyMacroConflict, problemMacroRunIdempotencyRevisionConflict:
 			return exitConflict

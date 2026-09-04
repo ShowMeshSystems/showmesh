@@ -486,6 +486,249 @@ func TestCmdConfigNoSubcommand(t *testing.T) {
 	}
 }
 
+// TestCmdConfigSetSendsIfMatchFromFreshRead proves "config set" issues a
+// GET before the PUT when neither --if-match nor a payload revision is
+// given, and sends the GET's own revision as the exact If-Match header
+// value, quotes included.
+func TestCmdConfigSetSendsIfMatchFromFreshRead(t *testing.T) {
+	var putIfMatch string
+	var sawPUT bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		if r.Method == http.MethodPut {
+			sawPUT = true
+			putIfMatch = r.Header.Get("If-Match")
+		}
+		_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponse)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !sawPUT {
+		t.Fatal("no PUT request observed")
+	}
+	if putIfMatch != `"1"` {
+		t.Errorf("If-Match = %q, want %q (testFPPEndpointsConfigResponse's own revision, from the fresh GET)", putIfMatch, `"1"`)
+	}
+}
+
+// TestCmdConfigSetIfMatchFlagWinsOverPayloadRevision proves an explicit
+// --if-match overrides a "revision" the operator's own "config get
+// --output json"-shaped payload carried, and that no GET is issued at all
+// once --if-match settles it.
+func TestCmdConfigSetIfMatchFlagWinsOverPayloadRevision(t *testing.T) {
+	var putIfMatch string
+	var sawGET bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			sawGET = true
+		}
+		if r.Method == http.MethodPut {
+			putIfMatch = r.Header.Get("If-Match")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponse)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "get-output.json")
+	// testFPPEndpointsConfigResponse carries "revision":1 at the wrapper
+	// level; --if-match 42 must win over it.
+	if err := os.WriteFile(file, []byte(testFPPEndpointsConfigResponse), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--if-match", "42", "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if putIfMatch != `"42"` {
+		t.Errorf("If-Match = %q, want %q (the explicit --if-match value)", putIfMatch, `"42"`)
+	}
+	if sawGET {
+		t.Error("a GET request was issued, want none once --if-match settles the precondition")
+	}
+}
+
+// TestCmdConfigSetPayloadRevisionWinsOverFreshGET proves a "revision"
+// field in a "config get --output json"-shaped input is used over a
+// fresh read, and that no GET is issued at all in that case.
+func TestCmdConfigSetPayloadRevisionWinsOverFreshGET(t *testing.T) {
+	var putIfMatch string
+	var sawGET bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			sawGET = true
+		}
+		if r.Method == http.MethodPut {
+			putIfMatch = r.Header.Get("If-Match")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponse)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "get-output.json")
+	if err := os.WriteFile(file, []byte(testFPPEndpointsConfigResponse), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if putIfMatch != `"1"` {
+		t.Errorf("If-Match = %q, want %q (testFPPEndpointsConfigResponse's own \"revision\")", putIfMatch, `"1"`)
+	}
+	if sawGET {
+		t.Error("a GET request was issued, want none: the payload's own revision should have settled it")
+	}
+}
+
+// TestCmdConfigSetForceSendsNoIfMatch proves --force sends no If-Match
+// header at all, and issues no GET.
+func TestCmdConfigSetForceSendsNoIfMatch(t *testing.T) {
+	var sawIfMatch, sawGET bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			sawGET = true
+		}
+		if r.Method == http.MethodPut {
+			_, sawIfMatch = r.Header["If-Match"]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponse)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--force", "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if sawIfMatch {
+		t.Error("If-Match header present, want none with --force")
+	}
+	if sawGET {
+		t.Error("a GET request was issued, want none with --force")
+	}
+}
+
+// TestCmdConfigSetNotFoundSendsNoIfMatch proves a first-time PUT (the
+// fresh GET returns 404 resource-not-found) sends no If-Match at all, so
+// first creation still works.
+func TestCmdConfigSetNotFoundSendsNoIfMatch(t *testing.T) {
+	var sawIfMatch bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/resource-not-found","title":"Resource not found","status":404,"detail":"no fpp.endpoints configuration has been created yet; PUT one to create it"}`)
+			return
+		}
+		_, sawIfMatch = r.Header["If-Match"]
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponse)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if sawIfMatch {
+		t.Error("If-Match header present, want none: the object does not exist yet")
+	}
+}
+
+// TestCmdConfigSetRevisionConflictRendersMovedSinceReadMessage proves a
+// 409 config-revision-precondition-failed problem renders the server's
+// Detail verbatim, adds the re-read suggestion, and exits exitConflict.
+func TestCmdConfigSetRevisionConflictRendersMovedSinceReadMessage(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ShowMesh-API-Version", "1")
+			_, _ = fmt.Fprint(w, testFPPEndpointsConfigResponse)
+			return
+		}
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/config-revision-precondition-failed",`+
+			`"title":"Config write refused: the revision precondition is no longer current","status":409,`+
+			`"detail":"If-Match \"1\" is no longer current for fpp.endpoints \"fpp.endpoints\"; its current revision is 3"}`)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--server", ts.URL, "--token", "t"}, &stdout, &stderr, time.Now)
+	if code != exitConflict {
+		t.Fatalf("exit code = %d, want exitConflict (%d); stderr=%s", code, exitConflict, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "its current revision is 3") {
+		t.Errorf("stderr = %q, want the server's Detail surfaced verbatim", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "get") || !strings.Contains(stderr.String(), "retry") {
+		t.Errorf("stderr = %q, want a re-read suggestion naming the matching get command", stderr.String())
+	}
+}
+
+// TestCmdConfigSetIfMatchZeroRejectedClientSide proves --if-match 0 (and,
+// by the same validation, any value below 1) is refused before any
+// request is sent: the server URL is deliberately unreachable.
+func TestCmdConfigSetIfMatchZeroRejectedClientSide(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "endpoints.json")
+	if err := os.WriteFile(file, []byte(`{"endpoints":[{"id":"player-01","url":"http://10.0.1.20"}]}`), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdConfig([]string{"set", "--file", file, "--if-match", "0", "--server", "http://unused.invalid"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Errorf("exit code = %d, want exitUsage (%d); stderr=%s", code, exitUsage, stderr.String())
+	}
+}
+
 func TestCmdConfigHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdConfig([]string{"help"}, &stdout, &stderr, time.Now)

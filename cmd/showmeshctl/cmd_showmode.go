@@ -184,12 +184,15 @@ func cmdShowModeGet(args []string, stdout, stderr io.Writer, clock func() time.T
 // ADR-033 decision 3 argues against.
 func cmdShowModeSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl show mode set", stderr)
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show mode set [flags] <program|show>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.mode revision (requires config:write, admin only).")
 		_, _ = fmt.Fprintln(stderr, "A full replacement, validated before activation: an invalid value is")
 		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision (ADR-009). Applies without a")
 		_, _ = fmt.Fprintln(stderr, "coordinator restart, in both directions.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "mode changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -216,8 +219,21 @@ func cmdShowModeSet(args []string, stdout, stderr io.Writer, clock func() time.T
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/show.mode"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r showModeConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "show mode set", err)
+	}
+
 	var resp showModeConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.mode", configShowModePayload{Mode: mode}, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, configShowModePayload{Mode: mode}, &resp); err != nil {
 		return reportError(stderr, "show mode set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

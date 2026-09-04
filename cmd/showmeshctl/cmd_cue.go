@@ -191,6 +191,7 @@ func cmdCueSet(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 	fs.StringVar(&show, "show", "", "the show this cue belongs to (required)")
 	fs.StringVar(&name, "name", "", "the cue's operator-facing name (required)")
 	fs.StringVar(&outputsJSON, "outputs-json", "", "the cue's \"outputs\" object, as raw JSON (required)")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl cue set [flags] <cue-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.cue revision (PUT")
@@ -201,6 +202,8 @@ func cmdCueSet(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		_, _ = fmt.Fprintln(stderr, "\nEach of outputs.audio/ltc/announcement also accepts an optional \"target\"")
 		_, _ = fmt.Fprintln(stderr, "naming an audio.node id (ADR-045); omitted, it resolves later to the")
 		_, _ = fmt.Fprintln(stderr, "installation's single program+ltc audio.node.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this cue), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -242,9 +245,22 @@ func cmdCueSet(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	apiPath := "/api/v1/config/show.cue/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r showCueConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "cue set", err)
+	}
+
 	body := configShowCue{Show: show, Name: name, Outputs: json.RawMessage(outputsJSON)}
 	var resp showCueConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.cue/"+url.PathEscape(id), body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "cue set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

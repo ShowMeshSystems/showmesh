@@ -460,6 +460,7 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	fs, g := newFlagSet("showmeshctl render settings set", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON file matching {\"idleOutput\":string,\"restartPolicy\":{...}}; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl render settings set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new render.settings configuration revision (requires config:write,")
@@ -469,6 +470,9 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"render settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -486,6 +490,7 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	if err != nil {
 		return reportError(stderr, "render settings set", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
 	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "render settings set", newCLIError(exitUsage, "%v", err))
@@ -503,8 +508,21 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/render.settings"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r renderSettingsConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "render settings set", err)
+	}
+
 	var resp renderSettingsConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/render.settings", payload, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, payload, &resp); err != nil {
 		return reportError(stderr, "render settings set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

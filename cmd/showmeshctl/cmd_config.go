@@ -157,6 +157,7 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	fs, g := newFlagSet("showmeshctl config set", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON file matching {\"endpoints\":[{\"id\":string,\"url\":string},...]}; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl config set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new fpp.endpoints configuration revision (requires config:write,")
@@ -166,6 +167,9 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "endpoint list per request, and the collector set follows within about")
 		_, _ = fmt.Fprintln(stderr, "ten seconds.")
 		_, _ = fmt.Fprintln(stderr, "\nAccepts either a bare {\"endpoints\":[...]} payload, or the full object \"config get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is \"config get --output json\"'s own shape, otherwise a fresh read), refusing")
+		_, _ = fmt.Fprintln(stderr, "with a 409 if the configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -183,6 +187,7 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	if err != nil {
 		return reportError(stderr, "config set", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
 	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "config set", newCLIError(exitUsage, "%v", err))
@@ -201,8 +206,20 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r fppEndpointsConfigResponse
+		if err := c.getJSON(ctx, "/api/v1/config/fpp.endpoints", nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "config set", err)
+	}
+
 	var resp fppEndpointsConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/fpp.endpoints", payload, &resp); err != nil {
+	if err := c.putJSON(ctx, "/api/v1/config/fpp.endpoints", ifMatch, payload, &resp); err != nil {
 		return reportError(stderr, "config set", err)
 	}
 
