@@ -23,7 +23,7 @@ import (
 // CurrentRevision == 0 means "no revision has ever been activated": see
 // migrations.go's schemaV6 doc comment. DeletedAt is nil for a live
 // object, and set the moment [Store.TombstoneConfigObject]/
-// [Tx.TombstoneConfigObject] runs: see migrations.go's schemaV30 doc
+// [Tx.TombstoneConfigObject] runs: see migrations.go's migrateV30AddConfigObjectDeletedAtColumn doc
 // comment. [Store.GetConfigObject]/[Tx.GetConfigObject] and
 // [Store.ListConfigObjects]/[Tx.ListConfigObjects] never return a
 // tombstoned row (DeletedAt is always nil on whatever they do return);
@@ -293,7 +293,7 @@ func getConfigObject(ctx context.Context, q querier, kind, id string) (ConfigObj
 
 // GetConfigObject returns (kind, id)'s pointer row, or
 // [ErrConfigObjectNotFound], including when the row exists but is
-// tombstoned (schemaV30's doc comment): a deleted object is absent from
+// tombstoned (migrateV30AddConfigObjectDeletedAtColumn's doc comment): a deleted object is absent from
 // every existence check and resolution path that already treats
 // [ErrConfigObjectNotFound] as "nothing here", with no per-caller change
 // required. See [Store.GetConfigObjectIncludingDeleted] for the narrow
@@ -393,7 +393,7 @@ func (t *Tx) ListConfigObjects(ctx context.Context, kind string) ([]ConfigObject
 // with no special-casing anywhere in the API layer: activating ANY
 // revision, including the very first one after a delete, is what "this
 // object is live again" means, and current_revision keeps climbing from
-// wherever it last stood (schemaV30's doc comment), never resetting to 1
+// wherever it last stood (migrateV30AddConfigObjectDeletedAtColumn's doc comment), never resetting to 1
 // and never colliding with a revision this object already used.
 func activateConfigRevision(ctx context.Context, q querier, kind, id string, revision int64, now time.Time) (ConfigObjectRecord, error) {
 	nowStr := timeToDB(now)
@@ -453,7 +453,7 @@ func (t *Tx) ActivateConfigRevision(ctx context.Context, kind, id string, revisi
 // already-deleted object is refused the same way a DELETE of an object
 // that never existed is, matching [handleDeleteNodeDeclaration]'s existing
 // precedent for this codebase's one other hard-delete-shaped operation.
-// config_revisions is never touched: see migrations.go's schemaV30 doc
+// config_revisions is never touched: see migrations.go's migrateV30AddConfigObjectDeletedAtColumn doc
 // comment.
 func tombstoneConfigObject(ctx context.Context, q querier, kind, id string, now time.Time) (ConfigObjectRecord, error) {
 	nowStr := timeToDB(now)
@@ -479,7 +479,7 @@ func tombstoneConfigObject(ctx context.Context, q querier, kind, id string, now 
 // object is immediately absent from [Store.GetConfigObject]/
 // [Store.ListConfigObjects] and from every resolution path built on them.
 // Returns [ErrConfigObjectNotFound] when (kind, id) has no live row to
-// delete. See migrations.go's schemaV30 doc comment.
+// delete. See migrations.go's migrateV30AddConfigObjectDeletedAtColumn doc comment.
 func (s *Store) TombstoneConfigObject(ctx context.Context, kind, id string) (ConfigObjectRecord, error) {
 	guardNotInTx(ctx, "Store.TombstoneConfigObject")
 	return tombstoneConfigObject(ctx, s.db, kind, id, s.now())

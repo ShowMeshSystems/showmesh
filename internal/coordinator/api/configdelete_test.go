@@ -14,6 +14,15 @@ import (
 // showconfig.go), and the twelve singleton kinds' deliberate absence of
 // one.
 
+// validAudioNodeBodySecondNode is validAudioNodeBody (audionode_test.go)
+// with an explicit "program" role: validAudioNodeBody omits "role" and so
+// decodes to the default "program+ltc" (ADR-045), and ADR-018's one clock
+// domain means only one audio.node across the installation may carry that
+// role at a time. A test that PUTs two nodes needs the second one to carry
+// a role that does not collide with the first.
+const validAudioNodeBodySecondNode = `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+	`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it","role":"program"}`
+
 func mustDeleteAudioNode(t *testing.T, api *API, token, id string, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()
 	h := map[string]string{"Authorization": "Bearer " + token}
@@ -43,7 +52,7 @@ func TestDeleteAudioNodeTombstonesExcludesFromListAndGetAndAudits(t *testing.T) 
 	if status, body := mustPutAudioNode(t, api, token, "render-01", validAudioNodeBody); status != http.StatusOK {
 		t.Fatalf("put render-01: status = %d, body: %s", status, body)
 	}
-	if status, body := mustPutAudioNode(t, api, token, "render-02", validAudioNodeBody); status != http.StatusOK {
+	if status, body := mustPutAudioNode(t, api, token, "render-02", validAudioNodeBodySecondNode); status != http.StatusOK {
 		t.Fatalf("put render-02: status = %d, body: %s", status, body)
 	}
 

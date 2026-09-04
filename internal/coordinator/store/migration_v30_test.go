@@ -61,7 +61,7 @@ func seedPreV30ConfigObject(t *testing.T, db *sql.DB, kind, id string, currentRe
 	}
 }
 
-// TestMigrateV30FromPreV30DatabaseWithExistingRows proves schemaV30's own
+// TestMigrateV30FromPreV30DatabaseWithExistingRows proves migrateV30AddConfigObjectDeletedAtColumn's own
 // doc comment: it is a pure addition, so every config_objects row a
 // pre-v30 database already holds survives migration unchanged, reading
 // back as a live object (deleted_at NULL), with no data fix applied.
@@ -134,6 +134,50 @@ func TestMigrateV30ThenStoreLayerCanTombstone(t *testing.T) {
 	}
 	if _, err := st.GetConfigObject(ctx, "audio.node", "node-1"); err == nil {
 		t.Fatalf("GetConfigObject after tombstone succeeded, want ErrConfigObjectNotFound")
+	}
+}
+
+// TestMigrateV30ToleratesReplayAfterAUserVersionRewind mirrors
+// TestMigrateV26ToleratesReplayAfterAUserVersionRewind (migration_v26_test.go)
+// one migration over: internal/coordinator/audioconfigpush's own tests
+// rewind PRAGMA user_version below 30 and reopen the store to force every
+// later migration, including this one, to run a second time. A bare
+// ALTER TABLE ... ADD COLUMN fails on that second pass with "duplicate
+// column name", exactly the defect this test caught before
+// migrateV30AddConfigObjectDeletedAtColumn added its own
+// pragma_table_info check.
+func TestMigrateV30ToleratesReplayAfterAUserVersionRewind(t *testing.T) {
+	db := openDatabaseAtV29(t)
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+
+	// Mirrors audioconfigpush's own rewind target (18) exactly, so this
+	// forces every migration above it, including v30, to run a second time
+	// through the ordinary [migrate] loop rather than only calling this
+	// function directly.
+	if _, err := db.ExecContext(context.Background(), `PRAGMA user_version = 18`); err != nil {
+		t.Fatalf("rewind user_version: %v", err)
+	}
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("second migrate after rewind: %v", err)
+	}
+
+	var version int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version after replay = %d, want %d", version, maxMigrationVersion())
+	}
+
+	var deletedAtExists int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM pragma_table_info('config_objects') WHERE name = 'deleted_at'`).Scan(&deletedAtExists); err != nil {
+		t.Fatalf("check deleted_at: %v", err)
+	}
+	if deletedAtExists != 1 {
+		t.Errorf("config_objects.deleted_at exists (count) = %d, want 1 (exactly one column, not duplicated by replay)", deletedAtExists)
 	}
 }
 

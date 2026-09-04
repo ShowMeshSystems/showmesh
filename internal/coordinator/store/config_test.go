@@ -219,7 +219,7 @@ func TestConfigRevisionTxForm(t *testing.T) {
 	}
 }
 
-// --- schemaV30 tombstone delete ---
+// --- migrateV30AddConfigObjectDeletedAtColumn tombstone delete ---
 
 func createAndActivate(t *testing.T, st *Store, ctx context.Context, kind, id string, revision int64, payload string) {
 	t.Helper()
