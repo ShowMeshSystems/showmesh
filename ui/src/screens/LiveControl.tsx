@@ -821,8 +821,9 @@ export function LiveControl() {
       />
 
       <Callout>
-        Brightness ceiling, site control and interlock authoring are not advertised by this coordinator, so they have no
-        controls here. All lists above are scoped to the active show.
+        Brightness ceiling is not advertised by this coordinator, so it has no controls here. Site control and
+        interlocks are authored on the Night Session definition and enforced automatically; Live Control has no
+        separate controls for them. All lists above are scoped to the active show.
       </Callout>
     </>
   )

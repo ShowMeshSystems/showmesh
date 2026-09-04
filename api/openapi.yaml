@@ -6325,9 +6325,9 @@ paths:
         Requires `config:write` (admin only). FPP alone authorizes and
         schedules a night session (ADR-038): a calendar field or a
         hand-entered rest-duration field anywhere in the payload is
-        rejected. `siteControl`/`interlocks` are specified
-        (RESTING-MODE.md §10) but not implemented in this seam and are
-        rejected if present - the whole block's absence is valid and is
+        rejected. `siteControl`/`interlocks` (RESTING-MODE.md §10) are
+        accepted on write, returned on read, and enforced against a
+        lifecycle command - the whole block's absence is valid and is
         NOT degraded. showPlaylist.fppInstanceId and
         resting.fppInstanceId must name configured FPP instances;
         resting.timelineAsset and every backgroundAudio item must resolve
