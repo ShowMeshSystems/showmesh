@@ -312,6 +312,12 @@ Commands:
   assets manifest [--node <id>] [--require-ready]
                            what each node should hold for the active show,
                            versus what it actually holds (Track E seam E5)
+  assets unused <nodeId>  which of this node's held assets no Cue in its
+                           resolved catalog references
+  assets remove <nodeId> <contentHash>
+                           remove one asset from a node (write, requires
+                           asset:write); refused (409) if a Cue still
+                           references it
   assets settings get     show the active assets.settings configuration (Track G seam G-4,
                            ADR-039)
   assets settings set     write a new assets.settings revision; only the flags passed are

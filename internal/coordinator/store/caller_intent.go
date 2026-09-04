@@ -74,6 +74,12 @@ const (
 	// internal/coordinator/api/cuecatalogdeploy.go's
 	// cueCatalogDeployRequestIdentity.
 	CallerIntentCueCatalogDeploy CallerIntentKind = "cuecatalog-deploy"
+
+	// CallerIntentAssetRemove tags an asset.remove dispatch command
+	// with the caller's own unresolved request identity (JSON). See
+	// internal/coordinator/api/nodeunusedassets.go's
+	// removeNodeAssetRequestIdentity.
+	CallerIntentAssetRemove CallerIntentKind = "asset-remove"
 )
 
 // callerIntentTagSeparator divides a formatted caller_intent value's kind
@@ -89,6 +95,7 @@ var callerIntentTags = []CallerIntentKind{
 	CallerIntentMacroRun,
 	CallerIntentRenderRequest,
 	CallerIntentCueCatalogDeploy,
+	CallerIntentAssetRemove,
 }
 
 // FormatCallerIntent tags payload with kind for storage in

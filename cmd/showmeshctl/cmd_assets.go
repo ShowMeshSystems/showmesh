@@ -113,6 +113,54 @@ type assetManifestResponse struct {
 	Nodes      []nodeAssetManifestRecord `json:"nodes"`
 }
 
+// --- unused/remove wire types, mirroring v1.NodeUnusedAssetsResponse and
+// v1.RemoveNodeAssetResponse ---
+
+type unusedAssetRecord struct {
+	ContentHash string  `json:"contentHash"`
+	Filename    string  `json:"filename"`
+	SizeBytes   int64   `json:"sizeBytes"`
+	Sequence    *string `json:"sequence"`
+}
+
+// nodeUnusedAssetsResponse is the body of GET /api/v1/nodes/{nodeId}/assets/unused.
+// State reuses nodeAssetManifestRecord.State's identical vocabulary; Unused
+// is meaningful only when State is not "unknown".
+type nodeUnusedAssetsResponse struct {
+	ServerTime time.Time           `json:"serverTime"`
+	Node       string              `json:"node"`
+	State      string              `json:"state"`
+	Reason     *string             `json:"reason"`
+	ObservedAt *time.Time          `json:"observedAt"`
+	Unused     []unusedAssetRecord `json:"unused"`
+}
+
+// removeNodeAssetRequest is the body of POST /api/v1/nodes/{nodeId}/assets/remove.
+type removeNodeAssetRequest struct {
+	ContentHash    string `json:"contentHash"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+}
+
+// removeNodeAssetResult mirrors v1.RemoveNodeAssetResult.
+type removeNodeAssetResult struct {
+	CommandID      string     `json:"commandId"`
+	IdempotencyKey string     `json:"idempotencyKey"`
+	Node           string     `json:"node"`
+	ContentHash    string     `json:"contentHash"`
+	Replay         bool       `json:"replay"`
+	Outcome        string     `json:"outcome"`
+	Reason         string     `json:"reason,omitempty"`
+	DispatchedAt   *time.Time `json:"dispatchedAt"`
+	ResolvedAt     *time.Time `json:"resolvedAt,omitempty"`
+}
+
+// removeNodeAssetResponse is the body of a successful (200) response from
+// POST /api/v1/nodes/{nodeId}/assets/remove.
+type removeNodeAssetResponse struct {
+	ServerTime time.Time             `json:"serverTime"`
+	Command    removeNodeAssetResult `json:"command"`
+}
+
 // --- the timeout budget: restated from assetstore.UploadBudget ---
 //
 // showmeshctl may not import a coordinator package (the import-graph test
@@ -186,6 +234,10 @@ func cmdAssets(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdAssetsFetch(rest, stdout, stderr, clock)
 	case "manifest":
 		return cmdAssetsManifest(rest, stdout, stderr, clock)
+	case "unused":
+		return cmdAssetsUnused(rest, stdout, stderr, clock)
+	case "remove":
+		return cmdAssetsRemove(rest, stdout, stderr, clock)
 	case "settings":
 		return cmdAssetsSettings(rest, stdout, stderr, clock)
 	default:
@@ -214,6 +266,11 @@ Subcommands:
                    before the file lands at --out
   manifest         show what each node should hold for the active show
                    versus what it actually holds (Track E seam E5)
+  unused <nodeId>  which of this node's held assets no Cue in its resolved
+                   catalog references
+  remove <nodeId> <contentHash>
+                   remove one asset from a node (write, requires
+                   asset:write); refused (409) if a Cue still references it
   settings         read or write the asset store's own configuration
                    (content base URL, upload limit, sync/inventory
                    intervals — Track G seam G-4, ADR-039)
@@ -754,6 +811,144 @@ func cmdAssetsManifest(args []string, stdout, stderr io.Writer, clock func() tim
 	default:
 		return exitOK
 	}
+}
+
+// --- unused ---
+
+func cmdAssetsUnused(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl assets unused", stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets unused <nodeId> [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nWhich of <nodeId>'s held assets no Cue in its resolved catalog")
+		_, _ = fmt.Fprintln(stderr, "references (GET /api/v1/nodes/{nodeId}/assets/unused). Reuses the same")
+		_, _ = fmt.Fprintln(stderr, "readiness evidence \"assets manifest\" reports: state is \"unknown\" under")
+		_, _ = fmt.Fprintln(stderr, "the identical conditions that route already is, and the unused list is")
+		_, _ = fmt.Fprintln(stderr, "withheld entirely in that case, never printed as empty.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "assets unused", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	nodeID := rest[0]
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "assets unused", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var resp nodeUnusedAssetsResponse
+	if err := c.getJSON(ctx, "/api/v1/nodes/"+url.PathEscape(nodeID)+"/assets/unused", nil, &resp); err != nil {
+		return reportError(stderr, "assets unused", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "assets unused", err)
+		}
+		return exitOK
+	}
+	printUnusedAssetsTable(stdout, resp)
+	return exitOK
+}
+
+func printUnusedAssetsTable(w io.Writer, resp nodeUnusedAssetsResponse) {
+	if resp.State == "unknown" {
+		reason := ""
+		if resp.Reason != nil {
+			reason = *resp.Reason
+		}
+		_, _ = fmt.Fprintf(w, "node %s: state=unknown (%s); unused assets cannot be determined\n", resp.Node, reason)
+		return
+	}
+	if len(resp.Unused) == 0 {
+		_, _ = fmt.Fprintf(w, "node %s: state=%s; no unused assets\n", resp.Node, resp.State)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "node %s: state=%s\n", resp.Node, resp.State)
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "CONTENT HASH\tSEQUENCE\tSIZE\tFILENAME")
+	for _, u := range resp.Unused {
+		sequence := "(unattributed)"
+		if u.Sequence != nil {
+			sequence = *u.Sequence
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", u.ContentHash, sequence, formatByteSize(u.SizeBytes), u.Filename)
+	}
+	_ = tw.Flush()
+}
+
+// --- remove ---
+
+func cmdAssetsRemove(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl assets remove", stderr)
+	var idempotencyKey string
+	fs.StringVar(&idempotencyKey, "idempotency-key", "", "reuse a prior request's key to replay its result instead of dispatching again")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets remove <nodeId> <contentHash> [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nDispatch asset.remove to <nodeId> for one held content hash (POST")
+		_, _ = fmt.Fprintln(stderr, "/api/v1/nodes/{nodeId}/assets/remove). This is a write: requires the")
+		_, _ = fmt.Fprintln(stderr, "asset:write scope (admin only). Refused (409) if any Cue in this node's")
+		_, _ = fmt.Fprintln(stderr, "current resolved catalog still references contentHash - the response")
+		_, _ = fmt.Fprintln(stderr, "names every referencing Cue. A confirmed outcome means only that the")
+		_, _ = fmt.Fprintln(stderr, "agent reported the file gone from its own disk; this coordinator's own")
+		_, _ = fmt.Fprintln(stderr, "inventory catches up only on the node's next report (\"assets unused\"")
+		_, _ = fmt.Fprintln(stderr, "reflects it after that, not immediately).")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "assets remove", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		fs.Usage()
+		return exitUsage
+	}
+	nodeID, contentHash := rest[0], rest[1]
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "assets remove", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	req := removeNodeAssetRequest{ContentHash: contentHash, IdempotencyKey: idempotencyKey}
+	var resp removeNodeAssetResponse
+	if err := c.postJSON(ctx, "/api/v1/nodes/"+url.PathEscape(nodeID)+"/assets/remove", req, &resp); err != nil {
+		return reportError(stderr, "assets remove", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "assets remove", err)
+		}
+		return exitOK
+	}
+	cmd := resp.Command
+	_, _ = fmt.Fprintf(stdout, "node %s: %s contentHash=%s", cmd.Node, cmd.Outcome, cmd.ContentHash)
+	if cmd.Reason != "" {
+		_, _ = fmt.Fprintf(stdout, " reason=%q", cmd.Reason)
+	}
+	if cmd.Replay {
+		_, _ = fmt.Fprint(stdout, " (replay)")
+	}
+	_, _ = fmt.Fprintln(stdout)
+	return exitOK
 }
 
 // --- rendering ---
