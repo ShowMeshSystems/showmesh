@@ -45,6 +45,8 @@ func cmdAudioSession(args []string, stdout, stderr io.Writer, clock func() time.
 	case "-h", "-help", "--help", "help":
 		printAudioSessionUsage(stdout)
 		return exitOK
+	case "show":
+		return cmdAudioSessionShow(rest, stdout, stderr, clock)
 	}
 	for _, op := range audioSessionOps {
 		if sub == op {
@@ -58,6 +60,7 @@ func cmdAudioSession(args []string, stdout, stderr io.Writer, clock func() time.
 
 func printAudioSessionUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio session <op> [flags] <node-id> <session-id> [params-json]
+       showmeshctl audio session show [flags] [<session-id>]
 
 Dispatch one of the nine audio.session.* operations (requires
 audio:command): apply, prepare, start, pause, resume, seek,
@@ -73,6 +76,12 @@ The pipeline backend behind these operations is an open owner decision;
 every dispatch against the shipped agent reports "unconfirmable" — this
 is expected and does not mean the request failed to reach the node. See
 "showmeshctl audio session <op> --help".
+
+"show" is a read, not one of the nine dispatch ops: it displays a
+session's audio_session.* observations (or, with no session id, every
+session this coordinator holds evidence for). No node scope: an
+audio_session observation carries no node field. See
+"showmeshctl audio session show --help".
 
 `)
 }
