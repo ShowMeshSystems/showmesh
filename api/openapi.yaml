@@ -1656,6 +1656,68 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/audio/silence:
+    post:
+      operationId: dispatchAudioNodeSilence
+      summary: Dispatch audio.node.silence to a node (unconditional per-node emergency stop)
+      description: >-
+        Behind `audio:command`. Stops every playback session the node's
+        agent currently holds, regardless of what this coordinator
+        itself knew about any of them - no `sessionId`, no `revision`.
+        Idempotent: silencing an already-silent node is a success
+        reporting zero or more already-stopped sessions, never an error.
+        A `200` response is never itself success: `command.outcome` is
+        the only place that is decided, and a node whose agent predates
+        this operation reports `"refused"` with that agent's own
+        refusal reason, never a generic failure. See
+        AudioNodeSilenceResult.outcome.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioNodeSilenceRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioNodeSilenceResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Two DISTINCT causes, decided in this order: (1) `idempotencyKey`
+            was already used for a command whose `action` differs from
+            this one - never answered as if it belonged to whichever
+            command first claimed the key; (2) the SAME action against a
+            DIFFERENT node - also a conflict, never a replay. Mint a
+            fresh `idempotencyKey` for a genuinely new request.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fpp/{instanceId}/commands:
     post:
       operationId: dispatchFPPCommand
@@ -9632,6 +9694,129 @@ components:
             the `audio.session.stop`/`audio.session.clear`/
             `audio.output.mute` safety-class exemption (ADR-024 decision
             11), with a degraded, stderr-only attribution record.
+    AudioNodeSilenceRequest:
+      type: object
+      description: >-
+        The body of POST /nodes/{nodeId}/audio/silence. audio.node.silence
+        takes no params of its own, so idempotencyKey is the only field -
+        unlike AudioSessionNoParamsRequest, there is no revision here.
+      additionalProperties: false
+      properties:
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key (same node) dispatches nothing and returns the
+            original command's own result, flagged `replay: true` - see
+            the `409` response for what happens when the SAME key is
+            reused against a DIFFERENT node.
+    AudioNodeSilenceResponse:
+      type: object
+      description: The body of a successful (200) response from POST /nodes/{nodeId}/audio/silence.
+      required: [serverTime, command]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/AudioNodeSilenceResult"
+    AudioNodeSilenceSessionResult:
+      type: object
+      description: >-
+        One session's own outcome, as the node's agent reported it
+        (internal/agent/audio.Manager.SilenceAll).
+      required: [sessionId, outcome, reason]
+      additionalProperties: false
+      properties:
+        sessionId:
+          type: string
+        outcome:
+          type: string
+          description: >-
+            The session engine's own outcome word for this session (e.g.
+            "stopped"); the same vocabulary AudioSessionCommandResult.
+            outcome's "started"/"position"/"stopped"/"completed" members
+            draw from, since silencing a session runs the identical
+            session-level stop.
+        reason:
+          type: string
+    AudioNodeSilenceResult:
+      type: object
+      description: >-
+        What happened to one dispatched (or replayed) audio.node.silence
+        command. Unlike AudioSessionCommandResult, this is node-scoped,
+        not session-scoped: outcome/reason are the wire-level result the
+        node's agent itself reported, and sessions/sessionsFound carry
+        what happened to every session that node was holding. A node
+        whose agent predates this operation reports `outcome: "refused"`
+        with that agent's own refusal reason in `reason`, never a
+        generic failure.
+      required:
+        [commandId, idempotencyKey, action, nodeId, replay, outcome,
+         reason, sessionsFound, sessions, dispatchedAt, resolvedAt,
+         attributionDegraded]
+      additionalProperties: false
+      properties:
+        commandId:
+          type: string
+        idempotencyKey:
+          type: string
+        action:
+          type: string
+          enum: ["audio.node.silence"]
+        nodeId:
+          type: string
+        replay:
+          type: boolean
+          description: >-
+            True when this response answers a REPLAYED idempotency key:
+            the command described here was NOT dispatched by this
+            request - it is the ORIGINAL command's already-recorded
+            result.
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "refused", "failed", "unconfirmable", ""]
+          description: >-
+            The wire-level result the node's own agent reported for this
+            command as a whole (mqttproto.ResultPayload.outcome), not a
+            per-session outcome word - read `sessions` for what happened
+            to each one. Empty only for a REPLAY response returned
+            before the original request's own dispatch has finished,
+            matching AudioSessionCommandResult.outcome's identical
+            accepted-empty case. "refused" carries the node's own
+            refusal reason verbatim - including an older agent that does
+            not know this operation - never flattened into a generic
+            failure.
+        reason:
+          type: string
+          description: >-
+            Required whenever outcome is not "confirmed"; empty for
+            "confirmed".
+        sessionsFound:
+          type: integer
+          description: >-
+            How many sessions the node's agent reported, matching
+            `sessions`' own length. Zero for a node holding no sessions,
+            or when outcome carries no evidence (e.g. "refused").
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioNodeSilenceSessionResult"
+        dispatchedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+        attributionDegraded:
+          type: boolean
+          description: >-
+            True when this command's dispatch could not write its audit
+            entry atomically with the command and proceeded anyway under
+            the `audio.node.silence` safety-class exemption (ADR-024
+            decision 11), with a degraded, stderr-only attribution
+            record.
     FPPCommandResponse:
       type: object
       description: The body of a successful (200) response from POST /fpp/{instanceId}/commands.

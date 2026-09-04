@@ -365,6 +365,9 @@ Commands:
                                         dispatch audio.output.mute (write, requires audio:command)
   audio output unmute <nodeId> <sessionId>
                                         dispatch audio.output.unmute (write, requires audio:command)
+  audio silence <nodeId>
+                                        dispatch audio.node.silence: the unconditional
+                                        per-node emergency stop (write, requires audio:command)
   fppconnect settings get              show the active fppconnect.settings configuration
                                         (ADR-044; never 404s, reports the built-in default)
   fppconnect settings set              write a new fppconnect.settings revision (write,

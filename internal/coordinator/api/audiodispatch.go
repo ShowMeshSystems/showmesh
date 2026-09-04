@@ -46,10 +46,11 @@ import (
 // decision 11, amended 2026-08-26 (owner ruling): an audit-write failure
 // never fails this dispatch closed for ANY audio.* action: every one
 // proceeds with degraded attribution. audioSafetyExemptActions
-// (audio.session.stop/clear, audio.output.mute) still exists because it
-// names this subsystem's own blackout-equivalent set and still picks the
+// (audio.session.stop/clear, audio.output.mute, audio.node.silence) still
+// exists because it names this subsystem's own blackout-equivalent set
+// and still picks the
 // degradedAttributionReasonSafetyClassExemption justification for those
-// three actions specifically, distinct from
+// four actions specifically, distinct from
 // degradedAttributionReasonAuditNeverBlocks for every other one; it no
 // longer gates whether the dispatch proceeds at all.
 
@@ -65,9 +66,10 @@ var audioSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,12
 // audioSafetyExemptActions is this file's own audience-audio equivalent of
 // ADR-024 decision 11's blackout/stop/power-off safety class: muting the
 // output is this subsystem's blackout, so it is grouped alongside the two
-// ways to silence a session. Since the 2026-08-26 amendment it no longer
-// decides whether an audit-write failure blocks dispatch (nothing does,
-// for any audio.* action); it only picks
+// ways to silence a session. audio.node.silence (audionodesilence.go) is
+// the node-wide blackout, so it joins the set too. Since the 2026-08-26
+// amendment it no longer decides whether an audit-write failure blocks
+// dispatch (nothing does, for any audio.* action); it only picks
 // degradedAttributionReasonSafetyClassExemption over
 // degradedAttributionReasonAuditNeverBlocks as the reported reason, so an
 // investigator can still tell "this is the blackout-equivalent set" from
@@ -76,6 +78,7 @@ var audioSafetyExemptActions = map[string]bool{
 	"audio.session.stop":  true,
 	"audio.session.clear": true,
 	"audio.output.mute":   true,
+	"audio.node.silence":  true,
 }
 
 // audioCommandDeadlineActions is a POSITIVE list: only an action named here
