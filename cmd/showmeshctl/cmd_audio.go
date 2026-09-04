@@ -254,6 +254,7 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 	fs, g := newFlagSet("showmeshctl audio settings set", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON file matching configAudioSettingsPayload; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio settings set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.settings configuration revision (requires config:write,")
@@ -263,6 +264,9 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"audio settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -280,6 +284,7 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 	if err != nil {
 		return reportError(stderr, "audio settings set", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
 	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "audio settings set", newCLIError(exitUsage, "%v", err))
@@ -296,8 +301,21 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const audioSettingsAPIPath = "/api/v1/config/audio.settings"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r audioSettingsConfigResponse
+		if err := c.getJSON(ctx, audioSettingsAPIPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "audio settings set", err)
+	}
+
 	var resp audioSettingsConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/audio.settings", json.RawMessage(raw), &resp); err != nil {
+	if err := c.putJSON(ctx, audioSettingsAPIPath, ifMatch, json.RawMessage(raw), &resp); err != nil {
 		return reportError(stderr, "audio settings set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -540,6 +558,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
 	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone (ADR-045); omitted, defaults to program+ltc")
 	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
@@ -553,6 +572,8 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
 		_, _ = fmt.Fprintln(stderr, "has no channel to spare for a discrete LTC signal. Passing one without")
 		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this node), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -626,8 +647,20 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	if zoneSet {
 		body.Zone = &zone
 	}
+	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r audioNodeConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "audio node set", err)
+	}
 	var resp audioNodeConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/audio.node/"+url.PathEscape(id), body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "audio node set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

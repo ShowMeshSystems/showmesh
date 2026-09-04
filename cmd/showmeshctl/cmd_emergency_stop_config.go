@@ -132,11 +132,15 @@ func cmdEmergencyStopConfigSet(args []string, stdout, stderr io.Writer, clock fu
 	fs, g := newFlagSet(cmdLabel, stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON show.emergencystop payload; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: %s [flags]\n", cmdLabel)
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.emergencystop configuration revision (a full replacement:")
 		_, _ = fmt.Fprintln(stderr, "all three level keys required, each with its own required actions array).")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"emergency-stop config get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -154,6 +158,7 @@ func cmdEmergencyStopConfigSet(args []string, stdout, stderr io.Writer, clock fu
 	if err != nil {
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
 	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, cmdLabel, newCLIError(exitUsage, "%v", err))
@@ -169,8 +174,21 @@ func cmdEmergencyStopConfigSet(args []string, stdout, stderr io.Writer, clock fu
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/show.emergencystop"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r emergencyStopConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, cmdLabel, err)
+	}
+
 	var resp emergencyStopConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.emergencystop", json.RawMessage(raw), &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, json.RawMessage(raw), &resp); err != nil {
 		return reportError(stderr, cmdLabel, err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

@@ -405,7 +405,7 @@ func cmdPrincipalSetRole(args []string, stdout, stderr io.Writer, clock func() t
 
 	req := setPrincipalRoleRequest{Role: role}
 	var resp principalResponse
-	if err := c.putJSON(ctx, "/api/v1/principals/"+id+"/role", req, &resp); err != nil {
+	if err := c.putJSON(ctx, "/api/v1/principals/"+id+"/role", "", req, &resp); err != nil {
 		return reportError(stderr, "principal set-role", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

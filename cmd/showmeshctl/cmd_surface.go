@@ -300,6 +300,7 @@ func cmdSurfaceSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	fs.StringVar(&transport, "transport", "", "output.transport: ndi|hdmi (required)")
 	fs.StringVar(&ndiSourceName, "ndi-source-name", "", "output.ndi.sourceName (required when --transport=ndi)")
 	fs.StringVar(&hdmiDisp, "hdmi-display", "", "output.hdmi.display (required when --transport=hdmi)")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl surface set [flags] <surface-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.surface revision (PUT")
@@ -309,6 +310,8 @@ func cmdSurfaceSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 		_, _ = fmt.Fprintln(stderr, "command never reads the surface's current definition first. width * height")
 		_, _ = fmt.Fprintln(stderr, "* channelsPerPixel(pixel-format) must equal --channel-count exactly, or the")
 		_, _ = fmt.Fprintln(stderr, "coordinator refuses the write and names both numbers.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this surface), refusing with")
+		_, _ = fmt.Fprintln(stderr, "a 409 if it changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -390,8 +393,21 @@ func cmdSurfaceSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 		FrameRate:    frameRate,
 		Output:       output,
 	}
+	apiPath := "/api/v1/config/show.surface/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r showSurfaceConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "surface set", err)
+	}
+
 	var resp showSurfaceConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.surface/"+url.PathEscape(id), body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "surface set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

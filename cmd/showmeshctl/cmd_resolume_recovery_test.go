@@ -45,8 +45,19 @@ func TestCmdResolumeRecoveryStatusPrintsToggleAndRecord(t *testing.T) {
 
 func TestCmdResolumeRecoveryEnablePUTsTrue(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ShowMesh-API-Version", "1")
+			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T00:00:00Z","kind":"resolume.recovery","revision":1,
+				"payload":{"autoRestoreEnabled":false},"updatedAt":"2026-08-16T00:00:00Z",
+				"createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+			return
+		}
 		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/config/resolume.recovery" {
 			t.Errorf("unexpected request %s %q", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("If-Match"); got != `"1"` {
+			t.Errorf("If-Match = %q, want %q (the revision the fresh read supplied)", got, `"1"`)
 		}
 		body := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(body)
@@ -73,6 +84,17 @@ func TestCmdResolumeRecoveryEnablePUTsTrue(t *testing.T) {
 
 func TestCmdResolumeRecoveryDisablePUTsFalse(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ShowMesh-API-Version", "1")
+			_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T00:00:00Z","kind":"resolume.recovery","revision":1,
+				"payload":{"autoRestoreEnabled":true},"updatedAt":"2026-08-16T00:00:00Z",
+				"createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+			return
+		}
+		if got := r.Header.Get("If-Match"); got != `"1"` {
+			t.Errorf("If-Match = %q, want %q (the revision the fresh read supplied)", got, `"1"`)
+		}
 		body := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(body)
 		if !strings.Contains(string(body), `"autoRestoreEnabled":false`) {

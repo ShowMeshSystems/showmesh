@@ -202,6 +202,7 @@ func cmdPlaylistSet(args []string, stdout, stderr io.Writer, clock func() time.T
 	fs.StringVar(&fppJSON, "fpp-json", "", "the playlist's \"fpp\" binding object, as raw JSON (required when --runner=fpp)")
 	fs.StringVar(&showmeshAudioJSON, "showmesh-audio-json", "", "the playlist's \"showmeshAudio\" object, as raw JSON (showmesh-audio runner only)")
 	fs.StringVar(&entriesJSON, "entries-json", "", "the playlist's \"entries\" array, as raw JSON (required)")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl playlist set [flags] <playlist-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.playlist revision (PUT")
@@ -209,6 +210,8 @@ func cmdPlaylistSet(args []string, stdout, stderr io.Writer, clock func() time.T
 		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: this command never reads the playlist's")
 		_, _ = fmt.Fprintln(stderr, "current definition first. --entries-json is the whole entries array, e.g.:")
 		_, _ = fmt.Fprintln(stderr, `  '[{"id":"e1","cue":"thriller","fpp":{"section":"mainPlaylist","position":0}}]'`)
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this playlist), refusing with")
+		_, _ = fmt.Fprintln(stderr, "a 409 if it changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -273,8 +276,21 @@ func cmdPlaylistSet(args []string, stdout, stderr io.Writer, clock func() time.T
 		body.ShowmeshAudio = json.RawMessage(showmeshAudioJSON)
 	}
 
+	apiPath := "/api/v1/config/show.playlist/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r showPlaylistConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "playlist set", err)
+	}
+
 	var resp showPlaylistConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.playlist/"+url.PathEscape(id), body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "playlist set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

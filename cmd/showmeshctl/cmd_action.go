@@ -203,6 +203,7 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	fs, g := newFlagSet("showmeshctl action put", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON show.action payload; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action put [flags] <action-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.action configuration revision")
@@ -211,6 +212,9 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "target. Validated before activation: an invalid payload, or a reference")
 		_, _ = fmt.Fprintln(stderr, "that does not resolve, is rejected and appends no revision (ADR-009).")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"action show --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is \"action show --output json\"'s own shape, otherwise a fresh read), refusing")
+		_, _ = fmt.Fprintln(stderr, "with a 409 if the action changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -230,6 +234,7 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	if err != nil {
 		return reportError(stderr, "action put", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
 	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "action put", newCLIError(exitUsage, "%v", err))
@@ -251,8 +256,21 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	apiPath := "/api/v1/config/show.action/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r showActionConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "action put", err)
+	}
+
 	var resp showActionConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.action/"+url.PathEscape(id), json.RawMessage(raw), &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, json.RawMessage(raw), &resp); err != nil {
 		return reportError(stderr, "action put", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

@@ -176,7 +176,7 @@ func (c *client) getRaw(ctx context.Context, apiPath string, query url.Values) (
 // write still reaches the coordinator and gets back a real 401, exactly
 // like every other path this program does not special-case.
 func (c *client) writeJSON(ctx context.Context, method, apiPath string, body, out any) error {
-	respBody, err := c.doWithBody(ctx, method, apiPath, body)
+	respBody, err := c.doWithBody(ctx, method, apiPath, body, nil)
 	if err != nil {
 		return err
 	}
@@ -189,9 +189,21 @@ func (c *client) writeJSON(ctx context.Context, method, apiPath string, body, ou
 	return nil
 }
 
-// putJSON is `config set`'s write (Step 7 seam A).
-func (c *client) putJSON(ctx context.Context, apiPath string, body, out any) error {
-	return c.writeJSON(ctx, http.MethodPut, apiPath, body, out)
+// putJSON is `config set`'s write (Step 7 seam A), and every other
+// config-write command's. ifMatch, when non-empty, is sent as the exact
+// If-Match header value (see ifMatchHeaderValue): the revision precondition
+// every config PUT the coordinator guards with parseRevisionPrecondition
+// (internal/coordinator/api/showconfig.go) accepts, so a script that reads
+// an object, waits, and writes it back cannot silently overwrite whatever
+// an operator changed in between. ifMatch is "" for a path
+// parseRevisionPrecondition does not guard at all (principals/{id}/role)
+// and for a caller's own --force, which skips the check entirely.
+func (c *client) putJSON(ctx context.Context, apiPath, ifMatch string, body, out any) error {
+	var headers map[string]string
+	if ifMatch != "" {
+		headers = map[string]string{"If-Match": ifMatch}
+	}
+	return c.writeJSONHeaders(ctx, http.MethodPut, apiPath, body, headers, out)
 }
 
 // postJSON is `discover`/`declare` (seam B) and `fpp stop-playlist`
@@ -207,13 +219,33 @@ func (c *client) deleteJSON(ctx context.Context, apiPath string, body, out any) 
 	return c.writeJSON(ctx, http.MethodDelete, apiPath, body, out)
 }
 
+// writeJSONHeaders is writeJSON plus caller-supplied extra request
+// headers (nil for none): putJSON's own building block for If-Match,
+// kept separate from writeJSON so postJSON/deleteJSON, which never send
+// extra headers, stay simple call sites.
+func (c *client) writeJSONHeaders(ctx context.Context, method, apiPath string, body any, headers map[string]string, out any) error {
+	respBody, err := c.doWithBody(ctx, method, apiPath, body, headers)
+	if err != nil {
+		return err
+	}
+	if out == nil || len(respBody) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return newCLIError(exitAPIError, "decoding response from %s: %v", c.endpoint(apiPath, nil), err)
+	}
+	return nil
+}
+
 // doWithBody is [client.getRaw]'s POST/DELETE sibling: identical request
 // construction, header application, bounded read, and success/problem
-// split, plus a JSON-encoded request body when body is non-nil. Returns an
-// empty (not nil) slice, no error, for a success response with an empty
-// body (e.g. this contract's 204s), matching getRaw's own posture of
-// returning exactly what the server sent on success.
-func (c *client) doWithBody(ctx context.Context, method, apiPath string, body any) ([]byte, error) {
+// split, plus a JSON-encoded request body when body is non-nil, plus any
+// caller-supplied extra headers (nil for none: putJSON's If-Match is the
+// only caller that passes one). Returns an empty (not nil) slice, no
+// error, for a success response with an empty body (e.g. this contract's
+// 204s), matching getRaw's own posture of returning exactly what the
+// server sent on success.
+func (c *client) doWithBody(ctx context.Context, method, apiPath string, body any, headers map[string]string) ([]byte, error) {
 	var reqBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -230,6 +262,9 @@ func (c *client) doWithBody(ctx context.Context, method, apiPath string, body an
 	c.applyHeaders(req)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -322,6 +357,15 @@ func decodeProblemError(resp *http.Response, body []byte) error {
 	msg := p.Title
 	if p.Detail != "" {
 		msg = fmt.Sprintf("%s: %s", p.Title, p.Detail)
+	}
+	if p.Type == problemConfigRevisionPreconditionFailed {
+		// p.Detail (surfaced above, verbatim, not reparsed) already names
+		// the object's current revision: configRevisionConflictProblem's
+		// own "its current revision is N". This only adds the generic
+		// remedy: re-read the object with its matching "get"/"show"
+		// command, then retry the write.
+		msg = fmt.Sprintf("%s (someone else changed this object since it was last read; run the matching "+
+			"\"get\" or \"show\" command to see its current revision, then retry the write)", msg)
 	}
 	if p.Type == problemUnsupportedAPIVersion && len(p.SupportedVersions) > 0 {
 		msg = fmt.Sprintf("%s (this CLI requested version %s; coordinator supports %v)", msg, clientAPIVersion, p.SupportedVersions)

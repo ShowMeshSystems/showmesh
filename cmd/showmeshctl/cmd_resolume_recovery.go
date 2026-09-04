@@ -233,9 +233,12 @@ func cmdResolumeRecoverySetToggle(args []string, stdout, stderr io.Writer, clock
 		label = "showmeshctl resolume recovery disable"
 	}
 	fs, g := newFlagSet(label, stderr)
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: %s [flags]\n", label)
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new resolume.recovery configuration revision (requires config:write, admin only).")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -256,8 +259,21 @@ func cmdResolumeRecoverySetToggle(args []string, stdout, stderr io.Writer, clock
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/resolume.recovery"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r resolumeRecoveryConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, label, err)
+	}
+
 	var resp resolumeRecoveryConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/resolume.recovery", configResolumeRecoveryPayload{AutoRestoreEnabled: enabled}, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, configResolumeRecoveryPayload{AutoRestoreEnabled: enabled}, &resp); err != nil {
 		return reportError(stderr, label, err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

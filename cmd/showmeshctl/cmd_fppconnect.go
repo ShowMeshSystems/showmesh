@@ -264,6 +264,7 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 	fs, g := newFlagSet("showmeshctl fppconnect settings set", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON file matching configFPPConnectSettingsPayload; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fppconnect settings set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new fppconnect.settings configuration revision (requires")
@@ -273,6 +274,9 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"fppconnect settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -290,6 +294,7 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 	if err != nil {
 		return reportError(stderr, "fppconnect settings set", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
 	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "fppconnect settings set", newCLIError(exitUsage, "%v", err))
@@ -306,8 +311,21 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/fppconnect.settings"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r fppConnectSettingsConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "fppconnect settings set", err)
+	}
+
 	var resp fppConnectSettingsConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/fppconnect.settings", json.RawMessage(raw), &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, json.RawMessage(raw), &resp); err != nil {
 		return reportError(stderr, "fppconnect settings set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
