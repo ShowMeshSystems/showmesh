@@ -356,6 +356,8 @@ Commands:
   audio node revisions <nodeId>        list audio.node revision history, newest first
   audio node delete --confirm <nodeId> tombstone this object (write); a later "audio node
                                        set" on the same id un-deletes it
+  audio session show [sessionId]        show a session's audio_session.* observations (read,
+                                        open, no node scope); all sessions if id omitted
   audio session apply <nodeId> <sessionId> [params-json]
                                         dispatch audio.session.apply (write, requires audio:command)
   audio session prepare <nodeId> <sessionId> [params-json]
