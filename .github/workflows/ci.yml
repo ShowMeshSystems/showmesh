@@ -480,7 +480,9 @@ jobs:
     # instead of failing it. `if: always()` keeps this job running and
     # reporting regardless.
     if: always()
-    timeout-minutes: 10
+    # npm ci alone has taken up to 6 minutes on hosted runners; 10 left the
+    # generated-types check with seconds to spare and cancelled it mid-run.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 

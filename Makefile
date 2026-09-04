@@ -192,7 +192,11 @@ ui-node-check:
 
 .PHONY: ui-install
 ui-install: ui-node-check
-	cd ui && npm ci
+	@if [ ui/node_modules/.package-lock.json -nt ui/package-lock.json ]; then \
+		echo "ui: node_modules is current with package-lock.json, skipping npm ci"; \
+	else \
+		cd ui && npm ci; \
+	fi
 
 .PHONY: ui-lint
 ui-lint: ui-install
