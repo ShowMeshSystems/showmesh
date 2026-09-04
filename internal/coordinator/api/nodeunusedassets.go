@@ -44,6 +44,19 @@ const auditActionAssetRemove = "asset.remove"
 // test can shrink it deterministically.
 var assetRemoveConfirmDeadline = 15 * time.Second
 
+// assetRemoveHTTPWriteDeadlineMargin matches cueCatalogDeployHTTPWriteDeadlineMargin
+// (cuecatalogdeploy.go) - this route's own AwaitResponse shape mirrors that
+// file's, on this file's own top comment.
+const assetRemoveHTTPWriteDeadlineMargin = 10 * time.Second
+
+// assetRemoveHTTPWriteDeadline bounds this endpoint's own HTTP write
+// deadline, set before dispatch, mirroring cueCatalogDeployHTTPWriteDeadline's
+// identical reasoning for the identical hazard. Derived from
+// assetRemoveConfirmDeadline itself, never a fixed constant.
+func assetRemoveHTTPWriteDeadline() time.Duration {
+	return assetRemoveConfirmDeadline + assetRemoveHTTPWriteDeadlineMargin
+}
+
 // assetRemoveWireDeadline bounds how stale a removal dispatch may be before
 // the agent refuses it, mirroring cueCatalogDeployWireDeadline.
 const assetRemoveWireDeadline = 60 * time.Second
@@ -162,6 +175,7 @@ type removeNodeAssetResultPayload struct {
 
 func (h *handlers) handlePostRemoveNodeAsset(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(assetRemoveHTTPWriteDeadline()))
 	ctx := r.Context()
 	nodeID := r.PathValue("nodeId")
 

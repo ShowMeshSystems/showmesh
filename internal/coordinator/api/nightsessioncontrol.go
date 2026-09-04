@@ -192,6 +192,33 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 
 const maxNightCommandRequestBodyBytes = 4 << 10
 
+// nightCommandHTTPWriteDeadlineMargin matches fppcommand_handler.go's own
+// 30s margin - the closest precedent for "one write deadline, not a series
+// of resets" over a single handler's own post-wait work (here, the
+// AuditedWrite transaction nightRunExempt/nightRunGated runs after the
+// live interlock dispatch below has already returned).
+const nightCommandHTTPWriteDeadlineMargin = 30 * time.Second
+
+// nightCommandHTTPWriteDeadline bounds handleNightCommand's own HTTP write
+// deadline, set before dispatch - mirroring emergencyStopHTTPWriteDeadline's
+// identical reasoning for the identical hazard: internal/coordinator/httpapi.
+// NewServer's shared http.Server.WriteTimeout would otherwise sever the
+// connection out from under a still-working live interlock dispatch.
+// prepare-site, fade-out-night, power-down-presentation, and run-readiness
+// each dispatch their own phase's live interlock evidence OUTSIDE any
+// transaction (their own doc comments), bounded by
+// nightBoundInterlockDispatch's nightInterlockAggregateDispatchBudget
+// (nightinterlock.go) - the actually configured source that dispatch
+// itself is bounded by, never a fresh constant re-derived here, so a
+// larger test-shrunk (or future-configured) budget carries through
+// automatically. start-preshow/start-night/end-session/request-final-show
+// never dispatch outside their own transaction (Invariant 7,
+// handleNightCommand's own doc comment), so this bound is this handler's
+// single worst case across every command it serves, not a per-command one.
+func nightCommandHTTPWriteDeadline() time.Duration {
+	return nightInterlockAggregateDispatchBudget + nightCommandHTTPWriteDeadlineMargin
+}
+
 // decodeNightCommandBody reads the optional {"idempotencyKey": string,
 // "interlockOverrides": [{"rule": string, "reason": string}]?,
 // "skipEnterShowLead": bool?} body. An absent or empty body is valid:
@@ -254,6 +281,7 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 // anything beyond the transaction itself.
 func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(nightCommandHTTPWriteDeadline()))
 	ctx := r.Context()
 	cmd := r.PathValue("command")
 	if !validNightCommands[cmd] {
