@@ -13,6 +13,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // errFakeResolumeDispatch is this file's own injected follow-up failure,
@@ -46,7 +47,7 @@ func (f *emergencyStopFixture) sentCommands() []string {
 
 func newEmergencyStopFixture(t *testing.T, now time.Time) *emergencyStopFixture {
 	t.Helper()
-	return newEmergencyStopFixtureWithDeps(t, now, nil, nil, "player-01")
+	return newEmergencyStopFixtureWithDeps(t, now, nil, nil, nil, nil, "player-01")
 }
 
 // newEmergencyStopFixtureWithInstances builds count configured FPP
@@ -58,16 +59,20 @@ func newEmergencyStopFixtureWithInstances(t *testing.T, now time.Time, count int
 	for i := range ids {
 		ids[i] = fmt.Sprintf("player-%02d", i+1)
 	}
-	return newEmergencyStopFixtureWithDeps(t, now, nil, nil, ids...)
+	return newEmergencyStopFixtureWithDeps(t, now, nil, nil, nil, nil, ids...)
 }
 
 // newEmergencyStopFixtureWithDeps builds the fixture with caller-supplied
-// FPPLister/NightSessionStore overrides (e.g. one that errors, for this
-// file's own blocking-1/blocking-2 coverage), or, when either is nil, the
-// default: a fake FPP pointing at a fresh httptest server with one
-// FPPInstanceView per id in instanceIDs, and the real store for night
-// sessions.
-func newEmergencyStopFixtureWithDeps(t *testing.T, now time.Time, fpp FPPLister, nightSessions NightSessionStore, instanceIDs ...string) *emergencyStopFixture {
+// FPPLister/NightSessionStore/ResolumeLister/AudioSessionPublisher
+// overrides (e.g. one that errors, for this file's own blocking-1/
+// blocking-2 coverage, or a fakeResolumeLister/fakeAudioPublisher
+// carrying configured Resolume instances or canned node results for this
+// file's own three-target-kind coverage), or, when any is nil, that
+// dependency's own no-op default (Dependencies.withDefaults' "nothing
+// configured" behavior - a real, honest empty result, never an error): a
+// fake FPP pointing at a fresh httptest server with one FPPInstanceView
+// per id in instanceIDs, and the real store for night sessions.
+func newEmergencyStopFixtureWithDeps(t *testing.T, now time.Time, fpp FPPLister, nightSessions NightSessionStore, resolumeLister ResolumeLister, audioPub AudioSessionPublisher, instanceIDs ...string) *emergencyStopFixture {
 	t.Helper()
 	f := &emergencyStopFixture{}
 
@@ -118,6 +123,7 @@ func newEmergencyStopFixtureWithDeps(t *testing.T, now time.Time, fpp FPPLister,
 		FPP:      workingFPP,
 		Identity: svc, Config: st, Commands: st, NightSessions: st,
 		Macros: &fakeMacroRunner{}, ResolumeActions: f.resolume,
+		Resolume: resolumeLister, AudioPublisher: audioPub,
 	}.withDefaults(), Options{Clock: fixedClock(now), Logger: testLogger()})
 	mustPutShow(t, setupAPI, f.adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutAction(t, setupAPI, f.adminToken, "worklights-on", validShowActionResolumeBlackoutBody)
@@ -128,6 +134,7 @@ func newEmergencyStopFixtureWithDeps(t *testing.T, now time.Time, fpp FPPLister,
 		FPP:      fpp,
 		Identity: svc, Config: st, Commands: st, NightSessions: nightSessions,
 		Macros: &fakeMacroRunner{}, ResolumeActions: f.resolume,
+		Resolume: resolumeLister, AudioPublisher: audioPub,
 	}.withDefaults()
 
 	f.api = New(deps, Options{
@@ -254,6 +261,175 @@ func TestEmergencyStopWithNoActionsConfiguredHasEmptyFollowUps(t *testing.T) {
 	}
 	if f.resolume.callCount() != 0 {
 		t.Fatalf("resolume dispatch calls = %d, want 0", f.resolume.callCount())
+	}
+}
+
+// --- three target kinds, concurrently ---
+
+// stopOutcomesByTargetKind decodes result.stopOutcomes and indexes it by
+// targetKind, failing the test if any kind carries more or less than
+// exactly one entry - every test in this section configures exactly one
+// target per kind, so "more than one" would itself be a defect worth
+// failing loudly on rather than silently taking the first.
+func stopOutcomesByTargetKind(t *testing.T, result map[string]any) map[string]map[string]any {
+	t.Helper()
+	out := map[string]map[string]any{}
+	for _, raw := range result["stopOutcomes"].([]any) {
+		entry := raw.(map[string]any)
+		kind, _ := entry["targetKind"].(string)
+		if _, dup := out[kind]; dup {
+			t.Fatalf("stopOutcomes carries more than one entry for targetKind %q: %v", kind, result["stopOutcomes"])
+		}
+		out[kind] = entry
+	}
+	return out
+}
+
+func audioNodeSilenceConfirmedEvidence() mqttproto.ResultPayload {
+	return mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.audio.silence",
+			Value:  map[string]any{"sessionsFound": float64(0), "sessions": []any{}},
+		},
+	}
+}
+
+// TestEmergencyStopDispatchesToAllThreeTargetKindsConcurrently is this
+// build's own three-family acceptance proof: one configured FPP instance,
+// one declared audio.node, and one configured Resolume instance each get
+// their own stop dispatched, and each outcome carries the RIGHT
+// targetKind - never one kind's outcome mislabeled as another's (mutation
+// M2's own target).
+func TestEmergencyStopDispatchesToAllThreeTargetKindsConcurrently(t *testing.T) {
+	now := time.Now()
+	resolumeLister := &fakeResolumeLister{views: []ResolumeInstanceView{{InstanceID: "arena-1"}}}
+	audioPub := &fakeAudioPublisher{result: audioNodeSilenceConfirmedEvidence()}
+	f := newEmergencyStopFixtureWithDeps(t, now, nil, nil, resolumeLister, audioPub, "player-01")
+	mustPutAudioNodeDirect(t, f.st, "node-a")
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/stop", `{"idempotencyKey":"key-1"}`,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	resp, body := doRawRequest(t, f.api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	stopOutcomes := result["stopOutcomes"].([]any)
+	if len(stopOutcomes) != 3 {
+		t.Fatalf("stopOutcomes has %d entries, want 3 (one fpp, one node, one resolume); got %v", len(stopOutcomes), stopOutcomes)
+	}
+	byKind := stopOutcomesByTargetKind(t, result)
+
+	fpp, ok := byKind["fpp"]
+	if !ok {
+		t.Fatalf("no stopOutcomes entry carries targetKind %q; got %v", "fpp", stopOutcomes)
+	}
+	if fpp["instanceId"] != "player-01" {
+		t.Errorf("fpp entry instanceId = %v, want %q", fpp["instanceId"], "player-01")
+	}
+
+	node, ok := byKind["node"]
+	if !ok {
+		t.Fatalf("no stopOutcomes entry carries targetKind %q; got %v", "node", stopOutcomes)
+	}
+	if node["instanceId"] != "node-a" {
+		t.Errorf("node entry instanceId = %v, want %q", node["instanceId"], "node-a")
+	}
+	if node["outcome"] != "confirmed" {
+		t.Errorf("node entry outcome = %v, want %q", node["outcome"], "confirmed")
+	}
+
+	resolume, ok := byKind["resolume"]
+	if !ok {
+		t.Fatalf("no stopOutcomes entry carries targetKind %q; got %v", "resolume", stopOutcomes)
+	}
+	if resolume["instanceId"] != "arena-1" {
+		t.Errorf("resolume entry instanceId = %v, want %q", resolume["instanceId"], "arena-1")
+	}
+	if resolume["outcome"] != "confirmed" {
+		t.Errorf("resolume entry outcome = %v, want %q", resolume["outcome"], "confirmed")
+	}
+	if audioPub.count() != 1 {
+		t.Fatalf("audio.node.silence publishes = %d, want exactly 1", audioPub.count())
+	}
+	if got := f.resolume.callCount(); got != 1 {
+		t.Fatalf("resolume dispatch calls = %d, want exactly 1 (the emergency stop's own blackout - no follow-up is configured in this test)", got)
+	}
+}
+
+// TestEmergencyStopFailedResolumeBlackoutIsReportedAsAFailedOutcome is
+// mutation M1's own target: a Resolume instance whose blackout dispatch
+// fails must appear in result.stopOutcomes as a "failed" resolume entry,
+// never dropped or silently forced to a success outcome the way a
+// follow-up action's own failure is allowed to be (this build's own
+// degrade-safely rule applies to follow-ups, deliberately NOT to a target
+// kind's own dispatch).
+func TestEmergencyStopFailedResolumeBlackoutIsReportedAsAFailedOutcome(t *testing.T) {
+	now := time.Now()
+	resolumeLister := &fakeResolumeLister{views: []ResolumeInstanceView{{InstanceID: "arena-1"}}}
+	f := newEmergencyStopFixtureWithDeps(t, now, nil, nil, resolumeLister, nil, "player-01")
+	f.resolume.results["blackout"] = ResolumeActionResult{Outcome: ResolumeOutcomeFailed, Reason: "transport error: connection refused"}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/stop", `{"idempotencyKey":"key-1"}`,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	resp, body := doRawRequest(t, f.api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a failed target outcome is reported, never turned into an HTTP error); body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	byKind := stopOutcomesByTargetKind(t, result)
+	resolume, ok := byKind["resolume"]
+	if !ok {
+		t.Fatalf("no stopOutcomes entry carries targetKind %q; got %v", "resolume", result["stopOutcomes"])
+	}
+	if resolume["outcome"] != "failed" {
+		t.Fatalf("resolume entry outcome = %v, want %q; the failed blackout must be reported, not dropped or forced to success", resolume["outcome"], "failed")
+	}
+	if resolume["outcomeReason"] != "transport error: connection refused" {
+		t.Errorf("resolume entry outcomeReason = %v, want the real dispatcher-reported reason", resolume["outcomeReason"])
+	}
+	if resolume["instanceId"] != "arena-1" {
+		t.Errorf("resolume entry instanceId = %v, want %q", resolume["instanceId"], "arena-1")
+	}
+}
+
+// TestEmergencyStopNodeWithAgentPredatingSilenceIsRefusedWithItsOwnReason
+// mirrors TestAudioNodeSilenceDispatchSurfacesAgentRefusalReason
+// (audionodesilence_test.go) at the emergency-stop level: an agent build
+// that predates audio.node.silence refuses it through its own allowlist,
+// and that refusal reason must reach result.stopOutcomes verbatim, never
+// flattened into a generic failure or "unconfirmable".
+func TestEmergencyStopNodeWithAgentPredatingSilenceIsRefusedWithItsOwnReason(t *testing.T) {
+	now := time.Now()
+	const agentReason = `operation "audio.node.silence" is not on the agent's allowlist`
+	audioPub := &fakeAudioPublisher{result: mqttproto.ResultPayload{Outcome: mqttproto.OutcomeRefused, Reason: agentReason}}
+	f := newEmergencyStopFixtureWithDeps(t, now, nil, nil, nil, audioPub, "player-01")
+	mustPutAudioNodeDirect(t, f.st, "node-old")
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/stop", `{"idempotencyKey":"key-1"}`,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	resp, body := doRawRequest(t, f.api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	byKind := stopOutcomesByTargetKind(t, result)
+	node, ok := byKind["node"]
+	if !ok {
+		t.Fatalf("no stopOutcomes entry carries targetKind %q; got %v", "node", result["stopOutcomes"])
+	}
+	if node["outcome"] != "refused" {
+		t.Fatalf("node entry outcome = %v, want %q", node["outcome"], "refused")
+	}
+	if node["outcomeReason"] != agentReason {
+		t.Errorf("node entry outcomeReason = %v, want the agent's own refusal reason %q", node["outcomeReason"], agentReason)
+	}
+	if node["instanceId"] != "node-old" {
+		t.Errorf("node entry instanceId = %v, want %q", node["instanceId"], "node-old")
 	}
 }
 

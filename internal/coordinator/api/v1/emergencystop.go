@@ -50,10 +50,32 @@ type EmergencyStopRequest struct {
 	IdempotencyKey string `json:"idempotencyKey"`
 }
 
-// EmergencyStopInstanceOutcome is one configured FPP instance's own stop
-// dispatch outcome, in [command]'s shared five-word vocabulary.
+// The three target kinds an emergency stop dispatches to, concurrently,
+// at every level: fpp (stopPlaylist to every configured FPP instance),
+// node (audio.node.silence to every declared audio.node), and resolume
+// (resolume.blackout to every configured Resolume instance). These are
+// the SAME spellings already used as store.CommandRecord.TargetKind
+// across this tree (fppcommand_reconcile.go, resolumeaction.go,
+// audionodesilence.go) - never a parallel vocabulary minted for this
+// endpoint alone.
+const (
+	EmergencyStopTargetKindFPP      = "fpp"
+	EmergencyStopTargetKindNode     = "node"
+	EmergencyStopTargetKindResolume = "resolume"
+)
+
+// EmergencyStopInstanceOutcome is one target's own stop dispatch outcome,
+// in [command]'s shared five-word vocabulary - a stopPlaylist against one
+// configured FPP instance (targetKind "fpp"), an audio.node.silence
+// against one declared audio.node (targetKind "node"), or a
+// resolume.blackout against one configured Resolume instance (targetKind
+// "resolume"). instanceId names the target within its own kind (the FPP
+// instance id, the audio.node id, or the Resolume instance id) - never
+// unique across kinds by itself, only the (targetKind, instanceId) pair
+// is.
 type EmergencyStopInstanceOutcome struct {
 	InstanceID    string  `json:"instanceId"`
+	TargetKind    string  `json:"targetKind"`
 	Outcome       string  `json:"outcome"`
 	OutcomeReason string  `json:"outcomeReason"`
 	DispatchedAt  *string `json:"dispatchedAt"`
@@ -90,13 +112,28 @@ type EmergencyStopNightSessionOutcome struct {
 // EmergencyStopResult is the shared result shape every trigger route
 // (stop, stop-power-down, and hard-stop's own fire) answers with.
 //
-// NoInstancesConfigured is the POSITIVE signal that zero FPP instances are
-// configured, distinct from a failure to read the configured instance
-// list: StopOutcomes is a required array and is NEVER null and never
-// silently empty on a failure, so a caller must read
-// NoInstancesConfigured rather than infer "nothing to stop" from an empty
-// StopOutcomes array. A failure to read the instance list is instead
-// reported as one "failed" entry inside StopOutcomes.
+// StopOutcomes carries all three target kinds (fpp, node, resolume)
+// together, in no particular order - a caller groups by
+// EmergencyStopInstanceOutcome.TargetKind if it wants a per-kind view (the
+// UI does; showmeshctl does not). A failure to read one kind's own
+// configured/declared target list is reported as one synthetic "failed"
+// entry of THAT kind inside StopOutcomes, never as an empty result for
+// that kind silently mistaken for "none configured".
+//
+// NoInstancesConfigured is the POSITIVE signal that zero FPP instances
+// specifically are configured, distinct from a failure to read the
+// configured FPP instance list. It keeps this FPP-only meaning now that
+// stopOutcomes carries all three target kinds - it is one signal about
+// one of three kinds, not "nothing was dispatched": a caller must read it
+// rather than infer "no FPP instance was stopped" from an empty
+// StopOutcomes array, and must not infer anything about node or resolume
+// targets from it at all. A declared-node or configured-Resolume-instance
+// list that is genuinely empty produces zero StopOutcomes entries of that
+// kind with no dedicated flag of its own - see [EmergencyStopTargetKindNode]
+// and [EmergencyStopTargetKindResolume]: a read FAILURE for either kind is
+// always distinguishable from a genuine empty list because it always
+// produces one synthetic "failed" entry of that kind, the identical
+// invariant NoInstancesConfigured states for fpp.
 //
 // FollowUpConfigError is non-empty exactly when this level's own
 // show.emergencystop configuration could not be read or decoded, in which

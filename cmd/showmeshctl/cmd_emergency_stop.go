@@ -88,6 +88,7 @@ printed but never changes the exit code.
 // independent transcription, never a shared struct with the coordinator.
 type emergencyStopInstanceOutcome struct {
 	InstanceID    string  `json:"instanceId"`
+	TargetKind    string  `json:"targetKind"`
 	Outcome       string  `json:"outcome"`
 	OutcomeReason string  `json:"outcomeReason"`
 	DispatchedAt  *string `json:"dispatchedAt"`
@@ -313,26 +314,37 @@ func cmdEmergencyStopHardStopFire(args []string, stdout, stderr io.Writer, clock
 // outcome if present, and every follow-up, then returns the exit code
 // StopOutcomes alone determines (exitCodeForEmergencyStopResult).
 func reportEmergencyStopResult(stdout io.Writer, cmdLabel string, result emergencyStopResult) int {
-	// result.NoInstancesConfigured is the ONLY honest "nothing to stop"
-	// signal, never inferred from an empty StopOutcomes array, which a
-	// failure to read the configured instance list also leaves non-empty
-	// (one "failed" entry), never empty. An empty array WITHOUT that flag
-	// set is therefore an ANOMALY, not a quiet success: a coordinator that
-	// predates this field, a truncated response, or something else this
-	// program cannot name. Silence plus exit 0 here would be the exact
-	// defect this whole feature exists to prevent, relocated to the
-	// client, so this is printed loudly and never allowed to exit 0 (see
-	// exitCodeForEmergencyStopResult's own identical check).
+	// result.NoInstancesConfigured is the ONLY honest "nothing to stop [on
+	// FPP]" signal - one of StopOutcomes' three target kinds (fpp, node,
+	// resolume), never inferred from an empty StopOutcomes array, which a
+	// failure to read the configured FPP instance list also leaves
+	// non-empty (one "failed" entry of that kind), never empty. When
+	// NoInstancesConfigured is false, StopOutcomes can therefore never be
+	// entirely empty either (the FPP portion alone always contributes at
+	// least one entry): an empty array in that case is an ANOMALY, not a
+	// quiet success - a coordinator that predates this field, a truncated
+	// response, or something else this program cannot name. Silence plus
+	// exit 0 here would be the exact defect this whole feature exists to
+	// prevent, relocated to the client, so this is printed loudly and
+	// never allowed to exit 0 (see exitCodeForEmergencyStopResult's own
+	// identical check). When NoInstancesConfigured is true and no audio
+	// node or Resolume instance is configured either, StopOutcomes is
+	// genuinely, honestly empty - a real "nothing configured anywhere",
+	// not an anomaly.
 	switch {
 	case result.NoInstancesConfigured:
-		_, _ = fmt.Fprintf(stdout, "%s: no FPP instances are configured; nothing to stop\n", result.Level)
+		_, _ = fmt.Fprintf(stdout, "%s: no FPP instances are configured\n", result.Level)
 	case len(result.StopOutcomes) == 0:
 		_, _ = fmt.Fprintf(stdout, "%s: WARNING: no stop outcomes were reported and noInstancesConfigured is not set; "+
 			"this coordinator may predate this field, or the response is otherwise malformed. Treating this as a "+
 			"failure to determine whether the stop happened, not as a success.\n", result.Level)
 	}
 	for _, o := range result.StopOutcomes {
-		_, _ = fmt.Fprintf(stdout, "%s: %s: %s\n", o.Outcome, o.InstanceID, o.OutcomeReason)
+		kind := o.TargetKind
+		if kind == "" {
+			kind = "fpp" // a coordinator that predates targetKind reports every entry as an FPP instance.
+		}
+		_, _ = fmt.Fprintf(stdout, "%s: %s %s: %s\n", o.Outcome, kind, o.InstanceID, o.OutcomeReason)
 	}
 	if result.NightSession != nil {
 		switch {
