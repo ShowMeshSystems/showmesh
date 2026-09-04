@@ -336,6 +336,12 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		// live, outside any transaction; see
 		// [handlers.nightFadeOutNightCommand]'s own doc comment.
 		out, problem, opErr = h.nightFadeOutNightCommand(ctx, now, issuer, &attributionDegraded, interlockOverrides, callerHasOverrideScope)
+	case cmd == nightCommandStartNight:
+		// May run a fresh run-readiness pass live, outside any transaction,
+		// before entering its own transaction; see
+		// [handlers.nightStartNightCommand]'s own doc comment for when and
+		// why.
+		out, problem, opErr = h.nightStartNightCommand(ctx, now, issuer, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
 	case cmd == nightCommandPowerDownPresentation:
 		// Its own phase="power-down-presentation" interlock evidence is
 		// dispatched live, outside any transaction; see
@@ -350,7 +356,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		})
 	default:
 		out, problem, opErr = h.nightRunGated(ctx, now, cmd, issuer, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
+			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey, interlockOverrides, callerHasOverrideScope)
 		})
 	}
 
@@ -400,15 +406,19 @@ func (h *handlers) nightDecideExemptCommand(ctx context.Context, tx *store.Tx, c
 
 // nightDecideGatedCommand applies invariant 4 (a degraded, non-terminal
 // session refuses every gated command) and then dispatches to
-// start-preshow and start-night, which both gate their own declared
-// phase against a STORED, trusted readiness result
-// ([handlers.nightGatePhaseTx]/[nightEvaluatePhaseInterlockGate]) since
-// both already run inside this transaction. run-readiness and
-// prepare-site are NOT here: both need live evidence dispatched outside
-// any transaction, so handleNightCommand routes them to
-// [handlers.nightRunReadinessCommand] and
-// [handlers.nightPrepareSiteCommand] directly instead.
-func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem, error) {
+// start-preshow, which gates its own declared phase against a STORED,
+// trusted readiness result ([handlers.nightGatePhaseTx]/
+// [nightEvaluatePhaseInterlockGate]) since it already runs inside this
+// transaction. run-readiness and prepare-site are NOT here: both need
+// live evidence dispatched outside any transaction, so handleNightCommand
+// routes them to [handlers.nightRunReadinessCommand] and
+// [handlers.nightPrepareSiteCommand] directly instead. start-night is
+// also not here, for the identical reason as of this seam's own fix: it
+// may need a live run-readiness pass first, so handleNightCommand routes
+// it to [handlers.nightStartNightCommand] directly; that command still
+// reaches [handlers.nightStartNightTx] (this same STORED-gate shape)
+// inside its own transaction once any needed live pass has completed.
+func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
 		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
 		return nightCommandOutcome{}, &p, nil
@@ -416,8 +426,6 @@ func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cm
 	switch cmd {
 	case nightCommandStartPreshow:
 		return h.nightStartPreshow(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
-	case nightCommandStartNight:
-		return h.nightStartNightTx(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
 	}
 	return nightCommandOutcome{}, nil, fmt.Errorf("api: no gated decide function for %q", cmd)
 }
@@ -1063,6 +1071,69 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		p := nightNotReadyProblem("start-night: not ready; operator recovery completes readiness and invokes start-preshow first")
 		return nightCommandOutcome{}, &p, nil
 	}
+}
+
+// nightStartNightCommand is start-night's own top-level entry, mirroring
+// [handlers.nightPrepareSiteCommand] and [handlers.nightRunReadinessCommand]'s
+// own shape: it may dispatch live evidence, outside any store transaction,
+// before entering the transaction [handlers.nightRunGated] wraps
+// [handlers.nightStartNightTx] in.
+//
+// Ordinarily nothing here dispatches anything: no current session, every
+// state but preshow, a missing readiness result, a prior epoch's
+// readiness result, and an already-fresh readiness result are all still
+// decided entirely inside nightStartNightTx's own transaction, unchanged.
+// The one case this adds is a preshow epoch whose own trusted readiness
+// result has gone stale (age past h.nightReadinessMaxAge, and never the
+// negative-age clock-step case, which stays nightStartNightTx's own
+// refusal exactly as before), the bug this seam fixes: a pre-show of one
+// to two hours is the normal case, and refusing outright once a
+// maximum-age measured in minutes had passed made that normal case fail.
+// This runs a fresh run-readiness pass instead, live and outside this
+// transaction for the identical reason
+// [handlers.nightRunReadinessCommand]'s own doc comment gives, mirroring
+// exactly what an operator re-running run-readiness by hand before
+// retrying start-night would produce, including that command's own audit
+// entry and its own phase="run-readiness" interlock gate. A fresh pass
+// that itself refuses or errors is reported here as THAT failure, never
+// the staleness message it replaced; a fresh pass that succeeds leaves a
+// new, zero-age readiness result for nightStartNightTx's own unchanged
+// age and phase="start-night" gate checks to evaluate next.
+//
+// This pre-check reads current state and the stored readiness result
+// without a transaction, so a concurrent write can race it exactly the
+// way nightPrepareSiteTx's own doc comment already names and accepts:
+// nightStartNightTx re-reads both, inside its own transaction, before
+// acting on either.
+func (h *handlers) nightStartNightCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem, error) {
+	current, hasCurrent, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	if err != nil {
+		return nightCommandOutcome{}, nil, err
+	}
+	if hasCurrent && !current.Degraded && current.State == nightStatePreshow {
+		readiness, rerr := h.deps.NightSessions.GetLatestNightReadiness(ctx, current.ID)
+		switch {
+		case rerr == nil && readiness.EpochID == current.ID:
+			age := now.Sub(readiness.CompletedAt)
+			if age > 0 && age > h.nightReadinessMaxAge {
+				if _, problem, err := h.nightRunReadinessCommand(ctx, now, issuer, interlockOverrides, callerHasOverrideScope); err != nil {
+					return nightCommandOutcome{}, nil, err
+				} else if problem != nil {
+					return nightCommandOutcome{}, problem, nil
+				}
+			}
+		case rerr != nil && !errors.Is(rerr, store.ErrNightReadinessNotFound):
+			return nightCommandOutcome{}, nil, rerr
+		}
+	}
+
+	return h.nightRunGated(ctx, now, nightCommandStartNight, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
+			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
+			return nightCommandOutcome{}, &p, nil
+		}
+		return h.nightStartNightTx(ctx, tx, now, cur, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
+	})
 }
 
 func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {

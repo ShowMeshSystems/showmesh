@@ -184,7 +184,7 @@ func (f nightOverrideFlag) Set(s string) error {
 
 func cmdNightStart(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night start", "start-night",
-		"Authorize the night session and begin the first transition (POST\n/api/v1/night/commands/start-night). Requires a completed readiness\nresult from the SAME preparation epoch, within the coordinator's\nconfigured maximum age.\n\nA configured \"block\" interlock for phase start-night is gated against\nthat same readiness result (never a live dispatch here) and can refuse\nthis command (409) unless covered by --override.")
+		"Authorize the night session and begin the first transition (POST\n/api/v1/night/commands/start-night). Requires a completed readiness\nresult from the SAME preparation epoch. When that result is older than\nthe coordinator's configured maximum age, this runs a fresh run-readiness\npass itself before proceeding (a pre-show commonly runs one to two\nhours, well past a maximum age measured in minutes); a fresh pass that\nitself fails refuses this command with THAT failure, never a staleness\nmessage.\n\nA configured \"block\" interlock for phase start-night is gated against\nthe readiness result start-night actually proceeds on (a live re-run's,\nwhen one ran; otherwise the stored one, never a live dispatch of its own)\nand can refuse this command (409) unless covered by --override.")
 }
 
 func cmdNightFinalShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {

@@ -95,6 +95,38 @@ func setupNightInterlockFixture(t *testing.T, phase, onUnavailable string) (api 
 	return api, brokers, operatorToken, adminToken, obsLister
 }
 
+// setupNightInterlockFixtureAdvanceable is setupNightInterlockFixture with
+// a caller-chosen maxAge and a mutable clock exposed via advance, added for
+// this seam's own start-night stale-readiness re-run coverage: proving a
+// live re-run that itself fails is reported as THAT failure, not the
+// staleness message it replaced.
+func setupNightInterlockFixtureAdvanceable(t *testing.T, phase, onUnavailable string, maxAge time.Duration) (api *API, brokers *fakeMQTTBrokerRegistry, operatorToken, adminToken string, obs *fakeObservationLister, advance func(time.Duration)) {
+	t.Helper()
+	advanceFn, clock := mutableClock(testNow)
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken = mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	operatorToken = mustIssueToken(t, svc, operator.ID)
+
+	deps, obsLister := nightControlTestDeps(svc, st)
+	deps.FPP = nightWireFPPForReadiness(t)
+	deps.AssetBackend = nightTestAssetBackend(t)
+	brokers = &fakeMQTTBrokerRegistry{}
+	deps.MQTTBrokers = brokers
+
+	api = New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: maxAge})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
+	mustCreateNightSessionFSEQAsset(t, st, deps.AssetBackend, "halloween-2026", "resting-loop", "player-01")
+	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithCooldownInterlock(phase, onUnavailable))
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	return api, brokers, operatorToken, adminToken, obsLister, advanceFn
+}
+
 func runToPreshowForInterlockTest(t *testing.T, api *API, token string, obs *fakeObservationLister) string {
 	t.Helper()
 	setHealthyFPPReachable(obs, testNow)
@@ -126,6 +158,38 @@ func TestInterlockAllowsStartNightWhenConditionTrue(t *testing.T) {
 	got := mustNightCommand(t, api, opToken, "start-night")
 	if got.Command.Outcome != "applied" {
 		t.Fatalf("start-night outcome = %q, want applied when the interlock condition holds true", got.Command.Outcome)
+	}
+}
+
+// TestInterlockFreshReadinessRerunOnStaleStartNightReportsTheFreshFailure is
+// this seam's own required coverage: a stale readiness result plus a
+// FAILING fresh re-run must refuse start-night with THAT failure, never the
+// staleness text it replaced. The interlock rule declares phase
+// run-readiness (not start-night), so a withhold here can only have come
+// from the live run-readiness pass start-night triggers on finding its
+// stored result stale, never from start-night's own separate phase gate -
+// this proves specifically that a fresh run-readiness refusal surfaces as
+// itself. The condition passes before staleness (so preshow is reached at
+// all) and is flipped to false only after the clock has advanced past the
+// configured maximum age.
+func TestInterlockFreshReadinessRerunOnStaleStartNightReportsTheFreshFailure(t *testing.T) {
+	api, brokers, opToken, _, obs, advance := setupNightInterlockFixtureAdvanceable(t, "run-readiness", "block", time.Minute)
+	brokers.msg = broker.Message{Payload: []byte("true")}
+	runToPreshowForInterlockTest(t, api, opToken, obs)
+
+	advance(2 * time.Minute)
+	setHealthyFPPReachable(obs, testNow.Add(2*time.Minute))
+	brokers.msg = broker.Message{Payload: []byte("false")}
+
+	status, problem := nightCommandProblem(t, api, opToken, "start-night")
+	if status != http.StatusConflict {
+		t.Fatalf("start-night after a stale readiness result and a failing fresh re-run: status = %d, want 409; problem: %+v", status, problem)
+	}
+	if strings.Contains(problem.Detail, "past the configured maximum age") {
+		t.Fatalf("start-night reported the staleness message instead of the fresh re-run's own failure: %q", problem.Detail)
+	}
+	if !containsAll(problem.Detail, "cooldown") {
+		t.Fatalf("problem detail does not name the rule the FRESH re-run withheld: %+v", problem)
 	}
 }
 

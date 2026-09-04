@@ -332,14 +332,39 @@ func TestInvariant2_StartNightRejectsWithoutReadiness(t *testing.T) {
 	}
 }
 
-func TestInvariant2_StartNightRejectsStaleReadiness(t *testing.T) {
+// TestInvariant2_StaleReadinessPassingRerunStartsTheNight is this seam's own
+// fix: a pre-show of one to two hours is the normal case, so start-night
+// finding the stored readiness result older than the configured maximum age
+// must run a fresh readiness pass and proceed on it, not refuse outright.
+// completedAt moving forward past the original stale timestamp is direct
+// evidence the fresh pass actually ran, not merely that the age check was
+// skipped.
+func TestInvariant2_StaleReadinessPassingRerunStartsTheNight(t *testing.T) {
 	api, _, token, advance, obs := setupNightControlFixture(t, time.Minute)
 	runToPreshow(t, api, token, obs, testNow)
-	advance(2 * time.Minute)
 
-	status, p := nightCommandProblem(t, api, token, "start-night")
-	if status != http.StatusConflict || p.Type != ProblemTypeNightNotReady {
-		t.Fatalf("start-night with stale readiness: status=%d type=%q, want 409/%s", status, p.Type, ProblemTypeNightNotReady)
+	before := mustGetNightSession(t, api)
+	staleAt, err := time.Parse(time.RFC3339Nano, before.Session.Readiness.CompletedAt)
+	if err != nil {
+		t.Fatalf("parse readiness completedAt: %v", err)
+	}
+
+	advance(2 * time.Minute)
+	setHealthyFPPReachable(obs, testNow.Add(2*time.Minute))
+
+	got := mustNightCommand(t, api, token, "start-night")
+	if got.Command.Outcome != nightOutcomeApplied {
+		t.Fatalf("start-night with a stale readiness result and a passing fresh re-run: outcome = %q, want %s", got.Command.Outcome, nightOutcomeApplied)
+	}
+	if got.Session.State != nightStateTransitionToShow {
+		t.Fatalf("start-night with a stale readiness result and a passing fresh re-run: state = %q, want %s", got.Session.State, nightStateTransitionToShow)
+	}
+	freshAt, err := time.Parse(time.RFC3339Nano, got.Session.Readiness.CompletedAt)
+	if err != nil {
+		t.Fatalf("parse post-start-night readiness completedAt: %v", err)
+	}
+	if !freshAt.After(staleAt) {
+		t.Fatalf("start-night on a stale readiness result did not run a fresh pass: completedAt stayed %s, want newer than %s", freshAt, staleAt)
 	}
 }
 
