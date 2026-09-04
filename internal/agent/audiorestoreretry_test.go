@@ -392,11 +392,20 @@ func TestRunAudioRestoreRetryTickBoundsAutomaticAttempts(t *testing.T) {
 	nowFn := func() time.Time { return now }
 
 	// Drive one tick per scheduled delay, always landing exactly on (or
-	// past) the due time, until the schedule is exhausted.
+	// past) the due time, until the schedule is exhausted. Every attempt
+	// before the last one must read "scheduled" at node level too --
+	// checked on the FIRST iteration only, so this loop still proves the
+	// bounded-attempts behavior the rest of the test exists for without
+	// repeating the same assertion every pass.
 	for i, delay := range audioRestoreRetryDelays {
 		runAudioRestoreRetryTick(m2, currentNode, rebuild, switchable.Available, nowFn, now, &retry, nil)
 		if calls != i+1 {
 			t.Fatalf("calls after scheduled attempt %d = %d, want %d", i+1, calls, i+1)
+		}
+		if i == 0 {
+			if state, _, next, _ := m2.NodeRestoreRetryStatus(now); state != audio.EngineRestoreScheduled || next <= 0 {
+				t.Fatalf("NodeRestoreRetryStatus after attempt 1 = (state=%q next=%v), want (%q, >0)", state, next, audio.EngineRestoreScheduled)
+			}
 		}
 		now = now.Add(delay)
 	}
@@ -415,6 +424,17 @@ func TestRunAudioRestoreRetryTickBoundsAutomaticAttempts(t *testing.T) {
 		t.Fatalf("last_reason after the schedule is exhausted is empty, want the final attempt's own reason preserved")
 	}
 
+	// The property this whole issue is about: exhausted must be
+	// DISTINGUISHABLE from scheduled at node level, not just a next_attempt_ms
+	// of zero that also happens once per-session on a fresh session.
+	nodeState, nodeAttempts, nodeNext, nodeReason := m2.NodeRestoreRetryStatus(now)
+	if nodeState != audio.EngineRestoreExhausted {
+		t.Fatalf("NodeRestoreRetryStatus state after the schedule is exhausted = %q, want %q (distinguishable from %q)", nodeState, audio.EngineRestoreExhausted, audio.EngineRestoreScheduled)
+	}
+	if nodeAttempts != len(audioRestoreRetryDelays) || nodeNext != 0 || nodeReason == "" {
+		t.Fatalf("NodeRestoreRetryStatus after exhaustion = (attempts=%d next=%v reason=%q), want (%d, 0, non-empty)", nodeAttempts, nodeNext, nodeReason, len(audioRestoreRetryDelays))
+	}
+
 	// Further due ticks must not call rebuild again, and must not
 	// disturb the exhausted status already reported.
 	callsAtBound := calls
@@ -428,6 +448,9 @@ func TestRunAudioRestoreRetryTickBoundsAutomaticAttempts(t *testing.T) {
 	attempts, next, _ = m2.RestoreRetryStatus(id, now)
 	if attempts != len(audioRestoreRetryDelays) || next != 0 {
 		t.Fatalf("RestoreRetryStatus after further idle ticks past exhaustion = (attempts=%d next=%v), want unchanged (%d, 0)", attempts, next, len(audioRestoreRetryDelays))
+	}
+	if state, _, _, _ := m2.NodeRestoreRetryStatus(now); state != audio.EngineRestoreExhausted {
+		t.Fatalf("NodeRestoreRetryStatus state after further idle ticks past exhaustion = %q, want unchanged %q", state, audio.EngineRestoreExhausted)
 	}
 }
 
@@ -479,6 +502,19 @@ func TestRunAudioRestoreRetryTickRebuildsAnUnavailableEngineWithNoPendingRestore
 		t.Fatalf("engine reports available after tick 1, want still unavailable (no probe evidence yet)")
 	}
 
+	// The whole point of this test: with NO session on the node at all
+	// (PendingRestoreCount is 0 throughout), the driver's attempts and
+	// countdown must still be visible at NODE level -- this is exactly
+	// the evidence [audio.Manager.RestoreRetryStatus] alone drops, since
+	// it only ever writes to sessions in m.pendingEngineRestore.
+	state, attempts, next, reason := m2.NodeRestoreRetryStatus(now)
+	if state != audio.EngineRestoreScheduled {
+		t.Fatalf("NodeRestoreRetryStatus state after tick 1 = %q, want %q", state, audio.EngineRestoreScheduled)
+	}
+	if attempts != 1 || next <= 0 || reason == "" {
+		t.Fatalf("NodeRestoreRetryStatus after tick 1 = (attempts=%d next=%v reason=%q), want (1, >0, non-empty)", attempts, next, reason)
+	}
+
 	// The device enumerates: discovery now has probe evidence, and the
 	// rebuild will bind a genuinely available engine.
 	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
@@ -498,6 +534,10 @@ func TestRunAudioRestoreRetryTickRebuildsAnUnavailableEngineWithNoPendingRestore
 	}
 	if retry.attempts != 0 {
 		t.Fatalf("attempts after resolution = %d, want 0 (reset)", retry.attempts)
+	}
+	state, attempts, next, reason = m2.NodeRestoreRetryStatus(now)
+	if state != audio.EngineRestoreIdle || attempts != 0 || next != 0 || reason != "" {
+		t.Fatalf("NodeRestoreRetryStatus after resolution = (state=%q attempts=%d next=%v reason=%q), want (%q, 0, 0, \"\")", state, attempts, next, reason, audio.EngineRestoreIdle)
 	}
 }
 
@@ -538,6 +578,13 @@ func TestRunAudioRestoreRetryTickDoesNothingOnAHealthyNode(t *testing.T) {
 	}
 	if retry.attempts != 0 {
 		t.Fatalf("attempts on a healthy node = %d, want 0", retry.attempts)
+	}
+
+	// A node that has never had an engine problem reads "idle" -- never
+	// "exhausted", and never an empty string that a wire consumer would
+	// have to guess the meaning of.
+	if state, attempts, next, reason := m2.NodeRestoreRetryStatus(now); state != audio.EngineRestoreIdle || attempts != 0 || next != 0 || reason != "" {
+		t.Fatalf("NodeRestoreRetryStatus on a node that never had an engine problem = (state=%q attempts=%d next=%v reason=%q), want (%q, 0, 0, \"\")", state, attempts, next, reason, audio.EngineRestoreIdle)
 	}
 }
 

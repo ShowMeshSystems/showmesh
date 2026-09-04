@@ -1591,6 +1591,39 @@ type AudioPayload struct {
 	// reporting it dropped or skipped a buffer to keep pace with the
 	// clock. Meaningful only when EngineGlitchCountsKnown is true.
 	EngineQosDropCount uint64 `json:"engineQosDropCount"`
+
+	// EngineRestoreState, EngineRestoreAttempts, EngineRestoreNextAttemptMs,
+	// and EngineRestoreLastReason are internal/agent's own automatic
+	// restore-retry driver's status for this NODE as a whole
+	// (docs/build/IDENTIFIER-REGISTER.md node.audio.engine.restore.state/
+	// .attempts/.next_attempt_ms/.last_reason) -- the node-level
+	// counterpart to AudioSessionReport's identical Restore* fields,
+	// which only ever cover a session with a queued restore: a delivered
+	// audio.node binding with no persisted session has none, and this is
+	// its only remaining wire evidence.
+	//
+	// EngineRestoreState is one of "idle" (no automatic attempt has ever
+	// been made), "scheduled" (the last attempt did not fully resolve
+	// and another one will run), or "exhausted" (the bounded schedule's
+	// last delay has been used with no further automatic attempt
+	// coming). All four fields are OPTIONAL: an agent built before this
+	// existed omits them, and an empty/absent EngineRestoreState reads
+	// as "idle" -- see Validate. A countdown or a boolean alone cannot
+	// express "scheduled" vs "exhausted"; that is the whole reason this
+	// is a three-value string instead.
+	//
+	// EngineRestoreAttempts and EngineRestoreNextAttemptMs mean exactly
+	// what AudioSessionReport.RestoreAttempts/RestoreNextAttemptMs mean,
+	// one level up: how many automatic attempts since this node's status
+	// was last cleared, and a countdown in milliseconds to the next
+	// backed-off attempt (0 both before the first attempt and once the
+	// schedule is exhausted -- EngineRestoreState is what disambiguates
+	// those two, not this field). EngineRestoreLastReason is required
+	// whenever EngineRestoreAttempts is nonzero.
+	EngineRestoreState         string `json:"engineRestoreState"`
+	EngineRestoreAttempts      int64  `json:"engineRestoreAttempts"`
+	EngineRestoreNextAttemptMs int64  `json:"engineRestoreNextAttemptMs"`
+	EngineRestoreLastReason    string `json:"engineRestoreLastReason"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device
@@ -1670,6 +1703,16 @@ func (p AudioPayload) Validate() error {
 		p.EngineOtherWarningCount != 0 || p.EngineQosDropCount != 0 {
 		return fmt.Errorf("%w: engine glitch counts/since must be zero/nil when engineGlitchCountsKnown is false", ErrPayloadInconsistentField)
 	}
+	switch p.EngineRestoreState {
+	case "", "idle", "scheduled", "exhausted":
+		// "" is an older agent's omitted field, read as "idle" -- see
+		// EngineRestoreState's own doc comment. Never required.
+	default:
+		return fmt.Errorf("%w: %q", ErrPayloadInvalidEngineRestoreState, p.EngineRestoreState)
+	}
+	if p.EngineRestoreAttempts > 0 && p.EngineRestoreLastReason == "" {
+		return fmt.Errorf("%w: engineRestoreLastReason (required whenever engineRestoreAttempts is nonzero)", ErrPayloadMissingField)
+	}
 	return nil
 }
 
@@ -1678,6 +1721,12 @@ func (p AudioPayload) Validate() error {
 // closed vocabulary, matching [ErrPayloadInvalidOutcome]'s identical
 // closed-vocabulary role for [ResultPayload].
 var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognized value")
+
+// ErrPayloadInvalidEngineRestoreState is wrapped by [AudioPayload.Validate]
+// when EngineRestoreState is set to something other than "", "idle",
+// "scheduled", or "exhausted" -- the closed vocabulary
+// node.audio.engine.restore.state carries (docs/build/IDENTIFIER-REGISTER.md).
+var ErrPayloadInvalidEngineRestoreState = errors.New("mqttproto: engineRestoreState is not a recognized value")
 
 // ErrPayloadInconsistentField is wrapped by [AudioPayload.Validate] when a
 // field that means "not collected" (e.g. engineGlitchCountsKnown false)

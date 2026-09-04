@@ -66,6 +66,14 @@ type Manager struct {
 	// zero.
 	restoreRetryStatusBySession map[pkgaudio.SessionID]restoreRetryStatus
 
+	// nodeRestoreRetry is internal/agent's own automatic restore-retry
+	// driver's status for this node as a whole -- see restoreretry.go's
+	// SetNodeRestoreRetryStatus/ClearNodeRestoreRetryStatus and
+	// NodeRestoreRetryStatus. Unlike restoreRetryStatusBySession, this is
+	// never empty-by-construction on a node with no pending restore: the
+	// zero value already reads as EngineRestoreIdle.
+	nodeRestoreRetry nodeRestoreRetryStatus
+
 	// rebindMu makes invalidate-Set-retry one atomic unit across
 	// concurrent RebindEngine calls. Two audio.node.configure commands
 	// delivered back to back produce genuinely concurrent calls (MQTT

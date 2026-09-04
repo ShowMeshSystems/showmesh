@@ -183,6 +183,49 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	}
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
+	obs = append(obs, engineRestoreObservations(nodeID, p, observedAt, rep)...)
+
+	return obs
+}
+
+// engineRestoreObservations renders the four node.audio.engine.restore.*
+// signals (see signals.go). State and Attempts are always collected --
+// "idle"/0 are real facts about a node that has never had an engine
+// problem, never "not collected" -- following [AudioPayload.
+// EngineRestoreState]'s own "\"\" reads as idle" rule for a report from
+// an agent built before these fields existed. NextAttemptMs is collected
+// only while State is "scheduled": 0 is otherwise genuinely ambiguous
+// between "never started" and "gave up", which State (not this signal)
+// exists to resolve, so reporting it not_collected rather than a
+// fabricated 0 keeps that resolution honest. LastReason is collected
+// only once Attempts is nonzero, matching sessionObservations' identical
+// RestoreLastReason gate one resource kind down.
+func engineRestoreObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+
+	state := p.EngineRestoreState
+	if state == "" {
+		state = "idle"
+	}
+
+	obs := []observation.Observation{
+		buildValue(nodeID, SignalEngineRestoreState, state, observedAt, rep),
+		buildValue(nodeID, SignalEngineRestoreAttempts, p.EngineRestoreAttempts, observedAt, rep),
+	}
+
+	if state == "scheduled" {
+		obs = append(obs, buildValue(nodeID, SignalEngineRestoreNextAttemptMs, p.EngineRestoreNextAttemptMs, observedAt, rep))
+	} else {
+		reason := "no automatic restore attempt is scheduled: this node's restore-retry driver has not run or has exhausted its bounded schedule"
+		obs = append(obs, notCollected(res, SignalEngineRestoreNextAttemptMs, source, reason, rep.receivedAt))
+	}
+
+	if p.EngineRestoreAttempts > 0 {
+		obs = append(obs, buildValue(nodeID, SignalEngineRestoreLastReason, p.EngineRestoreLastReason, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalEngineRestoreLastReason, source, "no automatic restore attempt has been made on this node", rep.receivedAt))
+	}
 
 	return obs
 }
