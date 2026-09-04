@@ -1074,6 +1074,202 @@ func TestNightTick_LiveStopsBackgroundAudio(t *testing.T) {
 	}
 }
 
+// TestNightTick_BackgroundAudioFadeDownScheduledToCompleteByE is the
+// owner's own "start time minus fade time" applied to the bed. With
+// resting.backgroundAudio.fadeOutMs configured, the fade-down
+// must be dispatched once real clock time reaches E minus fadeOutMs -
+// still while the session is in resting-intershow, well before Live - so
+// the ramp has room to finish BY E rather than only starting there. Real
+// wall-clock times (e minus a duration), table-driven over fadeOutMs and
+// how far before E the tick lands, exercise both sides of that exact
+// boundary: one tick short of the lead must not fire yet, and the lead
+// instant itself (or later) must.
+func TestNightTick_BackgroundAudioFadeDownScheduledToCompleteByE(t *testing.T) {
+	e := time.Date(2026, 10, 31, 20, 5, 0, 0, time.UTC)
+	dispatchedAt := e.Add(-300 * time.Second)
+
+	for _, tc := range []struct {
+		name      string
+		fadeOutMs int
+		beforeE   time.Duration
+		wantDue   bool
+	}{
+		{name: "1s before the 2s lead point (E-3s): not yet due", fadeOutMs: 2000, beforeE: 3 * time.Second, wantDue: false},
+		{name: "exactly at the 2s lead point (E-2s): due", fadeOutMs: 2000, beforeE: 2 * time.Second, wantDue: true},
+		{name: "1s past the 2s lead point (E-1s): due", fadeOutMs: 2000, beforeE: 1 * time.Second, wantDue: true},
+		{name: "1ms before the 200ms lead point: not yet due", fadeOutMs: 200, beforeE: 201 * time.Millisecond, wantDue: false},
+		{name: "exactly at the 200ms lead point: due", fadeOutMs: 200, beforeE: 200 * time.Millisecond, wantDue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, pub, obs := nightBackgroundAudioTestHandlers(t)
+			putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+			putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+			ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, tc.fadeOutMs, 800)
+			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+			playThroughApplyGainStart(t, h, pub, rec)
+
+			now := e.Add(-tc.beforeE)
+			anchor := nightContentAnchor{
+				Purpose: nightAnchorPurposeRestingOneShot, FPPInstanceID: "fpp-main", Playlist: "halloween-resting",
+				Item: "halloween-resting.fseq", DurationMS: 300000, PositionSeconds: 0, PositionMS: 0, PositionMSKnown: true,
+				DispatchedAt: dispatchedAt, ObservedAt: dispatchedAt,
+			}
+			rec.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+			rec.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &e})
+			if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+				t.Fatalf("UpdateNightSession: %v", err)
+			}
+			obs.setObs([]observation.Observation{
+				statusObservation("fpp-main", fppStatusValuePlaying, now),
+				playlistNameObservation("fpp-main", "halloween-resting", now),
+				positionMSObservation("fpp-main", 0, now),
+			})
+
+			pub.result = confirmedResultForAction("gain", nightBackgroundAudioSessionID(rec), "gain")
+			h.nightTick(context.Background(), now)
+
+			got, ok, err := st.GetCurrentNightSession(context.Background())
+			if err != nil || !ok {
+				t.Fatalf("get current session: ok=%v err=%v", ok, err)
+			}
+			if got.State != nightStateRestingIntershow {
+				t.Fatalf("state = %q at %v, want still %q (E itself is %v away)", got.State, now, nightStateRestingIntershow, tc.beforeE)
+			}
+
+			// The forward advance chain also dispatches audio.gain.fade once
+			// the earlier "start" step confirms, since fadeInMs is
+			// configured too (the fade-up half of the pair) - so "due" and
+			// "not due" are told apart by targetGain (0.0 for the fade-down
+			// this test is about), never by action name alone.
+			isFadeDown := pub.lastAction == "audio.gain.fade" && pub.lastParams["targetGain"] == 0.0
+			if tc.wantDue {
+				if !isFadeDown {
+					t.Fatalf("dispatched action at E-%v (lead %dms) = %q targetGain=%v, want audio.gain.fade targetGain=0.0 (the fade-down)", tc.beforeE, tc.fadeOutMs, pub.lastAction, pub.lastParams["targetGain"])
+				}
+				if got := pub.lastParams["durationMs"]; got != float64(tc.fadeOutMs) {
+					t.Fatalf("fade-down durationMs = %v, want %d (the configured fadeOutMs)", got, tc.fadeOutMs)
+				}
+			} else if isFadeDown {
+				t.Fatalf("dispatched action at E-%v (lead %dms) = fade-down (targetGain 0.0), want no fade-down yet", tc.beforeE, tc.fadeOutMs)
+			}
+		})
+	}
+}
+
+// TestNightTick_ReturnToRestingFadesUpExactlyOnceNoFadeDownRemainderStacked
+// checks the owner's report that coming out of a show back to resting
+// plays "the rest of the fade out" and THEN fades back in - two ramps
+// where there should be one transition. This drives the WHOLE round
+// trip through nightTick itself (never calling a background-audio handler
+// directly), exactly as the real night loop would: steady resting
+// playback, into live (fade-down dispatched, withheld from pausing while
+// the node still reports it in_progress, paused only once settled), into
+// transition-to-resting (idempotently still paused - nothing to stack
+// here), back into resting-intershow (resume, then fade-up). The full
+// dispatched sequence is asserted verbatim, so a stacked extra fade-down
+// (or a second fade-down/fade-up pair) immediately before the final
+// fade-up would show up as an unexpected entry, not just a wrong count.
+func TestNightTick_ReturnToRestingFadesUpExactlyOnceNoFadeDownRemainderStacked(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, 200, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+
+	// Reach steady, faded-up resting playback: apply, gain(silence), start,
+	// fade-up to maxGainDb - the entry-side half of the SAME pair this test
+	// is about, already proven in isolation by
+	// TestNightAdvanceBackgroundAudio_GainBeforeStartIsSilentWhenFadeInConfigured.
+	playThroughApplyGainStart(t, h, pub, rec)
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightTick(context.Background(), testNow) // fade-up (fadeInMs configured)
+
+	// Leave resting for a show: fade-down dispatched, withheld from pausing
+	// while still ramping, paused only once the node reports it settled.
+	rec.State = nightStateLive
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightTick(context.Background(), testNow) // fade-down dispatched
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "in_progress", testNow)})
+	h.nightTick(context.Background(), testNow) // withheld: still ramping
+	countBeforeSettle := pub.count()
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow)})
+	pub.result = confirmedResultForAction("pause", sessionID, "started")
+	h.nightTick(context.Background(), testNow) // pause, now that it settled
+	if pub.count() != countBeforeSettle+1 {
+		t.Fatalf("publish count once settled = %d, want %d (exactly one more dispatch: the pause)", pub.count(), countBeforeSettle+1)
+	}
+
+	// The show runs its course, then transition-to-resting: nothing to do
+	// here (already paused and confirmed) - proves this state never
+	// re-triggers a fade-down of its own.
+	rec.State = nightStateTransitionToResting
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	countBeforeReturn := pub.count()
+	h.nightTick(context.Background(), testNow)
+	if pub.count() != countBeforeReturn {
+		t.Fatalf("publish count during transition-to-resting = %d, want unchanged at %d (already paused; nothing to redo)", pub.count(), countBeforeReturn)
+	}
+
+	// Back to resting: resume, then (only once resume confirms) fade-up -
+	// ONE transition, not a fade-down remainder stacked before it.
+	rec.State = nightStateRestingIntershow
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("resume", sessionID, "started")
+	h.nightTick(context.Background(), testNow) // resume
+	if pub.lastAction != "audio.session.resume" {
+		t.Fatalf("dispatched action on return to resting = %q, want audio.session.resume", pub.lastAction)
+	}
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightTick(context.Background(), testNow) // fade-up
+
+	var gotActions []string
+	var gotGains []any
+	for _, d := range pub.dispatched {
+		gotActions = append(gotActions, d.Action)
+		if d.Action == "audio.gain.fade" {
+			gotGains = append(gotGains, d.Params["targetGain"])
+		}
+	}
+	wantActions := []string{
+		"audio.session.apply", "audio.gain.set", "audio.session.start", "audio.gain.fade", // entry: apply, silence, start, fade-up
+		"audio.gain.fade", "audio.session.pause", // exit: fade-down, pause
+		"audio.session.resume", "audio.gain.fade", // return: resume, fade-up - exactly once, nothing stacked before it
+	}
+	if len(gotActions) != len(wantActions) {
+		t.Fatalf("dispatched action sequence = %v, want %v (length mismatch: %d vs %d)", gotActions, wantActions, len(gotActions), len(wantActions))
+	}
+	for i, want := range wantActions {
+		if gotActions[i] != want {
+			t.Fatalf("dispatched action[%d] = %q, want %q; full sequence = %v", i, gotActions[i], want, gotActions)
+		}
+	}
+	// The three audio.gain.fade dispatches, in order: fade-up (entry),
+	// fade-down (exit, targetGain 0), fade-up (return). A stacked
+	// fade-out remainder before the return fade-up would show up as a
+	// FOURTH fade dispatch (an extra 0.0 immediately before the last
+	// entry), which the length check above already catches; this also
+	// pins the exact three gain values so a fade-down that silently
+	// targeted the wrong level would not pass by coincidence.
+	if len(gotGains) != 3 {
+		t.Fatalf("audio.gain.fade dispatch count = %d, want 3 (entry fade-up, exit fade-down, return fade-up)", len(gotGains))
+	}
+	wantGains := []any{0.31622776601683794, 0.0, 0.31622776601683794}
+	for i, want := range wantGains {
+		if gotGains[i] != want {
+			t.Fatalf("audio.gain.fade[%d] targetGain = %v, want %v", i, gotGains[i], want)
+		}
+	}
+}
+
 // TestNightClearBackgroundAudioAtEndSession_ClearsNotStops proves
 // end-session's own bed cleanup issues audio.session.clear, never
 // stop/pause: a stop or pause would leave the node's persisted session

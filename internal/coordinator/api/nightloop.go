@@ -138,27 +138,35 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// §5: the bed plays through pre-show, inter-show resting, and
 	// post-show alike, never just the two inter-show states.
 	//
-	// transition-to-show deliberately does NOT stop it: RESTING-MODE.md
-	// section 7.1 stages the audio fade beginning at E minus the audio
-	// lead, with music deliberately continuing into darkness, rather than
-	// cutting it the instant this state is entered (found by review: an
-	// earlier version hard-stopped here, about 20 seconds early, which
-	// also made the enterShow duck/restore path dead code since the
-	// announcement always found an already-resolved stop). This
-	// coordinator has no enterShow.audio.fadeDuration/
-	// startBeforeTimelineEnd configuration field to stage that fade at
-	// its own precise offset (a contract gap filed separately, not
-	// invented here), so the bounded fix is: let it keep playing through
-	// the transition, and suspend only once boundary E has actually
-	// passed (nightStateLive) or the night otherwise leaves resting.
+	// resting-intershow and transition-to-show do NOT unconditionally keep
+	// it running: RESTING-MODE.md section 7.1 stages the audio fade
+	// beginning at E minus the audio lead, so a fade meant to finish AT E
+	// must START before it, not at Live. resting.backgroundAudio.fadeOutMs
+	// (config.NightSessionBackgroundAudio) is exactly that field -
+	// [handlers.nightBackgroundAudioFadeDownDue] reports true once now has
+	// reached E minus fadeOutMs, and only then does either state fall
+	// through to the same suspend path every OTHER state uses. Before that
+	// lead point (or with no fadeOutMs configured at all, which keeps
+	// today's unchanged instant-cut-at-Live behavior), resting-intershow
+	// keeps advancing the bed forward and transition-to-show does nothing,
+	// letting it keep playing through the transition (found by review: an
+	// earlier version hard-stopped at transition-to-show entry, about 20
+	// seconds early, which also made the enterShow duck/restore path dead
+	// code since the announcement always found an already-resolved stop).
 	// Every OTHER state stops a still-playing background session
 	// idempotently; a session already stopped or never started costs
 	// nothing to check.
 	switch rec.State {
-	case nightStatePreshow, nightStateRestingIntershow, nightStateEndOfNightResting:
+	case nightStatePreshow, nightStateEndOfNightResting:
 		h.nightAdvanceBackgroundAudio(ctx, now, rec)
-	case nightStateTransitionToShow:
-		// Intentionally no action: see this switch's own comment above.
+	case nightStateRestingIntershow, nightStateTransitionToShow:
+		if h.nightBackgroundAudioFadeDownDue(ctx, now, rec) {
+			h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
+		} else if rec.State == nightStateRestingIntershow {
+			h.nightAdvanceBackgroundAudio(ctx, now, rec)
+		}
+		// transition-to-show, lead not yet reached: intentionally no
+		// action, per this switch's own comment above.
 	case nightStateStopped:
 		// end-session's own clear (nightClearBackgroundAudioAtEndSession,
 		// called from handleNightCommand the moment the session record
@@ -188,6 +196,35 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// action here. end-of-night-resting's repeating resting playlist was
 	// already started on the tick that entered it; its only exit is
 	// fade-out-night.
+}
+
+// nightBackgroundAudioFadeDownDue is nightTick's own second switch's gate
+// for resting-intershow and transition-to-show: true once now has reached
+// E minus resting.backgroundAudio.fadeOutMs, the bed's own pre-boundary
+// lead (RESTING-MODE.md §7.1's "E - audio lead   begin audio fade",
+// applied to the bed the same way [nightEnterShowLeadMs] applies it to
+// enterShow cues). False whenever the boundary is not yet armed with a
+// known E (nothing to lead against yet) or resting.backgroundAudio is
+// absent or carries no fadeOutMs - the unconfigured case is unchanged from
+// before this existed: the bed keeps playing at full gain until Live, then
+// cuts instantly (nightStopBackgroundAudioIfRunningForNode's own
+// FadeOutMs==nil branch).
+func (h *handlers) nightBackgroundAudioFadeDownDue(ctx context.Context, now time.Time, rec store.NightSessionRecord) bool {
+	boundary, ok := decodeNightBoundary(rec.BoundaryJSON)
+	if !ok || boundary.State != nightBoundaryStateArmed || boundary.ExpectedAt == nil {
+		return false
+	}
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: background audio: failed to read pinned night.session payload for the fade-down lead", "sessionId", rec.ID, "error", err)
+		return false
+	}
+	ba := payload.Resting.BackgroundAudio
+	if ba == nil || ba.FadeOutMs == nil {
+		return false
+	}
+	lead := time.Duration(*ba.FadeOutMs) * time.Millisecond
+	return !now.Before(boundary.ExpectedAt.Add(-lead))
 }
 
 // getPinnedNightSessionPayload reads outside any HTTP request's own
