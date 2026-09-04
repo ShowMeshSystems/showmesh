@@ -515,6 +515,7 @@ after shipping a breaking change to stored history.
 |---|---|---|
 | `agent.echo` | shipped | Track B seam B1 |
 | `asset.fetch` | shipped | Track E |
+| `asset.remove` | shipped | SM-306: delete one held asset from a node's disk, by verified content hash, so an operator can remove an asset no Cue references (`GET`/`POST /api/v1/nodes/{nodeId}/assets/unused`\|`/remove`, `api/openapi.yaml`). Result signal `node.asset.removed` is not its own register row: it falls under the already-shipped `node`/`node.*` observation namespace below, matching `node.asset.held`/`node.asset.fetch_failed`, neither of which has an individual row either |
 | `render.surface.apply` | shipped | Track B seam B2 |
 | `render.surface.clear` | shipped | Track B seam B2 |
 | `render.pipeline.restart` | shipped | Track B seam B2 |
@@ -602,6 +603,7 @@ register entry comes from the code and never from a plan.
 | `asset.upload` | shipped | Track E |
 | `asset.fetch` | shipped | Track E |
 | `asset.rollback` | shipped | Track E, ADR-028 decision 10 |
+| `asset.remove` | shipped | SM-306: `POST /api/v1/nodes/{nodeId}/assets/remove`'s own audit entries (Kind distinguishes dispatch from outcome), the same action string the Agent operation names table above reserves for the MQTT command itself |
 | `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 | `fpp.instance_uuid.acknowledge` | shipped | per-endpoint observed FPP instance uuid conflict acknowledgment |
 | `cuecatalog.acknowledge` | shipped | Track H seam H3: a node's cue-catalog acknowledgement |

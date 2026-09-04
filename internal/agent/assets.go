@@ -205,6 +205,104 @@ func (o assetFetchOperation) run(ctx context.Context, params map[string]any, now
 	}, nil
 }
 
+// assetRemoveOperation is the OperationFunc for "asset.remove": delete one
+// verified file from this node's asset directory. dir is the node's asset
+// directory (config.Config.AssetDir), matching assetFetchOperation's own.
+type assetRemoveOperation struct {
+	dir string
+}
+
+// parseAssetRemoveParams extracts and type-checks asset.remove's two
+// required params.
+func parseAssetRemoveParams(params map[string]any) (contentHash, filename string, err error) {
+	str := func(key string) (string, error) {
+		raw, ok := params[key]
+		if !ok {
+			return "", fmt.Errorf("asset.remove: params.%s is required", key)
+		}
+		v, ok := raw.(string)
+		if !ok || v == "" {
+			return "", fmt.Errorf("asset.remove: params.%s must be a non-empty string, got %T", key, raw)
+		}
+		return v, nil
+	}
+	if contentHash, err = str("contentHash"); err != nil {
+		return
+	}
+	if filename, err = str("filename"); err != nil {
+		return
+	}
+	return
+}
+
+// run is the OperationFunc for "asset.remove". It never deletes by filename
+// alone: the file at dir/filename is opened, hashed, and compared against
+// contentHash FIRST, and only a match is removed. A mismatch (a different
+// asset that happens to share a runtime filename, or a fetch currently in
+// flight) is refused, never silently overridden. A file already absent is
+// treated as an idempotent success: the desired end state (this content
+// hash is gone from this node) already holds, mirroring this codebase's
+// identical idempotent-re-upload precedent in the asset store
+// (store.AssetIdentityExistsError's own doc comment).
+func (o assetRemoveOperation) run(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
+	contentHash, filename, err := parseAssetRemoveParams(params)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := validateAssetFilename(filename); err != nil {
+		return OperationResult{}, err
+	}
+
+	path := filepath.Join(o.dir, filename)
+	appliedAt := now()
+	alreadyGone := OperationResult{
+		Confirmed: true, Signal: "node.asset.removed",
+		Value:      map[string]any{"contentHash": contentHash, "filename": filename},
+		ExecutedAt: appliedAt, ObservedAt: now(),
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return alreadyGone, nil
+		}
+		return OperationResult{}, fmt.Errorf("asset.remove: opening %q: %w", filename, err)
+	}
+	h := sha256.New()
+	_, copyErr := io.Copy(h, f)
+	_ = f.Close()
+	if copyErr != nil {
+		return OperationResult{}, fmt.Errorf("asset.remove: hashing %q: %w", filename, copyErr)
+	}
+	gotHash := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	if gotHash != contentHash {
+		return OperationResult{}, fmt.Errorf(
+			"asset.remove: refusing to delete %q: on-disk content hash %s does not match requested %s",
+			filename, gotHash, contentHash)
+	}
+
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			// Removed by something else between the hash check and here:
+			// the desired end state still holds.
+			return alreadyGone, nil
+		}
+		return OperationResult{}, fmt.Errorf("asset.remove: removing %q: %w", filename, err)
+	}
+
+	// Genuine post-write read-back: confirm the file is actually gone,
+	// mirroring assetFetchOperation's own re-open-and-verify convention.
+	if _, statErr := os.Stat(path); statErr == nil || !os.IsNotExist(statErr) {
+		return OperationResult{}, fmt.Errorf("asset.remove: %q still exists after removal", filename)
+	}
+
+	return OperationResult{
+		Confirmed: true, Signal: "node.asset.removed",
+		Value:      map[string]any{"contentHash": contentHash, "filename": filename},
+		ExecutedAt: appliedAt, ObservedAt: now(),
+	}, nil
+}
+
 // readBackAsset re-opens path from disk and re-hashes it, reporting whether
 // the on-disk content still matches wantHash and its actual size. This is a
 // distinct, separately-coded step from the hash computed during download

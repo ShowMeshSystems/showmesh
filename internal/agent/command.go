@@ -204,30 +204,33 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 }
 
 // newOperationRegistry returns this agent's entire command allowlist:
-// "agent.echo", "asset.fetch", "audio.device.probe" (Track C seam C1a),
-// "audio.media.probe" (Track C seam C2), Track B's four render.*
-// operations (seam B2a's apply/clear/restart, seam B4's transport.probe),
-// "cuecatalog.deploy" (Track H seam H3: the coordinator pushing a resolved
-// Cue catalog onto this node — see cuecatalogops.go), and "cue.activate"
-// (Track H seam H4: a runner-neutral Cue activation, authorized against
-// the held catalog and applied to rendering, audio, and LTC — see
-// cueactivationops.go). Per
+// "agent.echo", "asset.fetch", "asset.remove" (delete one verified held
+// asset, the counterpart asset.fetch never had), "audio.device.probe"
+// (Track C seam C1a), "audio.media.probe" (Track C seam C2), Track B's four
+// render.* operations (seam B2a's apply/clear/restart, seam B4's
+// transport.probe), "cuecatalog.deploy" (Track H seam H3: the coordinator
+// pushing a resolved Cue catalog onto this node, see cuecatalogops.go), and
+// "cue.activate" (Track H seam H4: a runner-neutral Cue activation,
+// authorized against the held catalog and applied to rendering, audio, and
+// LTC, see cueactivationops.go). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
-// this map itself IS the enforcement mechanism — [CommandHandler.
+// this map itself IS the enforcement mechanism: [CommandHandler.
 // HandleMessage] refuses any Action that is not a key here, never executes
 // it, and never silently ignores it. assetDir and assetAPIToken configure
-// "asset.fetch" (see assets.go); render configures the four render.*
-// operations (see renderops.go); nodeID and catalogStore configure
-// "cuecatalog.deploy". Adding a further allowlisted operation later means
-// adding a further entry to this map, not building a second enforcement
-// path.
+// "asset.fetch" (see assets.go); assetDir alone configures "asset.remove";
+// render configures the four render.* operations (see renderops.go);
+// nodeID and catalogStore configure "cuecatalog.deploy". Adding a further
+// allowlisted operation later means adding a further entry to this map, not
+// building a second enforcement path.
 func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, fppConnect *fppConnectState, logger *slog.Logger) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
+	remove := assetRemoveOperation{dir: assetDir}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
 	ops := map[string]OperationFunc{
 		"agent.echo":         state.apply,
 		"asset.fetch":        fetch.run,
+		"asset.remove":       remove.run,
 		"audio.device.probe": probeAudioDevice,
 		"audio.media.probe":  mediaProbe.run,
 	}
@@ -690,15 +693,16 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 			h.publishAgentEcho(ctx, publisher, v, opResult.ExecutedAt)
 		}
 	}
-	if cmd.Action == "asset.fetch" && h.assetFetchTrigger != nil {
+	if (cmd.Action == "asset.fetch" || cmd.Action == "asset.remove") && h.assetFetchTrigger != nil {
 		select {
 		case h.assetFetchTrigger <- struct{}{}:
 		default:
 			// A publish is already pending (or nothing is listening yet);
 			// see mqtt.go's identical heartbeatConnected send for why a
 			// dropped duplicate trigger here is correct, not lossy in any
-			// way that matters — the inventory publisher only needs to know
-			// "a fetch completed since I last checked," not how many.
+			// way that matters: the inventory publisher only needs to know
+			// "a fetch or remove completed since I last checked," not how
+			// many.
 		}
 	}
 	if isRenderAction(cmd.Action) && h.renderTrigger != nil {

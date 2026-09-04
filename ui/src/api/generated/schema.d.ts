@@ -2734,6 +2734,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/assets/unused": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which of a node's held assets no Cue in its resolved catalog references
+         * @description Reuses `GET /nodes/{nodeId}/assets`'s own readiness evidence rather than a second computation: `state` is the identical "ready"/"not_ready"/"unknown" verdict that route already renders, and `unused` is exactly that verdict's own `extra` (an asset this node holds that the active Show no longer expects for it), each entry additionally named by the sequence this coordinator's own asset records still attribute it to, when they can.
+         *
+         *     `state` is `"unknown"` under the identical conditions `GET /nodes/{nodeId}/assets` already is (no active Show configured, this node has never reported an inventory, its last report is stale, or it reported incomplete) - `unused` is withheld entirely in that case, never rendered as an empty "nothing unused": missing evidence is not evidence of absence. `404` when `nodeId` does not name a declared node.
+         */
+        get: operations["getNodeUnusedAssets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/assets/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove one held asset from a node
+         * @description Behind `asset:write`, the existing write-authority scope for the asset store. Names the asset by `contentHash` (not in the path - a `sha256:<hex>` value is not a safe path segment), mirroring `POST .../cue-catalog/acknowledge`'s identical by-value convention; the runtime filename to remove is always THIS coordinator's own evidence (the node's last reported inventory row for that content hash), never accepted from the caller.
+         *
+         *     Refused with `409` when `contentHash` is referenced by one or more Cues in this node's CURRENT (live-resolved, never merely last-acknowledged) Cue catalog - the response names every referencing Cue, checked before any command reaches the node, so a refusal never becomes a dispatched-and-refused command. `400` when this coordinator has no evidence the node holds `contentHash` at all.
+         *
+         *     `outcome` reflects only what the AGENT reported on its own result topic (`"confirmed"` means the agent verified the file gone from its own disk) - it does NOT mean this coordinator's own node-asset inventory has caught up yet. That only happens on the node's NEXT inventory report, which a confirmed removal triggers immediately (mirroring `asset.fetch`'s identical existing trigger) but which this response does not itself wait for: `GET /nodes/{nodeId}/assets/unused` reflects the removal only once that next report lands.
+         */
+        post: operations["removeNodeAsset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fallback-programs": {
         parameters: {
             query?: never;
@@ -5995,6 +6041,60 @@ export interface components {
             reason?: string;
             /** @description The revision the node reported holding after this deploy. Present only when outcome is "confirmed". */
             acknowledgedRevision?: string;
+            /**
+             * Format: date-time
+             * @description Null for a command whose publish has not completed, or whose publish failed before reaching the wire.
+             */
+            dispatchedAt: string | null;
+            /** Format: date-time */
+            resolvedAt?: string | null;
+        };
+        /** @description One asset a node holds that this node's resolved Cue catalog does not reference - exactly one ExtraAsset entry from `GET /nodes/{nodeId}/assets`, additionally named by the sequence this coordinator's own asset records still attribute it to. */
+        UnusedAsset: {
+            contentHash: string;
+            filename: string;
+            sizeBytes: number;
+            /** @description Absent when no asset record (current or superseded) for this Show can be traced to contentHash - a file the node holds that was never issued through the asset API at all. Never fabricated. */
+            sequence?: string;
+        };
+        /** @description The body of GET /nodes/{nodeId}/assets/unused. state reuses `GET /nodes/{nodeId}/assets`'s own "ready"/"not_ready"/"unknown" vocabulary verbatim. reason is present only when state is "unknown"; observedAt is present exactly when state is not "unknown" - the identical rules NodeAssetManifest already carries. unused is always a non-null array, empty and meaningless when state is "unknown". */
+        NodeUnusedAssetsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            node: string;
+            /** @enum {string} */
+            state: "ready" | "not_ready" | "unknown";
+            reason?: string;
+            /** Format: date-time */
+            observedAt?: string;
+            unused: components["schemas"]["UnusedAsset"][];
+        };
+        /** @description The body of POST /nodes/{nodeId}/assets/remove. */
+        RemoveNodeAssetRequest: {
+            contentHash: string;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key dispatches nothing and returns the original command's own result, flagged `replay: true`. */
+            idempotencyKey?: string;
+        };
+        /** @description The body of a successful (200) response from the remove endpoint. */
+        RemoveNodeAssetResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["RemoveNodeAssetResult"];
+        };
+        /** @description What happened to one dispatched (or replayed) asset.remove command. outcome reflects only the AGENT's own result-topic reply (ADR-003: a bare successful publish is never conflated with the node having removed anything) - it does NOT mean this coordinator's own node-asset-inventory row has caught up; that only happens on the node's NEXT inventory report. There is no "refused" outcome here: a removal refused because a Cue still references the asset is reported as a 409 before any command is ever dispatched, never as a dispatched-and-refused command. */
+        RemoveNodeAssetResult: {
+            commandId: string;
+            idempotencyKey: string;
+            node: string;
+            contentHash: string;
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request - it is the ORIGINAL command's already-recorded result. */
+            replay: boolean;
+            /**
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished, the same accepted-empty case CueCatalogDeployResult.outcome documents.
+             * @enum {string}
+             */
+            outcome: "confirmed" | "unconfirmed" | "failed" | "";
+            reason?: string;
             /**
              * Format: date-time
              * @description Null for a command whose publish has not completed, or whose publish failed before reaching the wire.
@@ -11756,6 +11856,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CueCatalogDeployResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNodeUnusedAssets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeUnusedAssetsResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removeNodeAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveNodeAssetRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoveNodeAssetResponse"];
                 };
             };
             400: components["responses"]["InvalidParameter"];

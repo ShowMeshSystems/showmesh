@@ -1989,6 +1989,14 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/assets/manifest", h.readAnyGuard(showConfigReadScopes, h.handleAssetManifest))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets", h.readAnyGuard(showConfigReadScopes, h.handleNodeAssetManifest))
 
+	// Which of a node's held assets no Cue in its resolved catalog
+	// references, and removing one. GET mirrors GET .../assets' own
+	// showConfigReadScopes posture: it answers over the identical evidence.
+	// POST is behind asset:write (nodeunusedassets.go's own doc comment),
+	// the existing write-authority scope for the asset store.
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets/unused", h.readAnyGuard(showConfigReadScopes, h.handleGetNodeUnusedAssets))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/assets/remove", h.writeGuard(&scopeAssetWrite, h.handlePostRemoveNodeAsset))
+
 	// TRACK-H-H3-SPEC.md §4: the resolved Cue catalog read route and its
 	// per-node acknowledgement. GET stays under observation:read (the
 	// spec's own posture, matching every other FPP/observation read
