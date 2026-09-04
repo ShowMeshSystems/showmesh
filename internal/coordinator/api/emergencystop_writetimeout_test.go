@@ -16,7 +16,7 @@ import (
 // and stream.go's TestStreamSurvivesServerWriteTimeout: a real *http.Server
 // with a short WriteTimeout, and a dispatch paced slower than it, proving
 // handleEmergencyStop's own SetWriteDeadline extension
-// (emergencyStopHTTPWriteDeadline) is what keeps the connection alive —
+// (emergencyStopHTTPWriteDeadline) is what keeps the connection alive,
 // not merely that the constant is large on paper.
 //
 // Before that extension existed, this endpoint had none at all (unlike
@@ -24,7 +24,7 @@ import (
 // audio.node.silence dispatch took longer than the server's own default
 // WriteTimeout had its connection severed mid-dispatch, telling the
 // operator a transport error for a stop that was still being carried out
-// server-side — discovered on this exact endpoint once audio.node.silence
+// server-side; discovered on this exact endpoint once audio.node.silence
 // and resolume.blackout joined stopPlaylist as concurrently-dispatched
 // families. WriteTimeout is set here deliberately short (not left at
 // zero): a passing test against a handler that forgot the extension
@@ -39,7 +39,7 @@ func TestEmergencyStopSurvivesServerWriteTimeout(t *testing.T) {
 
 	// FPP and Resolume are left unconfigured (their default no-op
 	// listers): each of those two families resolves near-instantly, so
-	// the audio.node family — deliberately slowed below — is what this
+	// the audio.node family, deliberately slowed below, is what this
 	// test actually exercises against the short server WriteTimeout.
 	pub := &fakeAudioPublisher{
 		result: audioNodeSilenceConfirmedEvidence(),
@@ -62,7 +62,7 @@ func TestEmergencyStopSurvivesServerWriteTimeout(t *testing.T) {
 	ts := httptest.NewUnstartedServer(api.Handler)
 	// Far shorter than the 300ms dispatch above, and far shorter than
 	// this handler's own real emergencyStopHTTPWriteDeadline (tens of
-	// seconds) — proving the extension, not merely a generous default.
+	// seconds): proving the extension, not merely a generous default.
 	ts.Config.WriteTimeout = 50 * time.Millisecond
 	ts.Start()
 	defer ts.Close()
@@ -93,6 +93,6 @@ func TestEmergencyStopSurvivesServerWriteTimeout(t *testing.T) {
 		t.Fatalf("no stopOutcomes entry carries targetKind %q; the slow dispatch never completed server-side either: %v", "node", result["stopOutcomes"])
 	}
 	if node["outcome"] != "confirmed" {
-		t.Fatalf("node entry outcome = %v, want %q — the slow dispatch must have actually finished, not just the HTTP connection surviving", node["outcome"], "confirmed")
+		t.Fatalf("node entry outcome = %v, want %q: the slow dispatch must have actually finished, not just the HTTP connection surviving", node["outcome"], "confirmed")
 	}
 }
