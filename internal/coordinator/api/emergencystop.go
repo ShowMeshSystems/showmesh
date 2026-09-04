@@ -705,6 +705,66 @@ func (h *handlers) resolveEmergencyStopPayloadDegrading(ctx context.Context) (pa
 	return payload, ""
 }
 
+// emergencyStopHTTPWriteDeadlineMargin is what [handlers.emergencyStopHTTPWriteDeadline]
+// adds on top of the longest of the three concurrently-dispatched target
+// families, for this handler's own sequential work AFTER they finish
+// (best-effort follow-ups, the outcome audit write) - sized like
+// fppcommand_handler.go's own 30s margin over its single final jsonWrite,
+// the closest precedent for "one write deadline, not a series of resets."
+const emergencyStopHTTPWriteDeadlineMargin = 30 * time.Second
+
+// emergencyStopHTTPWriteDeadline bounds this endpoint's own HTTP write
+// deadline, set before the request body is even read (mirroring
+// fppcommand_handler.go/audiodispatch.go/resolumeaction.go's identical
+// reasoning for the identical hazard: internal/coordinator/httpapi.NewServer's
+// shared http.Server.WriteTimeout would otherwise silently sever the
+// connection out from under a still-working dispatch, discovered on THIS
+// endpoint specifically once audio.node.silence and resolume.blackout
+// joined stopPlaylist as concurrently-dispatched families - see the PR
+// this landed in).
+//
+// emergencyStopDispatchAllTargets runs its three families CONCURRENTLY,
+// so the bound is the MAX of their own worst-case budgets, never the sum:
+// one slow family does not stack its own wait on top of another's. Each
+// term is drawn from the SAME source its own site already uses to guard
+// itself, never a fixed constant re-derived here - an operator who
+// configures a larger FPPCommandConfirmDeadline must not silently
+// reintroduce the connection-severed defect fppcommand_handler.go's own
+// doc comment names in full:
+//
+//   - fpp:      fppMaxConfirmDeadline(h.fppCommandConfirmDeadline) - the
+//     ACTUALLY CONFIGURED base, exactly as fppcommand_handler.go itself
+//     derives its own deadline, even though this endpoint only ever
+//     dispatches stopPlaylist (never every registered primitive): reusing
+//     the shared max-over-primitives helper costs nothing and stays
+//     correct if stopPlaylist's own ConfirmDeadline function ever stops
+//     being fppConfirmDeadlineUnchanged.
+//   - node:     audioHandlerWriteDeadline() - already carries its own
+//     margin (audioCommandConfirmDeadline + audioHandlerWriteDeadlineMargin),
+//     included here as one arm of a max(), never summed with anything
+//     else, so that margin is never double-counted.
+//   - resolume: resolumeActionMaxDispatchDuration alone, NOT the wider
+//     resolumeActionHTTPWriteDeadline: that constant additionally covers
+//     POST /resolume/actions' own TWO post-dispatch writes (the
+//     commands-row outcome update and its own outcome audit entry, each
+//     resolumeActionBookkeepingBudget), neither of which
+//     emergencyStopAllResolumeInstances performs - it calls Dispatch
+//     directly, exactly as a configured follow-up action's own Resolume
+//     step already does (dispatchActionTarget's own
+//     ShowActionIntegrationResolume case), with no per-instance
+//     bookkeeping write of its own. Adding that budget here would be
+//     double-counting a write this endpoint never makes.
+func (h *handlers) emergencyStopHTTPWriteDeadline() time.Duration {
+	longest := fppMaxConfirmDeadline(h.fppCommandConfirmDeadline)
+	if d := audioHandlerWriteDeadline(); d > longest {
+		longest = d
+	}
+	if resolumeActionMaxDispatchDuration > longest {
+		longest = resolumeActionMaxDispatchDuration
+	}
+	return longest + emergencyStopHTTPWriteDeadlineMargin
+}
+
 // --- the four trigger routes ---
 
 func (h *handlers) emergencyStopIssuer(now time.Time, ac authContext, clientAddr string) identity.AuditEntry {
@@ -722,6 +782,7 @@ func (h *handlers) emergencyStopIssuer(now time.Time, ac authContext, clientAddr
 // than turning a stop that could otherwise proceed into a 500.
 func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(h.emergencyStopHTTPWriteDeadline()))
 	ctx := context.WithoutCancel(r.Context())
 	idempotencyKey, problem := decodeEmergencyStopIdempotencyKeyBody(r, maxEmergencyStopRequestBodyBytes)
 	if problem != nil {
@@ -754,6 +815,7 @@ func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 // proceed into a 500.
 func (h *handlers) handleEmergencyStopPowerDown(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(h.emergencyStopHTTPWriteDeadline()))
 	ctx := context.WithoutCancel(r.Context())
 	idempotencyKey, problem := decodeEmergencyStopIdempotencyKeyBody(r, maxEmergencyStopRequestBodyBytes)
 	if problem != nil {
@@ -816,6 +878,7 @@ func (h *handlers) handleEmergencyStopArm(w http.ResponseWriter, r *http.Request
 // that was never going to execute.
 func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(h.emergencyStopHTTPWriteDeadline()))
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxEmergencyStopRequestBodyBytes+1))
 	if err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("reading request body: %v", err)))
