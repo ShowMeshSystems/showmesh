@@ -218,3 +218,208 @@ func TestConfigRevisionTxForm(t *testing.T) {
 		t.Errorf("CurrentRevision = %d, want 1", obj.CurrentRevision)
 	}
 }
+
+// --- schemaV30 tombstone delete ---
+
+func createAndActivate(t *testing.T, st *Store, ctx context.Context, kind, id string, revision int64, payload string) {
+	t.Helper()
+	if _, err := st.CreateConfigRevision(ctx, ConfigRevisionRecord{
+		Kind: kind, ObjectID: id, Revision: revision, PayloadJSON: payload,
+	}); err != nil {
+		t.Fatalf("create revision %s/%s/%d: %v", kind, id, revision, err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, kind, id, revision); err != nil {
+		t.Fatalf("activate revision %s/%s/%d: %v", kind, id, revision, err)
+	}
+}
+
+// TestTombstoneConfigObjectExcludesFromGetAndList is this seam's core
+// acceptance requirement: a tombstoned object is absent from
+// [Store.GetConfigObject] and [Store.ListConfigObjects], the two methods
+// every existence check, GET-by-id handler, and resolution path in
+// internal/coordinator/api builds on.
+func TestTombstoneConfigObjectExcludesFromGetAndList(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	createAndActivate(t, st, ctx, "audio.node", "node-1", 1, `{"role":"zone"}`)
+	createAndActivate(t, st, ctx, "audio.node", "node-2", 1, `{"role":"zone"}`)
+
+	if _, err := st.TombstoneConfigObject(ctx, "audio.node", "node-1"); err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+
+	if _, err := st.GetConfigObject(ctx, "audio.node", "node-1"); !errors.Is(err, ErrConfigObjectNotFound) {
+		t.Fatalf("GetConfigObject after tombstone: err = %v, want ErrConfigObjectNotFound", err)
+	}
+
+	objs, err := st.ListConfigObjects(ctx, "audio.node")
+	if err != nil {
+		t.Fatalf("list config objects: %v", err)
+	}
+	if len(objs) != 1 || objs[0].ID != "node-2" {
+		t.Fatalf("ListConfigObjects after tombstoning node-1 = %+v, want only node-2", objs)
+	}
+}
+
+// TestTombstoneConfigObjectNotFoundWhenMissingOrAlreadyDeleted covers both
+// halves of tombstoneConfigObject's own doc comment: an id that was never
+// created, and a second delete of one already tombstoned, both refuse the
+// same way: idempotent-delete-of-a-deleted-thing reads as 404, not a
+// second success and not a distinct error.
+func TestTombstoneConfigObjectNotFoundWhenMissingOrAlreadyDeleted(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	if _, err := st.TombstoneConfigObject(ctx, "audio.node", "never-created"); !errors.Is(err, ErrConfigObjectNotFound) {
+		t.Fatalf("tombstone of a never-created id: err = %v, want ErrConfigObjectNotFound", err)
+	}
+
+	createAndActivate(t, st, ctx, "audio.node", "node-1", 1, `{"role":"zone"}`)
+	if _, err := st.TombstoneConfigObject(ctx, "audio.node", "node-1"); err != nil {
+		t.Fatalf("first tombstone: %v", err)
+	}
+	if _, err := st.TombstoneConfigObject(ctx, "audio.node", "node-1"); !errors.Is(err, ErrConfigObjectNotFound) {
+		t.Fatalf("second tombstone of an already-deleted id: err = %v, want ErrConfigObjectNotFound", err)
+	}
+}
+
+// TestTombstoneConfigObjectLeavesRevisionHistoryReadable proves ADR-009's
+// rule survives a delete: config_revisions is never touched by
+// TombstoneConfigObject, so every revision this object ever held still
+// reads back byte-identical through [Store.GetConfigRevision] and
+// [Store.ListConfigRevisions] after it is gone from every list and every
+// live lookup.
+func TestTombstoneConfigObjectLeavesRevisionHistoryReadable(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	createAndActivate(t, st, ctx, "audio.node", "node-1", 1, `{"role":"zone","zone":"lobby"}`)
+	createAndActivate(t, st, ctx, "audio.node", "node-1", 2, `{"role":"zone","zone":"lobby-renamed"}`)
+
+	if _, err := st.TombstoneConfigObject(ctx, "audio.node", "node-1"); err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+
+	rev1, err := st.GetConfigRevision(ctx, "audio.node", "node-1", 1)
+	if err != nil {
+		t.Fatalf("get revision 1 after tombstone: %v", err)
+	}
+	if rev1.PayloadJSON != `{"role":"zone","zone":"lobby"}` {
+		t.Errorf("revision 1 payload after tombstone = %q, want it unchanged", rev1.PayloadJSON)
+	}
+	rev2, err := st.GetConfigRevision(ctx, "audio.node", "node-1", 2)
+	if err != nil {
+		t.Fatalf("get revision 2 after tombstone: %v", err)
+	}
+	if rev2.PayloadJSON != `{"role":"zone","zone":"lobby-renamed"}` {
+		t.Errorf("revision 2 payload after tombstone = %q, want it unchanged", rev2.PayloadJSON)
+	}
+
+	revs, err := st.ListConfigRevisions(ctx, "audio.node", "node-1")
+	if err != nil {
+		t.Fatalf("list revisions after tombstone: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("ListConfigRevisions after tombstone returned %d revisions, want 2", len(revs))
+	}
+}
+
+// TestGetConfigObjectIncludingDeletedSeesTombstone proves the one accessor
+// that CAN see a tombstoned row does, while the default GetConfigObject
+// still cannot: the two-method split this seam's design requires so that
+// a call site added later is correct by default without knowing this
+// feature exists.
+func TestGetConfigObjectIncludingDeletedSeesTombstone(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	createAndActivate(t, st, ctx, "audio.node", "node-1", 1, `{"role":"zone"}`)
+	if _, err := st.TombstoneConfigObject(ctx, "audio.node", "node-1"); err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+
+	if _, err := st.GetConfigObject(ctx, "audio.node", "node-1"); !errors.Is(err, ErrConfigObjectNotFound) {
+		t.Fatalf("GetConfigObject after tombstone: err = %v, want ErrConfigObjectNotFound", err)
+	}
+
+	obj, err := st.GetConfigObjectIncludingDeleted(ctx, "audio.node", "node-1")
+	if err != nil {
+		t.Fatalf("GetConfigObjectIncludingDeleted after tombstone: %v", err)
+	}
+	if obj.DeletedAt == nil {
+		t.Errorf("GetConfigObjectIncludingDeleted DeletedAt = nil, want it set")
+	}
+	if obj.CurrentRevision != 1 {
+		t.Errorf("GetConfigObjectIncludingDeleted CurrentRevision = %d, want 1 (the true last-activated revision, unchanged by tombstoning)", obj.CurrentRevision)
+	}
+}
+
+// TestReactivateAfterTombstoneContinuesRevisionNumberingAndUndeletes is
+// this seam's re-creation acceptance requirement: PUTting a new revision
+// for a tombstoned id (a) clears the tombstone, (b) is immediately visible
+// again through GetConfigObject/ListConfigObjects, and (c) continues
+// revision numbering from the object's true history rather than resetting
+// to 1 and colliding with the revision that was already there.
+func TestReactivateAfterTombstoneContinuesRevisionNumberingAndUndeletes(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	createAndActivate(t, st, ctx, "audio.node", "node-1", 1, `{"role":"zone","zone":"a"}`)
+	createAndActivate(t, st, ctx, "audio.node", "node-1", 2, `{"role":"zone","zone":"b"}`)
+	if _, err := st.TombstoneConfigObject(ctx, "audio.node", "node-1"); err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+
+	// A collision-free re-create computes its next revision number from
+	// the object's TRUE current_revision (2), the way
+	// writeShowConfigRevision's own AuditedWrite closure does via
+	// GetConfigObjectIncludingDeleted, not from a filtered read that
+	// would see nothing and restart numbering at 1.
+	trueObj, err := st.GetConfigObjectIncludingDeleted(ctx, "audio.node", "node-1")
+	if err != nil {
+		t.Fatalf("get true object before re-create: %v", err)
+	}
+	nextRevision := trueObj.CurrentRevision + 1
+	if nextRevision != 3 {
+		t.Fatalf("computed next revision = %d, want 3", nextRevision)
+	}
+
+	// Colliding at revision 1 or 2 must fail loudly (ErrConfigRevisionExists),
+	// proving the collision this design exists to avoid is real and would
+	// have been hit by a naive "reset to 1" re-create.
+	if _, err := st.CreateConfigRevision(ctx, ConfigRevisionRecord{
+		Kind: "audio.node", ObjectID: "node-1", Revision: 1, PayloadJSON: `{"role":"zone","zone":"collide"}`,
+	}); !errors.Is(err, ErrConfigRevisionExists) {
+		t.Fatalf("re-creating at revision 1 (already used before the delete): err = %v, want ErrConfigRevisionExists", err)
+	}
+
+	createAndActivate(t, st, ctx, "audio.node", "node-1", nextRevision, `{"role":"zone","zone":"c"}`)
+
+	obj, err := st.GetConfigObject(ctx, "audio.node", "node-1")
+	if err != nil {
+		t.Fatalf("get config object after re-create: %v", err)
+	}
+	if obj.DeletedAt != nil {
+		t.Errorf("DeletedAt after re-create = %v, want nil: activating a revision must clear a tombstone", obj.DeletedAt)
+	}
+	if obj.CurrentRevision != 3 {
+		t.Errorf("CurrentRevision after re-create = %d, want 3", obj.CurrentRevision)
+	}
+
+	objs, err := st.ListConfigObjects(ctx, "audio.node")
+	if err != nil {
+		t.Fatalf("list config objects after re-create: %v", err)
+	}
+	if len(objs) != 1 || objs[0].ID != "node-1" {
+		t.Fatalf("ListConfigObjects after re-create = %+v, want node-1 visible again", objs)
+	}
+
+	revs, err := st.ListConfigRevisions(ctx, "audio.node", "node-1")
+	if err != nil {
+		t.Fatalf("list revisions after re-create: %v", err)
+	}
+	if len(revs) != 3 {
+		t.Fatalf("ListConfigRevisions after re-create returned %d revisions, want 3 (1, 2, and the new 3; no gap, nothing overwritten)", len(revs))
+	}
+}

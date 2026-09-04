@@ -332,6 +332,44 @@ func (h *handlers) handleGetAudioNodeRevisions(w http.ResponseWriter, r *http.Re
 	h.handleGetShowConfigRevisions(w, r, config.AudioNodeConfigKind)
 }
 
+// handleDeleteAudioNode serves DELETE /api/v1/config/audio.node/{id}: a
+// tombstone (showconfig.go's deleteConfigObjectRevision), not a hard
+// delete. This is the motivating case this whole seam exists for: an
+// operator who mis-declared a node's audio placement, or decommissioned a
+// node, can now remove it instead of it sitting in
+// "showmeshctl audio node list" forever at a live revision. Nothing else
+// in this codebase's own reference graph names an audio.node id from an
+// object OTHER than show.action's target.audioNodeId and show.cue's
+// outputs (config's own reference graph); this delete does not refuse
+// against either. A show.action or show.cue naming this id afterward
+// reports the gap through the existing ADR-029 binding-check surface
+// (actionbinding.go's checkAudioActionBinding, unchanged by this seam),
+// never a crash.
+func (h *handlers) handleDeleteAudioNode(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	ac := authFromContext(r.Context())
+	id := r.PathValue("id")
+	if verr := config.ValidateAudioNodeObjectID(id); verr != nil {
+		writeProblem(w, h.logger, now, mapValidationError(verr))
+		return
+	}
+	precondition, problem := parseDeleteRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+	if problem := decodeConfigDeleteConfirmBody(r); problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
+	_, err := h.deleteConfigObjectRevision(r, now, ac, config.AudioNodeConfigKind, id, precondition, nil)
+	if h.writeConfigDeleteResponse(w, now, config.AudioNodeConfigKind, id, err) {
+		return
+	}
+	h.writeInternalError(w, now, "delete audio.node config object", err)
+}
+
 func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, p config.AudioNodePayload) v1.AudioNodeConfigResponse {
 	return v1.AudioNodeConfigResponse{
 		ServerTime: formatTime(now), Kind: config.AudioNodeConfigKind, ID: obj.ID, Revision: rev.Revision,

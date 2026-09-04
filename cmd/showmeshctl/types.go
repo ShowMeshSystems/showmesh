@@ -231,6 +231,15 @@ type deleteNodeDeclarationRequest struct {
 	Confirm bool `json:"confirm"`
 }
 
+// configObjectDeleteRequest is the required body of DELETE on a per-object
+// configuration kind's path (audio.node, show, show.surface, show.action,
+// show.macro, show.cue, show.playlist, night.session). Same shape as
+// deleteNodeDeclarationRequest immediately above, kept as its own type
+// since it backs a distinct wire operation.
+type configObjectDeleteRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
 // fppInstance is the FPP instance shape from contract §6.10.
 type fppInstance struct {
 	InstanceID    string     `json:"instanceId"`

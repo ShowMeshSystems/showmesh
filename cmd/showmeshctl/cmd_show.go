@@ -84,6 +84,8 @@ func cmdShow(args []string, stdout, stderr io.Writer, clock func() time.Time) in
 		return cmdShowActivate(rest, stdout, stderr, clock)
 	case "mode":
 		return cmdShowMode(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdShowDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl show: unknown subcommand %q\n\n", sub)
 		printShowUsage(stderr)
@@ -116,6 +118,14 @@ Subcommands:
                    installation is being programmed or is running a show,
                    and it is readable with observation:read so an operator
                    can always see which mode they are in
+  delete --confirm <id>
+                   tombstone this show (write); revision history stays
+                   readable via "revisions". Refused with a conflict while
+                   this id is the currently active show ("show active");
+                   change the active show first. Never cascades: any
+                   show.surface/show.action/show.macro/show.cue/
+                   show.playlist/night.session still naming this show id
+                   is left in place
 
 Run "showmeshctl show <subcommand> --help" for flags specific to one
 subcommand.
@@ -408,6 +418,60 @@ func printShowDetail(w io.Writer, resp showConfigResponse) {
 	} else {
 		_, _ = fmt.Fprintf(w, "Created by: (no principal recorded)\n")
 	}
+}
+
+// cmdShowDelete mirrors cmdUndeclare's own shape (cmd_discovery.go) and
+// cmdSurfaceDelete's (cmd_surface.go) one kind over: --confirm is required
+// and checked locally before any request is sent. A tombstone, not a hard
+// delete: revision history stays readable through "show revisions"
+// afterward. The coordinator refuses with a conflict while this id is the
+// currently active show; this command does not special-case that, since
+// reportError already maps a 409 to exitConflict generically.
+func cmdShowDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl show delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this show")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show delete --confirm <show-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a show object (DELETE /api/v1/config/show/{id}). This is a")
+		_, _ = fmt.Fprintln(stderr, "tombstone, not a hard delete: the object's revision history still reads")
+		_, _ = fmt.Fprintln(stderr, "through \"show revisions\" afterward. Refused if this show is currently")
+		_, _ = fmt.Fprintln(stderr, "active (\"show active\"); change the active show first. Requires")
+		_, _ = fmt.Fprintln(stderr, "config:write and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "show delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl show delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "show delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/show/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "show delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "show %s deleted\n", id)
+	return exitOK
 }
 
 func printShowActiveDetail(w io.Writer, resp showActiveConfigResponse) {

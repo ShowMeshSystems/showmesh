@@ -208,6 +208,19 @@ func (h *handlers) handleGetShowCueRevisions(w http.ResponseWriter, r *http.Requ
 	h.handleGetShowConfigRevisions(w, r, config.ShowCueConfigKind)
 }
 
+// handleDeleteShowCue serves DELETE /api/v1/config/show.cue/{id}: a
+// tombstone. A show.playlist entry naming this cue afterward is not
+// refused here and is not cascaded: show.playlist resolves its own
+// entries' cue references through GetConfigObject at the point it is
+// actually used, so the gap surfaces there. This codebase has no
+// pre-flight readiness check for show.playlist entries the way ADR-029
+// gives show.action's own targets and night.session's action bindings; a
+// dangling reference here fails at dispatch time, not before, same as any
+// other reference this package resolves.
+func (h *handlers) handleDeleteShowCue(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowCueConfigKind, nil)
+}
+
 func mapConfigShowCueOutputs(o config.ShowCueOutputs) v1.ConfigShowCueOutputs {
 	out := v1.ConfigShowCueOutputs{}
 	if o.Render != nil {

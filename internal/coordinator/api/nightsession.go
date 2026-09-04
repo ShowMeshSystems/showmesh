@@ -232,6 +232,50 @@ func (h *handlers) handleGetNightSessionRevisions(w http.ResponseWriter, r *http
 	h.handleGetShowConfigRevisions(w, r, config.NightSessionConfigKind)
 }
 
+// refuseNightSessionIfActive is handleDeleteNightSession's own
+// refuseIfActive (showconfig.go's deleteConfigObjectRevision):
+// night.session.active is the one live "what is running now" pointer a
+// night.session participates in, so deleting the session it currently
+// names is refused rather than left dangling under a running night.
+func (h *handlers) refuseNightSessionIfActive(sessionID string) func(ctx context.Context, tx *store.Tx) error {
+	return func(ctx context.Context, tx *store.Tx) error {
+		obj, err := tx.GetConfigObject(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID)
+		if errors.Is(err, store.ErrConfigObjectNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if obj.CurrentRevision == 0 {
+			return nil
+		}
+		rev, err := tx.GetConfigRevision(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID, obj.CurrentRevision)
+		if err != nil {
+			return err
+		}
+		var payload config.NightSessionActivePayload
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		if payload.Session != sessionID {
+			return nil
+		}
+		return &errConfigObjectCurrentlyActive{kind: config.NightSessionConfigKind, id: sessionID, activeKind: config.NightSessionActiveConfigKind}
+	}
+}
+
+// handleDeleteNightSession serves DELETE /api/v1/config/night.session/{id}:
+// a tombstone, not a hard delete. Its own action bindings (background
+// audio, resting cue, siteControl/interlocks) name show.action ids, not
+// the other direction, so deleting a session does not orphan anything
+// downstream; a night.session naming a since-deleted show.action already
+// reports that through the existing night readiness surface
+// (nightcue_readiness.go/nightaudioreadiness.go), unchanged by this seam.
+func (h *handlers) handleDeleteNightSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	h.handleDeleteShowConfigObject(w, r, config.NightSessionConfigKind, h.refuseNightSessionIfActive(id))
+}
+
 // handleGetNightSessionRevision serves GET
 // /config/night.session/{id}/revisions/{revision}: the FULL payload of one
 // past, immutable revision, not only its metadata — the seam spec's own

@@ -1710,11 +1710,18 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.action/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowAction))
 	mux.HandleFunc("PUT /api/v1/config/show.action/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowAction))
 	mux.HandleFunc("GET /api/v1/config/show.action/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActionRevisions))
+	// DELETE is the tombstone delete this seam adds (owner ruling,
+	// tombstone delete for every configuration kind): same config:write
+	// scope as PUT, immediately, since this is a per-object collection
+	// kind, not one of the twelve singletons this seam offers no DELETE
+	// for.
+	mux.HandleFunc("DELETE /api/v1/config/show.action/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowAction))
 
 	mux.HandleFunc("GET /api/v1/config/show.macro", h.readAnyGuard(showConfigReadScopes, h.handleListShowMacros))
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacro))
 	mux.HandleFunc("PUT /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowMacro))
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacroRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowMacro))
 
 	// A pre-show binding check (ADR-029's own Consequences section),
 	// re-resolving a stored show.action's target against current
@@ -1817,11 +1824,16 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShow))
 	mux.HandleFunc("PUT /api/v1/config/show/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShow))
 	mux.HandleFunc("GET /api/v1/config/show/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowRevisions))
+	// DELETE refuses with 409 when show.active currently names this show
+	// (showobjects.go's refuseShowIfActive); every OTHER kind namespaced
+	// under this show is left in place, not cascaded.
+	mux.HandleFunc("DELETE /api/v1/config/show/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShow))
 
 	mux.HandleFunc("GET /api/v1/config/show.surface", h.readAnyGuard(showConfigReadScopes, h.handleListShowSurfaces))
 	mux.HandleFunc("GET /api/v1/config/show.surface/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurface))
 	mux.HandleFunc("PUT /api/v1/config/show.surface/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowSurface))
 	mux.HandleFunc("GET /api/v1/config/show.surface/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurfaceRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.surface/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowSurface))
 
 	mux.HandleFunc("GET /api/v1/config/show.active", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActive))
 	mux.HandleFunc("PUT /api/v1/config/show.active", h.writeGuard(&scopeConfigWrite, h.handlePutShowActive))
@@ -1839,11 +1851,13 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.cue/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowCue))
 	mux.HandleFunc("PUT /api/v1/config/show.cue/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowCue))
 	mux.HandleFunc("GET /api/v1/config/show.cue/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowCueRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.cue/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowCue))
 
 	mux.HandleFunc("GET /api/v1/config/show.playlist", h.readAnyGuard(showConfigReadScopes, h.handleListShowPlaylists))
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylist))
 	mux.HandleFunc("PUT /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowPlaylist))
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylistRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowPlaylist))
 
 	// --- Track F seam F1: night.session and its active-session pointer ---
 	//
@@ -1860,6 +1874,9 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/night.session/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutNightSession))
 	mux.HandleFunc("GET /api/v1/config/night.session/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionRevisions))
 	mux.HandleFunc("GET /api/v1/config/night.session/{id}/revisions/{revision}", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionRevision))
+	// DELETE refuses with 409 when night.session.active currently names
+	// this session (nightsession.go's refuseNightSessionIfActive).
+	mux.HandleFunc("DELETE /api/v1/config/night.session/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteNightSession))
 
 	mux.HandleFunc("GET /api/v1/config/night.session.active", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionActive))
 	mux.HandleFunc("PUT /api/v1/config/night.session.active", h.writeGuard(&scopeConfigWrite, h.handlePutNightSessionActive))
@@ -2059,6 +2076,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNode))
 	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteAudioNode))
 
 	// GET/PUT /api/v1/config/fppconnect.settings (Track E phase 2 seam
 	// FC1a, ADR-044 decision 5): the enable flag and the two byte caps

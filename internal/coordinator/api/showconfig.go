@@ -336,6 +336,61 @@ func (h *handlers) handleGetShowMacroRevisions(w http.ResponseWriter, r *http.Re
 	h.handleGetShowConfigRevisions(w, r, config.ShowMacroConfigKind)
 }
 
+// --- delete: DELETE /config/{kind}/{id} ---
+
+// handleDeleteShowAction serves DELETE /api/v1/config/show.action/{id}: a
+// tombstone, not a hard delete (deleteConfigObjectRevision). A show.macro
+// step, night.session action binding, or show.emergencystop naming this id
+// afterward is not refused here and is not cascaded: each of those already
+// resolves a show.action id through GetConfigObject (config.go's own
+// tombstone-filtered default), so the gap is visible where it is actually
+// used, not silently absorbed. show.action's own targets (FPP, MQTT,
+// Resolume, audio.node) are unaffected by deleting THIS show.action; that
+// direction was never a reference TO this object.
+func (h *handlers) handleDeleteShowAction(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowActionConfigKind, nil)
+}
+
+// handleDeleteShowMacro serves DELETE /api/v1/config/show.macro/{id}: a
+// tombstone. Nothing in this codebase's reference graph names a show.macro
+// id from another configuration object, so there is no dangling reference
+// to consider on this side; a macro is invoked directly, never referenced
+// by id from another kind's payload.
+func (h *handlers) handleDeleteShowMacro(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowMacroConfigKind, nil)
+}
+
+// handleDeleteShowConfigObject is handleDeleteShowAction/
+// handleDeleteShowMacro's shared body (and reused by showcue.go and
+// showplaylist.go, which follow the identical no-id-syntax-precheck
+// pattern handlePutShowAction/handlePutShowMacro/handlePutShowCue/
+// handlePutShowPlaylist all already share): parse the DELETE precondition,
+// require the confirm body, tombstone, map the result. refuseIfActive is
+// threaded straight through to deleteConfigObjectRevision; nil for every
+// caller except handleDeleteShow/handleDeleteNightSession (showobjects.go,
+// nightsession.go), which pass their own live-selector check.
+func (h *handlers) handleDeleteShowConfigObject(w http.ResponseWriter, r *http.Request, kind string, refuseIfActive func(ctx context.Context, tx *store.Tx) error) {
+	now := h.now()
+	ac := authFromContext(r.Context())
+	id := r.PathValue("id")
+
+	precondition, problem := parseDeleteRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+	if problem := decodeConfigDeleteConfirmBody(r); problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
+	_, err := h.deleteConfigObjectRevision(r, now, ac, kind, id, precondition, refuseIfActive)
+	if h.writeConfigDeleteResponse(w, now, kind, id, err) {
+		return
+	}
+	h.writeInternalError(w, now, "delete "+kind+" config object", err)
+}
+
 // --- write: PUT /config/{kind}/{id} ---
 
 // currentFPPEndpoints derives config.FPPEndpoint from
@@ -756,7 +811,16 @@ func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac au
 	writeErr := h.deps.Identity.AuditedWrite(r.Context(), func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
 		currentRevision := int64(0)
 		nextRevisionNo = 1
-		if obj, gerr := tx.GetConfigObject(ctx, kind, id); gerr == nil {
+		// GetConfigObjectIncludingDeleted, not the plain, tombstone-filtered
+		// GetConfigObject: a PUT that re-creates a tombstoned id must compute
+		// its next revision number from the object's TRUE current_revision
+		// (config.go's own doc comment on this accessor), or it would restart
+		// numbering at 1 and collide with a revision this object already
+		// used. Reactivating below (tx.ActivateConfigRevision) also clears
+		// the tombstone unconditionally, so this one read is what makes
+		// "PUT a tombstoned id" both collision-free and self-undeleting,
+		// with no special case in this function beyond this accessor choice.
+		if obj, gerr := tx.GetConfigObjectIncludingDeleted(ctx, kind, id); gerr == nil {
 			currentRevision = obj.CurrentRevision
 			nextRevisionNo = obj.CurrentRevision + 1
 		} else if !errors.Is(gerr, store.ErrConfigObjectNotFound) {
@@ -794,6 +858,168 @@ func (h *handlers) writeShowConfigRevision(r *http.Request, now time.Time, ac au
 		return store.ConfigRevisionRecord{}, 0, writeErr
 	}
 	return activated, nextRevisionNo, nil
+}
+
+// --- delete: DELETE /config/{kind}/{id} ---
+
+// maxConfigDeleteRequestBodyBytes bounds a DELETE's {"confirm":true} body.
+// It carries one boolean field, so this is generous headroom, matching
+// maxDeclarationRequestBodyBytes' identical posture for the same shape one
+// operation over (discovery.go).
+const maxConfigDeleteRequestBodyBytes = 4 * 1024
+
+// decodeConfigDeleteConfirmBody requires an explicit {"confirm":true}
+// body, mirroring handleDeleteNodeDeclaration's identical rule
+// (discovery.go) so a mis-issued call cannot quietly tombstone a
+// configuration object. A non-nil *v1.Problem is the caller's 400 to
+// write; nil, nil means the body confirmed the delete.
+func decodeConfigDeleteConfirmBody(r *http.Request) *v1.Problem {
+	var req v1.ConfigObjectDeleteRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxConfigDeleteRequestBodyBytes+1))
+	if err := dec.Decode(&req); err != nil {
+		p := invalidParameterProblem(`request body must be JSON matching {"confirm":true}`)
+		return &p
+	}
+	if !req.Confirm {
+		p := invalidParameterProblem(
+			"deleting a configuration object requires an explicit {\"confirm\":true} body, so a mis-issued call cannot quietly remove it")
+		return &p
+	}
+	return nil
+}
+
+// parseDeleteRevisionPrecondition is [parseRevisionPrecondition] with one
+// added rule: If-None-Match has no coherent meaning on a DELETE (it is a
+// PUT create-guard, "only if this id has never been activated"), so this
+// rejects it with 400 rather than silently accepting a header that would
+// always refuse against a live object anyway. If-Match is unchanged: the
+// same "delete only if this is still the revision I expect" guard PUT
+// already offers.
+func parseDeleteRevisionPrecondition(r *http.Request) (revisionPrecondition, *v1.Problem) {
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		return revisionPrecondition{}, problem
+	}
+	if precondition.Mode == revisionPreconditionIfNoneMatchCreate {
+		p := invalidParameterProblem(
+			`If-None-Match has no meaning on a DELETE (it asserts an id was never created); use If-Match to guard a delete against the revision you last read, or send neither`)
+		return revisionPrecondition{}, &p
+	}
+	return precondition, nil
+}
+
+// errConfigObjectCurrentlyActive is [deleteConfigObjectRevision]'s
+// refuseIfActive sentinel: id is the object a live "what is running now"
+// singleton (show.active or night.session.active) currently names, so
+// deleting it is refused rather than leaving that singleton pointing at
+// nothing. Unlike an ordinary dangling reference (an unremarkable, visible-
+// at-resolution-time outcome this design otherwise allows throughout),
+// this ONE case is cheap to prevent at the moment of the request itself,
+// because there is exactly one live selector per kind to check, not a
+// graph of ordinary references to scan.
+type errConfigObjectCurrentlyActive struct {
+	kind, id, activeKind string
+}
+
+func (e *errConfigObjectCurrentlyActive) Error() string {
+	return fmt.Sprintf("%s %q is currently named by %s and cannot be deleted", e.kind, e.id, e.activeKind)
+}
+
+// ProblemTypeConfigObjectCurrentlyActive is
+// [configObjectCurrentlyActiveProblem]'s own type URI.
+const ProblemTypeConfigObjectCurrentlyActive = ProblemBaseURI + "config-object-currently-active"
+
+// configObjectCurrentlyActiveProblem renders e as the 409 [v1.Problem]
+// handleDeleteShow/handleDeleteNightSession write when their own call to
+// deleteConfigObjectRevision reports errConfigObjectCurrentlyActive.
+func configObjectCurrentlyActiveProblem(e *errConfigObjectCurrentlyActive) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConfigObjectCurrentlyActive,
+		Title:  "Config delete refused: this object is the one currently active",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"%s %q is currently named by %s; change %s to something else first, then delete %s %q",
+			e.kind, e.id, e.activeKind, e.activeKind, e.kind, e.id),
+	}
+}
+
+// deleteConfigObjectRevision is every per-object kind's DELETE handler's
+// shared write core, mirroring writeShowConfigRevision's shape one
+// operation over. The caller has already decoded and required the
+// {"confirm":true} body before calling this: this function only tombstones
+// and audits.
+//
+// The object's TRUE row (tombstoned or not) is read once, inside the
+// transaction, via GetConfigObjectIncludingDeleted: that one read backs
+// both the If-Match precondition check and the audit entry's own
+// "revision" param, so there is nothing left to re-read once the tombstone
+// write itself runs. refuseIfActive, when non-nil, runs against that same
+// transaction right before the tombstone write and may return a non-nil
+// error to refuse the delete; nil for every kind but show and
+// night.session, which have exactly one live "what is running now"
+// singleton apiece to protect (show.active, night.session.active).
+//
+// [store.Store.TombstoneConfigObject] itself is what actually decides
+// "not found" (covering both "never existed" and "already deleted"
+// uniformly): this function does not duplicate that check.
+func (h *handlers) deleteConfigObjectRevision(r *http.Request, now time.Time, ac authContext, kind, id string, precondition revisionPrecondition, refuseIfActive func(ctx context.Context, tx *store.Tx) error) (int64, error) {
+	var revisionAtDelete int64
+	writeErr := h.deps.Identity.AuditedWrite(r.Context(), func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		obj, gerr := tx.GetConfigObjectIncludingDeleted(ctx, kind, id)
+		if gerr != nil {
+			return identity.AuditEntry{}, gerr
+		}
+		if err := checkRevisionPrecondition(kind, id, precondition, obj.CurrentRevision); err != nil {
+			return identity.AuditEntry{}, err
+		}
+		if refuseIfActive != nil {
+			if err := refuseIfActive(ctx, tx); err != nil {
+				return identity.AuditEntry{}, err
+			}
+		}
+		if _, terr := tx.TombstoneConfigObject(ctx, kind, id); terr != nil {
+			return identity.AuditEntry{}, terr
+		}
+		revisionAtDelete = obj.CurrentRevision
+
+		return identity.AuditEntry{
+			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+			Action: "config.delete", Target: kind + "/" + id,
+			Params: map[string]any{"revision": obj.CurrentRevision}, Kind: identity.AuditAdmin,
+		}, nil
+	})
+	if writeErr != nil {
+		return 0, writeErr
+	}
+	return revisionAtDelete, nil
+}
+
+// writeConfigDeleteResponse maps deleteConfigObjectRevision's own error
+// classes onto the response every DELETE handler in this package writes,
+// so that mapping is one shared function rather than eight copies. Returns
+// true when it wrote a response (success or a mapped failure); false means
+// the caller must still handle err as an unmapped internal error.
+func (h *handlers) writeConfigDeleteResponse(w http.ResponseWriter, now time.Time, kind, id string, err error) bool {
+	if err == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		writeProblem(w, h.logger, now, showConfigObjectNotFoundProblem(kind, id))
+		return true
+	}
+	var precond *errConfigRevisionPreconditionFailed
+	if errors.As(err, &precond) {
+		writeProblem(w, h.logger, now, configRevisionConflictProblem(precond))
+		return true
+	}
+	var active *errConfigObjectCurrentlyActive
+	if errors.As(err, &active) {
+		writeProblem(w, h.logger, now, configObjectCurrentlyActiveProblem(active))
+		return true
+	}
+	return false
 }
 
 // --- mapping: config.ShowAction/ShowMacroPayload -> v1 wire types ---

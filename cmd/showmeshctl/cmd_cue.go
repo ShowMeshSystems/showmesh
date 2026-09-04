@@ -60,6 +60,8 @@ func cmdCue(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		return cmdCueSet(rest, stdout, stderr, clock)
 	case "revisions":
 		return cmdCueRevisions(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdCueDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl cue: unknown subcommand %q\n\n", sub)
 		printCueUsage(stderr)
@@ -80,6 +82,11 @@ Subcommands:
   get <id>               show one cue's full definition
   set <id>               write a new cue revision (write, full replacement)
   revisions <id>         list revision history, newest first
+  delete --confirm <id>  tombstone this cue (write); revision history stays
+                          readable via "revisions". A show.playlist entry
+                          naming this cue afterward is not refused here; it
+                          reports the gap when actually resolved for
+                          dispatch, never a crash
 
 Run "showmeshctl cue <subcommand> --help" for flags specific to one
 subcommand.
@@ -293,6 +300,56 @@ func cmdCueRevisions(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitOK
 	}
 	printConfigRevisionsTable(stdout, resp)
+	return exitOK
+}
+
+// cmdCueDelete mirrors cmdSurfaceDelete's own shape (cmd_surface.go):
+// --confirm is required and checked locally before any request is sent. A
+// tombstone, not a hard delete: revision history stays readable through
+// "cue revisions" afterward.
+func cmdCueDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl cue delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this cue")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl cue delete --confirm <cue-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a show.cue object (DELETE /api/v1/config/show.cue/{id}). This")
+		_, _ = fmt.Fprintln(stderr, "is a tombstone, not a hard delete: the object's revision history still")
+		_, _ = fmt.Fprintln(stderr, "reads through \"cue revisions\" afterward. Requires config:write and")
+		_, _ = fmt.Fprintln(stderr, "--confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "cue delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl cue delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "cue delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/show.cue/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "cue delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "cue %s deleted\n", id)
 	return exitOK
 }
 

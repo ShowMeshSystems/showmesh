@@ -103,6 +103,10 @@ var migrations = []migration{
 	// (migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn's own
 	// doc comment).
 	{version: 29, fn: migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn},
+	// v30 (owner ruling, tombstone delete for every configuration kind):
+	// adds config_objects.deleted_at, a nullable tombstone marker
+	// (schemaV30's own doc comment).
+	{version: 30, sql: schemaV30},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1700,6 +1704,31 @@ func migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn(ctx context.Co
 	}
 	return nil
 }
+
+// schemaV30 (owner ruling, tombstone delete for every configuration kind)
+// adds config_objects.deleted_at: a nullable RFC3339Nano timestamp, NULL
+// for a live object, set the moment an operator deletes a per-object
+// configuration kind (audio.node, show, show.surface, show.action,
+// show.macro, show.cue, show.playlist, night.session). config_revisions is
+// untouched: a tombstone is a fact about config_objects' mutable pointer,
+// never a revision of its own, so ADR-009's immutable revision history
+// reads back unchanged before, during, and after a delete.
+//
+// A plain ALTER TABLE, like schemaV18's identical single-column addition:
+// every existing row's deleted_at is implicitly NULL, so every row this
+// store already holds is a live object after this migration runs, exactly
+// as it was before it. No data fix follows.
+//
+// The twelve singleton configuration kinds (fpp.endpoints, resolume.
+// instances, fpp.mqtt, assets.settings, show.emergencystop, show.active,
+// show.mode, audio.settings, fppconnect.settings, render.settings,
+// resolume.recovery, night.session.active) never have this column set:
+// this store's own repository methods (config.go) never call
+// TombstoneConfigObject for them, because the API layer registers no
+// DELETE route for a singleton path at all.
+const schemaV30 = `
+ALTER TABLE config_objects ADD COLUMN deleted_at TEXT;
+`
 
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):

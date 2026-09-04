@@ -1372,7 +1372,11 @@ export interface paths {
          */
         put: operations["putAudioNode"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete an audio.node object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body, mirroring DELETE /nodes/{nodeId}/declaration, so a mis-issued call cannot quietly remove it. This is a TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/audio.node/{id}/revisions after the delete. The object is immediately excluded from GET/list and from every resolution path built on it, including the ADR-029 action-binding check for a show.action whose target names this node. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history; it never resets to 1 and never collides with a revision already used. Optionally carries `If-Match` (the same revision guard PUT offers); `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteAudioNode"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1560,7 +1564,11 @@ export interface paths {
          */
         put: operations["putShowAction"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a show.action object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show.action/{id}/revisions. Excluded immediately from GET/list and from resolution. A show.macro step, night.session action binding, or show.emergencystop naming this id afterward is not refused here and is not cascaded: each already resolves a show.action id at the point it is actually used, and reports the gap there, never a crash. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteShowAction"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1618,7 +1626,11 @@ export interface paths {
          */
         put: operations["putShowMacro"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a show.macro object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show.macro/{id}/revisions. Excluded immediately from GET/list and from resolution. Nothing in this codebase's reference graph names a show.macro id from another configuration object: a macro is invoked directly, never referenced by id from another kind's payload. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteShowMacro"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1924,7 +1936,11 @@ export interface paths {
          */
         put: operations["putShow"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a show object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show/{id}/revisions. Excluded immediately from GET/list and from resolution. Refused with `409` when GET /config/show.active currently names this show id: that is the one live "what is running now" selector a show participates in, so it is checked at the moment of the request rather than left dangling. Every OTHER reference to this show id (show.surface/show.action/show.macro/show.cue/show.playlist/ night.session, all namespaced under it) is an ordinary configuration reference, not a live selector, and deleting a show does NOT cascade to any of them: they are left in place naming a tombstoned show id, and each already resolves "show" through its own existence check wherever a write depends on it. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteShow"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1982,7 +1998,11 @@ export interface paths {
          */
         put: operations["putShowSurface"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a show.surface object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show.surface/{id}/revisions. Excluded immediately from GET/list and from resolution. Nothing in this codebase's reference graph names a show.surface id from another configuration object (its own references run outward, to a show and a declared node, never inward), so there is no dangling reference to consider and no live selector to protect. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteShowSurface"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2040,7 +2060,11 @@ export interface paths {
          */
         put: operations["putShowCue"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a show.cue object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show.cue/{id}/revisions. Excluded immediately from GET/list and from resolution. A show.playlist entry naming this cue afterward is not refused here and is not cascaded: show.playlist resolves its own entries' cue references at the point actually used (a fallback-program compile), and the gap surfaces there as a safe failure, never a crash; this codebase has no pre-flight readiness check for show.playlist entries. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteShowCue"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2098,7 +2122,11 @@ export interface paths {
          */
         put: operations["putShowPlaylist"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a show.playlist object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show.playlist/{id}/revisions. Excluded immediately from GET/list and from resolution. Nothing in this codebase's reference graph names a show.playlist id from another configuration object. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteShowPlaylist"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2197,7 +2225,11 @@ export interface paths {
          */
         put: operations["putNightSession"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete a night.session object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/night.session/{id}/revisions. Excluded immediately from GET/list and from resolution. Refused with `409` when GET /config/night.session.active currently names this session id: the same live-selector exception `deleteShow` gets one kind over, since night.session.active is the one live "what is running now" pointer a session participates in. Its own action bindings (background audio, resting cue, siteControl/interlocks) name show.action ids, not the other direction, so deleting a session does not orphan anything downstream; a session naming a since-deleted show.action already reports that through the existing night-readiness surface, unchanged by this seam. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteNightSession"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2889,6 +2921,10 @@ export interface components {
         };
         /** @description Required body of DELETE /nodes/{nodeId}/declaration. `confirm` must be `true`, so a mis-issued call cannot quietly remove inventory - in addition to, never instead of, any confirmation dialog a UI client shows. */
         DeleteNodeDeclarationRequest: {
+            confirm: boolean;
+        };
+        /** @description Required body of DELETE on a per-object configuration kind's path (audio.node, show, show.surface, show.action, show.macro, show.cue, show.playlist, night.session). `confirm` must be `true`, mirroring DeleteNodeDeclarationRequest immediately above, so a mis-issued call cannot quietly tombstone a configuration object. */
+        ConfigObjectDeleteRequest: {
             confirm: boolean;
         };
         /** @description One configured FPP instance's current representation. `endpoint` never includes userinfo (credentials are stripped before this is ever rendered). */
@@ -8873,6 +8909,41 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deleteAudioNode: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getAudioNodeConfigRevisions: {
         parameters: {
             query?: never;
@@ -9184,6 +9255,41 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deleteShowAction: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listShowActionRevisions: {
         parameters: {
             query?: never;
@@ -9301,6 +9407,41 @@ export interface operations {
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteShowMacro: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
@@ -9849,6 +9990,41 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deleteShow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listShowRevisions: {
         parameters: {
             query?: never;
@@ -9967,6 +10143,41 @@ export interface operations {
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteShowSurface: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
@@ -10094,6 +10305,41 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    deleteShowCue: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listShowCueRevisions: {
         parameters: {
             query?: never;
@@ -10211,6 +10457,41 @@ export interface operations {
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteShowPlaylist: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
@@ -10416,6 +10697,41 @@ export interface operations {
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteNightSession: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];

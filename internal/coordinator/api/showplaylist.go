@@ -233,6 +233,14 @@ func (h *handlers) handleGetShowPlaylistRevisions(w http.ResponseWriter, r *http
 	h.handleGetShowConfigRevisions(w, r, config.ShowPlaylistConfigKind)
 }
 
+// handleDeleteShowPlaylist serves DELETE /api/v1/config/show.playlist/{id}:
+// a tombstone. Nothing in this codebase's reference graph names a
+// show.playlist id from another configuration object, so there is no
+// dangling reference to consider on this side.
+func (h *handlers) handleDeleteShowPlaylist(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowPlaylistConfigKind, nil)
+}
+
 func mapConfigShowPlaylistEntries(entries []config.ShowPlaylistEntry) []v1.ConfigShowPlaylistEntry {
 	out := make([]v1.ConfigShowPlaylistEntry, 0, len(entries))
 	for _, e := range entries {
