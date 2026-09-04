@@ -228,6 +228,48 @@ func TestPlaylistReadinessCueNotReady(t *testing.T) {
 	}
 }
 
+// TestPlaylistReadinessReportsTombstonedCueBeforeDispatch is the
+// dangling-reference pre-flight design's playlist edge acceptance
+// evidence: a show.playlist entry naming a show.cue that has since been
+// tombstone-deleted (docs/decisions' tombstone delete ADR) must be
+// visible through THIS existing readiness read, before the playlist is
+// ever dispatched, the same pre-flight visibility the audio-node binding
+// edge already has through nodeHasAudioNodeObject, and no new code: cueReady's own
+// st.GetConfigObject(ctx, config.ShowCueConfigKind, cueID) already reads
+// through store.getConfigObject's deleted_at filter
+// (internal/coordinator/store/config.go), so a tombstoned cue already
+// reads back exactly as [store.ErrConfigObjectNotFound] and this
+// condition already fires. See internal/coordinator/fallbackcompile/
+// tombstone_test.go's identical edge at actual dispatch time; this test
+// is the pre-flight counterpart the issue asks for, not a duplicate: that
+// test proves the run fails safely; this one proves an operator can see
+// the same fact before the run is ever submitted.
+func TestPlaylistReadinessReportsTombstonedCueBeforeDispatch(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+
+	if _, err := st.TombstoneConfigObject(context.Background(), config.ShowCueConfigKind, "cue-1"); err != nil {
+		t.Fatalf("tombstone show.cue: %v", err)
+	}
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: the referenced cue was tombstone-deleted")
+	}
+	if report.FailingCondition != ReadinessCueNotReady {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessCueNotReady)
+	}
+	if !strings.Contains(report.Reason, "cue-1") {
+		t.Fatalf("Reason = %q, want it to name the dangling cue id cue-1", report.Reason)
+	}
+}
+
 // TestPlaylistReadinessCorruptedCueRevisionLogsWarnAndStillReportsCueNotReady
 // asserts that a cue whose stored revision fails to decode is
 // silently demoted to [ReadinessCueNotReady], the same closed-vocabulary

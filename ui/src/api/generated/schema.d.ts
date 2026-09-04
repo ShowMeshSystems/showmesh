@@ -1702,7 +1702,7 @@ export interface paths {
         };
         /**
          * Re-resolve every show.action's stored target (Track E seam E7-2)
-         * @description The pre-show sweep: every show.action's own binding check, in one request. Never gated by any scope. `show`, when given, narrows the result to that show; a show id matching nothing returns an empty list, never a refusal - see `?show=` on `GET /config/show.action`.
+         * @description The pre-show sweep: every show.action's own binding check, in one request. Never gated by any scope. `show`, when given, narrows the result to that show; a show id matching nothing returns an empty list, never a refusal - see `?show=` on `GET /config/show.action`. The list also carries one entry per show.macro step whose own `action` id no longer names a live show.action (the tombstone delete design's referential-safety decision, macro edge) - `state: "broken"`, `reason` naming the macro id, step id and dangling action id, `show` the macro's own show. This is a different relation from an action's own target binding above - the referenced action is gone entirely, not merely misconfigured - surfaced through this same list because it answers the same kind of pre-show question with the same three-valued vocabulary. A step whose action still resolves adds nothing: this route never reports a healthy step as "ok" bindings that only exist for actions that are actually broken.
          */
         get: operations["listActionBindings"];
         put?: never;
@@ -4933,7 +4933,7 @@ export interface components {
             serverTime: string;
             binding: components["schemas"]["ActionBinding"];
         };
-        /** @description The body of GET /actions/bindings. */
+        /** @description The body of GET /actions/bindings. `bindings` mixes two relations under the same ActionBinding shape: every show.action's own target binding, and one entry per show.macro step whose `action` id no longer names a live show.action - see that operation's own description for the second case. */
         ActionBindingsResponse: {
             /** Format: date-time */
             serverTime: string;
