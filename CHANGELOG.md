@@ -10,6 +10,16 @@ release version is not the public API version (`/api/v1` moves independently).
 
 ## Unreleased
 
+### Audio
+
+- The resting background bed's fade-down now completes at the show boundary
+  when a fade-out is configured, instead of starting there.
+
+### Show authoring and control
+
+- start-night now runs a fresh readiness pass when the stored one has aged
+  out, instead of refusing.
+
 ## 0.1.0 - 2026-09-03
 
 First pre-release. Pre-alpha.
