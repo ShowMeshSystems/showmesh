@@ -1780,7 +1780,7 @@ export interface paths {
         put?: never;
         /**
          * Emergency stop, level 1: stop playout immediately
-         * @description Behind `show:emergencystop:invoke` - umbrella authority over the underlying FPP stop dispatch and every configured follow-up action, the identical shape `show:action:invoke` already has over its own dispatch (see that scope's own doc comment, `internal/coordinator/identity/types.go`). Dispatches FPP's "Stop Now" to every configured FPP instance CONCURRENTLY, then invokes this level's own configured `show.emergencystop.stop.actions` best-effort, in order. A follow-up action's own failure is reported per-action in `result.followUps` and NEVER changes `result.stopOutcomes` or this response's own success: the operator pressed the button to stop the show, and a follow-up that failed must never read as "the stop did not happen". NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read the configured FPP instance list is reported as one `failed` entry in `result.stopOutcomes` (never a silent empty array; see `result.noInstancesConfigured` for the actual zero-instance signal), and a failure to read this level's own follow-up configuration degrades to no follow-ups (see `result.followUpConfigError`) rather than aborting the stop. No night-session interaction of any kind - see `/emergency-stop/stop-power-down` for level 2.
+         * @description Behind `show:emergencystop:invoke` - umbrella authority over the underlying stop dispatch and every configured follow-up action, the identical shape `show:action:invoke` already has over its own dispatch (see that scope's own doc comment, `internal/coordinator/identity/types.go`). Dispatches, CONCURRENTLY, to all three target kinds: FPP's "Stop Now" to every configured FPP instance (`targetKind` `"fpp"`), `audio.node.silence` to every declared audio.node (`targetKind` `"node"`), and `resolume.blackout` to every configured Resolume instance (`targetKind` `"resolume"`) - then invokes this level's own configured `show.emergencystop.stop.actions` best-effort, in order. A follow-up action's own failure is reported per-action in `result.followUps` and NEVER changes `result.stopOutcomes` or this response's own success: the operator pressed the button to stop the show, and a follow-up that failed must never read as "the stop did not happen" - but a failed or refused entry in `result.stopOutcomes` itself, of ANY target kind, DOES fail this response. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read one kind's own configured/declared target list is reported as one `failed` entry of that kind in `result.stopOutcomes` (never a silent empty array for that kind; see `result.noInstancesConfigured` for the FPP-specific zero-instance signal), and a failure to read this level's own follow-up configuration degrades to no follow-ups (see `result.followUpConfigError`) rather than aborting the stop. No night-session interaction of any kind - see `/emergency-stop/stop-power-down` for level 2.
          */
         post: operations["emergencyStop"];
         delete?: never;
@@ -4303,15 +4303,20 @@ export interface components {
         EmergencyStopRequest: {
             idempotencyKey: string;
         };
-        /** @description One configured FPP instance's own stop dispatch outcome. */
+        /** @description One target's own stop dispatch outcome - a stopPlaylist against one configured FPP instance (targetKind "fpp"), an audio.node.silence against one declared audio.node (targetKind "node"), or a resolume.blackout against one configured Resolume instance (targetKind "resolume"). instanceId names the target within its own kind (the FPP instance id, the audio.node id, or the Resolume instance id) - only the (targetKind, instanceId) pair is unique across the whole stopOutcomes array. */
         EmergencyStopInstanceOutcome: {
             instanceId: string;
+            /**
+             * @description Which of the three target kinds this outcome is - the SAME spellings already used as commands.target_kind elsewhere in this contract. Minted and settled by the coordinator; never inferred from instanceId's own shape.
+             * @enum {string}
+             */
+            targetKind: "fpp" | "node" | "resolume";
             /** @enum {string} */
-            outcome: "confirmed" | "unconfirmed" | "refused" | "failed";
+            outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed";
             outcomeReason: string;
             /** Format: date-time */
             dispatchedAt: string | null;
-            /** @description True when this instance's own idempotency key was already dispatched; nothing was re-sent. */
+            /** @description True when this target's own idempotency key was already dispatched; nothing was re-sent. */
             replay: boolean;
         };
         /** @description One configured follow-up show.action's own best-effort invocation outcome. This NEVER affects the response's own success or `stopOutcomes` - a follow-up action's own failure must never read as "the stop did not happen". */
@@ -4332,14 +4337,14 @@ export interface components {
             outcome?: string;
             error?: string;
         };
-        /** @description The shared result shape every trigger route (stop, stop-power-down, and hard-stop's own fire) answers with. stopOutcomes and followUps are two SEPARATE arrays, deliberately with no combined success flag: a caller's exit code is driven by stopOutcomes alone. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK THE STOP: reading the configured FPP instance list, the night-session step, and reading this level's own follow-up configuration each degrade independently and are reported here rather than turning a stop that could otherwise proceed into a failed response. */
+        /** @description The shared result shape every trigger route (stop, stop-power-down, and hard-stop's own fire) answers with. stopOutcomes and followUps are two SEPARATE arrays, deliberately with no combined success flag: a caller's exit code is driven by stopOutcomes alone. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK THE STOP: reading the configured FPP instance list, the declared audio.node list, the configured Resolume instance list, the night-session step, and reading this level's own follow-up configuration each degrade independently and are reported here rather than turning a stop that could otherwise proceed into a failed response. */
         EmergencyStopResult: {
             /** @enum {string} */
             level: "stop" | "stop-power-down" | "hard-stop";
             idempotencyKey: string;
-            /** @description NEVER null and never silently empty on a failure to read the configured instance list, which is instead reported as one "failed" entry here. Empty if and only if noInstancesConfigured is true. */
+            /** @description Every fpp, node, and resolume target's own outcome together, in no particular order - group by targetKind for a per-kind view. NEVER null, and never silently empty for a kind on a failure to read that kind's own configured/declared target list, which is instead reported as one "failed" entry of that kind here. The fpp entries are empty if and only if noInstancesConfigured is true; a genuinely empty declared-node or configured-Resolume- instance list produces zero entries of that kind with no dedicated flag of its own, distinguishable from a read failure because a read failure always produces one entry of that kind. */
             stopOutcomes: components["schemas"]["EmergencyStopInstanceOutcome"][];
-            /** @description The POSITIVE signal that zero FPP instances are configured, distinct from a failure to read the configured instance list. A caller must read this field rather than infer "nothing to stop" from an empty stopOutcomes array. */
+            /** @description The POSITIVE signal that zero FPP instances SPECIFICALLY are configured, distinct from a failure to read the configured FPP instance list. This is one signal about one of stopOutcomes' three target kinds, not "nothing was dispatched" - it says nothing about node or resolume targets. A caller must read this field rather than infer "no FPP instance was stopped" from an empty stopOutcomes array, and must not infer anything about the other two kinds from it. */
             noInstancesConfigured: boolean;
             nightSession?: components["schemas"]["EmergencyStopNightSessionOutcome"];
             followUps: components["schemas"]["EmergencyStopFollowUpResult"][];

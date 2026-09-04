@@ -40,6 +40,7 @@ import {
   unmuteAudioSessionOutput,
   type AudioSessionCommandResult,
   type ConfigObjectSummary,
+  type EmergencyStopInstanceOutcome,
   type EmergencyStopResult,
   type FPPCommandResult,
   type FPPPlaylistDefinitionMetadata,
@@ -179,7 +180,25 @@ type EmergencyOutcomeState =
 function instanceOutcomeTone(outcome: string): Tone {
   if (outcome === 'confirmed') return 'good'
   if (outcome === 'unconfirmed') return 'warn'
+  if (outcome === 'unconfirmable') return 'unknown'
   return 'bad' // refused | failed
+}
+
+/** The three target-kind groups stopOutcomes is dispatched to, in display order, each with its own label and column heading. */
+const STOP_OUTCOME_TARGET_KIND_GROUPS: Array<{ kind: string; label: string; column: string }> = [
+  { kind: 'fpp', label: 'FPP', column: 'FPP instance' },
+  { kind: 'node', label: 'audio node', column: 'Audio node' },
+  { kind: 'resolume', label: 'Resolume', column: 'Resolume instance' },
+]
+
+/** result.stopOutcomes grouped by targetKind, in [STOP_OUTCOME_TARGET_KIND_GROUPS] order - an operator reads what stopped, what refused, and what was never reached, per kind, rather than one flat list mixing FPP players, audio nodes, and Resolume instances together. */
+function groupStopOutcomesByTargetKind(
+  stopOutcomes: EmergencyStopInstanceOutcome[],
+): Array<{ kind: string; label: string; column: string; outcomes: EmergencyStopInstanceOutcome[] }> {
+  return STOP_OUTCOME_TARGET_KIND_GROUPS.map((g) => ({
+    ...g,
+    outcomes: stopOutcomes.filter((row) => row.targetKind === g.kind),
+  }))
 }
 
 function followUpOutcomeTone(outcome: string | undefined): Tone {
@@ -191,10 +210,12 @@ function followUpOutcomeTone(outcome: string | undefined): Tone {
 }
 
 /**
- * Renders exactly what the coordinator reported: every FPP instance's own
- * outcome, the night-session step where the level has one, and every
- * configured follow-up action's own outcome. Partial success stays
- * partial success: there is no combined pass/fail rollup.
+ * Renders exactly what the coordinator reported: every target's own
+ * outcome grouped by target kind (FPP, audio node, Resolume - what
+ * stopped, what refused, and what was never reached, per kind), the
+ * night-session step where the level has one, and every configured
+ * follow-up action's own outcome. Partial success stays partial success:
+ * there is no combined pass/fail rollup.
  */
 function EmergencyStopOutcome({ outcome }: { outcome: EmergencyOutcomeState | null }) {
   if (outcome === null) return null
@@ -205,41 +226,46 @@ function EmergencyStopOutcome({ outcome }: { outcome: EmergencyOutcomeState | nu
     return <Notice tone="bad" headline={headline} />
   }
   const { level, result } = outcome
+  const groups = groupStopOutcomesByTargetKind(result.stopOutcomes)
   return (
     <div className="sm-lc-emergency__outcome">
       <p className="sm-small">
         <strong>{EMERGENCY_LEVEL_LABEL[level]}</strong> was dispatched.
       </p>
-      {result.noInstancesConfigured ? (
+      {result.noInstancesConfigured && (
         <RuledStrip
           absence="empty"
           label="No FPP instances"
-          fact="No FPP instance is configured on this coordinator, so nothing was stopped."
+          fact="No FPP instance is configured on this coordinator, so nothing was stopped on FPP."
         />
-      ) : (
-        <TableWrap label="Emergency stop, per FPP instance">
-          <Table minWidth={480}>
-            <thead>
-              <tr>
-                <th scope="col">FPP instance</th>
-                <th scope="col">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.stopOutcomes.map((row) => (
-                <tr key={row.instanceId}>
-                  <td>
-                    <span className="sm-data">{row.instanceId}</span>
-                  </td>
-                  <td>
-                    <StatusPair tone={instanceOutcomeTone(row.outcome)} label={row.outcome} />
-                    <p className="sm-small sm-muted">{row.outcomeReason}</p>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </TableWrap>
+      )}
+      {groups.map(
+        (group) =>
+          group.outcomes.length > 0 && (
+            <TableWrap key={group.kind} label={`Emergency stop, per ${group.label} target`}>
+              <Table minWidth={480}>
+                <thead>
+                  <tr>
+                    <th scope="col">{group.column}</th>
+                    <th scope="col">Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.outcomes.map((row) => (
+                    <tr key={row.instanceId}>
+                      <td>
+                        <span className="sm-data">{row.instanceId}</span>
+                      </td>
+                      <td>
+                        <StatusPair tone={instanceOutcomeTone(row.outcome)} label={row.outcome} />
+                        <p className="sm-small sm-muted">{row.outcomeReason}</p>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ),
       )}
       {result.nightSession !== undefined && (
         <p className="sm-small sm-muted">
@@ -611,7 +637,7 @@ export function LiveControl() {
       <Section
         id="lc-emergency"
         title="Emergency stop"
-        detail="Every configured FPP instance, independent of which one is selected above. Resolume blackout, below, is the separate, per-instance visual path."
+        detail="Every configured FPP instance, independent of which one is selected above. Resolume blackout, below, fires the identical blackout the emergency stop already dispatches, not a separate path."
       >
         <div className="sm-lc-emergency">
           <ButtonRow>

@@ -28,7 +28,7 @@ var errFakeNightSessionRead = errors.New("emergencystop_degrade_test: injected n
 
 func TestEmergencyStopRegistryReadFailureReportsAFailedOutcomeNotSuccess(t *testing.T) {
 	now := time.Now()
-	f := newEmergencyStopFixtureWithDeps(t, now, &fakeFPPLister{err: errFakeFPPListInstances}, nil)
+	f := newEmergencyStopFixtureWithDeps(t, now, &fakeFPPLister{err: errFakeFPPListInstances}, nil, nil, nil)
 	f.putConfig(t, emergencyStopEmptyLevelsBody())
 
 	req := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/stop", `{"idempotencyKey":"key-1"}`,
@@ -60,7 +60,7 @@ func TestEmergencyStopRegistryFailureAndZeroInstancesAreWireDistinguishable(t *t
 	c := newOpenAPICompiler(t)
 	now := time.Now()
 
-	failing := newEmergencyStopFixtureWithDeps(t, now, &fakeFPPLister{err: errFakeFPPListInstances}, nil)
+	failing := newEmergencyStopFixtureWithDeps(t, now, &fakeFPPLister{err: errFakeFPPListInstances}, nil, nil, nil)
 	failing.putConfig(t, emergencyStopEmptyLevelsBody())
 	failReq := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/stop", `{"idempotencyKey":"key-1"}`,
 		map[string]string{"Authorization": "Bearer " + failing.adminToken})
@@ -70,7 +70,7 @@ func TestEmergencyStopRegistryFailureAndZeroInstancesAreWireDistinguishable(t *t
 	}
 	assertMatchesSchema(t, c, "EmergencyStopResponse", failBody)
 
-	zero := newEmergencyStopFixtureWithDeps(t, now, &fakeFPPLister{views: nil}, nil)
+	zero := newEmergencyStopFixtureWithDeps(t, now, &fakeFPPLister{views: nil}, nil, nil, nil)
 	zero.putConfig(t, emergencyStopEmptyLevelsBody())
 	zeroReq := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/stop", `{"idempotencyKey":"key-1"}`,
 		map[string]string{"Authorization": "Bearer " + zero.adminToken})
@@ -104,7 +104,7 @@ func TestEmergencyStopRegistryFailureAndZeroInstancesAreWireDistinguishable(t *t
 
 func TestEmergencyStopNightSessionReadFailureDegradesAndStillDispatchesAndRunsFollowUps(t *testing.T) {
 	now := time.Now()
-	f := newEmergencyStopFixtureWithDeps(t, now, nil, &erroringNightSessionStore{err: errFakeNightSessionRead}, "player-01")
+	f := newEmergencyStopFixtureWithDeps(t, now, nil, &erroringNightSessionStore{err: errFakeNightSessionRead}, nil, nil, "player-01")
 	f.putConfig(t, emergencyStopWorklightsOnPowerDownBody())
 
 	req := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/stop-power-down", `{"idempotencyKey":"key-1"}`,

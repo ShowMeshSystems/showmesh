@@ -314,8 +314,8 @@ describe('Live Control', () => {
         level: 'stop',
         idempotencyKey: 'k1',
         stopOutcomes: [
-          { instanceId: 'main-player', outcome: 'confirmed', outcomeReason: 'Stopped.', dispatchedAt: null, replay: false },
-          { instanceId: 'lobby-player', outcome: 'failed', outcomeReason: 'Unreachable.', dispatchedAt: null, replay: false },
+          { instanceId: 'main-player', targetKind: 'fpp', outcome: 'confirmed', outcomeReason: 'Stopped.', dispatchedAt: null, replay: false },
+          { instanceId: 'lobby-player', targetKind: 'fpp', outcome: 'failed', outcomeReason: 'Unreachable.', dispatchedAt: null, replay: false },
         ],
         noInstancesConfigured: false,
         followUps: [{ actionId: 'act-1', label: 'Notify staff', outcome: 'confirmed', outcomeReason: 'Ran.' }],
@@ -331,6 +331,33 @@ describe('Live Control', () => {
     expect(screen.getByText('Unreachable.')).toBeInTheDocument()
     expect(screen.getByText('Notify staff')).toBeInTheDocument()
     expect(stubs.emergencyStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('groups stopOutcomes by target kind so an operator reads what stopped, refused, or was never reached per kind', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    stubs.emergencyStop = vi.fn(() =>
+      Promise.resolve({
+        level: 'stop',
+        idempotencyKey: 'k1',
+        stopOutcomes: [
+          { instanceId: 'main-player', targetKind: 'fpp', outcome: 'confirmed', outcomeReason: 'Stopped.', dispatchedAt: null, replay: false },
+          { instanceId: 'stage-node', targetKind: 'node', outcome: 'confirmed', outcomeReason: 'Silenced.', dispatchedAt: null, replay: false },
+          { instanceId: 'arena-1', targetKind: 'resolume', outcome: 'failed', outcomeReason: 'Transport error.', dispatchedAt: null, replay: false },
+        ],
+        noInstancesConfigured: false,
+        followUps: [],
+      }),
+    )
+    renderScreen({ session: emergencyAllowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(await screen.findByText('main-player')).toBeInTheDocument()
+
+    expect(screen.getByRole('region', { name: 'Emergency stop, per FPP target' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Emergency stop, per audio node target' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Emergency stop, per Resolume target' })).toBeInTheDocument()
+    expect(screen.getByText('stage-node')).toBeInTheDocument()
+    expect(screen.getByText('arena-1')).toBeInTheDocument()
+    expect(screen.getByText('Transport error.')).toBeInTheDocument()
   })
 
   it('sends nothing when level 1 stop’s confirmation is cancelled', () => {
@@ -349,7 +376,7 @@ describe('Live Control', () => {
       Promise.resolve({
         level: 'hard-stop',
         idempotencyKey: 'k2',
-        stopOutcomes: [{ instanceId: 'main-player', outcome: 'confirmed', outcomeReason: `Stopped (${armToken}).`, dispatchedAt: null, replay: false }],
+        stopOutcomes: [{ instanceId: 'main-player', targetKind: 'fpp', outcome: 'confirmed', outcomeReason: `Stopped (${armToken}).`, dispatchedAt: null, replay: false }],
         noInstancesConfigured: false,
         nightSession: { present: false },
         followUps: [],
@@ -406,7 +433,7 @@ describe('Live Control', () => {
       Promise.resolve({
         level: 'hard-stop',
         idempotencyKey: 'k3',
-        stopOutcomes: [{ instanceId: 'main-player', outcome: 'confirmed', outcomeReason: `Stopped (${armToken}).`, dispatchedAt: null, replay: false }],
+        stopOutcomes: [{ instanceId: 'main-player', targetKind: 'fpp', outcome: 'confirmed', outcomeReason: `Stopped (${armToken}).`, dispatchedAt: null, replay: false }],
         noInstancesConfigured: false,
         nightSession: { present: false },
         followUps: [],

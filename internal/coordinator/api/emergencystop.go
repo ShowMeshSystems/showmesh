@@ -20,11 +20,17 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/command"
 )
 
-// Three emergency-stop levels, each stopping playout on every
-// configured FPP instance immediately, each with its own OPTIONAL,
-// best-effort follow-up show.action list (show.emergencystop.go handles
-// that configuration kind's own GET/PUT/revisions; this file is the four
-// trigger routes).
+// Three emergency-stop levels, each dispatching CONCURRENTLY, immediately,
+// to three target kinds - stopPlaylist to every configured FPP instance,
+// audio.node.silence to every declared audio.node, and resolume.blackout
+// to every configured Resolume instance (see [v1.EmergencyStopTargetKindFPP]
+// and its siblings) - each with its own OPTIONAL, best-effort follow-up
+// show.action list (show.emergencystop.go handles that configuration
+// kind's own GET/PUT/revisions; this file is the four trigger routes).
+// Every one of those three families lands in StopOutcomes carrying which
+// kind of target it was: a failed blackout or a refusing node FAILS the
+// operation exactly the way a failed FPP stop already did, instead of
+// sitting unnoticed in the best-effort FollowUps array.
 //
 //   - stop            (level 1): the immediate stop and its follow-ups.
 //   - stop-power-down (level 2): the immediate stop, PLUS forcing the
@@ -77,8 +83,15 @@ const maxEmergencyStopIdempotencyKeyLength = 64
 // emergencyStopInstanceListUnavailableID is the synthetic instanceId used
 // for the ONE outcome entry [handlers.emergencyStopAllInstances] returns
 // when the configured FPP instance list itself could not be read: never a
-// real instance id, and never mistaken for one.
-const emergencyStopInstanceListUnavailableID = "(fpp-instance-list)"
+// real instance id, and never mistaken for one. emergencyStopNodeListUnavailableID
+// and emergencyStopResolumeListUnavailableID are its siblings for the
+// other two target kinds, the identical "a read failure is one synthetic
+// failed entry, never a silently empty result" rule applied to each.
+const (
+	emergencyStopInstanceListUnavailableID = "(fpp-instance-list)"
+	emergencyStopNodeListUnavailableID     = "(audio-node-list)"
+	emergencyStopResolumeListUnavailableID = "(resolume-instance-list)"
+)
 
 // The three level names on the wire, in URL paths, and in this build's own
 // three minted audit action strings, deliberately the SAME spelling in
@@ -272,19 +285,25 @@ func emergencyStopValidateIdempotencyKey(idempotencyKey string) error {
 // a second stop, the identical protection a broker redelivery gets for
 // free from the SAME mechanism.
 //
-// noInstancesConfigured is the ONLY honest source of "nothing to stop": a
-// failure to READ the configured instance list is a different fact from
-// a confirmed empty list, and the two must never be wire-identical. A read
-// failure returns ONE synthetic "failed" outcome entry instead (never a
-// nil or empty slice), so the returned slice is empty if and only if
-// noInstancesConfigured is true - satisfying [v1.EmergencyStopResult]'s
-// own required, never-null stopOutcomes array either way.
+// noInstancesConfigured is the ONLY honest source of "nothing to stop [on
+// FPP]": a failure to READ the configured instance list is a different
+// fact from a confirmed empty list, and the two must never be
+// wire-identical. A read failure returns ONE synthetic "failed" outcome
+// entry instead (never a nil or empty slice), so the returned slice is
+// empty if and only if noInstancesConfigured is true - satisfying
+// [v1.EmergencyStopResult]'s own required, never-null stopOutcomes array
+// either way. This method's own return value covers ONLY the fpp target
+// kind; [handlers.emergencyStopAllAudioNodes] and
+// [handlers.emergencyStopAllResolumeInstances] are its siblings for the
+// other two, combined into one StopOutcomes array by
+// [handlers.emergencyStopDispatchAllTargets].
 func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) (outcomes []v1.EmergencyStopInstanceOutcome, noInstancesConfigured bool) {
 	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
 	if err != nil {
 		h.logWarn("emergency stop: failed to list configured FPP instances; no stop could be dispatched", "error", err)
 		return []v1.EmergencyStopInstanceOutcome{{
 			InstanceID:    emergencyStopInstanceListUnavailableID,
+			TargetKind:    v1.EmergencyStopTargetKindFPP,
 			Outcome:       "failed",
 			OutcomeReason: fmt.Sprintf("could not list configured FPP instances, so no stop could be dispatched to any of them: %v", err),
 		}}, false
@@ -311,13 +330,13 @@ func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time,
 			})
 			switch {
 			case err != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, Outcome: "failed", OutcomeReason: "this stop could not be dispatched because of an internal coordinator error"}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: "this stop could not be dispatched because of an internal coordinator error"}
 			case problem != nil:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, Outcome: "refused", OutcomeReason: problem.Detail}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "refused", OutcomeReason: problem.Detail}
 			case outcome.DispatchFailed:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, Outcome: "failed", OutcomeReason: fmt.Sprintf("the request to %s did not succeed, so this stop never reached it", instanceID), DispatchedAt: formatTimePtr(outcome.DispatchedAt), Replay: outcome.Replay}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: "failed", OutcomeReason: fmt.Sprintf("the request to %s did not succeed, so this stop never reached it", instanceID), DispatchedAt: formatTimePtr(outcome.DispatchedAt), Replay: outcome.Replay}
 			default:
-				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, Outcome: outcome.Outcome, OutcomeReason: outcome.OutcomeReason, DispatchedAt: formatTimePtr(outcome.DispatchedAt), Replay: outcome.Replay}
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindFPP, Outcome: outcome.Outcome, OutcomeReason: outcome.OutcomeReason, DispatchedAt: formatTimePtr(outcome.DispatchedAt), Replay: outcome.Replay}
 			}
 		}(i, ep.ID)
 	}
@@ -327,6 +346,181 @@ func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time,
 
 func emergencyStopInstanceIdempotencyKey(idempotencyKey, instanceID string) string {
 	return "emergencystop:" + idempotencyKey + ":fpp:" + instanceID
+}
+
+// --- dispatching audio.node.silence across every declared audio.node ---
+
+// declaredAudioNodeIDs lists every "audio.node" config object's own id
+// with an active revision - this coordinator's own record of which audio
+// nodes are DECLARED, independent of whether any of them is currently
+// online or even reachable (mirrors listAudioNodeSummaries' identical
+// ListConfigObjects walk, audionode.go, narrowed to ids only: the
+// emergency stop does not need each node's own payload, only which ids to
+// dispatch audio.node.silence to).
+func (h *handlers) declaredAudioNodeIDs(ctx context.Context) ([]string, error) {
+	objs, err := h.deps.Config.ListConfigObjects(ctx, config.AudioNodeConfigKind)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(objs))
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		out = append(out, obj.ID)
+	}
+	return out, nil
+}
+
+// emergencyStopAllAudioNodes dispatches audio.node.silence
+// (h.executeAudioNodeSilenceDispatch, the SAME core dispatch
+// POST /nodes/{nodeId}/audio/silence uses - audionodesilence.go) to every
+// declared audio.node CONCURRENTLY, mirroring
+// [handlers.emergencyStopAllInstances]'s identical "one target must never
+// wait on another" reasoning and its identical read-failure-vs-genuinely-
+// empty distinction (a list-read failure is ONE synthetic "failed" entry,
+// never a silently empty result). audio.node.silence is exempt from
+// ADR-024 decision 11's safety class (audiodispatch.go's
+// audioSafetyExemptActions) and carries no wire staleness deadline
+// (executeAudioNodeSilenceDispatch's own doc comment) - this method adds
+// no gate of its own on top of that.
+func (h *handlers) emergencyStopAllAudioNodes(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) []v1.EmergencyStopInstanceOutcome {
+	nodeIDs, err := h.declaredAudioNodeIDs(ctx)
+	if err != nil {
+		h.logWarn("emergency stop: failed to list declared audio.node ids; no silence could be dispatched", "error", err)
+		return []v1.EmergencyStopInstanceOutcome{{
+			InstanceID:    emergencyStopNodeListUnavailableID,
+			TargetKind:    v1.EmergencyStopTargetKindNode,
+			Outcome:       "failed",
+			OutcomeReason: fmt.Sprintf("could not list declared audio.node ids, so no silence could be dispatched to any of them: %v", err),
+		}}
+	}
+	if len(nodeIDs) == 0 {
+		return []v1.EmergencyStopInstanceOutcome{}
+	}
+
+	out := make([]v1.EmergencyStopInstanceOutcome, len(nodeIDs))
+	var wg sync.WaitGroup
+	for i, nodeID := range nodeIDs {
+		wg.Add(1)
+		go func(i int, nodeID string) {
+			defer wg.Done()
+			result, problem, err := h.executeAudioNodeSilenceDispatch(ctx, now, AudioNodeSilenceDispatchInput{
+				NodeID: nodeID, IdempotencyKey: emergencyStopNodeIdempotencyKey(idempotencyKey, nodeID),
+				IssuerID: ac.result.Principal.ID, IssuerName: ac.result.Principal.Name,
+				IssuerForm: ac.result.Form, IssuerCredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
+			})
+			switch {
+			case err != nil:
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "failed", OutcomeReason: "this silence could not be dispatched because of an internal coordinator error"}
+			case problem != nil:
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: "refused", OutcomeReason: problem.Detail}
+			default:
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: nodeID, TargetKind: v1.EmergencyStopTargetKindNode, Outcome: result.Outcome, OutcomeReason: result.Reason, DispatchedAt: nonEmptyStrPtr(result.DispatchedAt), Replay: result.Replay}
+			}
+		}(i, nodeID)
+	}
+	wg.Wait()
+	return out
+}
+
+func emergencyStopNodeIdempotencyKey(idempotencyKey, nodeID string) string {
+	return "emergencystop:" + idempotencyKey + ":node:" + nodeID
+}
+
+// --- dispatching resolume.blackout across every configured Resolume instance ---
+
+// emergencyStopResolumeBlackoutAction is the wire action name
+// [ResolumeActionDispatcher.Dispatch] and [resolumeActionAuditNames]
+// ("blackout": "resolume.blackout") both already use - not a new name
+// minted here, this endpoint's own copy of the existing literal so the
+// dispatch call site below does not repeat it inline.
+const emergencyStopResolumeBlackoutAction = "blackout"
+
+// emergencyStopAllResolumeInstances dispatches "blackout"
+// (h.deps.ResolumeActions.Dispatch, the SAME dispatch seam a configured
+// follow-up action's own Resolume step already calls -
+// dispatchActionTarget's config.ShowActionIntegrationResolume case,
+// actioninvoke.go) to every configured Resolume instance CONCURRENTLY,
+// mirroring [handlers.emergencyStopAllInstances]'s identical
+// read-failure-vs-genuinely-empty distinction. blackout is exempt from
+// ADR-024 decision 11's safety class (resolumeaction_interfaces.go) - this
+// method adds no gate of its own on top of that, and - like the follow-up
+// path it mirrors - dispatches directly through the interface method
+// rather than through POST /resolume/actions' own idempotency-keyed
+// command-row bookkeeping, which that HTTP surface owns and this
+// installation-wide stop does not need: blackout is naturally idempotent
+// (disconnecting every already-disconnected layer again is a no-op).
+// Dispatch bounds itself (resolume.ActionDispatcher's own internal
+// baseline/write/confirm phase budgets), so this method adds no deadline
+// of its own on top of that either.
+func (h *handlers) emergencyStopAllResolumeInstances(ctx context.Context, now time.Time) []v1.EmergencyStopInstanceOutcome {
+	instanceIDs, err := currentResolumeInstanceIDs(ctx, h.deps.Resolume)
+	if err != nil {
+		h.logWarn("emergency stop: failed to list configured Resolume instances; no blackout could be dispatched", "error", err)
+		return []v1.EmergencyStopInstanceOutcome{{
+			InstanceID:    emergencyStopResolumeListUnavailableID,
+			TargetKind:    v1.EmergencyStopTargetKindResolume,
+			Outcome:       "failed",
+			OutcomeReason: fmt.Sprintf("could not list configured Resolume instances, so no blackout could be dispatched to any of them: %v", err),
+		}}
+	}
+	if len(instanceIDs) == 0 {
+		return []v1.EmergencyStopInstanceOutcome{}
+	}
+
+	out := make([]v1.EmergencyStopInstanceOutcome, len(instanceIDs))
+	var wg sync.WaitGroup
+	for i, instanceID := range instanceIDs {
+		wg.Add(1)
+		go func(i int, instanceID string) {
+			defer wg.Done()
+			result, err := h.deps.ResolumeActions.Dispatch(ctx, emergencyStopResolumeBlackoutAction, map[string]any{}, now)
+			if err != nil {
+				out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: "failed", OutcomeReason: "this blackout could not be dispatched because of an internal coordinator error"}
+				return
+			}
+			out[i] = v1.EmergencyStopInstanceOutcome{InstanceID: instanceID, TargetKind: v1.EmergencyStopTargetKindResolume, Outcome: mapResolumeOutcomeWord(result.Outcome), OutcomeReason: result.Reason, DispatchedAt: formatTimePtr(result.DispatchedAt)}
+		}(i, instanceID)
+	}
+	wg.Wait()
+	return out
+}
+
+// --- combining every target kind's own outcomes into one StopOutcomes array ---
+
+// emergencyStopDispatchAllTargets runs every target kind's own dispatch
+// (emergencyStopAllInstances, emergencyStopAllAudioNodes,
+// emergencyStopAllResolumeInstances) CONCURRENTLY WITH EACH OTHER, not
+// merely internally concurrent within its own kind: one slow or wedged
+// target of any kind must never delay another kind's own dispatch. The
+// three returned slices are concatenated into one StopOutcomes array in a
+// fixed fpp/node/resolume order, for a deterministic response shape - the
+// dispatch itself has already completed by the time this order is
+// applied, so it affects nothing but readability.
+func (h *handlers) emergencyStopDispatchAllTargets(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) (outcomes []v1.EmergencyStopInstanceOutcome, noInstancesConfigured bool) {
+	var fppOutcomes, nodeOutcomes, resolumeOutcomes []v1.EmergencyStopInstanceOutcome
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		fppOutcomes, noInstancesConfigured = h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
+	}()
+	go func() {
+		defer wg.Done()
+		nodeOutcomes = h.emergencyStopAllAudioNodes(ctx, now, idempotencyKey, ac, clientAddr)
+	}()
+	go func() {
+		defer wg.Done()
+		resolumeOutcomes = h.emergencyStopAllResolumeInstances(ctx, now)
+	}()
+	wg.Wait()
+
+	outcomes = make([]v1.EmergencyStopInstanceOutcome, 0, len(fppOutcomes)+len(nodeOutcomes)+len(resolumeOutcomes))
+	outcomes = append(outcomes, fppOutcomes...)
+	outcomes = append(outcomes, nodeOutcomes...)
+	outcomes = append(outcomes, resolumeOutcomes...)
+	return outcomes, noInstancesConfigured
 }
 
 // --- dispatching one level's own optional, best-effort follow-up actions ---
@@ -537,7 +731,7 @@ func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 	ac := authFromContext(r.Context())
 	clientAddr := h.clientAddr(r)
 
-	stopOutcomes, noInstancesConfigured := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
+	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, idempotencyKey, ac, clientAddr)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.Stop.Actions, ac, clientAddr)
 
@@ -570,7 +764,7 @@ func (h *handlers) handleEmergencyStopPowerDown(w http.ResponseWriter, r *http.R
 	clientAddr := h.clientAddr(r)
 	issuer := h.emergencyStopIssuer(now, ac, clientAddr)
 
-	stopOutcomes, noInstancesConfigured := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
+	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, idempotencyKey, ac, clientAddr)
 	nightOutcome := h.nightEmergencyPowerDown(ctx, now, issuer)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.StopPowerDown.Actions, ac, clientAddr)
@@ -680,7 +874,7 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 	// Past this point nothing may refuse the request: the token is spent,
 	// and every remaining step degrades rather than aborting.
 	ctx := context.WithoutCancel(r.Context())
-	stopOutcomes, noInstancesConfigured := h.emergencyStopAllInstances(ctx, now, top.IdempotencyKey, ac, clientAddr)
+	stopOutcomes, noInstancesConfigured := h.emergencyStopDispatchAllTargets(ctx, now, top.IdempotencyKey, ac, clientAddr)
 	nightOutcome := h.nightEmergencyEndSession(ctx, now, issuer)
 	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, top.IdempotencyKey, payload.HardStop.Actions, ac, clientAddr)

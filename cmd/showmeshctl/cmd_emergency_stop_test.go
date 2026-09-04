@@ -42,6 +42,23 @@ func TestExitCodeForEmergencyStopResultTakesTheWorstStopOutcome(t *testing.T) {
 	}
 }
 
+// TestExitCodeForEmergencyStopResultTakesTheWorstAcrossAllThreeTargetKinds
+// is showmeshctl's own side of mutation M1's coverage: exitCodeForEmergencyStopResult
+// takes the worst outcome across StopOutcomes regardless of targetKind, so
+// a failed Resolume blackout fails the whole operation exactly the way a
+// failed FPP stop already did, even while every other target confirmed.
+func TestExitCodeForEmergencyStopResultTakesTheWorstAcrossAllThreeTargetKinds(t *testing.T) {
+	outcomes := []emergencyStopInstanceOutcome{
+		{InstanceID: "player-01", TargetKind: "fpp", Outcome: "confirmed"},
+		{InstanceID: "node-a", TargetKind: "node", Outcome: "confirmed"},
+		{InstanceID: "arena-1", TargetKind: "resolume", Outcome: "failed", OutcomeReason: "transport error"},
+	}
+	got := exitCodeForEmergencyStopResult(emergencyStopResult{StopOutcomes: outcomes})
+	if got != exitActionFailed {
+		t.Fatalf("exitCodeForEmergencyStopResult(fpp+node confirmed, resolume failed) = %d, want exitActionFailed (%d)", got, exitActionFailed)
+	}
+}
+
 // An empty StopOutcomes array WITHOUT noInstancesConfigured set (a
 // coordinator that predates this field, or a malformed response) used to
 // read as a silent success: exit 0, nothing printed. That is the exact
