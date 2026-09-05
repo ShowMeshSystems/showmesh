@@ -1358,7 +1358,7 @@ func TestNightClearBackgroundAudioAtEndSession_RepeatedCallDoesNotRedispatch(t *
 }
 
 // TestNightClearBackgroundAudioAtEndSession_WithholdsClearUntilFadeSettles
-// proves SM-520's fix: end-session's own synchronous clear must never race
+// proves the fix: end-session's own synchronous clear must never race
 // a fade-down still ramping from the ordinary resting-exit path. The clear
 // is withheld while the node reports the fade in_progress, and dispatched
 // once it reports settled.
