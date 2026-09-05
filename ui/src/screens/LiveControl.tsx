@@ -887,14 +887,6 @@ function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | und
       </div>
     )
   }
-  if (state.nodes.length === 0) {
-    return (
-      <div className="sm-outcome">
-        <StatusPair tone="warn" label="Accepted" />
-        <p className="sm-outcome__detail">Accepted, but no node currently resolves this cue.</p>
-      </div>
-    )
-  }
   return (
     <div className="sm-outcome">
       <StatusPair tone="warn" label="Accepted" />

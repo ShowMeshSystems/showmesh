@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -74,6 +75,13 @@ func nextCueDirectActivationNonce(now time.Time) int64 {
 // awaits each node's own result before returning) before this response is
 // written - never a claim of success, and never collapsed into one
 // verdict across nodes.
+//
+// A request that would dispatch to ZERO nodes is refused outright (400),
+// never answered 202 with an empty nodes array: an operator's explicit
+// Fire click that reaches nothing is a refusal to act, not "nothing to
+// report" - see the two invalidParameterProblem calls below, one per
+// distinct reason (no active show at all, versus an active show whose
+// Cue catalog resolves this Cue on no node).
 func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -93,10 +101,31 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Checked here, before resolution, so the two empty-activations causes
+	// below stay distinguishable: resolveActivationsForCue's own doc
+	// comment already treats "no active show" as an unconditional empty
+	// map, which would otherwise be indistinguishable from "an active
+	// show whose catalog resolves this Cue on no node".
+	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
+	if err != nil {
+		h.writeInternalError(w, now, "resolve active show", err)
+		return
+	}
+	if !active.Configured {
+		writeProblem(w, h.logger, now, invalidParameterProblem(
+			fmt.Sprintf("no active show is configured; there is nothing to fire %q against", cueID)))
+		return
+	}
+
 	nonce := nextCueDirectActivationNonce(now)
 	activations, err := cueactivate.ResolveDirectCueActivations(ctx, h.deps.AssetManifests, now, cueID, cueDirectActivationRunnerInstance, nonce)
 	if err != nil {
 		h.writeInternalError(w, now, "resolve direct cue activations", err)
+		return
+	}
+	if len(activations) == 0 {
+		writeProblem(w, h.logger, now, invalidParameterProblem(
+			fmt.Sprintf("%q resolves on no node: no node's own Cue catalog currently declares any output for it", cueID)))
 		return
 	}
 

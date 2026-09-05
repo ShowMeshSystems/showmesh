@@ -6376,7 +6376,12 @@ paths:
         success, and never collapsed into one verdict across nodes. Takes
         no request body: a manual fire is inherently a fresh operator
         action every time, never a request this route treats as a
-        retry-replay of an earlier one.
+        retry-replay of an earlier one. A request that would dispatch to
+        ZERO nodes is refused `400`, never answered `202` with an empty
+        `nodes` array: an operator's explicit Fire click that reaches
+        nothing is a refusal to act, not "nothing to report" - `detail`
+        distinguishes no active show being configured from an active
+        show whose Cue catalog resolves this Cue on no node.
       parameters:
         - name: id
           in: path
@@ -6394,6 +6399,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CueActivateResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

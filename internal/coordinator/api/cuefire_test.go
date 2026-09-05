@@ -151,3 +151,68 @@ func TestHandleActivateCueUnknownCueRefused(t *testing.T) {
 		t.Fatalf("problem.Detail is empty, want a stated reason")
 	}
 }
+
+// TestHandleActivateCueNoActiveShowRefused proves a Fire click reaching
+// zero nodes because no show is active at all is refused (400), never
+// answered 202 with an empty nodes array: an explicit operator action
+// that dispatches nothing is a refusal to act, not "nothing to report".
+func TestHandleActivateCueNoActiveShowRefused(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	putShowForTest(t, setup.st, "halloween-2026", "Halloween 2026")
+	putAudioOnlyCueForTest(t, setup.st, "cue-1", "halloween-2026")
+	// Deliberately no putActiveShowForTest: no show is active at all.
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+
+	rec := httptest.NewRecorder()
+	h.handleActivateCue(rec, newCueFireTestRequest(t, "cue-1"))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var problem v1.Problem
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode problem: %v; body = %s", err, rec.Body.String())
+	}
+	if problem.Detail == "" {
+		t.Fatalf("problem.Detail is empty, want a stated reason")
+	}
+}
+
+// TestHandleActivateCueNoParticipatingNodeRefused proves a Fire click
+// against a real, active show whose Cue catalog resolves cueID on ZERO
+// nodes (no node is declared at all) is refused (400) with a reason
+// distinguishable from TestHandleActivateCueNoActiveShowRefused's own -
+// the same "an explicit operator action that dispatches nothing is a
+// refusal to act" rule, for the OTHER cause an empty activations map can
+// have.
+func TestHandleActivateCueNoParticipatingNodeRefused(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	putShowForTest(t, setup.st, "halloween-2026", "Halloween 2026")
+	putAudioOnlyCueForTest(t, setup.st, "cue-1", "halloween-2026")
+	putActiveShowForTest(t, setup.st, "halloween-2026")
+	// Deliberately no declared node at all: st.ListNodes returns none, so
+	// resolveActivationsForCue has nothing to iterate.
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+
+	rec := httptest.NewRecorder()
+	h.handleActivateCue(rec, newCueFireTestRequest(t, "cue-1"))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var problem v1.Problem
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode problem: %v; body = %s", err, rec.Body.String())
+	}
+	if problem.Detail == "" {
+		t.Fatalf("problem.Detail is empty, want a stated reason")
+	}
+}

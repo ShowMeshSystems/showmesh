@@ -2118,7 +2118,7 @@ export interface paths {
         put?: never;
         /**
          * Fire one Cue's activation directly (TRACK-H-cues-and-playlists.md section H4)
-         * @description Requires `cue:activate`. An operator hand-firing one show.cue directly from Live Control's Announcements control - the one path onto this coordinator's own cue.activate dispatch that does not run through the automatic FPP-observation-driven activation loop at all: there is no playlist or FPP entry behind this call, only the operator's own click. `202`, never `200`: the per-node outcomes below are this coordinator's own evidence, gathered synchronously (each node's own result is awaited before this response is written) before this response is written - never a claim of success, and never collapsed into one verdict across nodes. Takes no request body: a manual fire is inherently a fresh operator action every time, never a request this route treats as a retry-replay of an earlier one.
+         * @description Requires `cue:activate`. An operator hand-firing one show.cue directly from Live Control's Announcements control - the one path onto this coordinator's own cue.activate dispatch that does not run through the automatic FPP-observation-driven activation loop at all: there is no playlist or FPP entry behind this call, only the operator's own click. `202`, never `200`: the per-node outcomes below are this coordinator's own evidence, gathered synchronously (each node's own result is awaited before this response is written) before this response is written - never a claim of success, and never collapsed into one verdict across nodes. Takes no request body: a manual fire is inherently a fresh operator action every time, never a request this route treats as a retry-replay of an earlier one. A request that would dispatch to ZERO nodes is refused `400`, never answered `202` with an empty `nodes` array: an operator's explicit Fire click that reaches nothing is a refusal to act, not "nothing to report" - `detail` distinguishes no active show being configured from an active show whose Cue catalog resolves this Cue on no node.
          */
         post: operations["activateCue"];
         delete?: never;
@@ -10689,6 +10689,7 @@ export interface operations {
                     "application/json": components["schemas"]["CueActivateResponse"];
                 };
             };
+            400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
