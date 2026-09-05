@@ -220,10 +220,14 @@ func (h *handlers) nightBackgroundAudioFadeDownDue(ctx context.Context, now time
 		return false
 	}
 	ba := payload.Resting.BackgroundAudio
-	if ba == nil || ba.FadeOutMs == nil {
+	if ba == nil {
 		return false
 	}
-	lead := time.Duration(*ba.FadeOutMs) * time.Millisecond
+	resolved, _, ok := h.nightResolveBackgroundAudio(ctx, rec, ba)
+	if !ok || resolved.FadeOutMs == nil {
+		return false
+	}
+	lead := time.Duration(*resolved.FadeOutMs) * time.Millisecond
 	return !now.Before(boundary.ExpectedAt.Add(-lead))
 }
 

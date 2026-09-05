@@ -119,6 +119,21 @@ func (h *handlers) nightInterlockSignalResolver(ctx context.Context) config.Inte
 	}
 }
 
+// nightSessionMediaPlaylistCurrent is [config.MediaPlaylistCurrent]:
+// resting.backgroundAudio's reference-form check, mirroring h.showExists
+// (showobjects.go) one kind over — a tombstoned media.playlist has
+// CurrentRevision == 0, same as every other tombstone check in this
+// package.
+func (h *handlers) nightSessionMediaPlaylistCurrent(ctx context.Context) config.MediaPlaylistCurrent {
+	return func(id string) bool {
+		obj, err := h.deps.Config.GetConfigObject(ctx, config.MediaPlaylistConfigKind, id)
+		if err != nil {
+			return false
+		}
+		return obj.CurrentRevision > 0
+	}
+}
+
 // nightSessionExists is [config.NightSessionExists] — the
 // night.session.active singleton's own reference check, mirroring
 // h.showExists (showobjects.go) one kind over.
@@ -199,7 +214,8 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 	}
 
 	payload, verr := config.DecodeNightSessionPayload(string(raw), endpoints,
-		h.nightSessionAssetCurrent(r.Context()), h.nightSessionActionResolver(r.Context()), h.nightInterlockSignalResolver(r.Context()))
+		h.nightSessionAssetCurrent(r.Context()), h.nightSessionActionResolver(r.Context()), h.nightInterlockSignalResolver(r.Context()),
+		h.nightSessionMediaPlaylistCurrent(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -423,7 +439,8 @@ func mapConfigNightSessionResting(r config.NightSessionResting) v1.ConfigNightSe
 			})
 		}
 		out.BackgroundAudio = &v1.ConfigNightSessionBackgroundAudio{
-			Items: items, Repeat: r.BackgroundAudio.Repeat, Resume: r.BackgroundAudio.Resume,
+			MediaPlaylist: r.BackgroundAudio.MediaPlaylist,
+			Items:         items, Repeat: r.BackgroundAudio.Repeat, Resume: r.BackgroundAudio.Resume,
 			ItemTransition: r.BackgroundAudio.ItemTransition, CrossfadeMs: r.BackgroundAudio.CrossfadeMs,
 			MaxGainDb: r.BackgroundAudio.MaxGainDb,
 			FadeOutMs: r.BackgroundAudio.FadeOutMs, FadeInMs: r.BackgroundAudio.FadeInMs,

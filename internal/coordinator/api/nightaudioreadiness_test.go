@@ -84,6 +84,75 @@ func TestNightCheckBackgroundAudioAssets_PresentAssetsPass(t *testing.T) {
 	}
 }
 
+// TestNightCheckBackgroundAudioReadiness_MissingMediaPlaylistFails proves
+// SM-526's own readiness rule: a resting.backgroundAudio reference naming
+// a media.playlist that does not exist fails readiness, and the reason
+// names the playlist id - write-time validation (DecodeNightSessionPayload)
+// has no power over an object deleted after the session was saved.
+func TestNightCheckBackgroundAudioReadiness_MissingMediaPlaylistFails(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "no-such-playlist"}
+
+	checks := h.nightCheckBackgroundAudioReadiness(context.Background(), testNow, "halloween", ba)
+
+	if len(checks) != 1 || checks[0].health != nightHealthFailed() {
+		t.Fatalf("checks = %+v, want exactly one failed check", checks)
+	}
+	if !strings.Contains(checks[0].reason, "no-such-playlist") {
+		t.Fatalf("reason = %q, want it to name the missing playlist id", checks[0].reason)
+	}
+}
+
+// TestNightCheckBackgroundAudioReadiness_TombstonedMediaPlaylistFails is
+// the same rule for a playlist that once existed but was deleted -
+// CurrentRevision == 0, the tombstone this package always checks (see
+// nightSessionMediaPlaylistCurrent's own doc comment, nightsession.go).
+func TestNightCheckBackgroundAudioReadiness_TombstonedMediaPlaylistFails(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	if _, err := st.TombstoneConfigObject(context.Background(), config.MediaPlaylistConfigKind, "planetary-bed"); err != nil {
+		t.Fatalf("tombstone media.playlist: %v", err)
+	}
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+
+	checks := h.nightCheckBackgroundAudioReadiness(context.Background(), testNow, "halloween", ba)
+
+	if len(checks) != 1 || checks[0].health != nightHealthFailed() {
+		t.Fatalf("checks = %+v, want exactly one failed check", checks)
+	}
+	if !strings.Contains(checks[0].reason, "planetary-bed") {
+		t.Fatalf("reason = %q, want it to name the tombstoned playlist id", checks[0].reason)
+	}
+}
+
+// TestNightCheckBackgroundAudioReadiness_ReferenceFormRunsInlineChecks
+// proves a healthy reference resolves and runs the SAME checks the inline
+// form has always run, rather than being skipped entirely.
+func TestNightCheckBackgroundAudioReadiness_ReferenceFormRunsInlineChecks(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+
+	checks := h.nightCheckBackgroundAudioReadiness(context.Background(), testNow, "halloween", ba)
+
+	var sawAssetsCheck bool
+	for _, c := range checks {
+		if c.name == "resting:background-audio-assets" {
+			sawAssetsCheck = true
+			if c.health != nightHealthHealthy() {
+				t.Fatalf("assets check = %+v, want healthy", c)
+			}
+		}
+	}
+	if !sawAssetsCheck {
+		t.Fatalf("checks = %+v, want the ordinary resting:background-audio-assets check to run against the resolved playlist", checks)
+	}
+}
+
 // TestNightCheckBackgroundAudioItemTransition_SequentialAlwaysPasses
 // proves sequential needs no output evidence at all: no node is ever
 // registered in inventory, and the check still reports healthy.

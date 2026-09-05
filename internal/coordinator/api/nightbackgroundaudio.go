@@ -373,6 +373,85 @@ func (h *handlers) nightRunAudioCommand(ctx context.Context, now time.Time, rec 
 	}
 }
 
+// nightBackgroundAudioOwnerKindSession is audio.session.apply's own
+// ownerKind for the inline form - unchanged wire value from before the
+// reference form existed.
+const nightBackgroundAudioOwnerKindSession = "night.session.resting.backgroundAudio"
+
+// nightBackgroundAudioOwner is audio.session.apply's playlist owner triple
+// (ownerKind/ownerId/ownerRevision): the night.session itself for the
+// inline form, or the referenced media.playlist object for the reference
+// form, so editing that object alone changes what the next apply pins
+// without writing the session again.
+type nightBackgroundAudioOwner struct {
+	Kind     string
+	ID       string
+	Revision int64
+}
+
+// nightResolveMediaPlaylist reads id's current media.playlist revision and
+// decodes it, mirroring h.nightSessionMediaPlaylistCurrent's own tombstone
+// rule (nightsession.go): CurrentRevision == 0, or any store/decode
+// failure, is answered as ok == false, never a distinguished error - the
+// same "no store access reads as unavailable" posture this package uses
+// throughout (nightSessionAssetCurrent's own doc comment, showobjects.go's
+// showExists).
+func nightResolveMediaPlaylist(ctx context.Context, deps Dependencies, id string) (config.MediaPlaylistPayload, int64, bool) {
+	obj, err := deps.Config.GetConfigObject(ctx, config.MediaPlaylistConfigKind, id)
+	if err != nil || obj.CurrentRevision == 0 {
+		return config.MediaPlaylistPayload{}, 0, false
+	}
+	rev, err := deps.Config.GetConfigRevision(ctx, config.MediaPlaylistConfigKind, id, obj.CurrentRevision)
+	if err != nil {
+		return config.MediaPlaylistPayload{}, 0, false
+	}
+	var payload config.MediaPlaylistPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return config.MediaPlaylistPayload{}, 0, false
+	}
+	return payload, int64(obj.CurrentRevision), true
+}
+
+// nightMediaPlaylistBackgroundAudio converts a media.playlist object's own
+// current revision into config.NightSessionBackgroundAudio's shape - the
+// same items/repeat/resume/itemTransition/gain/fade fields the inline form
+// already produces, so every reader downstream of resting.backgroundAudio
+// needs no reference-vs-inline branch of its own. Item ids are synthesized
+// (mediaPlaylistID-index): media.playlist items carry no itemId of their
+// own (mediaplaylist.go), and this file's own itemId is otherwise only a
+// wire/debug label, never an identity a lookup keys on.
+func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.MediaPlaylistPayload) *config.NightSessionBackgroundAudio {
+	items := make([]config.NightSessionBackgroundAudioItem, 0, len(payload.Items))
+	for i, it := range payload.Items {
+		items = append(items, config.NightSessionBackgroundAudioItem{
+			ItemID: fmt.Sprintf("%s-%d", mediaPlaylistID, i), Asset: it.Asset,
+		})
+	}
+	return &config.NightSessionBackgroundAudio{
+		Items: items, Repeat: payload.Repeat, Resume: payload.Resume, ItemTransition: payload.ItemTransition,
+		CrossfadeMs: payload.CrossfadeMs, MaxGainDb: payload.MaxGainDb,
+		FadeOutMs: payload.FadeOutMs, FadeInMs: payload.FadeInMs,
+	}
+}
+
+// nightResolveBackgroundAudio resolves ba into its dispatch shape and
+// owner: the session's own inline block unchanged (ok always true), or -
+// when ba names a media.playlist - that object's current revision
+// resolved via [nightMediaPlaylistBackgroundAudio]. ok is false only for a
+// reference naming a missing or tombstoned playlist; every caller treats
+// that the same way a dangling reference is treated everywhere else in
+// this controller - warned and left for an operator, never dispatched.
+func (h *handlers) nightResolveBackgroundAudio(ctx context.Context, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio) (*config.NightSessionBackgroundAudio, nightBackgroundAudioOwner, bool) {
+	if ba.MediaPlaylist == "" {
+		return ba, nightBackgroundAudioOwner{Kind: nightBackgroundAudioOwnerKindSession, ID: rec.ConfigObjectID, Revision: rec.ConfigRevision}, true
+	}
+	payload, revision, ok := nightResolveMediaPlaylist(ctx, h.deps, ba.MediaPlaylist)
+	if !ok {
+		return nil, nightBackgroundAudioOwner{}, false
+	}
+	return nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload), nightBackgroundAudioOwner{Kind: config.MediaPlaylistConfigKind, ID: ba.MediaPlaylist, Revision: revision}, true
+}
+
 // nightBuildBackgroundPlaylistItems resolves ba's configured items into
 // pkg/audio.PlaylistItems against this coordinator's own asset store -
 // the exact (show, sequence, target) lookup nightasset.go's
@@ -525,8 +604,11 @@ func audioNodeConfirmsCeiling(ctx context.Context, nodes NodeLister, now time.Ti
 // omitted entirely, not sent as zero or null, for every other node,
 // including one this coordinator cannot currently confirm anything
 // about, so a deployed agent from before this field existed still
-// accepts this apply exactly as it always has.
-func nightBackgroundApplyParams(ctx context.Context, nodes NodeLister, now time.Time, nodeID string, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem) map[string]any {
+// accepts this apply exactly as it always has. owner is passed in rather
+// than derived here, resolved by [handlers.nightResolveBackgroundAudio]:
+// the session itself for the inline form, or the referenced media.playlist
+// object for the reference form.
+func nightBackgroundApplyParams(ctx context.Context, nodes NodeLister, now time.Time, nodeID string, owner nightBackgroundAudioOwner, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem) map[string]any {
 	wireItems := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		wireItems = append(wireItems, map[string]any{
@@ -538,8 +620,8 @@ func nightBackgroundApplyParams(ctx context.Context, nodes NodeLister, now time.
 	params := map[string]any{
 		"sourceRole": string(pkgaudio.SourceRoleBackground),
 		"playlist": map[string]any{
-			"ownerKind": "night.session.resting.backgroundAudio", "ownerId": rec.ConfigObjectID,
-			"ownerRevision": rec.ConfigRevision, "items": wireItems,
+			"ownerKind": owner.Kind, "ownerId": owner.ID,
+			"ownerRevision": owner.Revision, "items": wireItems,
 			"repeat": ba.Repeat, "resume": ba.Resume, "requestedTransition": ba.ItemTransition,
 		},
 		"mixPolicy":   string(pkgaudio.MixPolicyMix),
@@ -570,21 +652,28 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 	if ba == nil {
 		return
 	}
+	resolved, owner, ok := h.nightResolveBackgroundAudio(ctx, rec, ba)
+	if !ok {
+		h.logWarn("night loop: background audio: referenced media.playlist is missing or tombstoned; not advancing", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
+		return
+	}
 	history, err := h.nightBackgroundAudioHistory(ctx, rec)
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to read history", "sessionId", rec.ID, "error", err)
 		return
 	}
-	for _, nodeID := range ba.OutputNodeIDs() {
-		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, payload.Show, nodeID, ba, history)
+	for _, nodeID := range resolved.OutputNodeIDs() {
+		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, payload.Show, nodeID, resolved, owner, history)
 	}
 }
 
 // nightAdvanceBackgroundAudioForNode is [nightAdvanceBackgroundAudio]'s
 // own per-node body, unchanged in shape from the single-node state
 // machine this coordinator has always run - a single-target installation
-// (one node in ba.OutputNodeIDs()) behaves exactly as it always has.
-func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
+// (one node in ba.OutputNodeIDs()) behaves exactly as it always has. ba is
+// already resolved (never carries a MediaPlaylist reference); owner is
+// its paired dispatch owner triple.
+func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, history []nightBackgroundAudioHistoryRow) {
 	sessionID := nightBackgroundAudioSessionID(rec)
 
 	confirms, _, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, pkgaudio.ItemTransition(ba.ItemTransition))
@@ -608,13 +697,13 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 
 	steps := nightBackgroundAudioStepsForNode(history, nodeID)
 	if len(steps) == 0 {
-		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, items, history)
+		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, owner, items, history)
 		return
 	}
 	latest := steps[len(steps)-1]
 
 	if latest.Row.State == nightCueStatePending || latest.Row.State == nightCueStateDispatched {
-		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, items, latest, history)
+		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, owner, items, latest, history)
 		return
 	}
 
@@ -690,14 +779,14 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 			h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history) // retry: never leave the bed running with a stop that never landed.
 			return
 		}
-		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, items, history)
+		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, owner, items, history)
 	}
 }
 
-func (h *handlers) nightBackgroundAudioApply(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow) {
+func (h *handlers) nightBackgroundAudioApply(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow) {
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameApply(int(revision))
-	target := nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, rec, ba, items))
+	target := nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, owner, ba, items))
 	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: apply failed", "sessionId", rec.ID, "error", err)
 	}
@@ -842,12 +931,12 @@ func (h *handlers) nightBackgroundAudioStop(ctx context.Context, now time.Time, 
 // dispatched) step under its own already-committed identity - audio is
 // retryable by identity ([nightCueRetryableByIdentity]), so this can
 // never double-send.
-func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem, latest nightBackgroundAudioHistoryRow, history []nightBackgroundAudioHistoryRow) {
+func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, items []pkgaudio.PlaylistItem, latest nightBackgroundAudioHistoryRow, history []nightBackgroundAudioHistoryRow) {
 	revision := latest.Row.ActionRevision
 	var target config.ShowActionTarget
 	switch latest.Step.Kind {
 	case nightBGStepApply:
-		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, rec, ba, items))
+		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, owner, ba, items))
 	case nightBGStepGain:
 		gain, ceiling := nightBackgroundCeilingGain(nightBackgroundAudioInitialGainDb(ba))
 		result, err := pkgaudio.ApplyCeiling(gain, ceiling)
@@ -904,18 +993,25 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 	if err != nil || payload.Resting.BackgroundAudio == nil {
 		return
 	}
-	ba := payload.Resting.BackgroundAudio
+	resolved, owner, ok := h.nightResolveBackgroundAudio(ctx, rec, payload.Resting.BackgroundAudio)
+	if !ok {
+		h.logWarn("night loop: background audio: referenced media.playlist is missing or tombstoned; not stopping", "sessionId", rec.ID, "mediaPlaylist", payload.Resting.BackgroundAudio.MediaPlaylist)
+		return
+	}
 	history, err := h.nightBackgroundAudioHistory(ctx, rec)
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to read history for stop", "sessionId", rec.ID, "error", err)
 		return
 	}
-	for _, nodeID := range ba.OutputNodeIDs() {
-		h.nightStopBackgroundAudioIfRunningForNode(ctx, now, rec, payload.Show, nodeID, ba, history)
+	for _, nodeID := range resolved.OutputNodeIDs() {
+		h.nightStopBackgroundAudioIfRunningForNode(ctx, now, rec, payload.Show, nodeID, resolved, owner, history)
 	}
 }
 
-func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
+// nightStopBackgroundAudioIfRunningForNode's ba is already resolved (never
+// carries a MediaPlaylist reference); owner is its paired dispatch owner
+// triple, needed only for the in-flight-apply resume case.
+func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, history []nightBackgroundAudioHistoryRow) {
 	sessionID := nightBackgroundAudioSessionID(rec)
 	steps := nightBackgroundAudioStepsForNode(history, nodeID)
 	if len(steps) == 0 {
@@ -934,7 +1030,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 		if err != nil {
 			return
 		}
-		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, items, latest, history)
+		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, owner, items, latest, history)
 		return
 	}
 
@@ -1012,9 +1108,14 @@ func (h *handlers) nightClearBackgroundAudioAtEndSession(ctx context.Context, no
 	if ba == nil {
 		return
 	}
+	resolved, _, ok := h.nightResolveBackgroundAudio(ctx, rec, ba)
+	if !ok {
+		h.logWarn("night loop: end-session: referenced media.playlist is missing or tombstoned; background audio session was not cleared", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
+		return
+	}
 	sessionID := nightBackgroundAudioSessionID(rec)
-	for _, nodeID := range ba.OutputNodeIDs() {
-		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, rec.StateEnteredAt, nodeID, sessionID, ba.FadeOutMs)
+	for _, nodeID := range resolved.OutputNodeIDs() {
+		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, rec.StateEnteredAt, nodeID, sessionID, resolved.FadeOutMs)
 	}
 }
 
@@ -1160,7 +1261,12 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 	if ba == nil {
 		return
 	}
-	nodeIDs := ba.OutputNodeIDs()
+	resolved, _, ok := h.nightResolveBackgroundAudio(ctx, rec, ba)
+	if !ok {
+		h.logWarn("night loop: end-session clear retry: referenced media.playlist is missing or tombstoned", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
+		return
+	}
+	nodeIDs := resolved.OutputNodeIDs()
 	if len(nodeIDs) == 0 {
 		return
 	}
@@ -1174,7 +1280,7 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 	// node once, so only a node whose SYNCHRONOUS attempt also failed
 	// is left unrecovered by this tick-based safety net.
 	sessionID := nightBackgroundAudioSessionID(rec)
-	if !h.nightEndSessionClearMayProceed(now, rec.StateEnteredAt, nodeIDs[0], sessionID, ba.FadeOutMs) {
+	if !h.nightEndSessionClearMayProceed(now, rec.StateEnteredAt, nodeIDs[0], sessionID, resolved.FadeOutMs) {
 		return // fade still ramping and within bound; retried again next tick.
 	}
 	h.nightDispatchEndSessionClearRetry(ctx, now, rec, nodeIDs[0], sessionID, anchor)

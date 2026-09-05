@@ -1660,11 +1660,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// Track F seam F5: resting.backgroundAudio's own readiness (RESTING-
 	// MODE.md §13), only when it is configured at all.
 	if ba := payload.Resting.BackgroundAudio; ba != nil {
-		checks = append(checks, h.nightCheckBackgroundAudioAssets(ctx, payload.Show, ba))
-		for _, nodeID := range ba.OutputNodeIDs() {
-			checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, nodeID, ba))
-			checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, nodeID, ba))
-		}
+		checks = append(checks, h.nightCheckBackgroundAudioReadiness(ctx, now, payload.Show, ba)...)
 	}
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
 	checks = append(checks, nightCheckAnnouncementAssets(allCues))
@@ -1953,10 +1949,19 @@ func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec 
 	if err != nil {
 		return nil, "", err
 	}
-	if payload.Resting.BackgroundAudio == nil {
+	ba := payload.Resting.BackgroundAudio
+	if ba == nil {
 		return nil, "resting.backgroundAudio is not configured on this session's pinned night.session revision", nil
 	}
-	g := payload.Resting.BackgroundAudio.MaxGainDb
+	if ba.MediaPlaylist != "" {
+		mp, _, ok := nightResolveMediaPlaylist(ctx, deps, ba.MediaPlaylist)
+		if !ok {
+			return nil, fmt.Sprintf("referenced media.playlist %q is missing or has been deleted", ba.MediaPlaylist), nil
+		}
+		g := mp.MaxGainDb
+		return &g, "", nil
+	}
+	g := ba.MaxGainDb
 	return &g, "", nil
 }
 
