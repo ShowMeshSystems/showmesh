@@ -186,19 +186,20 @@ func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // audio.media.probe's own field names), playlist (ownerKind, ownerId,
 // ownerRevision, repeat, resume, requestedTransition, items — items reuse
 // the exact object shape audio.media.probe's params.items already
-// defines), outputs (a string array), and mixPolicy. media and playlist
-// are mutually exclusive, matching [pkgaudio.SessionDesiredState.Validate].
-// Gain, ceiling, fade, and bookmark are not wired here: the first three
-// belong to the separate audio.gain.set/audio.gain.fade surface,
-// and a bookmark is session-internal state this package manages itself
-// (Pause writes one; nothing here accepts one from a caller).
-// expiresInMs additionally refreshes the session's retirement deadline
-// ([pkgaudio.SessionDesiredState.Expiry]) to this agent's own now() plus
-// the given duration: a coordinator-stamped field an operator need not
-// send.
+// defines), outputs (a string array), mixPolicy, and ceiling (a linear
+// [pkgaudio.Ceiling], optional; an agent that predates this field simply
+// never advertised it, and a caller that omits it leaves the session's
+// ceiling exactly as it was). Gain, fade, and bookmark are not wired
+// here: gain and fade belong to the separate audio.gain.set/
+// audio.gain.fade surface, and a bookmark is session-internal state this
+// package manages itself (Pause writes one; nothing here accepts one
+// from a caller). expiresInMs additionally refreshes the session's
+// retirement deadline ([pkgaudio.SessionDesiredState.Expiry]) to this
+// agent's own now() plus the given duration: a coordinator-stamped field
+// an operator need not send.
 var audioSessionApplyKnownKeys = map[string]bool{
 	"sourceRole": true, "media": true, "playlist": true, "outputs": true,
-	"ltcStartOffset": true, "mixPolicy": true, "expiresInMs": true,
+	"ltcStartOffset": true, "mixPolicy": true, "expiresInMs": true, "ceiling": true,
 }
 
 func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequest, error) {
@@ -291,6 +292,18 @@ func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequ
 			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ltcStartOffset: %w", action, err)
 		}
 		req.LTCStartOffset = pkgaudio.SetField(tc)
+	}
+
+	if raw, ok := body["ceiling"]; ok {
+		f, ok := raw.(float64)
+		if !ok {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ceiling must be a number, got %T", action, raw)
+		}
+		ceiling := pkgaudio.Ceiling(f)
+		if err := ceiling.Validate(); err != nil {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ceiling: %w", action, err)
+		}
+		req.Ceiling = pkgaudio.SetField(ceiling)
 	}
 
 	if raw, ok := body["expiresInMs"]; ok {

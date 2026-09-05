@@ -275,6 +275,12 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 		writeProblem(w, h.logger, now, *problem)
 		return
 	}
+	if action == "audio.session.apply" {
+		if problem := convertAudioApplyCeilingParamToLinear(params); problem != nil {
+			writeProblem(w, h.logger, now, *problem)
+			return
+		}
+	}
 	params["sessionId"] = sessionID
 
 	ac := authFromContext(ctx)

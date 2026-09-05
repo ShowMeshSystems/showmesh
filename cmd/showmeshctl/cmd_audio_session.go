@@ -66,9 +66,13 @@ Dispatch one of the nine audio.session.* operations (requires
 audio:command): apply, prepare, start, pause, resume, seek,
 advance, stop, clear. params-json, when given, is passed through verbatim
 as this command's "params" body field — the node validates its shape, not
-this program. --revision sets the desired-state revision this command
-carries (pkg/audio.RevisionState); a stale or replayed value is reported
-as "refused", not treated as a transport error. Left unset, it defaults
+this program. apply accepts an optional "ceilingDb" field (decibels,
+same scale and +12 dB bound as "showmeshctl audio gain set"'s own
+gainDb) to change the session's standing gain ceiling; every other apply
+field is documented at api/openapi.yaml's AudioSessionApplyParams.
+--revision sets the desired-state revision this command carries
+(pkg/audio.RevisionState); a stale or replayed value is reported as
+"refused", not treated as a transport error. Left unset, it defaults
 to this session's current observed revision plus one, or 1 for a session
 this coordinator has never observed.
 

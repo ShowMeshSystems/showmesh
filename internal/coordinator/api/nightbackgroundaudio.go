@@ -61,16 +61,15 @@ import (
 // Known, deliberate limits (see this builder's own report): a failed
 // apply or start is logged and left for an operator rather than auto-
 // retried indefinitely (a session with genuinely bad configuration would
-// otherwise retry forever); gapless/crossfade item transitions are
+// otherwise retry forever); and gapless/crossfade item transitions are
 // confirmed against the output node's live capability advertisement
 // ([audioNodeConfirmsTransition]) - configuring one against an
 // output that has never declared the matching audio.transition.* ID
 // refuses background audio outright, honestly, rather than approximating
-// it as sequential; and maxGainDb is enforced only at the moment this
-// controller computes and
-// sends a gain - there is no wire-level standing ceiling on
-// audio.session.apply or audio.gain.set today (a contract gap filed
-// separately, not invented here).
+// it as sequential. maxGainDb now also travels as a standing ceiling on
+// audio.session.apply itself ([nightBackgroundApplyParams]'s own ceiling
+// field), so the node enforces it on every path gain takes effect, not
+// only at the moments this controller happens to compute and send one.
 
 // nightPhaseRestingBackground is the phase FAMILY prefix for every step
 // this controller commits for background audio: apply, gain, start,
@@ -487,7 +486,12 @@ func nightAudioTarget(nodeID, sessionID, action string, params map[string]any) c
 // internal/agent/audiosessionops.go's parsePlaylistRef accepts, spelled
 // exactly as it requires (ownerKind, ownerId, ownerRevision, items,
 // repeat, resume, requestedTransition; each item itemId/index/assetId/
-// contentHash/filename/sizeBytes).
+// contentHash/filename/sizeBytes). ceiling carries
+// resting.backgroundAudio.maxGainDb, already converted to the linear
+// pkgaudio.Ceiling this controller sends every gain against
+// ([nightBackgroundCeilingGain]): this is a server-built target, not an
+// operator's own HTTP request, so it is sent linear rather than as
+// ceilingDb, matching audio.gain.set's own gain field one call below.
 func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem) map[string]any {
 	wireItems := make([]map[string]any, 0, len(items))
 	for _, item := range items {
@@ -497,6 +501,7 @@ func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSe
 			"filename": item.Media.RuntimeFilename, "sizeBytes": item.Media.SizeBytes,
 		})
 	}
+	_, ceiling := nightBackgroundCeilingGain(ba.MaxGainDb)
 	return map[string]any{
 		"sourceRole": string(pkgaudio.SourceRoleBackground),
 		"playlist": map[string]any{
@@ -506,6 +511,7 @@ func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSe
 		},
 		"mixPolicy":   string(pkgaudio.MixPolicyMix),
 		"expiresInMs": float64(nightBackgroundAudioExpiryTTL.Milliseconds()),
+		"ceiling":     float64(ceiling),
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -199,6 +201,17 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	}
 	if items[1]["itemId"] != "track-2" || items[1]["assetId"] != "asset-2" {
 		t.Fatalf("playlist.items[1] = %v, want track-2/asset-2", items[1])
+	}
+	// ba.MaxGainDb (-10, twoItemBackgroundAudioConfig's own fixed value)
+	// travels on this SAME apply as a linear ceiling, so the node enforces
+	// it on every path gain takes effect, not only at the moments this
+	// controller happens to compute and send a gain.
+	ceiling, ok := pub.lastParams["ceiling"].(float64)
+	if !ok {
+		t.Fatalf("params.ceiling = %v, want the linear ceiling derived from maxGainDb", pub.lastParams["ceiling"])
+	}
+	if wantCeiling := float64(pkgaudio.CeilingFromDb(-10)); math.Abs(ceiling-wantCeiling) > 1e-9 {
+		t.Fatalf("params.ceiling = %v, want %v (the linear value of maxGainDb -10)", ceiling, wantCeiling)
 	}
 }
 
