@@ -325,6 +325,52 @@ func TestTombstoneConfigObjectLeavesRevisionHistoryReadable(t *testing.T) {
 	}
 }
 
+// TestTombstoneConfigObjectExcludesMediaPlaylistFromListAndResolutionWhileKeepingRevisions
+// proves the v30 tombstone (migrateV30AddConfigObjectDeletedAtColumn) is
+// kind-agnostic: media.playlist is deletable the same way as every other
+// per-object configuration kind, needing no store change of its own. Kind
+// is spelled as a literal here rather than imported from
+// internal/coordinator/config, matching this package's one-way dependency
+// rule (migration_v19.go's own doc comment).
+func TestTombstoneConfigObjectExcludesMediaPlaylistFromListAndResolutionWhileKeepingRevisions(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	createAndActivate(t, st, ctx, "media.playlist", "resting-bed", 1, `{"show":"halloween-2026","label":"Resting bed"}`)
+	createAndActivate(t, st, ctx, "media.playlist", "another-bed", 1, `{"show":"halloween-2026","label":"Another bed"}`)
+
+	if _, err := st.TombstoneConfigObject(ctx, "media.playlist", "resting-bed"); err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+
+	if _, err := st.GetConfigObject(ctx, "media.playlist", "resting-bed"); !errors.Is(err, ErrConfigObjectNotFound) {
+		t.Fatalf("GetConfigObject after tombstone: err = %v, want ErrConfigObjectNotFound", err)
+	}
+
+	objs, err := st.ListConfigObjects(ctx, "media.playlist")
+	if err != nil {
+		t.Fatalf("list config objects: %v", err)
+	}
+	if len(objs) != 1 || objs[0].ID != "another-bed" {
+		t.Fatalf("ListConfigObjects after tombstoning resting-bed = %+v, want only another-bed", objs)
+	}
+
+	rev, err := st.GetConfigRevision(ctx, "media.playlist", "resting-bed", 1)
+	if err != nil {
+		t.Fatalf("get revision after tombstone: %v", err)
+	}
+	if rev.PayloadJSON != `{"show":"halloween-2026","label":"Resting bed"}` {
+		t.Errorf("revision payload after tombstone = %q, want it unchanged", rev.PayloadJSON)
+	}
+	revs, err := st.ListConfigRevisions(ctx, "media.playlist", "resting-bed")
+	if err != nil {
+		t.Fatalf("list revisions after tombstone: %v", err)
+	}
+	if len(revs) != 1 {
+		t.Fatalf("ListConfigRevisions after tombstone returned %d revisions, want 1", len(revs))
+	}
+}
+
 // TestGetConfigObjectIncludingDeletedSeesTombstone proves the one accessor
 // that CAN see a tombstoned row does, while the default GetConfigObject
 // still cannot: the two-method split this seam's design requires so that

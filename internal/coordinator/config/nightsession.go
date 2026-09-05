@@ -775,76 +775,21 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		return NightSessionBackgroundAudio{}, verr
 	}
 
-	itemTransition, verr := decodeRequiredEnum(fields, "itemTransition", "resting.backgroundAudio.itemTransition", nightSessionItemTransitionValues)
+	itemTransition, crossfadeMs, verr := decodeBackgroundAudioItemTransition(fields,
+		"resting.backgroundAudio.itemTransition", "resting.backgroundAudio.crossfadeMs")
 	if verr != nil {
 		return NightSessionBackgroundAudio{}, verr
 	}
 
-	_, crossfadePresent := fields["crossfadeMs"]
-	var crossfadeMs *int
-	if itemTransition == NightSessionItemTransitionCrossfade {
-		if !crossfadePresent {
-			return NightSessionBackgroundAudio{}, &ValidationError{
-				Code: ValidationCodeFieldRequired, Field: "resting.backgroundAudio.crossfadeMs",
-				Detail: "resting.backgroundAudio.crossfadeMs is required when itemTransition is \"crossfade\"",
-			}
-		}
-		v, verr := decodeRequiredNonNegativeInt(fields, "crossfadeMs", "resting.backgroundAudio.crossfadeMs")
-		if verr != nil {
-			return NightSessionBackgroundAudio{}, verr
-		}
-		crossfadeMs = &v
-	} else if crossfadePresent {
-		return NightSessionBackgroundAudio{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.crossfadeMs",
-			Detail: "resting.backgroundAudio.crossfadeMs must be absent unless itemTransition is \"crossfade\"",
-		}
-	}
-
-	maxGainDb, verr := decodeRequiredNumber(fields, "maxGainDb", "resting.backgroundAudio.maxGainDb")
+	maxGainDb, verr := decodeBackgroundAudioMaxGainDb(fields, "resting.backgroundAudio.maxGainDb")
 	if verr != nil {
 		return NightSessionBackgroundAudio{}, verr
 	}
-	if maxGainDb > 0 {
-		return NightSessionBackgroundAudio{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.maxGainDb",
-			Detail: "resting.backgroundAudio.maxGainDb must be <= 0",
-		}
-	}
 
-	_, fadeOutPresent := fields["fadeOutMs"]
-	_, fadeInPresent := fields["fadeInMs"]
-	var fadeOutMs, fadeInMs *int
-	if fadeOutPresent != fadeInPresent {
-		return NightSessionBackgroundAudio{}, &ValidationError{
-			Code: ValidationCodeFieldRequired, Field: "resting.backgroundAudio.fadeOutMs",
-			Detail: "resting.backgroundAudio.fadeOutMs and fadeInMs must be configured together, or both omitted for no fade",
-		}
-	}
-	if fadeOutPresent {
-		v, verr := decodeRequiredNonNegativeInt(fields, "fadeOutMs", "resting.backgroundAudio.fadeOutMs")
-		if verr != nil {
-			return NightSessionBackgroundAudio{}, verr
-		}
-		if v == 0 {
-			return NightSessionBackgroundAudio{}, &ValidationError{
-				Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.fadeOutMs",
-				Detail: "resting.backgroundAudio.fadeOutMs must be positive when configured; omit fadeOutMs and fadeInMs together for no fade",
-			}
-		}
-		fadeOutMs = &v
-
-		v2, verr := decodeRequiredNonNegativeInt(fields, "fadeInMs", "resting.backgroundAudio.fadeInMs")
-		if verr != nil {
-			return NightSessionBackgroundAudio{}, verr
-		}
-		if v2 == 0 {
-			return NightSessionBackgroundAudio{}, &ValidationError{
-				Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.fadeInMs",
-				Detail: "resting.backgroundAudio.fadeInMs must be positive when configured; omit fadeOutMs and fadeInMs together for no fade",
-			}
-		}
-		fadeInMs = &v2
+	fadeOutMs, fadeInMs, verr := decodeBackgroundAudioFadePair(fields,
+		"resting.backgroundAudio.fadeOutMs", "resting.backgroundAudio.fadeInMs")
+	if verr != nil {
+		return NightSessionBackgroundAudio{}, verr
 	}
 
 	return NightSessionBackgroundAudio{
@@ -1007,6 +952,101 @@ func decodeNightSessionCue(raw json.RawMessage, field, sessionShow string, actio
 		FadeDurationMs: fadeDurationMs, Barrier: barrier, OnFailure: onFailure,
 		AnnouncementPolicy: announcementPolicy,
 	}, nil
+}
+
+// --- Background-audio bed rules shared with media.playlist (mediaplaylist.go),
+// which promotes this same shape to its own per-object configuration kind.
+// Each function takes the field's own already-prefixed path(s) rather than
+// a bare key, so a caller nested under "resting.backgroundAudio" and one at
+// media.playlist's own top level get identical validation with the correct
+// path in every error. ---
+
+// decodeBackgroundAudioItemTransition decodes the required "itemTransition"
+// enum and its paired "crossfadeMs": crossfadeMs is required, and decoded,
+// only when itemTransition is "crossfade", and refused as present
+// otherwise.
+func decodeBackgroundAudioItemTransition(fields map[string]json.RawMessage, itemTransitionField, crossfadeField string) (string, *int, *ValidationError) {
+	itemTransition, verr := decodeRequiredEnum(fields, "itemTransition", itemTransitionField, nightSessionItemTransitionValues)
+	if verr != nil {
+		return "", nil, verr
+	}
+
+	_, crossfadePresent := fields["crossfadeMs"]
+	if itemTransition != NightSessionItemTransitionCrossfade {
+		if crossfadePresent {
+			return "", nil, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: crossfadeField,
+				Detail: fmt.Sprintf("%s must be absent unless itemTransition is \"crossfade\"", crossfadeField),
+			}
+		}
+		return itemTransition, nil, nil
+	}
+	if !crossfadePresent {
+		return "", nil, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: crossfadeField,
+			Detail: fmt.Sprintf("%s is required when itemTransition is \"crossfade\"", crossfadeField),
+		}
+	}
+	v, verr := decodeRequiredNonNegativeInt(fields, "crossfadeMs", crossfadeField)
+	if verr != nil {
+		return "", nil, verr
+	}
+	return itemTransition, &v, nil
+}
+
+// decodeBackgroundAudioMaxGainDb decodes the required "maxGainDb", refusing
+// a positive value: the bed's own ceiling, never a boost above unity.
+func decodeBackgroundAudioMaxGainDb(fields map[string]json.RawMessage, field string) (float64, *ValidationError) {
+	maxGainDb, verr := decodeRequiredNumber(fields, "maxGainDb", field)
+	if verr != nil {
+		return 0, verr
+	}
+	if maxGainDb > 0 {
+		return 0, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: field,
+			Detail: fmt.Sprintf("%s must be <= 0", field),
+		}
+	}
+	return maxGainDb, nil
+}
+
+// decodeBackgroundAudioFadePair decodes the optional "fadeOutMs"/"fadeInMs"
+// pair: both present and positive, or both absent, never one without the
+// other (see [NightSessionBackgroundAudio]'s own doc comment for why).
+func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutField, fadeInField string) (*int, *int, *ValidationError) {
+	_, fadeOutPresent := fields["fadeOutMs"]
+	_, fadeInPresent := fields["fadeInMs"]
+	if fadeOutPresent != fadeInPresent {
+		return nil, nil, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: fadeOutField,
+			Detail: fmt.Sprintf("%s and fadeInMs must be configured together, or both omitted for no fade", fadeOutField),
+		}
+	}
+	if !fadeOutPresent {
+		return nil, nil, nil
+	}
+
+	v, verr := decodeRequiredNonNegativeInt(fields, "fadeOutMs", fadeOutField)
+	if verr != nil {
+		return nil, nil, verr
+	}
+	if v == 0 {
+		return nil, nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: fadeOutField,
+			Detail: fmt.Sprintf("%s must be positive when configured; omit fadeOutMs and fadeInMs together for no fade", fadeOutField),
+		}
+	}
+	v2, verr := decodeRequiredNonNegativeInt(fields, "fadeInMs", fadeInField)
+	if verr != nil {
+		return nil, nil, verr
+	}
+	if v2 == 0 {
+		return nil, nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: fadeInField,
+			Detail: fmt.Sprintf("%s must be positive when configured; omit fadeOutMs and fadeInMs together for no fade", fadeInField),
+		}
+	}
+	return &v, &v2, nil
 }
 
 // --- night.session-local decode helpers not already in showaction.go. ---
