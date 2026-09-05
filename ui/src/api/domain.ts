@@ -136,6 +136,9 @@ export type RenderCommandResult = components['schemas']['RenderCommandResult']
 export type CueCatalogResponse = components['schemas']['CueCatalogResponse']
 export type CueCatalogEntry = components['schemas']['CueCatalogEntry']
 export type CueCatalogDeployResult = components['schemas']['CueCatalogDeployResult']
+// POST /nodes/{nodeId}/assets/resync's own 202 body: acceptance only, no
+// outcome; see that route's own doc comment.
+export type ResyncNodeAssetsResult = components['schemas']['ResyncNodeAssetsResult']
 // ObservationEntry is Node['render']'s element type, aliased here
 // separately so NodeDetail.tsx and the dashboard attention list can
 // import it directly rather than indexing through Node.

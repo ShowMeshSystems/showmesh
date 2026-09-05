@@ -12,6 +12,7 @@ import {
   listShowSurfacesForNode,
   probeRenderTransport,
   restartRenderPipeline,
+  resyncNodeAssets,
   runDiscovery,
   type Capability,
   type CueCatalogDeployResult,
@@ -27,8 +28,6 @@ import {
   DefinitionStrip,
   Field,
   Input,
-  NotWired,
-  NotWiredBanner,
   RuledStrip,
   Section,
   SelectableRow,
@@ -234,6 +233,7 @@ export function NodeDetail() {
 
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const renderGate = evaluateScope(model.session, model.sessionFetchFailed, 'render:command')
+  const assetWriteGate = evaluateScope(model.session, model.sessionFetchFailed, 'asset:write')
 
   const [labelValue, setLabelValue] = useState(node?.label ?? '')
   const [savingLabel, setSavingLabel] = useState(false)
@@ -251,6 +251,10 @@ export function NodeDetail() {
   const [runningDiscovery, setRunningDiscovery] = useState(false)
   const [discoveryError, setDiscoveryError] = useState<string | null>(null)
   const [discoveryNote, setDiscoveryNote] = useState<string | null>(null)
+
+  const [resyncing, setResyncing] = useState(false)
+  const [resyncError, setResyncError] = useState<string | null>(null)
+  const [resyncNote, setResyncNote] = useState<string | null>(null)
 
   if (node === undefined) {
     return (
@@ -326,6 +330,19 @@ export function NodeDetail() {
         setRemoving(false)
         setRemoveError(describeApiError(err))
       })
+  }
+
+  const resync = () => {
+    setResyncing(true)
+    setResyncError(null)
+    setResyncNote(null)
+    resyncNodeAssets(node.nodeId)
+      .then(() => {
+        setResyncNote('Re-sync accepted. This node’s manifest reflects the result once it reports back in.')
+        reloadManifest()
+      })
+      .catch((err: unknown) => setResyncError(describeApiError(err)))
+      .finally(() => setResyncing(false))
   }
 
   const manifestData = manifestState.kind === 'loading' ? null : manifestState.manifest
@@ -704,11 +721,22 @@ export function NodeDetail() {
             {node.controlPlane.state === 'offline' && (
               <p className="sm-section__footnote">Sync cannot run while the node is offline.</p>
             )}
-            <NotWiredBanner what="Re-syncing every asset on this node" missing="way to trigger an asset sync to a node" />
+            {resyncError !== null && <RuledStrip absence="failed" label="Refused" fact={resyncError} />}
+            {resyncNote !== null && <p className="sm-section__footnote">{resyncNote}</p>}
             <ButtonRow>
-              <NotWired>
-                <Button>Re-sync all</Button>
-              </NotWired>
+              <Button
+                disabled={!assetWriteGate.allowed || resyncing || node.controlPlane.state === 'offline'}
+                title={
+                  node.controlPlane.state === 'offline'
+                    ? 'Sync cannot run while the node is offline.'
+                    : assetWriteGate.allowed
+                      ? undefined
+                      : assetWriteGate.reason
+                }
+                onClick={resync}
+              >
+                {resyncing ? 'Re-syncing…' : 'Re-sync all'}
+              </Button>
             </ButtonRow>
           </>
         )}

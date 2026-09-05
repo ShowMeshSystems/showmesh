@@ -5,12 +5,13 @@ import {
   getAssetContent,
   listAssets,
   listConfigObjects,
+  resyncNodeAssets,
   uploadAsset,
   type Asset,
   type ConfigObjectSummary,
   type UploadProgress,
 } from '../api'
-import { Button, ButtonRow, Callout, Field, Input, NotWired, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, Field, Input, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
@@ -368,6 +369,21 @@ function AssetDetail({
   const [rollback, setRollback] = useState<RollbackState>({ kind: 'idle' })
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, 'asset:write')
 
+  const [resyncing, setResyncing] = useState(false)
+  const [resyncError, setResyncError] = useState<string | null>(null)
+  const [resyncNote, setResyncNote] = useState<string | null>(null)
+
+  const resync = () => {
+    if (asset.targetKind !== 'node') return
+    setResyncing(true)
+    setResyncError(null)
+    setResyncNote(null)
+    resyncNodeAssets(asset.target)
+      .then(() => setResyncNote('Re-sync accepted. This node’s manifest reflects the result once it reports back in.'))
+      .catch((err: unknown) => setResyncError(describeApiError(err)))
+      .finally(() => setResyncing(false))
+  }
+
   const confirmRollback = (entry: Asset) => {
     setRollback({ kind: 'busy', entryId: entry.id })
     getAssetContent(entry.id)
@@ -503,13 +519,20 @@ function AssetDetail({
         })}
       </section>
 
+      {resyncError !== null && <RuledStrip absence="failed" label="Refused" fact={resyncError} />}
+      {resyncNote !== null && <p className="sm-small sm-muted">{resyncNote}</p>}
       <div className="sm-inspector__actions">
         <a className="sm-small" href={assetContentUrl(asset.id)}>
           Download
         </a>
-        <NotWired>
-          <Button variant="quiet">Re-sync to node</Button>
-        </NotWired>
+        <Button
+          variant="quiet"
+          disabled={asset.targetKind !== 'node' || !writeGate.allowed || resyncing}
+          title={asset.targetKind !== 'node' ? 'This asset is show-wide, not targeted at one node.' : writeGate.allowed ? undefined : writeGate.reason}
+          onClick={resync}
+        >
+          {resyncing ? 'Re-syncing…' : 'Re-sync to node'}
+        </Button>
       </div>
     </div>
   )

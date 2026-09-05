@@ -194,6 +194,7 @@ export type {
   ExtraAsset,
   NodeAssetManifestResponse,
   AssetManifestResponse,
+  ResyncNodeAssetsResult,
   AuditEntry,
   AuditResponse,
   // Track H seam H6: the resolved Cue catalog a node holds, and the
@@ -398,6 +399,7 @@ export {
   getAssetContent,
   getAssetManifest,
   getNodeAssetManifest,
+  resyncNodeAssets,
   listAudit,
   // Track H seam H6: the resolved Cue catalog a node holds and the
   // operator's own deploy control.

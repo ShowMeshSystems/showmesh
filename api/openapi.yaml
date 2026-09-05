@@ -8310,6 +8310,63 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/assets/resync:
+    post:
+      operationId: resyncNodeAssets
+      summary: Ask the existing asset-sync service to re-check this node now
+      description: >-
+        Behind `asset:write`, the same write-authority scope as `POST
+        .../assets/remove`. Dispatches no command of its own: it nudges the
+        existing asset-sync service (Track E seam E6, `assetsync.Service`)
+        to run its own gap-driven tick now, for every declared node
+        including this one, instead of waiting out its own sync interval -
+        the identical hook `POST /assets` (upload) already uses.
+
+
+        Answers `202`, never `200`: accepted, and never confirmed by
+        anything downstream at this layer - this route holds no
+        confirmation loop of its own. Whether anything was actually
+        missing, and whether a dispatched `asset.fetch` succeeded, is never
+        claimed here; that evidence surfaces later, from the node's own next
+        asset report, on `GET /nodes/{nodeId}/assets`.
+
+
+        `400` when `assets.settings`' `contentBaseUrl` is not set: with sync
+        disabled, dispatching an `asset.fetch` command would be accepted but
+        never actually deliver anything, so this route refuses before
+        accepting rather than promising a re-sync it cannot perform. `404`
+        when `nodeId` does not name a declared node.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >-
+            Same ID syntax as an MQTT node ID: 1-64 characters, lowercase
+            letters/digits/hyphens, not starting or ending with a hyphen.
+      responses:
+        "202":
+          description: Accepted
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResyncNodeAssetsResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fallback-programs:
     get:
       operationId: listFallbackPrograms
@@ -17289,6 +17346,33 @@ components:
             publish failed before reaching the wire.
         resolvedAt:
           type: [string, "null"]
+          format: date-time
+    ResyncNodeAssetsResponse:
+      type: object
+      description: >-
+        The 202 body of POST /nodes/{nodeId}/assets/resync: acceptance
+        only, never an outcome (this route holds no confirmation loop of
+        its own - see that operation's own description). The re-sync
+        itself runs on the existing asset-sync service's own gap-driven
+        dispatch; its result surfaces later on GET /nodes/{nodeId}/assets.
+      required: [serverTime, resync]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        resync:
+          $ref: "#/components/schemas/ResyncNodeAssetsResult"
+    ResyncNodeAssetsResult:
+      type: object
+      description: What was accepted by POST /nodes/{nodeId}/assets/resync.
+      required: [node, acceptedAt]
+      additionalProperties: false
+      properties:
+        node:
+          type: string
+        acceptedAt:
+          type: string
           format: date-time
     FallbackProgramRenderActivation:
       type: object

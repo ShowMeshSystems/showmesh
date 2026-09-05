@@ -1997,6 +1997,10 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets/unused", h.readAnyGuard(showConfigReadScopes, h.handleGetNodeUnusedAssets))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/assets/remove", h.writeGuard(&scopeAssetWrite, h.handlePostRemoveNodeAsset))
 
+	// Nudge the existing asset-sync service to run its own gap-driven tick
+	// now for this node (noderesync.go). Same asset:write scope as remove.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/assets/resync", h.writeGuard(&scopeAssetWrite, h.handlePostResyncNodeAssets))
+
 	// TRACK-H-H3-SPEC.md §4: the resolved Cue catalog read route and its
 	// per-node acknowledgement. GET stays under observation:read (the
 	// spec's own posture, matching every other FPP/observation read

@@ -16,6 +16,7 @@ const stubs = vi.hoisted(() => ({
   clearRenderSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   restartRenderPipeline: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   probeRenderTransport: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  resyncNodeAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -32,6 +33,7 @@ vi.mock('../api', async () => {
     clearRenderSurface: (...args: never[]) => stubs.clearRenderSurface(...args),
     restartRenderPipeline: (...args: never[]) => stubs.restartRenderPipeline(...args),
     probeRenderTransport: (...args: never[]) => stubs.probeRenderTransport(...args),
+    resyncNodeAssets: (...args: never[]) => stubs.resyncNodeAssets(...args),
   }
 })
 
@@ -163,6 +165,7 @@ describe('Node detail', () => {
     stubs.clearRenderSurface = () => new Promise(() => {})
     stubs.restartRenderPipeline = () => new Promise(() => {})
     stubs.probeRenderTransport = () => new Promise(() => {})
+    stubs.resyncNodeAssets = () => new Promise(() => {})
   })
 
   it('renders the drawer title and the mock’s section labels in order', () => {
@@ -296,7 +299,21 @@ describe('Node detail', () => {
     renderScreen([node({ controlPlane: { state: 'offline', reason: 'No heartbeat within the expected interval.' } })])
     await waitFor(() => expect(screen.getByRole('button', { name: 'Re-sync all' })).toBeDisabled())
     expect(screen.getByText('Sync cannot run while the node is offline.')).toBeInTheDocument()
-    expect(screen.getByText(/does nothing yet/)).toBeInTheDocument()
+  })
+
+  it('Re-sync all calls the resync route and states acceptance, never an outcome', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    let calledWith: string | null = null
+    stubs.resyncNodeAssets = (nodeId: string) => {
+      calledWith = nodeId
+      return Promise.resolve({ node: nodeId, acceptedAt: '2026-08-30T21:08:00Z' })
+    }
+    renderScreen([node()], { session: signedIn(['config:write', 'asset:write']) })
+    const button = await screen.findByRole('button', { name: 'Re-sync all' })
+    fireEvent.click(button)
+    await waitFor(() => expect(screen.getByText(/Re-sync accepted/)).toBeInTheDocument())
+    expect(calledWith).toBe('media-garage')
   })
 
   it('keeps Remove declaration disabled until the typed id matches exactly', async () => {
