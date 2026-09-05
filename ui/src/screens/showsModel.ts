@@ -290,6 +290,15 @@ export function slugify(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
+export type AudioAssetOption = { id: string; sequence: string; target: string }
+
+/** `assets` filtered current/audio/node: what an audio-asset picker offers. Shared by the night session's background-audio item editor and Shows/Media Playlists' item editor (both bind an item to the same asset identity, ADR-028). */
+export function audioAssetOptions(assets: readonly { id: string; current: boolean; mediaType: string; targetKind: string; sequence: string; target: string }[]): AudioAssetOption[] {
+  return assets
+    .filter((asset) => asset.current && asset.mediaType === 'audio' && asset.targetKind === 'node')
+    .map((asset) => ({ id: asset.id, sequence: asset.sequence, target: asset.target }))
+}
+
 export type AssetIdentityKey = string
 
 /** The identity ADR-028 defines: (show, sequence, targetKind, target). Never the runtime filename. */

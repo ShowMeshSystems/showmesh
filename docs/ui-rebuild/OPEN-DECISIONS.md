@@ -13,6 +13,59 @@ a build, self-ruled so the screen could ship, and Eric later ruled on each.
 D-020 onward were ruled directly by Eric during the 2026-09-01 review rounds.
 The index below is the working list; the entries keep their full reasoning.
 
+## Raised while building Media Playlists
+
+### D-030 Media Playlists has no mock; placed as a sibling tab beside Playlists, awaiting a ruling
+
+**What.** The design directory has mocks for Show Night Session, Show Cues,
+Show Presentation and the rest of the Shows workspace, but none for a Media
+Playlists screen: `media.playlist` (`internal/coordinator/config/mediaplaylist.go`)
+is a newer configuration kind, promoted out of the night session's own inline
+`resting.backgroundAudio` block, with its own list/get/put/delete/revisions
+routes (`internal/coordinator/api/mediaplaylist.go`). Per the standing rule, an
+unmocked placement is a ruling question, not something to invent layout for
+silently.
+
+**Why now.** The kind, its routes and its `showmeshctl` verbs are already on
+`main`; this task is the operator UI for it, and the screen ships either way.
+
+**What I did.** Mirrored the existing `show.playlist` screen: `media.playlist`
+also carries a `show` field and its list route takes the same `?show=` filter
+`show.playlist` does, so a show-scoped tab is the placement the data already
+implies. The Shows workspace (`ui/src/screens/ShowsWorkspace.tsx`) gained a
+seventh tab, `media-playlists` (`/shows/:id/media-playlists`,
+`ShowsMediaPlaylists.tsx`), placed immediately beside Playlists. It composes
+from the kit exactly as Playlists does (`Panes`, `Section`, `Table`,
+`SelectableRow`, `RevisionHistory`), and its item editor is the night
+session's own background-audio item editor relocated into a shared
+`audioAssetPicker.tsx`, not reinvented: the night session's inline form still
+uses the same picker, unchanged in behavior.
+
+**Why not somewhere else.** Settings has no natural home for a per-show,
+per-bed object. Assets is the content library, not configuration authoring.
+Folding it into the Playlists tab itself would conflate two different
+runners (`show.playlist` steps cues; `media.playlist` plays an audio bed) the
+parent issue is explicit about keeping distinct.
+
+**Options for Eric to rule on.**
+
+- A. Keep it as built: a seventh workspace tab beside Playlists.
+- B. Fold it into the Playlists tab as a second table on the same page.
+- C. Give it its own top-level route outside the Shows workspace.
+
+**Recommendation.** A. It matches the guide's `?show=`-scoped precedent
+exactly and needs no new information architecture; B loses the two-kind
+distinction the parent issue calls "the whole point of having two playlist
+kinds," and C has no evident owner outside a show.
+
+**Unblocks.** Nothing; the screen ships at this placement either way. If Eric
+rules differently this is a route change to `App.tsx` and the tab list, not a
+rewrite of the screen itself.
+
+**Ruling:** Awaiting Eric.
+
+---
+
 ## Ruling index
 
 | # | Ruling | What it obliges the rebuild to do |

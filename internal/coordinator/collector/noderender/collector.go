@@ -167,14 +167,20 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	// framesObservedAt is the frame writer's OWN evidence timestamp
 	// (pipeline.FrameWriter.sampleRate's window-close stamp, carried over
 	// the wire as sf.FramesObservedAt), deliberately not sf.ObservedAt.
-	// FramesWritten/FramesLate/FramesDropped/FramesRate are continuously
-	// sampled counters, not a pipeline lifecycle transition, so they must
-	// never be judged for staleness against a timestamp that only moves
-	// when PipelineState changes: that conflation is exactly what made
-	// every render signal read as permanently stale 45s after any apply on
-	// a healthy, continuously-advancing pipeline. Zero means the frame
-	// writer has not yet closed its first sampling window, handled the
-	// same way FramesRate's own nil case already is one line down.
+	// FramesWritten/FramesLate/FramesDropped/FramesRate, and the draw-state
+	// group below (TimelineState/TimelinePositionMS/Drawing/IdleMode/
+	// FailureOutput), are all published by the same FrameWriter.reportCounts
+	// call on the same tick, not a pipeline lifecycle transition, so none of
+	// them may be judged for staleness against a timestamp that only moves
+	// when PipelineState changes: that conflation is exactly what made every
+	// render signal read as permanently stale 45s after any apply on a
+	// healthy, continuously-advancing pipeline, and what made the timeline
+	// swap between stopped and playing on a cue activation read stale a day
+	// later. Zero means the frame writer has not yet closed its first
+	// sampling window, handled the same way FramesRate's own nil case
+	// already is one line down: buildValue's observedAt.IsZero() branch
+	// reports the real value with unknown age rather than fabricating a
+	// timestamp.
 	framesObservedAt := sf.FramesObservedAt
 
 	obs := []observation.Observation{
@@ -237,7 +243,7 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	// content identity instead of frame counters.
 	contentObservedAt := sf.ContentObservedAt
 
-	obs = append(obs, surfaceDrawStateObservations(nodeID, res, sf, observedAt, rep)...)
+	obs = append(obs, surfaceDrawStateObservations(nodeID, res, sf, framesObservedAt, rep)...)
 	obs = append(obs, surfaceContentObservations(nodeID, res, sf, contentObservedAt, rep)...)
 
 	return obs
@@ -327,6 +333,13 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 // FrameWriter at all — a Track B seam B2a test-pattern-only pipeline with
 // no FSEQ assigned, so all five signals are NotCollected together with
 // one reason, rather than a fabricated empty string or zero position.
+//
+// observedAt is sf.FramesObservedAt (the frame writer's own sampling-window
+// close, passed in by the caller), NOT sf.ObservedAt. The timeline swaps
+// between stopped and playing on a cue activation without the pipeline
+// transitioning, so judging it against sf.ObservedAt made a live surface
+// read as a day stale. See surfaceReportObservations' framesObservedAt
+// comment.
 func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
 	if sf.Drawing == "" {
 		reason := "this surface has no active frame writer (e.g. a test-pattern-only pipeline with no FSEQ assigned)"

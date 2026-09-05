@@ -203,6 +203,11 @@ type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse'
 // aliasing pattern.
 type SchemaConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
 type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+
+// media.playlist's own read/write response, same aliasing pattern.
+type SchemaConfigMediaPlaylist = components['schemas']['ConfigMediaPlaylist']
+type SchemaMediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
+type SchemaConfigObjectDeleteRequest = components['schemas']['ConfigObjectDeleteRequest']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -1969,6 +1974,7 @@ export class ApiStore {
       | 'show.surface'
       | 'show.cue'
       | 'show.playlist'
+      | 'media.playlist'
       | 'night.session'
       // audio.node carries no show reference (its own list summary reports
       // programRoute as label instead) - `show` is simply never passed for it.
@@ -2380,6 +2386,67 @@ export class ApiStore {
         `/config/show.playlist/${encodeURIComponent(id)}/revisions`,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/media.playlist/{id}`. Throws (404) when no such media playlist exists. */
+  async getMediaPlaylist(id: string): Promise<SchemaMediaPlaylistConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaMediaPlaylistConfigResponse>(
+        `/config/media.playlist/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/media.playlist/{id}`. `config:write` only. Full
+   * replacement, same as [putShowPlaylist]. Validated and normalized
+   * server-side; a rejected payload (including an `items[]` entry of kind
+   * "cue", refused as not-yet-implemented) throws and appends no revision.
+   */
+  async putMediaPlaylist(id: string, payload: SchemaConfigMediaPlaylist): Promise<SchemaMediaPlaylistConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaMediaPlaylistConfigResponse>(
+        `/config/media.playlist/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/media.playlist/{id}/revisions`: revision history, newest first, metadata only. */
+  async getMediaPlaylistRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/media.playlist/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/config/media.playlist/{id}`. `config:write` only, a
+   * tombstone (D-019's typed-confirmation treatment gates the call in the
+   * screen, same pattern as [deleteNodeDeclaration]). Always sends
+   * `{"confirm":true}`, the server's own required body.
+   */
+  async deleteMediaPlaylist(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/media.playlist/${encodeURIComponent(id)}`, body, controller.signal)
     } finally {
       this.endSideCall(controller)
     }

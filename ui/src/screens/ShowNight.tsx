@@ -55,6 +55,8 @@ import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import { formatPosition, nightLifecycleGroups, type CommandOutcome } from './liveControlModel'
+import { AudioAssetPicker } from './audioAssetPicker'
+import { audioAssetOptions } from './showsModel'
 import { StaleWriteStrip } from './StaleWrite'
 import {
   backgroundAudioSteps,
@@ -1187,7 +1189,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
     return Array.from(new Set([...(retained === '' ? [] : [retained]), ...reported])).sort()
   }
   const timelineAssets = assets.filter((asset) => asset.current && asset.mediaType === 'fseq' && asset.targetKind === 'node')
-  const audioAssets = assets.filter((asset) => asset.current && asset.mediaType === 'audio' && asset.targetKind === 'node')
+  const audioAssets = audioAssetOptions(assets)
   const timelineSequences = Array.from(new Set([...(draft.timelineSequence === '' ? [] : [draft.timelineSequence]), ...timelineAssets.map((asset) => asset.sequence)])).sort()
   const timelineTargets = Array.from(new Set([
     ...(draft.timelineTarget === '' ? [] : [draft.timelineTarget]),
@@ -1258,17 +1260,15 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                     <Field label="Item id">{(p) => <Input {...p} value={item.itemId} onChange={(e) => updateBackgroundAudioItem(index, { itemId: e.target.value })} />}</Field>
                     <Field label="Audio asset">
                       {(p) => (
-                        <Select
+                        <AudioAssetPicker
                           {...p}
-                          value={audioAssets.find((asset) => asset.sequence === item.sequence && asset.target === item.target)?.id ?? ''}
-                          onChange={(e) => {
-                            const selectedAsset = audioAssets.find((asset) => asset.id === e.target.value)
-                            updateBackgroundAudioItem(index, { show: draft.show, sequence: selectedAsset?.sequence ?? '', target: selectedAsset?.target ?? '', itemId: item.itemId || (selectedAsset?.sequence ?? '') })
-                          }}
-                        >
-                          <option value="">Select an audio asset…</option>
-                          {audioAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.sequence} · {asset.target}</option>)}
-                        </Select>
+                          assets={audioAssets}
+                          sequence={item.sequence}
+                          target={item.target}
+                          onPick={(asset) =>
+                            updateBackgroundAudioItem(index, { show: draft.show, sequence: asset?.sequence ?? '', target: asset?.target ?? '', itemId: item.itemId || (asset?.sequence ?? '') })
+                          }
+                        />
                       )}
                     </Field>
                     <Button variant="quiet" onClick={() => removeBackgroundAudioItem(index)}>Remove</Button>

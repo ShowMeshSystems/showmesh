@@ -210,6 +210,13 @@ export type ConfigShowPlaylistEntry = components['schemas']['ConfigShowPlaylistE
 export type ConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
 export type ShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
 
+// Media Playlists screen: media.playlist authoring. Unlike show.playlist (a
+// list of cues a runner steps through), media.playlist is a list of things
+// the audio engine plays as a bed.
+export type ConfigMediaPlaylistItem = components['schemas']['ConfigMediaPlaylistItem']
+export type ConfigMediaPlaylist = components['schemas']['ConfigMediaPlaylist']
+export type MediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
+
 export type MacroRunSummary = components['schemas']['MacroRunSummary']
 export type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
 export type MacroRunStep = components['schemas']['MacroRunStep']

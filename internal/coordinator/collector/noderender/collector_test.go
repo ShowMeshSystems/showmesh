@@ -786,6 +786,114 @@ func TestPollIdleDrawingLeavesFailureOutputNotCollected(t *testing.T) {
 	}
 }
 
+// TestPollDrawStateSignalsAgeFromTheirOwnObservedAtNotPipelineState is this
+// issue's regression test: TimelineState/Drawing (and the rest of the
+// draw-state group) must be judged for staleness against sf.FramesObservedAt,
+// never sf.ObservedAt. Before the fix, a cue activation swapped the timeline
+// between stopped and playing without transitioning PipelineState, so
+// sf.ObservedAt stopped advancing while the frame counters kept climbing
+// every report, and the draw-state group read stale a day later even though
+// the same report's frame counters read current.
+func TestPollDrawStateSignalsAgeFromTheirOwnObservedAtNotPipelineState(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].TimelineState = "playing"
+	payload.Surfaces[0].Drawing = mqttproto.RenderDrawingIdle
+	payload.Surfaces[0].IdleMode = mqttproto.RenderIdleOutputBlack
+	st.Put("render-01", payload, false, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceTimelineState,
+		SignalSurfaceOutputMode,
+		SignalSurfaceOutputIdleMode,
+	} {
+		o := findObs(t, obs, sig)
+
+		fresh := sampleFramesObservedAt.Add(DefaultValidFor - time.Second)
+		if o.StateAt(fresh) != observation.StateCurrent {
+			t.Errorf("%s just before its own ValidFor elapses: StateAt = %s, want current", sig, o.StateAt(fresh))
+		}
+
+		stale := sampleFramesObservedAt.Add(DefaultValidFor + time.Second)
+		if o.StateAt(stale) != observation.StateStale {
+			t.Errorf("%s after its own ValidFor elapses: StateAt = %s, want stale", sig, o.StateAt(stale))
+		}
+
+		// A window pinned at sampleObservedAt (the older, non-advancing
+		// pipeline-lifecycle timestamp) would already have gone stale by
+		// sampleObservedAt+DefaultValidFor+1s. Prove the draw-state signal
+		// does NOT use that timestamp.
+		pipelineWindowStale := sampleObservedAt.Add(DefaultValidFor + time.Second)
+		if o.StateAt(pipelineWindowStale) != observation.StateCurrent {
+			t.Errorf("%s at pipeline-state's own stale boundary (%s): StateAt = %s, want current, this signal must age from its own FramesObservedAt, not sf.ObservedAt",
+				sig, pipelineWindowStale, o.StateAt(pipelineWindowStale))
+		}
+	}
+}
+
+// TestPollDrawStateZeroFramesObservedAtIsUnknownAge proves ADR-011's converse
+// this issue must respect: until the frame writer's first sampling window
+// closes, sf.FramesObservedAt is the zero value, and the draw-state signals
+// must render as unknown age, never "now" and never borrowing sf.ObservedAt.
+func TestPollDrawStateZeroFramesObservedAtIsUnknownAge(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].TimelineState = "playing"
+	payload.Surfaces[0].Drawing = mqttproto.RenderDrawingIdle
+	payload.Surfaces[0].IdleMode = mqttproto.RenderIdleOutputBlack
+	payload.Surfaces[0].FramesObservedAt = time.Time{}
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceTimelineState,
+		SignalSurfaceOutputMode,
+		SignalSurfaceOutputIdleMode,
+	} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt != nil {
+			t.Errorf("%s: ObservedAt = %v, want nil (FramesObservedAt is zero: age is genuinely unknown)", sig, o.ObservedAt)
+		}
+		if o.StateAt(time.Now()) != observation.StateUnknownAge {
+			t.Errorf("%s: StateAt(now) = %s, want unknown_age", sig, o.StateAt(time.Now()))
+		}
+	}
+}
+
+// TestPollDrawStateStillGoesStaleWhenANodeStopsReporting proves the fix does
+// not break real staleness: a node that genuinely stopped reporting leaves
+// sf.FramesObservedAt frozen at its last real sample, same as it always did,
+// so the draw-state group still reads stale once that sample ages past
+// DefaultValidFor. The fix must not make draw-state signals immune to
+// staleness merely by moving which timestamp they age from.
+func TestPollDrawStateStillGoesStaleWhenANodeStopsReporting(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].TimelineState = "stopped"
+	payload.Surfaces[0].Drawing = mqttproto.RenderDrawingIdle
+	payload.Surfaces[0].IdleMode = mqttproto.RenderIdleOutputBlack
+	st.Put("render-01", payload, false, sampleFramesObservedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	dayLater := sampleFramesObservedAt.Add(24 * time.Hour)
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceTimelineState,
+		SignalSurfaceOutputMode,
+	} {
+		o := findObs(t, obs, sig)
+		if o.StateAt(dayLater) != observation.StateStale {
+			t.Errorf("%s a day after the node's last real sample: StateAt = %s, want stale", sig, o.StateAt(dayLater))
+		}
+	}
+}
+
 // TestPollContentIdentityProducesAllFourSignals proves a surface reporting
 // full content identity (an assignment applied by a cue activation, with a
 // catalog authorization tuple) renders all four surface.content.* signals
