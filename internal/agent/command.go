@@ -205,7 +205,9 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 
 // newOperationRegistry returns this agent's entire command allowlist:
 // "agent.echo", "asset.fetch", "asset.remove" (delete one verified held
-// asset, the counterpart asset.fetch never had), "audio.device.probe"
+// asset, the counterpart asset.fetch never had), "asset.inventory.request"
+// (no params: republish this node's asset inventory immediately, see
+// assetInventoryRequestOperation), "audio.device.probe"
 // (Track C seam C1a), "audio.media.probe" (Track C seam C2), Track B's four
 // render.* operations (seam B2a's apply/clear/restart, seam B4's
 // transport.probe), "cuecatalog.deploy" (Track H seam H3: the coordinator
@@ -227,12 +229,14 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
 	remove := assetRemoveOperation{dir: assetDir}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
+	inventoryRequest := assetInventoryRequestOperation{}
 	ops := map[string]OperationFunc{
-		"agent.echo":         state.apply,
-		"asset.fetch":        fetch.run,
-		"asset.remove":       remove.run,
-		"audio.device.probe": probeAudioDevice,
-		"audio.media.probe":  mediaProbe.run,
+		"agent.echo":              state.apply,
+		"asset.fetch":             fetch.run,
+		"asset.remove":            remove.run,
+		"asset.inventory.request": inventoryRequest.run,
+		"audio.device.probe":      probeAudioDevice,
+		"audio.media.probe":       mediaProbe.run,
 	}
 	if render != nil {
 		ops["render.surface.apply"] = render.applySurface
@@ -693,7 +697,7 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 			h.publishAgentEcho(ctx, publisher, v, opResult.ExecutedAt)
 		}
 	}
-	if (cmd.Action == "asset.fetch" || cmd.Action == "asset.remove") && h.assetFetchTrigger != nil {
+	if (cmd.Action == "asset.fetch" || cmd.Action == "asset.remove" || cmd.Action == "asset.inventory.request") && h.assetFetchTrigger != nil {
 		select {
 		case h.assetFetchTrigger <- struct{}{}:
 		default:

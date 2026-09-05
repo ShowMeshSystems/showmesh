@@ -7,6 +7,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,10 +19,31 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/google/uuid"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
+
+// reconnectInventoryRequestIssuerPrincipalID/Name identify THIS COORDINATOR
+// as the issuer of an "asset.inventory.request" dispatched on its own
+// broker reconnect (see dispatchReconnectInventoryRequests), the same
+// "the process itself, not an operator" issuer shape assetsync's own
+// asset.fetch dispatch uses (internal/coordinator/assetsync/sync.go's
+// assetSyncIssuerPrincipalID/Name).
+const (
+	reconnectInventoryRequestIssuerPrincipalID   = "showmesh-broker-reconnect"
+	reconnectInventoryRequestIssuerPrincipalName = "ShowMesh broker reconnect"
+)
+
+// reconnectInventoryRequestConfirmationMethod is the wire value for
+// pkg/command.ConfirmationEvidence, independently reproduced here rather
+// than imported: this package does not import pkg/command, matching
+// mqttproto.CmdPayload.ConfirmationMethod's own doc comment on why every
+// wire-boundary package in this codebase keeps its own copy of this
+// constant.
+const reconnectInventoryRequestConfirmationMethod = "evidence"
 
 // brokerProbeInterval is how often the background probe goroutine re-checks
 // the broker connection and re-stamps BrokerState.ObservedAt, independent of
@@ -99,6 +121,14 @@ type Message struct {
 // regardless of exactly which paho internals a slow handler affects.
 type MessageHandler func(Message)
 
+// ReconnectNodeLister lists every node this coordinator currently has
+// declared, so [BrokerManager.dispatchReconnectInventoryRequests] knows
+// who to ask for a fresh asset inventory the moment the broker connection
+// comes back up. broker.go itself has no store dependency; coordinator.go
+// wires this to *store.Store.ListNodes, reduced to node IDs, matching
+// MessageHandler's identical callback-injection shape immediately above.
+type ReconnectNodeLister func(ctx context.Context) ([]string, error)
+
 // newPublishReceivedHandler adapts a [MessageHandler] to paho's
 // OnPublishReceived callback shape. It is a standalone function, rather
 // than an inline closure inside NewBrokerManager, specifically so its
@@ -155,6 +185,73 @@ func subscribeAll(ctx context.Context, sub subscriber, opts []paho.SubscribeOpti
 		logger.Error("mqtt subscribe failed after connect; inventory will not receive updates until the next reconnect",
 			"error", err)
 	}
+}
+
+// dispatchReconnectInventoryRequests asks every node bm.nodeLister
+// currently lists for a fresh asset inventory report, once per successful
+// connection (including the very first one): the coordinator no longer
+// waits out a node's own ordinary reporting interval before it has any
+// post-outage evidence at all. It runs on its own goroutine so a slow node
+// list or a slow publish can never delay OnConnectionUp's own subscribeAll
+// call.
+//
+// A node that refuses this action (the deployed agent may predate it and
+// not recognize it at all) or never answers is treated as ORDINARY, not as
+// evidence about the node: every failure here is logged and dropped, never
+// retried from this call, and never feeds back into any refusal decision.
+// [cueactivate.Authorize]'s own reconnect-staleness allowance is what
+// actually governs whether a cue is refused while the coordinator waits
+// for a report; this dispatch only ever shortens that wait when the node
+// in fact understands the request.
+func (b *BrokerManager) dispatchReconnectInventoryRequests(ctx context.Context, logger *slog.Logger) {
+	if b.nodeLister == nil {
+		return
+	}
+	go func() {
+		nodeIDs, err := b.nodeLister(ctx)
+		if err != nil {
+			logger.Warn("mqtt reconnect: failed to list nodes for asset.inventory.request", "error", err)
+			return
+		}
+		for _, nodeID := range nodeIDs {
+			if err := b.publishInventoryRequest(ctx, nodeID); err != nil {
+				logger.Warn("mqtt reconnect: failed to dispatch asset.inventory.request", "node_id", nodeID, "error", err)
+			}
+		}
+	}()
+}
+
+// publishInventoryRequest publishes one "asset.inventory.request"
+// [mqttproto.CmdPayload] to nodeID's cmd topic, QoS 1, never retained
+// (mqttproto.CmdDeliveryPolicy), with no params, matching internal/agent's
+// own assetInventoryRequestOperation, which requires none. Fire and forget: no
+// AwaitResponse, since dispatchReconnectInventoryRequests' own doc comment
+// already commits to never acting on whether this is answered.
+func (b *BrokerManager) publishInventoryRequest(ctx context.Context, nodeID string) error {
+	topic, err := mqttproto.CmdTopic(nodeID)
+	if err != nil {
+		return fmt.Errorf("build cmd topic: %w", err)
+	}
+	payload := mqttproto.CmdPayload{
+		CommandID:      uuid.NewString(),
+		IdempotencyKey: uuid.NewString(),
+		Action:         "asset.inventory.request",
+		Target:         mqttproto.CmdTarget{Kind: "node", ID: nodeID},
+		Issuer: mqttproto.CmdIssuer{
+			PrincipalID:   reconnectInventoryRequestIssuerPrincipalID,
+			PrincipalName: reconnectInventoryRequestIssuerPrincipalName,
+		},
+		ConfirmationMethod: reconnectInventoryRequestConfirmationMethod,
+	}
+	env, err := mqttproto.NewCmdEnvelope(b.now, nodeID, payload)
+	if err != nil {
+		return fmt.Errorf("build cmd envelope: %w", err)
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return fmt.Errorf("marshal cmd envelope: %w", err)
+	}
+	return b.Publish(ctx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, raw)
 }
 
 // subscriptionsToOptions converts this package's own [Subscription] type to
@@ -275,6 +372,13 @@ type BrokerManager struct {
 	// field (rather than a direct time.Now call) so tests can drive state
 	// transitions with a fake clock instead of real sleeps.
 	now func() time.Time
+
+	// nodeLister, when non-nil, is [ReconnectNodeLister]: called from
+	// OnConnectionUp on every successful connection (including the initial
+	// one) to dispatch "asset.inventory.request" to every node it lists.
+	// nil for a BrokerManager built directly in tests, or wired with no
+	// nodes to ask (matching handler's identical optional shape above).
+	nodeLister ReconnectNodeLister
 
 	mu    sync.Mutex
 	state BrokerState
@@ -409,6 +513,29 @@ func (b *BrokerManager) log() *slog.Logger {
 	return slog.Default()
 }
 
+// onConnectionUp is OnConnectionUp's entire body (NewBrokerManager's own
+// autopaho.ClientConfig), factored out so a unit test can invoke it
+// directly against a fake mqttClient (b.cm), instead of needing a real
+// broker connection: see broker_test.go. Called on every successful
+// connection, including every reconnection: subscribeAll re-establishes
+// every subscription (its own doc comment explains why that survives a
+// broker restart), and dispatchReconnectInventoryRequests asks every
+// declared node for a fresh asset inventory. b.cm is used directly rather
+// than a parameter here: it is set once, synchronously, right after
+// autopaho.NewConnection returns in NewBrokerManager below, strictly
+// before this callback can ever fire.
+func (b *BrokerManager) onConnectionUp(ctx context.Context, logger *slog.Logger) {
+	// Re-subscribing here, unconditionally, on every call (including every
+	// reconnect) is what makes a subscription survive a broker restart;
+	// see subscribeAll's doc comment. The set is computed fresh on every
+	// call via subscriptionsToResubscribe, not captured once at
+	// construction, so a response waiter that is live right now (rather
+	// than at NewBrokerManager time) also survives the reconnect, per
+	// that method's own doc comment.
+	subscribeAll(ctx, b.cm, b.subscriptionsToResubscribe(), logger)
+	b.dispatchReconnectInventoryRequests(ctx, logger)
+}
+
 // NewBrokerManager begins connecting to cfg.MQTTBroker in the background and
 // returns immediately. It does not wait for the connection to come up, and
 // it does not return an error merely because the broker is currently
@@ -423,7 +550,12 @@ func (b *BrokerManager) log() *slog.Logger {
 // The probe goroutine that periodically re-confirms BrokerState is tied to
 // ctx: it exits when ctx is done, so callers must cancel ctx (or call
 // Disconnect) on shutdown to avoid leaking it.
-func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logger, subs []Subscription, handler MessageHandler) (*BrokerManager, error) {
+//
+// nodeLister, when non-nil, is called on every successful connection to
+// dispatch "asset.inventory.request" to every node it lists, per
+// [BrokerManager.dispatchReconnectInventoryRequests]. May be nil for a
+// BrokerManager that has no nodes to ask (e.g. an integration broker).
+func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logger, subs []Subscription, handler MessageHandler, nodeLister ReconnectNodeLister) (*BrokerManager, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -436,7 +568,7 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return nil, fmt.Errorf("parsing mqtt broker url %q: %w", cfg.MQTTBroker, err)
 	}
 
-	bm := &BrokerManager{now: time.Now, logger: logger}
+	bm := &BrokerManager{now: time.Now, logger: logger, nodeLister: nodeLister}
 	initAt := bm.now()
 	bm.state = BrokerState{Connected: false, Since: initAt, ObservedAt: initAt}
 
@@ -476,17 +608,10 @@ func NewBrokerManager(ctx context.Context, cfg config.Config, logger *slog.Logge
 		KeepAlive:        keepAliveSeconds,
 		ConnectTimeout:   10 * time.Second,
 		ReconnectBackoff: autopaho.DefaultExponentialBackoff(),
-		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
+		OnConnectionUp: func(_ *autopaho.ConnectionManager, _ *paho.Connack) {
 			bm.setConnected(true)
 			logger.Info("mqtt broker connection up", "broker", cfg.MQTTBroker, "client_id", cfg.MQTTClientID)
-			// Re-subscribing here, unconditionally, on every call (including
-			// every reconnect) is what makes a subscription survive a broker
-			// restart; see subscribeAll's doc comment. The set is computed
-			// fresh on every call via subscriptionsToResubscribe, not
-			// captured once at construction, so a response waiter that is
-			// live right now (rather than at NewBrokerManager time) also
-			// survives the reconnect — see that method's doc comment.
-			subscribeAll(ctx, cm, bm.subscriptionsToResubscribe(), logger)
+			bm.onConnectionUp(ctx, logger)
 		},
 		OnConnectionDown: func() bool {
 			bm.setConnected(false)

@@ -517,6 +517,7 @@ after shipping a breaking change to stored history.
 | `agent.echo` | shipped | Track B seam B1 |
 | `asset.fetch` | shipped | Track E |
 | `asset.remove` | shipped | SM-306: delete one held asset from a node's disk, by verified content hash, so an operator can remove an asset no Cue references (`GET`/`POST /api/v1/nodes/{nodeId}/assets/unused`\|`/remove`, `api/openapi.yaml`). Result signal `node.asset.removed` is not its own register row: it falls under the already-shipped `node`/`node.*` observation namespace below, matching `node.asset.held`/`node.asset.fetch_failed`, neither of which has an individual row either |
+| `asset.inventory.request` | shipped | SM-521: no params; ask a node to republish its asset inventory immediately rather than waiting for its own next scheduled interval. The coordinator dispatches this once, fire and forget, to every declared node from `internal/coordinator/broker/broker.go`'s own reconnect handling, so a node that rode out a broker outage cleanly gets to prove its inventory is current sooner than the ordinary tick would. Result signal `node.asset.inventory_requested` is not its own register row, matching `asset.remove`'s identical reasoning for `node.asset.removed` immediately above |
 | `render.surface.apply` | shipped | Track B seam B2 |
 | `render.surface.clear` | shipped | Track B seam B2 |
 | `render.pipeline.restart` | shipped | Track B seam B2 |
