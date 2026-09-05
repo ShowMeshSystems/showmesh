@@ -32,7 +32,7 @@ silently.
 **What I did.** Mirrored the existing `show.playlist` screen: `media.playlist`
 also carries a `show` field and its list route takes the same `?show=` filter
 `show.playlist` does, so a show-scoped tab is the placement the data already
-implies. The Shows workspace (`ui/src/screens/ShowsWorkspace.tsx`) gained an
+implies. The Shows workspace (`ui/src/screens/ShowsWorkspace.tsx`) gained a
 seventh tab, `media-playlists` (`/shows/:id/media-playlists`,
 `ShowsMediaPlaylists.tsx`), placed immediately beside Playlists. It composes
 from the kit exactly as Playlists does (`Panes`, `Section`, `Table`,
