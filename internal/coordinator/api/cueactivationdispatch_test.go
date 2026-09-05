@@ -448,7 +448,7 @@ func TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently(t *testing.T) {
 		t.Fatalf("first tick prepare revision = %v, want %v (derived from act.EvidenceAt)", got, wantPrepareRevision)
 	}
 
-	// A genuinely later, distinct wall-clock reading for the SECOND tick —
+	// A genuinely later, distinct wall-clock reading for the SECOND tick:
 	// the exact condition that produced a different revision, and so a
 	// params conflict, under the old bare-now derivation.
 	secondNow := now.Add(30 * time.Second)
@@ -471,16 +471,15 @@ func TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently(t *testing.T) {
 // TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds is the
 // prepare-ahead audio prepare's own stale-revision regression test: by
 // the time this dispatch's audio.session.prepare runs, the node's own
-// activateAudio has
-// already consumed activationRevision(act, activationStepStart) against
-// THIS SAME staging session (Promote or Clear, both keyed off
-// act.EvidenceAt — see internal/agent/cueactivationaudio.go's
-// activationRevision). Both PrepareStagingSessionStepApply and
-// PrepareStagingSessionStepPrepare, applied against a real
-// [pkgaudio.RevisionState] that already holds that consumed revision,
-// must still be accepted — proof at the level that actually matters,
-// mirroring cueactivationloop_test.go's own simulateNodeAudioSessionRevision
-// pattern.
+// activateAudio has already consumed activationRevision(act,
+// activationStepStart) against THIS SAME staging session (Promote or
+// Clear, both keyed off act.EvidenceAt, see internal/agent/
+// cueactivationaudio.go's activationRevision). Both
+// PrepareStagingSessionStepApply and PrepareStagingSessionStepPrepare,
+// applied against a real [pkgaudio.RevisionState] that already holds that
+// consumed revision, must still be accepted: proof at the level that
+// actually matters, mirroring cueactivationloop_test.go's own
+// simulateNodeAudioSessionRevision pattern.
 func TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds(t *testing.T) {
 	evidenceAt := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
 	rs := pkgaudio.NewRevisionState(pkgaudio.SessionID(cueactivation.PrepareStagingSessionID))

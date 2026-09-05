@@ -959,8 +959,8 @@ func (h *handlers) dispatchPrepareAheadAudio(ctx context.Context, now time.Time,
 	// only a value fixed to act itself (never a fresh wall-clock reading)
 	// gives that. [PrepareStagingSessionStepApply]/[PrepareStagingSessionStepPrepare]
 	// both sort past every AudioSessionStep* constant, so the resulting
-	// revisions still land above activationRevision(act, activationStepStart)
-	// — the revision the node's own activateAudio already consumed against
+	// revisions still land above activationRevision(act, activationStepStart),
+	// the revision the node's own activateAudio already consumed against
 	// THIS SAME staging session (Promote or Clear) before this runs.
 	t := act.EvidenceAt
 
