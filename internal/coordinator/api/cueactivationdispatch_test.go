@@ -405,17 +405,17 @@ func TestDispatchPrepareAheadAudioStagesNextCue(t *testing.T) {
 }
 
 // TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently reproduces
-// SM-519's own defect: dispatchPrepareAheadAudio's idempotency keys
+// dispatchPrepareAheadAudio's own idempotency defect: its idempotency keys
 // (act.ActivationID+":prepare-ahead-apply"/"-prepare") are stable for
 // act's whole lifetime, so a second tick over the SAME unchanged act must
 // present the SAME params under that SAME key. Before the fix, t was a
 // fresh wall-clock reading taken on every call, so the second tick's
 // revision differed from the first's even though the key did not, and
 // executeAudioSessionDispatch's own idempotency-store replay
-// (resolveAudioSessionReplay) refused it as a params conflict — this
-// function's own doc comment's "answers from the replay path with no
-// publish and no await" promise, broken. Two real, distinct wall-clock
-// "now" readings are passed to the two calls specifically to prove the
+// (resolveAudioSessionReplay) refused it as a params conflict, breaking
+// this function's own doc comment's "answers from the replay path with no
+// publish and no await" promise. Two real, distinct wall-clock "now"
+// readings are passed to the two calls specifically to prove the
 // dispatched revision tracks act.EvidenceAt, never that per-call now.
 func TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently(t *testing.T) {
 	now := testNow
@@ -468,9 +468,10 @@ func TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently(t *testing.T) {
 	}
 }
 
-// TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds is
-// SM-519's second symptom's own regression test: by the time this
-// dispatch's audio.session.prepare runs, the node's own activateAudio has
+// TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds is the
+// prepare-ahead audio prepare's own stale-revision regression test: by
+// the time this dispatch's audio.session.prepare runs, the node's own
+// activateAudio has
 // already consumed activationRevision(act, activationStepStart) against
 // THIS SAME staging session (Promote or Clear, both keyed off
 // act.EvidenceAt — see internal/agent/cueactivationaudio.go's
