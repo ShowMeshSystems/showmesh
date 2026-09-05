@@ -226,7 +226,7 @@ func TestAudioApplyCeilingConvertsDecibelsToLinearBeforeDispatch(t *testing.T) {
 
 // Omitting ceilingDb entirely must dispatch exactly as apply always has:
 // no ceiling key at all reaches the node, and the request is not refused
-// for lacking one — unlike gainDb, which audio.gain.set requires.
+// for lacking one, unlike gainDb, which audio.gain.set requires.
 func TestAudioApplyWithNoCeilingDispatchesUnchanged(t *testing.T) {
 	setup, token := gainDbTestSetup(t)
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
