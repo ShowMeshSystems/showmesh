@@ -971,15 +971,46 @@ func (h *handlers) nightClearBackgroundAudioAtEndSession(ctx context.Context, no
 	}
 	sessionID := nightBackgroundAudioSessionID(rec)
 	for _, nodeID := range ba.OutputNodeIDs() {
-		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, nodeID, sessionID)
+		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, rec.StateEnteredAt, nodeID, sessionID, ba.FadeOutMs)
 	}
+}
+
+// nightEndSessionClearFadeGuardMargin is how much longer than the
+// configured fade-out [nightEndSessionClearMayProceed] waits past
+// StateEnteredAt before forcing the clear regardless of fade state: one
+// night-loop tick's worth of slack (matching defaultNightLoopInterval)
+// for the fade-settled observation to catch up.
+const nightEndSessionClearFadeGuardMargin = 1 * time.Second
+
+// nightEndSessionClearMayProceed reports whether an end-session clear may
+// dispatch now. No fadeOutMs configured means yes immediately, unchanged
+// from today. Otherwise it waits for [nightBackgroundAudioFadeSettled],
+// but never past stateEnteredAt+fadeOutMs+margin: a stuck or silent node
+// (fadeSettled returns false forever with no CURRENT observation at all)
+// must never hold end-session open indefinitely.
+func (h *handlers) nightEndSessionClearMayProceed(now, stateEnteredAt time.Time, nodeID, sessionID string, fadeOutMs *int) bool {
+	if fadeOutMs == nil {
+		return true
+	}
+	if nightBackgroundAudioFadeSettled(h.deps.Audio, now, nodeID, sessionID) {
+		return true
+	}
+	bound := time.Duration(*fadeOutMs)*time.Millisecond + nightEndSessionClearFadeGuardMargin
+	return now.Sub(stateEnteredAt) >= bound
 }
 
 // nightClearBackgroundAudioAtEndSessionForNode is
 // [handlers.nightClearBackgroundAudioAtEndSession]'s own per-node body: one
 // node's own clear attempt, warned and abandoned independently of every
-// other node's own outcome.
-func (h *handlers) nightClearBackgroundAudioAtEndSessionForNode(ctx context.Context, now time.Time, nodeID, sessionID string) {
+// other node's own outcome. Guarded by
+// [handlers.nightEndSessionClearMayProceed] so a fade-down still ramping
+// from the ordinary resting-exit path is never cut off by this clear;
+// when the guard holds, [handlers.nightRetryEndSessionClear]'s own
+// per-tick retry (below) is what eventually dispatches it.
+func (h *handlers) nightClearBackgroundAudioAtEndSessionForNode(ctx context.Context, now, stateEnteredAt time.Time, nodeID, sessionID string, fadeOutMs *int) {
+	if !h.nightEndSessionClearMayProceed(now, stateEnteredAt, nodeID, sessionID, fadeOutMs) {
+		return
+	}
 	clearRevision := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) + 1
 	idemKey := fmt.Sprintf("night-end-session-clear:%s:%s", nodeID, sessionID)
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
@@ -1100,6 +1131,9 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 	// node once, so only a node whose SYNCHRONOUS attempt also failed
 	// is left unrecovered by this tick-based safety net.
 	sessionID := nightBackgroundAudioSessionID(rec)
+	if !h.nightEndSessionClearMayProceed(now, rec.StateEnteredAt, nodeIDs[0], sessionID, ba.FadeOutMs) {
+		return // fade still ramping and within bound; retried again next tick.
+	}
 	h.nightDispatchEndSessionClearRetry(ctx, now, rec, nodeIDs[0], sessionID, anchor)
 }
 
