@@ -647,8 +647,9 @@ func TestRequestNodeSyncsOnlyTheRequestedNode(t *testing.T) {
 }
 
 // TestRequestNodeDrainsEvenWithAPendingNudge proves a queued node id
-// survives an already-pending nudge from an unrelated caller: RequestNode
-// must never lose a node id to Nudge's own coalescing.
+// survives an already-pending, unrelated Nudge: an operator's own request
+// must never be lost to a coincidental full-fleet wake pending from
+// another caller.
 func TestRequestNodeDrainsEvenWithAPendingNudge(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "halloween-2026", "Halloween 2026")
@@ -665,6 +666,33 @@ func TestRequestNodeDrainsEvenWithAPendingNudge(t *testing.T) {
 
 	if n := len(pub.callsFor("render-01")); n != 1 {
 		t.Fatalf("callsFor(render-01) = %d, want exactly 1", n)
+	}
+}
+
+// TestRequestNodeWakesRequestNeverNudge is the property that actually
+// matters for noderesync.go's own contract: RequestNode must wake Run
+// through its own request signal, never nudge, because Run only skips
+// tick's full-fleet pass on a request-only wake (see Run's own doc
+// comment). White-box by necessity: proving this by starting Run and
+// counting a second node's dispatches is not a fair test, because Run's
+// OWN initial full pass would legitimately dispatch to every node first,
+// and maybeDispatch's in-flight suppression would then silently absorb
+// whatever RequestNode caused, passing either way.
+func TestRequestNodeWakesRequestNeverNudge(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	svc.RequestNode("render-01")
+
+	select {
+	case <-svc.request:
+	default:
+		t.Fatal("RequestNode() left nothing queued on the request channel")
+	}
+	select {
+	case <-svc.nudge:
+		t.Fatal("RequestNode() also signaled nudge; that would make Run run tick's full-fleet pass on this wake")
+	default:
 	}
 }
 

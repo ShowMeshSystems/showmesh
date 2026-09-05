@@ -146,10 +146,15 @@ type Service struct {
 	// even started adds nothing.
 	nudge chan struct{}
 
+	// request is nudge's own shape (buffered 1, coalescing) but a SEPARATE
+	// channel: waking on request alone must run a per-node sync only, never
+	// tick's full-fleet pass, so it cannot share nudge's wake path.
+	request chan struct{}
+
 	// requestMu guards pendingNodes: node ids queued by [Service.
 	// RequestNode] for [Service.syncRequestedNodes] to drain on Run's next
 	// iteration, syncing exactly those nodes rather than every declared
-	// one. Never dropped, unlike nudge's own coalescing signal.
+	// one. Never dropped, unlike request's own coalescing wake signal.
 	requestMu    sync.Mutex
 	pendingNodes map[string]bool
 
@@ -181,7 +186,7 @@ func NewService(st *store.Store, pub Publisher, logger *slog.Logger, initial Set
 	return &Service{
 		st: st, pub: pub, logger: logger, now: time.Now,
 		settings: initial,
-		nudge:    make(chan struct{}, 1), inFlight: make(map[dispatchKey]dispatchRecord),
+		nudge:    make(chan struct{}, 1), request: make(chan struct{}, 1), inFlight: make(map[dispatchKey]dispatchRecord),
 		byCmdID: make(map[string]dispatchKey), failures: make(map[dispatchKey]FetchFailureRecord),
 	}
 }
@@ -269,10 +274,11 @@ func (s *Service) Nudge() {
 }
 
 // RequestNode queues nodeID for [Service.syncRequestedNodes] to sync on
-// Run's next iteration, then nudges Run to run promptly. Unlike Nudge's
-// own coalescing signal, a queued node id is never dropped: an operator
-// asking to re-sync one node must not be silently absorbed into whatever
-// nudge happened to already be pending.
+// Run's next iteration, then wakes Run through request, NEVER nudge: a
+// request-only wake runs a per-node sync alone, skipping tick's own
+// full-fleet pass, so an operator re-syncing one node never triggers a
+// dispatch pass over every declared node. A queued node id is never
+// dropped, unlike request's own coalescing wake signal.
 func (s *Service) RequestNode(nodeID string) {
 	s.requestMu.Lock()
 	if s.pendingNodes == nil {
@@ -280,22 +286,32 @@ func (s *Service) RequestNode(nodeID string) {
 	}
 	s.pendingNodes[nodeID] = true
 	s.requestMu.Unlock()
-	s.Nudge()
+	select {
+	case s.request <- struct{}{}:
+	default:
+	}
 }
 
 // Run ticks immediately, then waits [Service.syncInterval] (read fresh on
-// every iteration, or a [Service.Nudge], or ctx.Done) before ticking
-// again, until ctx is cancelled. Track G seam G-4 (ADR-039 decision 6):
-// unlike before, Run never returns early because [Service.Enabled] is
-// false — it keeps looping and simply skips dispatch work on any
-// iteration where Enabled reports false, because contentBaseUrl can be
-// set (or cleared) through the assets.settings configuration kind at any
-// point while this process runs, and a Run that already returned could
-// never notice. Every enabled<->disabled transition is logged once, not
-// on every iteration, matching the original "says so once" contract for
-// each state rather than repeating it every tick.
+// every iteration, a [Service.Nudge], a [Service.RequestNode], or
+// ctx.Done) before ticking again, until ctx is cancelled. Track G seam G-4
+// (ADR-039 decision 6): unlike before, Run never returns early because
+// [Service.Enabled] is false: it keeps looping and simply skips dispatch
+// work on any iteration where Enabled reports false, because
+// contentBaseUrl can be set (or cleared) through the assets.settings
+// configuration kind at any point while this process runs, and a Run that
+// already returned could never notice. Every enabled<->disabled
+// transition is logged once, not on every iteration, matching the
+// original "says so once" contract for each state rather than repeating
+// it every tick.
+//
+// fullPass tracks WHY the previous wait woke this loop: true for the
+// first iteration, a timer tick, or a Nudge (tick's own full-fleet pass
+// runs); false for a RequestNode-only wake (only syncRequestedNodes runs,
+// so a per-node request never causes a full-fleet dispatch pass).
 func (s *Service) Run(ctx context.Context) {
 	var loggedEnabled *bool
+	fullPass := true
 
 	for {
 		enabled := s.Enabled()
@@ -310,7 +326,9 @@ func (s *Service) Run(ctx context.Context) {
 		}
 
 		if enabled {
-			s.tick(ctx)
+			if fullPass {
+				s.tick(ctx)
+			}
 			s.syncRequestedNodes(ctx)
 		}
 		if ctx.Err() != nil {
@@ -318,12 +336,17 @@ func (s *Service) Run(ctx context.Context) {
 		}
 
 		timer := time.NewTimer(s.syncInterval())
+		fullPass = false
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
 		case <-timer.C:
+			fullPass = true
 		case <-s.nudge:
+			timer.Stop()
+			fullPass = true
+		case <-s.request:
 			timer.Stop()
 		}
 	}
