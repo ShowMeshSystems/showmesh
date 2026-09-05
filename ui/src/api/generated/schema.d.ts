@@ -1958,7 +1958,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a show object (tombstone)
-         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show/{id}/revisions. Excluded immediately from GET/list and from resolution. Refused with `409` when GET /config/show.active currently names this show id: that is the one live "what is running now" selector a show participates in, so it is checked at the moment of the request rather than left dangling. Every OTHER reference to this show id (show.surface/show.action/show.macro/show.cue/show.playlist/ night.session, all namespaced under it) is an ordinary configuration reference, not a live selector, and deleting a show does NOT cascade to any of them: they are left in place naming a tombstoned show id, and each already resolves "show" through its own existence check wherever a write depends on it. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/show/{id}/revisions. Excluded immediately from GET/list and from resolution. Refused with `409` when GET /config/show.active currently names this show id: that is the one live "what is running now" selector a show participates in, so it is checked at the moment of the request rather than left dangling. Every OTHER reference to this show id (show.surface/show.action/show.macro/show.cue/show.playlist/ night.session/media.playlist, all namespaced under it) is an ordinary configuration reference, not a live selector, and deleting a show does NOT cascade to any of them: they are left in place naming a tombstoned show id, and each already resolves "show" through its own existence check wherever a write depends on it. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
          */
         delete: operations["deleteShow"];
         options?: never;
@@ -2161,6 +2161,68 @@ export interface paths {
         };
         /** show.playlist revision history, newest first (Track H seam H1) */
         get: operations["listShowPlaylistRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/media.playlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate media.playlist objects
+         * @description Object ids with label (the bed's own name), show (the parent show id), and current revision number, NOT the full payloads. Optionally narrowed with `?show=<id>`. `?node=` is not a supported filter for this kind (400).
+         */
+        get: operations["listMediaPlaylists"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/media.playlist/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One media.playlist object's active revision */
+        get: operations["getMediaPlaylist"];
+        /**
+         * Write a new media.playlist revision
+         * @description Requires `config:write`. `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` object. `items` is required and non-empty; each item's `kind` is today always `asset` (`cue` is reserved and refused with problem type `show-config-not-implemented`, never a 501), and each asset item's own `show` must equal the playlist's `show` and must name a current asset for that (show, sequence, target) tuple. `resume` and `itemTransition` are the same vocabulary night.session's inline `resting.backgroundAudio` block uses; `crossfadeMs` is required when `itemTransition` is `crossfade` and refused otherwise. `maxGainDb` must be `<= 0`. `fadeOutMs` and `fadeInMs` must be configured together, or both omitted for an instant cut. This is a FULL REPLACEMENT. Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
+         */
+        put: operations["putMediaPlaylist"];
+        post?: never;
+        /**
+         * Delete a media.playlist object (tombstone)
+         * @description Requires `config:write` (admin only), the same scope PUT requires. Requires an explicit `{"confirm":true}` body. A TOMBSTONE, not a hard delete: config_revisions is immutable and never pruned (ADR-009), so every revision this object ever held still reads back through GET /config/media.playlist/{id}/revisions. Excluded immediately from GET/list and from resolution. Nothing in this codebase's reference graph names a media.playlist id from another configuration object. Re-creating this id with a later PUT clears the tombstone and continues revision numbering from this object's true history. `If-None-Match` has no meaning on a DELETE and is refused with `400`.
+         */
+        delete: operations["deleteMediaPlaylist"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/media.playlist/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** media.playlist revision history, newest first */
+        get: operations["listMediaPlaylistRevisions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3013,7 +3075,7 @@ export interface components {
         DeleteNodeDeclarationRequest: {
             confirm: boolean;
         };
-        /** @description Required body of DELETE on a per-object configuration kind's path (audio.node, show, show.surface, show.action, show.macro, show.cue, show.playlist, night.session). `confirm` must be `true`, mirroring DeleteNodeDeclarationRequest immediately above, so a mis-issued call cannot quietly tombstone a configuration object. */
+        /** @description Required body of DELETE on a per-object configuration kind's path (audio.node, show, show.surface, show.action, show.macro, show.cue, show.playlist, night.session, media.playlist). `confirm` must be `true`, mirroring DeleteNodeDeclarationRequest immediately above, so a mis-issued call cannot quietly tombstone a configuration object. */
         ConfigObjectDeleteRequest: {
             confirm: boolean;
         };
@@ -3957,12 +4019,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, GET /config/audio.node/{id}/revisions, and GET /config/fppconnect.settings/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, ADR-033's show.mode one more, and Track E phase 2 seam FC1a's fppconnect.settings one more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, GET /config/audio.node/{id}/revisions, GET /config/fppconnect.settings/revisions, and GET /config/media.playlist/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, ADR-033's show.mode one more, Track E phase 2 seam FC1a's fppconnect.settings one more, and media.playlist one more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -4656,12 +4718,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, GET /config/audio.node, and GET /config/media.playlist (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "audio.node";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "audio.node" | "media.playlist";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
@@ -5414,6 +5476,46 @@ export interface components {
             id: string;
             revision: number;
             payload: components["schemas"]["ConfigShowPlaylist"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description One element of media.playlist.items. kind is today always "asset" ("cue" is reserved and refused server-side with problem type show-config-not-implemented). show/sequence/target are the same asset identity night.session's own background-audio items resolve against (ADR-028); show must equal the playlist's own show. */
+        ConfigMediaPlaylistItem: {
+            /** @enum {string} */
+            kind: "asset";
+            show: string;
+            sequence: string;
+            target: string;
+        };
+        /** @description The "media.playlist" configuration kind's decoded payload: the body PUT /config/media.playlist/{id} accepts, and the "payload" member of GET /config/media.playlist/{id}'s response. Unlike show.playlist (a list of cues a runner steps through), a media.playlist is a list of things the audio engine plays as a bed, and several may exist per show. show must name an existing show object. items is required and non-empty. resume and itemTransition share night.session's own resting.backgroundAudio vocabulary. crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs must be configured together, or both omitted for an instant cut (server-side; not expressible here). repeat defaults to "none" and is always resolved and emitted on the wire, even though an authored request may omit it. */
+        ConfigMediaPlaylist: {
+            label: string;
+            show: string;
+            items: components["schemas"]["ConfigMediaPlaylistItem"][];
+            /** @enum {string} */
+            repeat: "none" | "item" | "playlist";
+            /** @enum {string} */
+            resume: "resume" | "restart";
+            /** @enum {string} */
+            itemTransition: "sequential" | "gapless" | "crossfade";
+            crossfadeMs?: number;
+            maxGainDb: number;
+            fadeOutMs?: number;
+            fadeInMs?: number;
+        };
+        /** @description The body of GET and PUT /config/media.playlist/{id}. */
+        MediaPlaylistConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "media.playlist";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigMediaPlaylist"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -10758,6 +10860,163 @@ export interface operations {
         };
     };
     listShowPlaylistRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listMediaPlaylists: {
+        parameters: {
+            query?: {
+                /** @description Narrow the list to media playlists belonging to this show id. */
+                show?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getMediaPlaylist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaPlaylistConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putMediaPlaylist: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigMediaPlaylist"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaPlaylistConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteMediaPlaylist: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigObjectDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The object was tombstoned. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listMediaPlaylistRevisions: {
         parameters: {
             query?: never;
             header?: never;
