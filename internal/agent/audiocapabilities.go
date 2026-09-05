@@ -112,15 +112,16 @@ const minLTCChannels = audio.MinLTCChannels
 // engine reports itself available, see [detectAudioCapabilities]'s own
 // gating of these (and "audio.engine") on [audioEngineAvailable].
 // Playlist advance (background/announcement source roles, item repeat),
-// gain/fade application, duck/interrupt priority resolution, and
-// position readback are all Manager-level behavior implemented once
-// against the [audio.Engine] interface (internal/agent/audio/mix.go,
-// session.go, engine.go), never varying by which engine backend is
-// actually bound underneath it, so there is nothing further to probe
-// per-ID: an available engine provides all of them.
+// gain/fade application, ceiling enforcement, duck/interrupt priority
+// resolution, and position readback are all Manager-level behavior
+// implemented once against the [audio.Engine] interface
+// (internal/agent/audio/mix.go, session.go, engine.go), never varying by
+// which engine backend is actually bound underneath it, so there is
+// nothing further to probe per-ID: an available engine provides all of
+// them.
 //
 // "audio.mix.concurrent" (more than one session audible on this output
-// at once) is DIFFERENT from the other eleven, and this is worth
+// at once) is DIFFERENT from the other twelve, and this is worth
 // stating plainly rather than overclaiming a guarantee that does not
 // exist: it is real for internal/agent/audio/gstengine, the one
 // production Engine agent.go's own real wiring ever binds newGstEngine
@@ -165,6 +166,7 @@ var audioSessionCapabilityIDs = []capability.ID{
 	"audio.playback.fade",
 	"audio.playback.seek",
 	"audio.playback.position",
+	"audio.playback.ceiling",
 	"audio.mix.concurrent",
 	"audio.mix.duck",
 	"audio.mix.interrupt",

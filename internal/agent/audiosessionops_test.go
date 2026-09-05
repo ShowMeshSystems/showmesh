@@ -109,6 +109,56 @@ func TestParseApplyRequestRejectsNonNumericExpiresInMs(t *testing.T) {
 	}
 }
 
+// TestParseApplyRequestAcceptsCeiling is the load-bearing case for the
+// gain ceiling traveling on the wire at all: a linear params.ceiling
+// must land in ApplyRequest.Ceiling for Manager.Apply to merge onto the
+// session's desired state.
+func TestParseApplyRequestAcceptsCeiling(t *testing.T) {
+	req, err := parseApplyRequest("audio.session.apply", map[string]any{
+		"ceiling": 0.5,
+	})
+	if err != nil {
+		t.Fatalf("parseApplyRequest: %v", err)
+	}
+	v, ok := req.Ceiling.Value()
+	if !ok || v != pkgaudio.Ceiling(0.5) {
+		t.Errorf("Ceiling = %v (ok=%v), want 0.5", v, ok)
+	}
+}
+
+// TestParseApplyRequestOmittedCeilingStaysUnset is the optionality
+// requirement itself: an apply that never mentions ceiling must leave a
+// session's already-applied ceiling exactly as it was, matching every
+// deployed caller (older agent or coordinator) that has never heard of
+// this field.
+func TestParseApplyRequestOmittedCeilingStaysUnset(t *testing.T) {
+	req, err := parseApplyRequest("audio.session.apply", map[string]any{})
+	if err != nil {
+		t.Fatalf("parseApplyRequest: %v", err)
+	}
+	if !req.Ceiling.IsUnset() {
+		t.Errorf("Ceiling state = %v, want unset", req.Ceiling.State())
+	}
+}
+
+// TestParseApplyRequestRejectsNonPositiveCeiling reuses
+// pkgaudio.Ceiling.Validate rather than a second bound: zero and
+// negative are both refused, because a ceiling that clamps everything to
+// silence is indistinguishable from a deliberate mute.
+func TestParseApplyRequestRejectsNonPositiveCeiling(t *testing.T) {
+	for _, c := range []float64{0, -1} {
+		if _, err := parseApplyRequest("audio.session.apply", map[string]any{"ceiling": c}); err == nil {
+			t.Errorf("parseApplyRequest(ceiling=%v) = nil error, want one", c)
+		}
+	}
+}
+
+func TestParseApplyRequestRejectsNonNumericCeiling(t *testing.T) {
+	if _, err := parseApplyRequest("audio.session.apply", map[string]any{"ceiling": "loud"}); err == nil {
+		t.Error("parseApplyRequest(string ceiling) = nil error, want one")
+	}
+}
+
 // TestApplyAcceptsEveryMixPolicyOverTheWire guards reachability rather
 // than behaviour. Announcement policy is a resolved decision and the
 // session layer implements all three, but none of it is worth anything

@@ -106,3 +106,44 @@ func ConvertAuthoredAudioGainParams(action string, params map[string]any) {
 // audioGainDbMax is [pkgaudio.MaxOperatorGainDb], the bound every
 // operator-facing gain shares.
 const audioGainDbMax = pkgaudio.MaxOperatorGainDb
+
+// audioApplyCeilingDbKey and audioApplyCeilingLinearKey name
+// audio.session.apply's own decibel/linear ceiling pair. Unlike gainDb/
+// targetGainDb, the field is OPTIONAL: an apply that omits it changes no
+// ceiling, matching every other apply field's own "omitted means
+// unchanged" contract.
+const (
+	audioApplyCeilingDbKey     = "ceilingDb"
+	audioApplyCeilingLinearKey = "ceiling"
+)
+
+// convertAudioApplyCeilingParamToLinear is convertAudioGainParamsToLinear's
+// sibling for audio.session.apply's own optional ceiling field: absent
+// means "this apply carries no ceiling change" and is left alone, present
+// is validated and converted the same way gainDb and targetGainDb are.
+func convertAudioApplyCeilingParamToLinear(params map[string]any) *v1.Problem {
+	if _, present := params[audioApplyCeilingLinearKey]; present {
+		p := invalidParameterProblem(fmt.Sprintf(
+			"params.%s was a linear amplitude multiplier and no longer exists; send params.%s instead, in decibels",
+			audioApplyCeilingLinearKey, audioApplyCeilingDbKey))
+		return &p
+	}
+	raw, present := params[audioApplyCeilingDbKey]
+	if !present {
+		return nil
+	}
+	db, ok := raw.(float64)
+	if !ok {
+		p := invalidParameterProblem(fmt.Sprintf("params.%s must be a JSON number in decibels, got %T", audioApplyCeilingDbKey, raw))
+		return &p
+	}
+	if db > audioGainDbMax {
+		p := invalidParameterProblem(fmt.Sprintf(
+			"params.%s is in decibels and must not exceed %v dB: a larger value is a typo, not a level",
+			audioApplyCeilingDbKey, audioGainDbMax))
+		return &p
+	}
+	delete(params, audioApplyCeilingDbKey)
+	params[audioApplyCeilingLinearKey] = float64(pkgaudio.CeilingFromDb(db))
+	return nil
+}

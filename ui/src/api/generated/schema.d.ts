@@ -3323,7 +3323,7 @@ export interface components {
             /** @description Optional. Neither the node nor this coordinator actually validates params for these nine operations: each is silently accepted and ignored, whatever it contains. This schema states the useful contract instead of that unconditional tolerance, matching AudioSessionSeekParams' and AudioSessionGainParams' own stricter-than-the-node posture. */
             params?: Record<string, never>;
         };
-        /** @description Every field is independently optional: params with no fields at all is syntactically valid and merges nothing new onto the session's already-applied state. `media` and `playlist` are mutually exclusive; neither is required, since an apply that only changes e.g. `outputs` or `mixPolicy` on an already-applied session is valid. `gain`, `ceiling`, `fade`, and `bookmark` are never accepted here: gain and its ceiling and fade are set through the separate audio.gain.* commands, and a bookmark is state the session records for itself, never supplied by a caller. */
+        /** @description Every field is independently optional: params with no fields at all is syntactically valid and merges nothing new onto the session's already-applied state. `media` and `playlist` are mutually exclusive; neither is required, since an apply that only changes e.g. `outputs` or `mixPolicy` on an already-applied session is valid. `gain`, `fade`, and `bookmark` are never accepted here: gain and fade are set through the separate audio.gain.* commands, and a bookmark is state the session records for itself, never supplied by a caller. `ceilingDb` is the one gain-adjacent field this endpoint does accept, since a session's ceiling is part of its standing desired state, not a one-shot gain command. */
         AudioSessionApplyParams: {
             /**
              * @description This session's source type. An unrecognized value is refused.
@@ -3385,6 +3385,8 @@ export interface components {
             mixPolicy?: "mix" | "duck" | "interrupt";
             /** @description The coordinator stamps this on its own applies to keep a session's retirement deadline current; an operator need not send it. */
             expiresInMs?: number;
+            /** @description Optional. The maximum gain this session's own gain (set, faded, or ducked) may ever be clamped to, in decibels, shares its decibel boundary and +12 dB typo-guard bound with AudioSessionGainParams.gainDb - see that field's own description. Omitted means "leave this session's ceiling exactly as it already is"; there is no way to clear a ceiling back to unset once one has been sent. The node reapplies this ceiling on every path that changes the session's effective gain, including a duck or a mute releasing. */
+            ceilingDb?: number;
         };
         /** @description This schema is stricter than the node: an unrecognized key here is refused, where the node itself silently ignores one instead. */
         AudioSessionSeekParams: {

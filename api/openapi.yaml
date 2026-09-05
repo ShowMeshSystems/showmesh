@@ -10052,11 +10052,13 @@ components:
         session's already-applied state. `media` and `playlist` are
         mutually exclusive; neither is required, since an apply that
         only changes e.g. `outputs` or `mixPolicy` on an already-applied
-        session is valid. `gain`, `ceiling`, `fade`, and `bookmark` are
-        never accepted here: gain and its ceiling and fade are set
-        through the separate audio.gain.* commands, and a bookmark is
-        state the session records for itself, never supplied by a
-        caller.
+        session is valid. `gain`, `fade`, and `bookmark` are never
+        accepted here: gain and fade are set through the separate
+        audio.gain.* commands, and a bookmark is state the session
+        records for itself, never supplied by a caller. `ceilingDb` is
+        the one gain-adjacent field this endpoint does accept, since a
+        session's ceiling is part of its standing desired state, not a
+        one-shot gain command.
       not:
         required: [media, playlist]
       properties:
@@ -10194,6 +10196,20 @@ components:
             The coordinator stamps this on its own applies to keep a
             session's retirement deadline current; an operator need not
             send it.
+        ceilingDb:
+          type: number
+          maximum: 12
+          description: >-
+            Optional. The maximum gain this session's own gain (set,
+            faded, or ducked) may ever be clamped to, in decibels,
+            shares its decibel boundary and +12 dB typo-guard bound with
+            AudioSessionGainParams.gainDb - see that field's own
+            description. Omitted means "leave this session's ceiling
+            exactly as it already is"; there is no way to clear a
+            ceiling back to unset once one has been sent. The node
+            reapplies this ceiling on every path that changes the
+            session's effective gain, including a duck or a mute
+            releasing.
     AudioSessionSeekParams:
       type: object
       additionalProperties: false

@@ -11,6 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -61,16 +62,15 @@ import (
 // Known, deliberate limits (see this builder's own report): a failed
 // apply or start is logged and left for an operator rather than auto-
 // retried indefinitely (a session with genuinely bad configuration would
-// otherwise retry forever); gapless/crossfade item transitions are
+// otherwise retry forever); and gapless/crossfade item transitions are
 // confirmed against the output node's live capability advertisement
 // ([audioNodeConfirmsTransition]) - configuring one against an
 // output that has never declared the matching audio.transition.* ID
 // refuses background audio outright, honestly, rather than approximating
-// it as sequential; and maxGainDb is enforced only at the moment this
-// controller computes and
-// sends a gain - there is no wire-level standing ceiling on
-// audio.session.apply or audio.gain.set today (a contract gap filed
-// separately, not invented here).
+// it as sequential. maxGainDb now also travels as a standing ceiling on
+// audio.session.apply itself ([nightBackgroundApplyParams]'s own ceiling
+// field), so the node enforces it on every path gain takes effect, not
+// only at the moments this controller happens to compute and send one.
 
 // nightPhaseRestingBackground is the phase FAMILY prefix for every step
 // this controller commits for background audio: apply, gain, start,
@@ -481,14 +481,52 @@ func nightAudioTarget(nodeID, sessionID, action string, params map[string]any) c
 	}
 }
 
+// audioPlaybackCeilingCapabilityID mirrors the literal capability ID
+// internal/agent/audiocapabilities.go advertises for the standing-ceiling
+// ability, matching audionode.go's own audioOutputLocalCapabilityID/
+// audioOutputLTCCapabilityID convention: pkg/capability's vocabulary is
+// untyped strings by design, so there is no shared constant to import.
+const audioPlaybackCeilingCapabilityID capability.ID = "audio.playback.ceiling"
+
+// audioNodeConfirmsCeiling reads nodeID's live capability advertisement
+// and reports whether it declares audioPlaybackCeilingCapabilityID,
+// mirroring audioNodeConfirmsTransition's (nightaudioreadiness.go) own
+// evidence-first pattern: a node this coordinator cannot currently
+// confirm anything about (never published, not currently online, or a
+// lookup failure) never gets a wire ceiling manufactured for it. Sending
+// ceiling unconditionally to a node built before this capability existed
+// would fail the WHOLE apply at that agent's own rejectUnknownKeys, not
+// merely leave the ceiling unenforced, so omission here is not a
+// courtesy, it is what keeps a deployed older agent's background bed
+// starting at all.
+func audioNodeConfirmsCeiling(ctx context.Context, nodes NodeLister, now time.Time, nodeID string) bool {
+	evidence, err := audioNodeCapabilitySet(ctx, nodes, now, nodeID)
+	if err != nil || !evidence.Live {
+		return false
+	}
+	_, confirmed := evidence.Capabilities.Lookup(audioPlaybackCeilingCapabilityID)
+	return confirmed
+}
+
 // nightBackgroundApplyParams builds audio.session.apply's own wire
 // params: a full pkgaudio.PlaylistRef pinning every configured item,
 // repeat, resume, and requestedTransition on the node - the fields
 // internal/agent/audiosessionops.go's parsePlaylistRef accepts, spelled
 // exactly as it requires (ownerKind, ownerId, ownerRevision, items,
 // repeat, resume, requestedTransition; each item itemId/index/assetId/
-// contentHash/filename/sizeBytes).
-func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem) map[string]any {
+// contentHash/filename/sizeBytes). ceiling, when sent at all, carries
+// resting.backgroundAudio.maxGainDb, already converted to the linear
+// pkgaudio.Ceiling this controller sends every gain against
+// ([nightBackgroundCeilingGain]): this is a server-built target, not an
+// operator's own HTTP request, so it is sent linear rather than as
+// ceilingDb, matching audio.gain.set's own gain field one call below.
+// The key is present only when nodeID's live advertisement confirms
+// audioPlaybackCeilingCapabilityID ([audioNodeConfirmsCeiling]); it is
+// omitted entirely, not sent as zero or null, for every other node,
+// including one this coordinator cannot currently confirm anything
+// about, so a deployed agent from before this field existed still
+// accepts this apply exactly as it always has.
+func nightBackgroundApplyParams(ctx context.Context, nodes NodeLister, now time.Time, nodeID string, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem) map[string]any {
 	wireItems := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		wireItems = append(wireItems, map[string]any{
@@ -497,7 +535,7 @@ func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSe
 			"filename": item.Media.RuntimeFilename, "sizeBytes": item.Media.SizeBytes,
 		})
 	}
-	return map[string]any{
+	params := map[string]any{
 		"sourceRole": string(pkgaudio.SourceRoleBackground),
 		"playlist": map[string]any{
 			"ownerKind": "night.session.resting.backgroundAudio", "ownerId": rec.ConfigObjectID,
@@ -507,6 +545,11 @@ func nightBackgroundApplyParams(rec store.NightSessionRecord, ba *config.NightSe
 		"mixPolicy":   string(pkgaudio.MixPolicyMix),
 		"expiresInMs": float64(nightBackgroundAudioExpiryTTL.Milliseconds()),
 	}
+	if audioNodeConfirmsCeiling(ctx, nodes, now, nodeID) {
+		_, ceiling := nightBackgroundCeilingGain(ba.MaxGainDb)
+		params["ceiling"] = float64(ceiling)
+	}
+	return params
 }
 
 // nightAdvanceBackgroundAudio is nightTick's own per-tick entry point
@@ -654,7 +697,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 func (h *handlers) nightBackgroundAudioApply(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow) {
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameApply(int(revision))
-	target := nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(rec, ba, items))
+	target := nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, rec, ba, items))
 	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
 		h.logWarn("night loop: background audio: apply failed", "sessionId", rec.ID, "error", err)
 	}
@@ -804,7 +847,7 @@ func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time,
 	var target config.ShowActionTarget
 	switch latest.Step.Kind {
 	case nightBGStepApply:
-		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(rec, ba, items))
+		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(ctx, h.deps.Nodes, now, nodeID, rec, ba, items))
 	case nightBGStepGain:
 		gain, ceiling := nightBackgroundCeilingGain(nightBackgroundAudioInitialGainDb(ba))
 		result, err := pkgaudio.ApplyCeiling(gain, ceiling)

@@ -390,6 +390,7 @@ above was added for.
 | `audio.playback.fade` | shipped | Lane 17a SM-201 |
 | `audio.playback.seek` | shipped | Lane 17a SM-201 |
 | `audio.playback.position` | shipped | Lane 17a SM-201 |
+| `audio.playback.ceiling` | shipped | Lane 17a SM-201 |
 | `audio.mix.concurrent` | shipped | Lane 17a SM-201 |
 | `audio.mix.duck` | shipped | Lane 17a SM-201 |
 | `audio.mix.interrupt` | shipped | Lane 17a SM-201 |
