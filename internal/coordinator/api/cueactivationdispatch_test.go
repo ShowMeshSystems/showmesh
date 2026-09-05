@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +12,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
@@ -397,6 +401,101 @@ func TestDispatchPrepareAheadAudioStagesNextCue(t *testing.T) {
 		if s, _ := d.Params["sessionId"].(string); s == cueactivation.AudioSessionID {
 			t.Fatalf("dispatchPrepareAheadAudio published against the playing show session id %q: %+v", cueactivation.AudioSessionID, d)
 		}
+	}
+}
+
+// TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently reproduces
+// SM-519's own defect: dispatchPrepareAheadAudio's idempotency keys
+// (act.ActivationID+":prepare-ahead-apply"/"-prepare") are stable for
+// act's whole lifetime, so a second tick over the SAME unchanged act must
+// present the SAME params under that SAME key. Before the fix, t was a
+// fresh wall-clock reading taken on every call, so the second tick's
+// revision differed from the first's even though the key did not, and
+// executeAudioSessionDispatch's own idempotency-store replay
+// (resolveAudioSessionReplay) refused it as a params conflict — this
+// function's own doc comment's "answers from the replay path with no
+// publish and no await" promise, broken. Two real, distinct wall-clock
+// "now" readings are passed to the two calls specifically to prove the
+// dispatched revision tracks act.EvidenceAt, never that per-call now.
+func TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cuePrepareAheadTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	var logBuf bytes.Buffer
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchPrepareAheadAudio(context.Background(), now, nodeID, act, issuer)
+	firstTick := dispatchedActionsToSession(setup, cueactivation.PrepareStagingSessionID)
+	if len(firstTick) != 2 {
+		t.Fatalf("first tick dispatched %d commands against the staging session, want 2 (apply, prepare); got %+v", len(firstTick), firstTick)
+	}
+	// Compared as float64, matching dispatchedAudioCommand's own params
+	// round trip through the fake publisher's JSON decode into
+	// map[string]any: both sides suffer the identical uint64-to-float64
+	// conversion, so an exact match here still proves the two computed
+	// revisions started out identical.
+	wantApplyRevision := float64(cueactivation.PrepareStagingSessionRevision(act.EvidenceAt, cueactivation.PrepareStagingSessionStepApply))
+	wantPrepareRevision := float64(cueactivation.PrepareStagingSessionRevision(act.EvidenceAt, cueactivation.PrepareStagingSessionStepPrepare))
+	if got := firstTick[0].Params["revision"]; got != wantApplyRevision {
+		t.Fatalf("first tick apply revision = %v, want %v (derived from act.EvidenceAt)", got, wantApplyRevision)
+	}
+	if got := firstTick[1].Params["revision"]; got != wantPrepareRevision {
+		t.Fatalf("first tick prepare revision = %v, want %v (derived from act.EvidenceAt)", got, wantPrepareRevision)
+	}
+
+	// A genuinely later, distinct wall-clock reading for the SECOND tick —
+	// the exact condition that produced a different revision, and so a
+	// params conflict, under the old bare-now derivation.
+	secondNow := now.Add(30 * time.Second)
+	h.dispatchPrepareAheadAudio(context.Background(), secondNow, nodeID, act, issuer)
+
+	secondTick := dispatchedActionsToSession(setup, cueactivation.PrepareStagingSessionID)
+	if len(secondTick) != len(firstTick) {
+		t.Fatalf("second tick over an unchanged act published %d commands beyond the first tick's %d; want no new publish (replay path)", len(secondTick)-len(firstTick), len(firstTick))
+	}
+	for i, d := range secondTick {
+		if !reflect.DeepEqual(d, firstTick[i]) {
+			t.Fatalf("second tick's replayed command %d = %+v, want byte-identical to the first tick's %+v", i, d, firstTick[i])
+		}
+	}
+	if logged := logBuf.String(); strings.Contains(logged, "refused") || strings.Contains(logged, "failed") {
+		t.Fatalf("second tick logged a refusal or failure, want a silent replay: %s", logged)
+	}
+}
+
+// TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds is
+// SM-519's second symptom's own regression test: by the time this
+// dispatch's audio.session.prepare runs, the node's own activateAudio has
+// already consumed activationRevision(act, activationStepStart) against
+// THIS SAME staging session (Promote or Clear, both keyed off
+// act.EvidenceAt — see internal/agent/cueactivationaudio.go's
+// activationRevision). Both PrepareStagingSessionStepApply and
+// PrepareStagingSessionStepPrepare, applied against a real
+// [pkgaudio.RevisionState] that already holds that consumed revision,
+// must still be accepted — proof at the level that actually matters,
+// mirroring cueactivationloop_test.go's own simulateNodeAudioSessionRevision
+// pattern.
+func TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds(t *testing.T) {
+	evidenceAt := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	rs := pkgaudio.NewRevisionState(pkgaudio.SessionID(cueactivation.PrepareStagingSessionID))
+
+	consumed := pkgaudio.Revision(cueactivation.AudioSessionRevision(evidenceAt, cueactivation.AudioSessionStepStart))
+	if d := rs.Apply("promote-or-clear", consumed); !d.Accepted {
+		t.Fatalf("simulated node Promote/Clear step not accepted: %+v", d)
+	}
+
+	applyRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(evidenceAt, cueactivation.PrepareStagingSessionStepApply))
+	if d := rs.Apply("prepare-ahead-apply", applyRevision); !d.Accepted {
+		t.Fatalf("prepare-ahead apply revision %d refused against a staging session already holding %d: %+v", applyRevision, consumed, d)
+	}
+	prepareRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(evidenceAt, cueactivation.PrepareStagingSessionStepPrepare))
+	if d := rs.Apply("prepare-ahead-prepare", prepareRevision); !d.Accepted {
+		t.Fatalf("prepare-ahead prepare revision %d refused against a staging session that just accepted apply at %d: %+v", prepareRevision, applyRevision, d)
 	}
 }
 

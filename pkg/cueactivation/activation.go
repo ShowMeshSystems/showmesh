@@ -175,9 +175,15 @@ const PrepareStagingSessionID = "cue-activation:prepare-staging"
 // PrepareStagingSessionStepApply and PrepareStagingSessionStepPrepare are
 // [PrepareStagingSessionID]'s own two steps — Apply then Prepare, never
 // Start or Seek: a staged session is loaded and left Ready, never started
-// under this id (see that constant's own doc comment).
+// under this id (see that constant's own doc comment). Both are defined
+// past [AudioSessionStepStop] deliberately: dispatchPrepareAheadAudio
+// (internal/coordinator/api/cueactivationloop.go) derives its revision
+// from the SAME activation's act.EvidenceAt that the node's own
+// activateAudio already consumed for this staging session at
+// AudioSessionStepStart, so these two steps must sort after every step
+// that timestamp could already have produced a revision for.
 const (
-	PrepareStagingSessionStepApply = iota
+	PrepareStagingSessionStepApply = AudioSessionStepStop + 1 + iota
 	PrepareStagingSessionStepPrepare
 )
 
