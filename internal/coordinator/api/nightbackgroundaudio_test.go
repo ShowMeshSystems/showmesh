@@ -260,10 +260,11 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 }
 
 // TestNightAdvanceBackgroundAudio_ReferenceFormPinsToMediaPlaylist proves
-// SM-526's own build: a session whose resting.backgroundAudio names a
-// media.playlist dispatches an apply pinning ownerKind "media.playlist",
-// that object's own id and revision, and its own items - never the
-// session's own identity, and never an empty playlist.
+// the reference form's own dispatch rule: a session whose
+// resting.backgroundAudio names a media.playlist dispatches an apply
+// pinning ownerKind "media.playlist", that object's own id and revision,
+// and its own items - never the session's own identity, and never an
+// empty playlist.
 func TestNightAdvanceBackgroundAudio_ReferenceFormPinsToMediaPlaylist(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")

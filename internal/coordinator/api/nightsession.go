@@ -121,7 +121,7 @@ func (h *handlers) nightInterlockSignalResolver(ctx context.Context) config.Inte
 
 // nightSessionMediaPlaylistCurrent is [config.MediaPlaylistCurrent]:
 // resting.backgroundAudio's reference-form check, mirroring h.showExists
-// (showobjects.go) one kind over — a tombstoned media.playlist has
+// (showobjects.go) one kind over - a tombstoned media.playlist has
 // CurrentRevision == 0, same as every other tombstone check in this
 // package.
 func (h *handlers) nightSessionMediaPlaylistCurrent(ctx context.Context) config.MediaPlaylistCurrent {

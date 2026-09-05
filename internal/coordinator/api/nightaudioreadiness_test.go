@@ -85,7 +85,7 @@ func TestNightCheckBackgroundAudioAssets_PresentAssetsPass(t *testing.T) {
 }
 
 // TestNightCheckBackgroundAudioReadiness_MissingMediaPlaylistFails proves
-// SM-526's own readiness rule: a resting.backgroundAudio reference naming
+// this readiness rule: a resting.backgroundAudio reference naming
 // a media.playlist that does not exist fails readiness, and the reason
 // names the playlist id - write-time validation (DecodeNightSessionPayload)
 // has no power over an object deleted after the session was saved.
