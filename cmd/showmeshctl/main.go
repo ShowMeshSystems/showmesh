@@ -70,6 +70,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdCue(rest, stdout, stderr, clock)
 	case "playlist":
 		return cmdPlaylist(rest, stdout, stderr, clock)
+	case "media-playlist":
+		return cmdMediaPlaylist(rest, stdout, stderr, clock)
 	case "night":
 		return cmdNight(rest, stdout, stderr, clock)
 	case "emergency-stop":
@@ -232,6 +234,13 @@ Commands:
   playlist revisions <id>             list playlist revision history, newest first
   playlist delete --confirm <id>      tombstone this playlist (write); revision history stays
                                        readable via "playlist revisions"
+  media-playlist list [--show <id>]   enumerate media.playlist objects, optionally by show
+  media-playlist get <id>             show one media playlist's full definition
+  media-playlist set <id>             write a new media playlist revision (write, full replacement)
+  media-playlist revisions <id>       list media playlist revision history, newest first
+  media-playlist delete --confirm <id>
+                                       tombstone this media playlist (write); revision history
+                                       stays readable via "media-playlist revisions"
   night list                          enumerate night.session objects
   night get <id>                      show one night session's full definition
   night set <id>                      write a new night.session revision (write, full replacement)
