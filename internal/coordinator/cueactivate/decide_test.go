@@ -1025,12 +1025,12 @@ func TestDecideEvidenceBrokenWithNonResolvedOutcomeHasNothingToUndo(t *testing.T
 	}
 }
 
-// --- cueAssetsPresent: reconnect-staleness allowance (SM-521) ---
+// --- cueAssetsPresent: reconnect-staleness allowance ---
 //
 // The reported incident: the coordinator lost its own broker connection for
 // several minutes, reconnected cleanly, and then refused Wake Up for about
 // a minute because it counted its OWN disconnected time against
-// showmesh-node-01's inventory-report staleness window — the node never
+// showmesh-node-01's inventory-report staleness window. The node never
 // lost a file and kept the show running throughout. These tests exercise
 // cueAssetsPresent directly (a synthetic cuecatalog.Entry with no declared
 // Render/Audio output) so only the report-freshness branch this fix
@@ -1067,8 +1067,8 @@ func TestCueAssetsPresentNeverReportedStillRefused(t *testing.T) {
 	now := time.Unix(10000, 0).UTC()
 
 	// A very recent reconnect must not turn "never reported" into
-	// "trusted" — the allowance only ever extends a freshness deadline
-	// that a report must already exist to have.
+	// "trusted": the allowance only ever extends a freshness deadline that
+	// a report must already exist to have.
 	reconnectedAt := now.Add(-1 * time.Second)
 
 	present, reason, err := cueAssetsPresent(context.Background(), st, now, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
@@ -1110,7 +1110,7 @@ func TestCueAssetsPresentNeverConnectedNoOpenEndedAllowance(t *testing.T) {
 // TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires is the
 // fix itself: a report received before an outage, now individually stale,
 // is not refused for one inventoryInterval after this coordinator's own
-// reconnect — but the allowance is not permanent immunity, and a node that
+// reconnect, but the allowance is not permanent immunity, and a node that
 // stays silent past that one interval is refused again.
 func TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires(t *testing.T) {
 	st := openTestStore(t)
@@ -1129,8 +1129,8 @@ func TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires(t *testi
 		t.Fatalf("present = false (reason %q), want true: the node's own report predates a reconnect that happened within one inventoryInterval of now", reason)
 	}
 
-	// Expire: the SAME reconnect, now two intervals in the past — the
-	// node still never reported, so the allowance has run out.
+	// Expire: the SAME reconnect, now two intervals in the past. The node
+	// still never reported, so the allowance has run out.
 	later := reconnectedAt.Add(2 * testInterval)
 	present, reason, err = cueAssetsPresent(context.Background(), st, later, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
 	if err != nil {

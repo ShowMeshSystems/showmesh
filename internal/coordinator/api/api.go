@@ -364,15 +364,15 @@ type Dependencies struct {
 	AssetSettings AssetSettingsSource
 
 	// BrokerConnection reports when this coordinator's own MQTT broker
-	// connection last came up (SM-521), threaded into
-	// [cueactivate.Authorize]'s reconnect-staleness allowance
-	// (cueactivationdispatch.go): a control-plane outage this coordinator
-	// itself rode out must not be counted against a node's own asset
-	// inventory staleness window. In practice the real value is the SAME
-	// *broker.BrokerManager wired as [Dependencies.RenderPublisher] and
-	// [Dependencies.AudioPublisher]. A nil field is replaced by
-	// [noBrokerConnectionState], whose ConnectedSince is always the zero
-	// time — "never connected", never an open-ended allowance.
+	// connection last came up, threaded into [cueactivate.Authorize]'s
+	// reconnect-staleness allowance (cueactivationdispatch.go): a
+	// control-plane outage this coordinator itself rode out must not be
+	// counted against a node's own asset inventory staleness window. In
+	// practice the real value is the SAME *broker.BrokerManager wired as
+	// [Dependencies.RenderPublisher] and [Dependencies.AudioPublisher]. A
+	// nil field is replaced by [noBrokerConnectionState], whose
+	// ConnectedSince is always the zero time, meaning "never connected",
+	// never an open-ended allowance.
 	BrokerConnection BrokerConnectionState
 
 	// AssetSyncNudger is Track E seam E6's out-of-band sync trigger — see

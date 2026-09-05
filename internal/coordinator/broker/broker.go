@@ -201,9 +201,9 @@ type BrokerState struct {
 	// caller can still ask "when did we last come back up", not only
 	// "how long has the CURRENT state held". Zero when this coordinator
 	// has never connected at all. Consumed by internal/coordinator/
-	// cueactivate's reconnect-staleness allowance (SM-521): a control-plane
-	// outage must not be counted against a node's own inventory-report
-	// staleness window.
+	// cueactivate's reconnect-staleness allowance: a control-plane outage
+	// must not be counted against a node's own inventory-report staleness
+	// window.
 	ConnectedSince time.Time
 
 	// Rejected is true when the most recent connection attempt failed

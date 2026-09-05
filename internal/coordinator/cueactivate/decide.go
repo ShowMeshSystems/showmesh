@@ -556,8 +556,8 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 // never connected. [cueAssetsPresent] uses it to give a node one
 // inventoryInterval to publish a fresh report after THIS coordinator comes
 // back from an outage, before counting the outage itself against the
-// node's own staleness window (SM-521) -- a broker outage the node rode
-// out cleanly must not read as a node-side asset fault.
+// node's own staleness window: a broker outage the node rode out cleanly
+// must not read as a node-side asset fault.
 func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, reconnectedAt time.Time, nodeID string, act cueactivation.Activation, pin *ShowPin) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
 	var active assetsync.ActiveShow
 	if pin != nil {
@@ -689,8 +689,8 @@ func knownCueRevisions(catalog assetsync.Catalog) map[string]int64 {
 // deadline AND reconnectedAt is after report.ReportedAt -- i.e. only when
 // this coordinator's own most recent reconnection happened after the last
 // report it received, so the node has not yet had a chance to publish a
-// fresh one on the new connection (SM-521: the outage, not the node, is
-// what made the report look stale). A reconnectedAt at or before
+// fresh one on the new connection: the outage, not the node, is what made
+// the report look stale. A reconnectedAt at or before
 // report.ReportedAt means the report already postdates the reconnect (an
 // ordinary continuously-connected staleness, or one this coordinator has
 // never been connected long enough to see) and never extends the deadline
