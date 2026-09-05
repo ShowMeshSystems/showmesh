@@ -1864,6 +1864,15 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylistRevisions))
 	mux.HandleFunc("DELETE /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowPlaylist))
 
+	// --- media.playlist: an operator-authored bed the audio engine plays,
+	// promoted to its own per-object config kind (mediaplaylist.go). Same
+	// route shape and scopes as show.playlist immediately above.
+	mux.HandleFunc("GET /api/v1/config/media.playlist", h.readAnyGuard(showConfigReadScopes, h.handleListMediaPlaylists))
+	mux.HandleFunc("GET /api/v1/config/media.playlist/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetMediaPlaylist))
+	mux.HandleFunc("PUT /api/v1/config/media.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutMediaPlaylist))
+	mux.HandleFunc("GET /api/v1/config/media.playlist/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetMediaPlaylistRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/media.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteMediaPlaylist))
+
 	// --- Track F seam F1: night.session and its active-session pointer ---
 	//
 	// Same route shape as show/show.surface/show.active immediately above:
