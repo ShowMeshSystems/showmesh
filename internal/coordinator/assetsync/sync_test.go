@@ -618,6 +618,56 @@ func TestServiceNudgeIsNonBlockingAndCoalesces(t *testing.T) {
 	}
 }
 
+// TestRequestNodeSyncsOnlyTheRequestedNode proves the per-node request path
+// (noderesync.go's own delivery, this package's own RequestNode/
+// syncRequestedNodes) dispatches to exactly the node it named, never to
+// every declared node the way tick's own full-fleet pass does.
+func TestRequestNodeSyncsOnlyTheRequestedNode(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	declareNode(t, st, "render-02")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	createAsset(t, st, "halloween-2026", "finale", store.AssetTargetKindNode, "render-02", "sha256:bbb", "Finale.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
+	seedEmptyCompleteReport(t, st, "render-02", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.RequestNode("render-01")
+	svc.syncRequestedNodes(context.Background())
+
+	if n := len(pub.callsFor("render-01")); n != 1 {
+		t.Fatalf("callsFor(render-01) = %d, want exactly 1", n)
+	}
+	if n := len(pub.callsFor("render-02")); n != 0 {
+		t.Fatalf("callsFor(render-02) = %d, want 0: a request for render-01 must never touch render-02", n)
+	}
+}
+
+// TestRequestNodeDrainsEvenWithAPendingNudge proves a queued node id
+// survives an already-pending nudge from an unrelated caller: RequestNode
+// must never lose a node id to Nudge's own coalescing.
+func TestRequestNodeDrainsEvenWithAPendingNudge(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.Nudge()
+	svc.RequestNode("render-01")
+	svc.syncRequestedNodes(context.Background())
+
+	if n := len(pub.callsFor("render-01")); n != 1 {
+		t.Fatalf("callsFor(render-01) = %d, want exactly 1", n)
+	}
+}
+
 // --- HandleMessage: consuming asset.fetch results ---
 
 // resultMessage builds a broker.Message carrying a result envelope for

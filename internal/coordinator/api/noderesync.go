@@ -9,21 +9,10 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// This file is the operator-invoked resync route's own HTTP surface: POST
-// /nodes/{nodeId}/assets/resync asks the existing asset-sync service
-// (internal/coordinator/assetsync.Service) to run its own gap-driven tick
-// now, instead of waiting out its own sync interval, for this node among
-// every declared node. It dispatches no MQTT command of its own: [Service.
-// Nudge], reached here through [Dependencies.AssetSyncNudger], is the SAME
-// hook the asset-upload handler already uses to run the identical tick
-// early. See assetsync/doc.go's own doc comment: this package already
-// reserves this exact shape for "any future manifest API handler".
-//
-// Answers 202, never 200: accepted, never confirmed by anything downstream
-// at this layer, mirroring dispatchNightCommand's identical posture
-// (nightsessioncontrol.go). An outcome comes only from the node's own next
-// asset report and the existing FetchConfirmed rule (assetsync/sync.go),
-// surfaced later on GET /nodes/{nodeId}/assets, never from this response.
+// POST /nodes/{nodeId}/assets/resync: queues this one node for the
+// existing asset-sync service's next pass (assetsync.Service.RequestNode)
+// and answers 202 with acceptance only. The outcome is never claimed here;
+// it surfaces later on GET /nodes/{nodeId}/assets.
 
 func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
@@ -42,7 +31,7 @@ func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.deps.AssetSyncNudger.Nudge()
+	h.deps.AssetSyncNudger.RequestNode(nodeID)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)

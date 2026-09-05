@@ -146,6 +146,13 @@ type Service struct {
 	// even started adds nothing.
 	nudge chan struct{}
 
+	// requestMu guards pendingNodes: node ids queued by [Service.
+	// RequestNode] for [Service.syncRequestedNodes] to drain on Run's next
+	// iteration, syncing exactly those nodes rather than every declared
+	// one. Never dropped, unlike nudge's own coalescing signal.
+	requestMu    sync.Mutex
+	pendingNodes map[string]bool
+
 	mu       sync.Mutex
 	inFlight map[dispatchKey]dispatchRecord
 
@@ -261,6 +268,21 @@ func (s *Service) Nudge() {
 	}
 }
 
+// RequestNode queues nodeID for [Service.syncRequestedNodes] to sync on
+// Run's next iteration, then nudges Run to run promptly. Unlike Nudge's
+// own coalescing signal, a queued node id is never dropped: an operator
+// asking to re-sync one node must not be silently absorbed into whatever
+// nudge happened to already be pending.
+func (s *Service) RequestNode(nodeID string) {
+	s.requestMu.Lock()
+	if s.pendingNodes == nil {
+		s.pendingNodes = make(map[string]bool)
+	}
+	s.pendingNodes[nodeID] = true
+	s.requestMu.Unlock()
+	s.Nudge()
+}
+
 // Run ticks immediately, then waits [Service.syncInterval] (read fresh on
 // every iteration, or a [Service.Nudge], or ctx.Done) before ticking
 // again, until ctx is cancelled. Track G seam G-4 (ADR-039 decision 6):
@@ -289,6 +311,7 @@ func (s *Service) Run(ctx context.Context) {
 
 		if enabled {
 			s.tick(ctx)
+			s.syncRequestedNodes(ctx)
 		}
 		if ctx.Err() != nil {
 			return
@@ -332,6 +355,33 @@ func (s *Service) tick(ctx context.Context) {
 
 	for _, n := range nodes {
 		s.syncNode(ctx, active.ShowID, n.NodeID)
+	}
+}
+
+// syncRequestedNodes drains every node id [Service.RequestNode] queued and
+// syncs exactly those, independent of tick's own full-fleet pass. A store
+// error or no active show skips this drain the same way tick does; the
+// node ids stay dropped rather than requeued, matching tick's own "next
+// pass tries again" posture for anything a caller cares to re-request.
+func (s *Service) syncRequestedNodes(ctx context.Context) {
+	s.requestMu.Lock()
+	nodes := s.pendingNodes
+	s.pendingNodes = nil
+	s.requestMu.Unlock()
+	if len(nodes) == 0 {
+		return
+	}
+
+	active, err := ResolveActiveShow(ctx, s.st)
+	if err != nil {
+		s.logger.Error("asset sync: failed to resolve active show for a requested node", "error", err)
+		return
+	}
+	if !active.Configured {
+		return
+	}
+	for nodeID := range nodes {
+		s.syncNode(ctx, active.ShowID, nodeID)
 	}
 }
 

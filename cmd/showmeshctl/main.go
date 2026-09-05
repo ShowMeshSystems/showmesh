@@ -318,6 +318,8 @@ Commands:
                            remove one asset from a node (write, requires
                            asset:write); refused (409) if a Cue still
                            references it
+  assets resync <nodeId>  ask the coordinator to re-check this node now
+                           (write, requires asset:write); accepted only
   assets settings get     show the active assets.settings configuration (Track G seam G-4,
                            ADR-039)
   assets settings set     write a new assets.settings revision; only the flags passed are

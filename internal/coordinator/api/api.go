@@ -831,7 +831,8 @@ func (noFPPMQTTSecretStore) ClearFPPMQTTPassword(context.Context) error {
 // identical shape one field over.
 type noAssetSyncNudger struct{}
 
-func (noAssetSyncNudger) Nudge() {}
+func (noAssetSyncNudger) Nudge()             {}
+func (noAssetSyncNudger) RequestNode(string) {}
 
 // noAssetFetchFailureSource is [Dependencies.AssetFetchFailures]'s
 // nil-safe default: LastFetchFailure always reports ok=false, matching

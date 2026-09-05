@@ -78,14 +78,14 @@ func TestPostResyncNodeAssetsDisabledSyncRefused(t *testing.T) {
 // TestPostResyncNodeAssetsAcceptedThenEvidence is this route's own
 // acceptance criterion 1: the response is a 202 naming only acceptance (no
 // outcome field exists on the wire at all - see ResyncNodeAssetsResult),
-// it nudges the SAME AssetSyncNudger hook the asset-upload handler already
-// uses (never a second delivery path), and the node's readiness verdict
-// immediately after acceptance is computed independently by
-// GET /nodes/{nodeId}/assets from the node's own (still-missing) evidence
-// - not_ready, exactly as it was before the POST. Only once a fresh report
-// dated AFTER acceptance arrives does the SAME route's evidence flip to
-// ready, proving the outcome came from that observation, never from the
-// fact a command was dispatched.
+// it requests exactly the named node through the existing AssetSyncNudger
+// hook (never a second delivery path, and never every declared node), and
+// the node's readiness verdict immediately after acceptance is computed
+// independently by GET /nodes/{nodeId}/assets from the node's own
+// (still-missing) evidence - not_ready, exactly as it was before the POST.
+// Only once a fresh report dated AFTER acceptance arrives does the SAME
+// route's evidence flip to ready, proving the outcome came from that
+// observation, never from the fact a command was dispatched.
 func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -110,7 +110,6 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 		t.Fatalf("seed empty report: %v", err)
 	}
 
-	spy.calls = 0 // uploadOneAsset above already nudges on upload; only this route's own call counts here.
 	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/assets/resync", "", auth)
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusAccepted {
@@ -130,8 +129,8 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 	if !containsAll(string(body), `"acceptedAt"`) || containsAll(string(body), `"outcome"`) {
 		t.Errorf("body must carry acceptance only, never an outcome field; body: %s", body)
 	}
-	if spy.calls != 1 {
-		t.Fatalf("spy.calls = %d, want 1: this route must reuse AssetSyncNudger, never a second delivery path", spy.calls)
+	if len(spy.requestedNode) != 1 || spy.requestedNode[0] != "render-01" {
+		t.Fatalf("requestedNode = %v, want exactly [render-01]: this route must request the ONE named node, never every declared node", spy.requestedNode)
 	}
 
 	// The acceptance claims nothing: the manifest, read right after, still
@@ -156,5 +155,31 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 	if manifestAfterEvidence.Manifest.State != "ready" {
 		t.Fatalf("state after fresh confirming evidence = %q, want %q; body: %s",
 			manifestAfterEvidence.Manifest.State, "ready", manifestBody2)
+	}
+}
+
+// TestPostResyncNodeAssetsRequestsOnlyTheNamedNode proves two operators
+// resyncing two different nodes are distinguishable: each POST must name
+// only its own node, never leak into the other's request.
+func TestPostResyncNodeAssetsRequestsOnlyTheNamedNode(t *testing.T) {
+	spy := &spyAssetSyncNudger{}
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AssetSettings.(*fakeAssetSettingsSource).contentBaseURL = "https://coordinator.example"
+	deps.AssetSyncNudger = spy
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustDeclareNode(t, st, "render-02")
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-02/assets/resync", "",
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body: %s", resp.StatusCode, body)
+	}
+	if len(spy.requestedNode) != 1 || spy.requestedNode[0] != "render-02" {
+		t.Fatalf("requestedNode = %v, want exactly [render-02]", spy.requestedNode)
 	}
 }

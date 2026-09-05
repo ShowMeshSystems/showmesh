@@ -616,6 +616,10 @@ type FPPPollNudger interface {
 // SHOWMESH_ASSET_SYNC_INTERVAL (5 minutes) later.
 type AssetSyncNudger interface {
 	Nudge()
+	// RequestNode queues nodeID for the next sync pass and nudges Run to
+	// process it promptly, syncing exactly that node rather than every
+	// declared node.
+	RequestNode(nodeID string)
 }
 
 // CueActivationNudger requests that [CueActivationLoop]'s current (or

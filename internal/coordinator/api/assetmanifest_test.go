@@ -708,9 +708,15 @@ func TestListAssetManifestReturnsEveryDeclaredNode(t *testing.T) {
 // for *assetsync.Service, which this package must not import for behavior
 // (see assetmanifest.go's compile-time assertion for the real type's own
 // pin).
-type spyAssetSyncNudger struct{ calls int }
+type spyAssetSyncNudger struct {
+	calls         int
+	requestedNode []string
+}
 
 func (s *spyAssetSyncNudger) Nudge() { s.calls++ }
+func (s *spyAssetSyncNudger) RequestNode(nodeID string) {
+	s.requestedNode = append(s.requestedNode, nodeID)
+}
 
 // TestDependenciesAssetSyncNudgerDefaultsToNoOp proves withDefaults gives a
 // nil AssetSyncNudger a working, panic-free no-op — the same "an unwired
