@@ -631,48 +631,9 @@ func TestNextPlaylistEntryCueIDUnknownEntryID(t *testing.T) {
 	}
 }
 
-// TestPrepareAheadAudioRevisionNeverCollidesWithSameActivationConsume
-// proves dispatchPrepareAheadAudio's own t derivation (cueactivationloop.go)
-// is safe. By the time that dispatch runs, the node's own activateAudio has
-// already processed THIS SAME cue's own activation — including its own
-// Promote or Clear call against the SAME staging session, both at
-// activationRevision(act, activationStepStart): act.EvidenceAt itself, at a
-// HIGHER step than [cueactivation.PrepareStagingSessionStepApply]/
-// [PrepareStagingSessionStepPrepare]. Reusing act.EvidenceAt as t here
-// would collide with that already-recorded revision on nearly every tick
-// and refuse this dispatch as stale before it ever reached the wire; a
-// genuinely later, distinct wall-clock reading (this coordinator's own
-// now) does not. This is the exact defect a naive "later of now and
-// act.EvidenceAt" derivation would reintroduce whenever act.EvidenceAt
-// ends up being the later of the two — proven here directly against a
-// real [pkgaudio.RevisionState], mirroring simulateNodeAudioSessionRevision's
-// own proof-at-the-level-that-matters pattern one function up.
-func TestPrepareAheadAudioRevisionNeverCollidesWithSameActivationConsume(t *testing.T) {
-	evidenceAt := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
-	rs := pkgaudio.NewRevisionState(pkgaudio.SessionID(cueactivation.PrepareStagingSessionID))
-
-	consumeRevision := pkgaudio.Revision(cueactivation.AudioSessionRevision(evidenceAt, cueactivation.AudioSessionStepStart))
-	if d := rs.Apply("consume", consumeRevision); !d.Accepted {
-		t.Fatalf("simulated node consume step not accepted: %+v", d)
-	}
-
-	// A prepare-ahead dispatch using act.EvidenceAt itself as t would be
-	// refused here — proving why it must not.
-	staleApply := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(evidenceAt, cueactivation.PrepareStagingSessionStepApply))
-	if d := rs.Apply("would-be-stale", staleApply); d.Accepted {
-		t.Fatal("a revision derived from act.EvidenceAt itself was accepted; the collision this test exists to demonstrate did not reproduce, so it no longer proves t must be a distinct reading")
-	}
-
-	// A genuinely later, distinct wall-clock reading — this coordinator's
-	// own now, captured after that consume step already ran — is what
-	// dispatchPrepareAheadAudio actually uses, and it must be accepted.
-	now := evidenceAt.Add(50 * time.Millisecond)
-	applyRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(now, cueactivation.PrepareStagingSessionStepApply))
-	if d := rs.Apply("prepare-ahead-apply", applyRevision); !d.Accepted {
-		t.Fatalf("prepare-ahead apply revision (from coordinator now) refused: %+v", d)
-	}
-	prepareRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(now, cueactivation.PrepareStagingSessionStepPrepare))
-	if d := rs.Apply("prepare-ahead-prepare", prepareRevision); !d.Accepted {
-		t.Fatalf("prepare-ahead prepare revision (from coordinator now) refused: %+v", d)
-	}
-}
+// dispatchPrepareAheadAudio's own revision derivation (act.EvidenceAt plus
+// a step past every AudioSessionStep* constant) is proven in
+// cueactivationdispatch_test.go's
+// TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds and
+// TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently, alongside
+// that file's other dispatchPrepareAheadAudio coverage.

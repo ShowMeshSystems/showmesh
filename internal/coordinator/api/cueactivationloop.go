@@ -953,29 +953,16 @@ func (h *handlers) dispatchPrepareAheadAudio(ctx context.Context, now time.Time,
 		contentHash = entry.Outputs.Audio.AssetHashes[0]
 	}
 
-	// t is THIS coordinator's own now — deliberately never act.EvidenceAt,
-	// unlike dispatchBlackAndSilenceAudioStopSession one function up. That
-	// function reads back the NODE's own clock as a floor because its stop
-	// writes to a session the NODE already wrote to first, using that same
-	// clock. Here the order is reversed: THIS dispatch writes to the
-	// staging session FIRST, and act itself is cue N's own activation,
-	// which the node's own activateAudio has (by the time this runs,
-	// synchronously after dispatchOneCueActivation's own await, see this
-	// function's own doc comment) already processed — including its own
-	// Promote/Clear call against THIS SAME staging session, at
-	// activationRevision(act, activationStepStart), i.e. act.EvidenceAt
-	// itself with a HIGHER step than [PrepareStagingSessionStepApply]/
-	// [PrepareStagingSessionStepPrepare]. Reusing act.EvidenceAt as t here
-	// would collide with that already-recorded revision on nearly every
-	// tick and refuse this dispatch as stale; now, a genuinely later,
-	// distinct wall-clock reading taken after that processing completed,
-	// does not. The residual risk this leaves unaddressed — this
-	// coordinator's own clock lagging the FPP host's by more than the
-	// observation's own ingest latency — is the same "SHOWMESH HYPOTHESIS,
-	// NOT MEASURED" class of clock-skew risk already accepted elsewhere in
-	// this seam, and here it is bounded: a refusal from it costs nothing
-	// beyond one wasted prepare (this function's own doc comment above).
-	t := now
+	// t is act.EvidenceAt, not this coordinator's own now: the apply and
+	// prepare idempotency keys below are stable for act's whole lifetime,
+	// so their params must be byte-identical on every repeat tick too, and
+	// only a value fixed to act itself (never a fresh wall-clock reading)
+	// gives that. [PrepareStagingSessionStepApply]/[PrepareStagingSessionStepPrepare]
+	// both sort past every AudioSessionStep* constant, so the resulting
+	// revisions still land above activationRevision(act, activationStepStart),
+	// the revision the node's own activateAudio already consumed against
+	// THIS SAME staging session (Promote or Clear) before this runs.
+	t := act.EvidenceAt
 
 	staging := cueactivation.PrepareStagingSessionID
 	applyInvocation := act.ActivationID + ":prepare-ahead-apply"
