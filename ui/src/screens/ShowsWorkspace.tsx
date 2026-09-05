@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useParams } from 'react-router-dom'
-import { getFPPPlaylistReadiness, getShow, type ShowConfigResponse } from '../api'
+import { getFPPPlaylistReadiness, getShow, listConfigObjects, type ShowConfigResponse } from '../api'
 import { BlankingPlate, Button, PageTitle, RuledStrip, StatusPair } from '../kit'
 import { describeApiError } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -49,6 +49,25 @@ function useTabCounts(id: string): ShowContentsCounts | null {
   return counts
 }
 
+/** Media Playlists is not part of ShowContents (showsData.ts's six-kind fan-out); its own count is one small list read, matching that fan-out's own per-kind shape. */
+function useMediaPlaylistCount(id: string): number | null {
+  const [count, setCount] = useState<number | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    listConfigObjects('media.playlist', id)
+      .then((response) => {
+        if (!cancelled) setCount(response.objects.length)
+      })
+      .catch(() => {
+        // A failed count leaves the tab strip showing no count rather than a fabricated zero; the tab itself still routes.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id])
+  return count
+}
+
 type ReadinessResult = { playlistId: string; label: string; ready: boolean; failingCondition: string | null; reason: string | null; warning: string | null }
 
 /** One button that runs `GET .../readiness` for every FPP-runner playlist in this show. There is no aggregate endpoint; this rolls up N real per-playlist reads, never a fabricated one. */
@@ -94,6 +113,7 @@ function useCheckReadiness(showId: string) {
 
 const TABS: readonly { path: string; label: string; built: boolean }[] = [
   { path: 'playlists', label: 'Playlists', built: true },
+  { path: 'media-playlists', label: 'Media playlists', built: true },
   { path: 'cues', label: 'Cues', built: true },
   { path: 'assets', label: 'Assets', built: true },
   { path: 'presentation', label: 'Presentation', built: true },
@@ -101,7 +121,8 @@ const TABS: readonly { path: string; label: string; built: boolean }[] = [
   { path: 'night-session', label: 'Night session', built: true },
 ]
 
-function tabCount(tab: string, counts: ShowContentsCounts | null): number | null {
+function tabCount(tab: string, counts: ShowContentsCounts | null, mediaPlaylists: number | null): number | null {
+  if (tab === 'media-playlists') return mediaPlaylists
   if (counts === null) return null
   switch (tab) {
     case 'playlists':
@@ -123,6 +144,7 @@ export function ShowsWorkspace() {
   const { id = '' } = useParams<{ id: string }>()
   const head = useShowHead(id)
   const counts = useTabCounts(id)
+  const mediaPlaylistCount = useMediaPlaylistCount(id)
   const readiness = useCheckReadiness(id)
 
   if (head.kind === 'loading') {
@@ -193,7 +215,7 @@ export function ShowsWorkspace() {
 
       <nav className="sm-facets" aria-label="Show workspace tabs">
         {TABS.map((tab) => {
-          const count = tabCount(tab.path, counts)
+          const count = tabCount(tab.path, counts, mediaPlaylistCount)
           return (
             <NavLink key={tab.path} to={`/shows/${id}/${tab.path}`} className="sm-facets__tab">
               {tab.label}

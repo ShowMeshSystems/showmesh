@@ -21,6 +21,7 @@ import { ShowDraft } from '../screens/ShowDraft'
 import { ShowDetail } from '../screens/ShowDetail'
 import { ShowsWorkspace } from '../screens/ShowsWorkspace'
 import { ShowsPlaylists } from '../screens/ShowsPlaylists'
+import { ShowsMediaPlaylists } from '../screens/ShowsMediaPlaylists'
 import { ShowsCues } from '../screens/ShowsCues'
 import { ShowsAssets } from '../screens/ShowsAssets'
 import { ShowsPresentation } from '../screens/ShowsPresentation'
@@ -106,6 +107,7 @@ export default function App() {
             <Route path="shows/:id" element={<ShowDetail />} />
             <Route path="shows/:id" element={<ShowsWorkspace />}>
               <Route path="playlists" element={<ShowsPlaylists />} />
+              <Route path="media-playlists" element={<ShowsMediaPlaylists />} />
               <Route path="cues" element={<ShowsCues />} />
               <Route path="assets" element={<ShowsAssets />} />
               <Route path="presentation" element={<ShowsPresentation />} />
