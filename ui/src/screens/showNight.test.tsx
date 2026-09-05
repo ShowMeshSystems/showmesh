@@ -886,15 +886,22 @@ describe('Show Night', () => {
     source: 'api',
   })
 
-  function mockListConfigObjects() {
-    stubs.listConfigObjects = ((kind: string) =>
-      kind === 'show.action'
-        ? Promise.resolve({ serverTime: '', kind, objects: [] })
-        : Promise.resolve({
-            serverTime: '',
-            kind: 'night.session',
-            objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
-          })) as typeof stubs.listConfigObjects
+  function mockListConfigObjects(mediaPlaylists: { id: string; label: string }[] = []) {
+    stubs.listConfigObjects = ((kind: string) => {
+      if (kind === 'show.action') return Promise.resolve({ serverTime: '', kind, objects: [] })
+      if (kind === 'media.playlist') {
+        return Promise.resolve({
+          serverTime: '',
+          kind,
+          objects: mediaPlaylists.map((p) => ({ id: p.id, label: p.label, show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' })),
+        })
+      }
+      return Promise.resolve({
+        serverTime: '',
+        kind: 'night.session',
+        objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+      })
+    }) as typeof stubs.listConfigObjects
   }
 
   async function openWinterRidgeDefinition() {
@@ -1137,5 +1144,88 @@ describe('Show Night', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
     expect(await screen.findByText('Background audio fade-out and fade-in must be configured together, or both left empty for an instant cut.')).toBeInTheDocument()
     expect(putSpy).not.toHaveBeenCalled()
+  })
+
+  // The media.playlist reference picker: a save-path contract already
+  // established elsewhere (enabled -> inline, !enabled && mediaPlaylist !== '' ->
+  // reference, !enabled && mediaPlaylist === '' -> none) is exercised through the
+  // new UI control rather than by hand-building the draft.
+  const noBackgroundAudioResponse = (label: string) => {
+    const response = fullDefinitionResponse(label)
+    delete (response.payload.resting as Record<string, unknown>).backgroundAudio
+    return response
+  }
+
+  const referenceDefinitionResponse = (label: string, mediaPlaylist: string) => {
+    const response = fullDefinitionResponse(label)
+    ;(response.payload.resting as Record<string, unknown>).backgroundAudio = { mediaPlaylist }
+    return response
+  }
+
+  it('picking a playlist from the reference control saves the reference form, not inline items', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(noBackgroundAudioResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'bench-bed'))
+    }
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    fireEvent.change(await screen.findByLabelText('Or reference a media playlist'), { target: { value: 'bench-bed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    expect((captured.body?.resting as Record<string, unknown>).backgroundAudio).toEqual({ mediaPlaylist: 'bench-bed' })
+  })
+
+  it('an inline session round-trips as inline and is not converted by opening the form', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    }
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    // The reference control is not even offered while the inline form is enabled.
+    expect(screen.queryByLabelText('Or reference a media playlist')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Failure text'), { target: { value: 'unrelated edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    const backgroundAudio = (captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>
+    expect(backgroundAudio).not.toHaveProperty('mediaPlaylist')
+    expect((backgroundAudio.items as Record<string, unknown>[])[0]).toMatchObject({ itemId: 'bed-1', target: 'audio-01' })
+  })
+
+  it('clearing the pick sends neither mediaPlaylist nor items, never a malformed body', async () => {
+    const captured: { body: Record<string, unknown> | null } = { body: null }
+    mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'bench-bed'))
+    stubs.putNightSessionConfig = (...args: unknown[]) => {
+      captured.body = args[1] as Record<string, unknown>
+      return Promise.resolve(noBackgroundAudioResponse('Winter Ridge'))
+    }
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const picker = await screen.findByLabelText('Or reference a media playlist')
+    expect(picker).toHaveValue('bench-bed')
+    fireEvent.change(picker, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    await screen.findByDisplayValue('Winter Ridge')
+    expect(captured.body?.resting).not.toHaveProperty('backgroundAudio')
+  })
+
+  it('keeps a loaded session’s referenced playlist offered and selected even when the current list does not report it', async () => {
+    // A bed for another show, or one deleted since this session last saved: the
+    // fetch never reports it, but the session still names it, so the picker must
+    // not silently render as if the session had no bed.
+    mockListConfigObjects([{ id: 'other-bed', label: 'Other Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'stale-bed'))
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const picker = await screen.findByLabelText('Or reference a media playlist')
+    expect(picker).toHaveValue('stale-bed')
+    expect(within(picker).getByRole('option', { name: 'stale-bed' })).toBeInTheDocument()
   })
 })

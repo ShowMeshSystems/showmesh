@@ -857,6 +857,13 @@ const OVERRIDE_POLICIES = ['none', 'authorized-operator'] as const
 const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', barrier: false, onFailure: 'continue', fadeDurationMs: '', announcementPolicy: '', base: null })
 const blankBackgroundAudioItem = (show = ''): BackgroundAudioItemDraft => ({ itemId: '', show, sequence: '', target: '' })
 const blankBackgroundAudio = (): BackgroundAudioDraft => ({ enabled: false, mediaPlaylist: '', items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential', crossfadeMs: '', maxGainDb: '', fadeOutMs: '', fadeInMs: '' })
+
+/** The reference picker's options: the show's reported media.playlist objects, plus the retained id if a loaded session names one this fetch did not report (never dropped silently). */
+function mediaPlaylistOptions(reported: readonly ConfigObjectSummary[], retained: string): { id: string; label: string }[] {
+  const options = reported.map((playlist) => ({ id: playlist.id, label: playlist.label }))
+  if (retained !== '' && !options.some((option) => option.id === retained)) options.push({ id: retained, label: retained })
+  return options
+}
 const blankPrerequisite = (): PrerequisiteDraft => ({ kind: 'action', action: '', requireConfirmation: false, delayMs: '' })
 const blankSiteControl = (): SiteControlDraft => ({
   requestThermalProfile: '',
@@ -1112,6 +1119,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const [actions, setActions] = useState<ShowActionConfigResponse[]>([])
   const [playlistDefinitions, setPlaylistDefinitions] = useState<FPPPlaylistDefinitionMetadata[]>([])
   const [assets, setAssets] = useState<Asset[]>([])
+  const [mediaPlaylists, setMediaPlaylists] = useState<ConfigObjectSummary[]>([])
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<DefinitionDraft>(() => blankDefinition(showId))
   const [loaded, setLoaded] = useState<NightSessionConfigResponse | null>(null)
@@ -1127,8 +1135,9 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
       showId === undefined ? Promise.resolve({ objects: [] as ConfigObjectSummary[], serverTime: '' }) : listConfigObjects('show.action', showId),
       listFPPPlaylistDefinitions().catch(() => ({ definitions: [], serverTime: '' })),
       showId === undefined ? Promise.resolve({ assets: [], serverTime: '' }) : listAssets({ show: showId }).catch(() => ({ assets: [], serverTime: '' })),
+      showId === undefined ? Promise.resolve({ objects: [] as ConfigObjectSummary[], serverTime: '', kind: 'media.playlist' as const }) : listConfigObjects('media.playlist', showId),
     ])
-      .then(async ([response, actionObjects, definitions, assetResponse]) => {
+      .then(async ([response, actionObjects, definitions, assetResponse, mediaPlaylistObjects]) => {
         if (cancelled) return
         const summaries = showId === undefined ? response.objects : response.objects.filter((object) => object.show === showId)
         const [full, fullActions] = await Promise.all([Promise.all(summaries.map((object) => getNightSessionConfig(object.id))), Promise.all(actionObjects.objects.map((object) => getShowAction(object.id)))])
@@ -1137,6 +1146,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
         setActions(fullActions)
         setPlaylistDefinitions(definitions.definitions)
         setAssets(assetResponse.assets)
+        setMediaPlaylists(mediaPlaylistObjects.objects)
       })
       .catch((err: unknown) => { if (!cancelled) setError(describeApiError(err)) })
     getNightSessionActiveConfig().then((active) => { if (!cancelled) setActiveId(active.payload.session) }).catch(() => undefined)
@@ -1242,6 +1252,27 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
               }}
               label="Enable background audio while resting"
             />
+            {!draft.backgroundAudio.enabled && (
+              <Field
+                label="Or reference a media playlist"
+                help="An existing media.playlist bed for this show. Its own items, repeat, resume and gain apply; editing that object re-pins the bed without touching this session again."
+              >
+                {(p) => (
+                  <Select
+                    {...p}
+                    value={draft.backgroundAudio.mediaPlaylist}
+                    onChange={(e) => updateBackgroundAudio({ mediaPlaylist: e.target.value })}
+                  >
+                    <option value="">No background audio</option>
+                    {mediaPlaylistOptions(mediaPlaylists, draft.backgroundAudio.mediaPlaylist).map((playlist) => (
+                      <option key={playlist.id} value={playlist.id}>
+                        {playlist.label}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            )}
             {draft.backgroundAudio.enabled && (
               <>
                 <div className="sm-night-session-compact-grid">
