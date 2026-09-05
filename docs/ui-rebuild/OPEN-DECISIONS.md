@@ -66,6 +66,61 @@ rewrite of the screen itself.
 
 ---
 
+### D-031 Night session background audio: how to expose the inline/reference choice, no mock either
+
+**What.** `resting.backgroundAudio` is a `oneOf` of an inline form (items the
+operator authors directly) and a reference form (`mediaPlaylist`, naming a
+`media.playlist` object, merged separately). The two are selected by one existing draft
+field, `enabled`, doing double duty: `enabled: true` sends the inline items;
+`enabled: false` with a non-empty `mediaPlaylist` sends the reference;
+`enabled: false` with an empty `mediaPlaylist` sends neither (no background
+audio at all). `buildBackgroundAudio` (`ShowNight.tsx`) already encodes this
+exactly and Stage 2 does not touch it. Before this change there was no
+control anywhere that let an operator populate `mediaPlaylist`: it could only
+survive on the draft by loading a session that already referenced one. There
+is no mock for this screen, so the presentation is a rebuild judgement, same
+as D-030.
+
+**Why now.** The picker is the whole of this stage, and the contract it sits
+on top of was ruled by a different lane and must not be rewritten here.
+
+**What I did.** Kept the "Enable background audio while resting" checkbox
+exactly as built: checked still means inline, and the inline items editor
+still renders only while checked. When the checkbox is UNCHECKED, a new
+`Field` ("Or reference a media playlist") appears with a `Select` over the
+show's `media.playlist` objects (the same `GET /config/media.playlist?show=`
+list route and `listConfigObjects` call the Media Playlists screen uses),
+bound straight to the existing `backgroundAudio.mediaPlaylist` draft field.
+Its own empty option reads "No background audio," matching what an empty
+string already means to `buildBackgroundAudio`. The two controls are mutually
+exclusive by construction, exactly mirroring the save path's own two-way
+branch on `enabled`; nothing in `buildBackgroundAudio` changed. A session
+already using inline items loads and saves unchanged; a reference-form
+session's `mediaPlaylist` shows selected in the new control on load and
+survives a save that touches nothing else.
+
+**Options for Eric to rule on.**
+
+- A. Keep it as built: one checkbox toggles between two mutually exclusive
+  sub-forms, one of which is a plain reference picker.
+- B. Replace the checkbox with a three-way `Segmented` (None / Inline items /
+  Reference a playlist), making the state machine explicit instead of
+  inferring "reference" from an unchecked box plus a filled picker.
+- C. Split into two screens or two tabs, one per form.
+
+**Recommendation.** A now. B is the more honest long-term shape (three real
+states instead of a boolean plus a side channel) but is a larger rework of an
+existing, working checkbox for a screen with no mock either way; C splits one
+coherent field for no operator benefit.
+
+**Unblocks.** Nothing; the picker ships at this presentation either way. If
+Eric rules B, it is a render-layer change over the same `BackgroundAudioDraft`
+shape and the same `buildBackgroundAudio` contract, not a data model change.
+
+**Ruling:** Awaiting Eric.
+
+---
+
 ## Ruling index
 
 | # | Ruling | What it obliges the rebuild to do |
