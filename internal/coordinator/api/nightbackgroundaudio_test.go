@@ -1357,6 +1357,146 @@ func TestNightClearBackgroundAudioAtEndSession_RepeatedCallDoesNotRedispatch(t *
 	}
 }
 
+// TestNightClearBackgroundAudioAtEndSession_WithholdsClearUntilFadeSettles
+// proves SM-520's fix: end-session's own synchronous clear must never race
+// a fade-down still ramping from the ordinary resting-exit path. The clear
+// is withheld while the node reports the fade in_progress, and dispatched
+// once it reports settled.
+func TestNightClearBackgroundAudioAtEndSession_WithholdsClearUntilFadeSettles(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "in_progress", testNow)})
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear dispatched while the fade was still in_progress, want 0, got %d", got)
+	}
+
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow)})
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action once the fade settled = %q, want audio.session.clear", pub.lastAction)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_NoFadeOutMsClearsImmediately
+// proves the compatibility requirement directly on the new guard: a session
+// with no fadeOutMs configured still clears on the very first attempt,
+// unchanged from today.
+func TestNightClearBackgroundAudioAtEndSession_NoFadeOutMsClearsImmediately(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear on the first attempt (no fadeOutMs configured)", pub.lastAction)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_DispatchesAfterBoundEvenWithoutObservation
+// proves the safety bound: a node that never reports the fade's own state at
+// all (nightBackgroundAudioFadeSettled answers false for it forever) must
+// never hold end-session open indefinitely. The clear stays withheld right
+// up to stateEnteredAt+fadeOutMs+nightEndSessionClearFadeGuardMargin (the
+// real bound, not a mocked one) and lands the instant that bound is
+// reached.
+func TestNightClearBackgroundAudioAtEndSession_DispatchesAfterBoundEvenWithoutObservation(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	bound := time.Duration(*ba.FadeOutMs)*time.Millisecond + nightEndSessionClearFadeGuardMargin
+
+	// No observation is ever reported for this session: never settled.
+	justBefore := testNow.Add(bound - time.Millisecond)
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), justBefore, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear dispatched before the bound elapsed, want 0, got %d", got)
+	}
+
+	atBound := testNow.Add(bound)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), atBound, rec)
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action once the bound elapsed = %q, want audio.session.clear", pub.lastAction)
+	}
+}
+
+// TestNightTick_StoppedRetryWithholdsEndSessionClearUntilFadeSettles proves
+// the tick-based retry path (nightRetryEndSessionClear) honors the same
+// fade-settled guard as the synchronous clear above: in the reported
+// defect it was the RETRY key ("night-end-session-clear-retry:...") that
+// actually won the race and cut the fade, not the synchronous
+// "night-end-session-clear:..." key, so both dispatch paths need the same
+// guard.
+func TestNightTick_StoppedRetryWithholdsEndSessionClearUntilFadeSettles(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "in_progress", testNow)})
+
+	// The synchronous first attempt never lands: the node is unreachable.
+	pub.beforePublishErr = errors.New("dial tcp: no route to host")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	pub.beforePublishErr = nil
+
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("the tick-based retry dispatched audio.session.clear while the fade was still in_progress, want 0, got %d", got)
+	}
+
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow)})
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 1 {
+		t.Fatalf("audio.session.clear dispatch count once the fade settled = %d, want 1", got)
+	}
+}
+
 // TestNightTick_StoppedRetriesEndSessionClearUntilNodeReturns is this
 // review finding's own end-to-end proof: nightTick's stopped-state case
 // must RETRY end-session's own clear, not do nothing, when the node was
