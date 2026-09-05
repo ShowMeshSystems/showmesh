@@ -38,6 +38,7 @@ const stubs = vi.hoisted(() => ({
   emergencyStopPowerDown: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   armEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   fireEmergencyStopHardStop: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  activateCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -72,6 +73,7 @@ vi.mock('../api', async () => {
     emergencyStopPowerDown: (...args: never[]) => stubs.emergencyStopPowerDown(...args),
     armEmergencyStopHardStop: (...args: never[]) => stubs.armEmergencyStopHardStop(...args),
     fireEmergencyStopHardStop: (...args: never[]) => stubs.fireEmergencyStopHardStop(...args),
+    activateCue: (...args: never[]) => stubs.activateCue(...args),
   }
 })
 
@@ -131,7 +133,7 @@ async function renderAnnouncements() {
   stubs.listAssets = () =>
     Promise.resolve({ assets: [{ sequence: 'welcome-vo', current: true }, { sequence: 'closing-vo', current: false }] })
   renderScreen({ currentRuns: { activeShow: { configured: true, show: 'winter-ridge-2026' } } as never })
-  await screen.findByText(/Firing an announcement does nothing yet/)
+  await screen.findByText('Cues with an announcement output · 2')
 }
 
 describe('Live Control', () => {
@@ -164,6 +166,7 @@ describe('Live Control', () => {
     stubs.emergencyStopPowerDown = () => new Promise(() => {})
     stubs.armEmergencyStopHardStop = () => new Promise(() => {})
     stubs.fireEmergencyStopHardStop = () => new Promise(() => {})
+    stubs.activateCue = () => new Promise(() => {})
   })
 
   const fppInstance = (playerState = 'stopped') =>
@@ -454,19 +457,36 @@ describe('Live Control', () => {
     expect(stubs.fireEmergencyStopHardStop).toHaveBeenCalledExactlyOnceWith('token-2')
   })
 
-  it('draws the mock’s Fire button, warns that it is not wired, and leaves it inert', async () => {
+  it('wires an uploaded announcement’s Fire button to POST /cues/{id}/activate, reporting accepted then each node’s own outcome', async () => {
+    stubs.activateCue = vi.fn((cueId: string) =>
+      Promise.resolve({
+        serverTime: '2026-08-10T21:14:22Z',
+        cueId,
+        nodes: [{ nodeId: 'audio-01', dispatched: true, confirmed: true, outcome: 'confirmed' }],
+      }),
+    )
     await renderAnnouncements()
-    expect(screen.getByText(/Firing an announcement does nothing yet/)).toBeInTheDocument()
-    expect(screen.getByText('POST /cues/{id}/fire')).toBeInTheDocument()
     const fire = screen.getAllByRole('button', { name: 'Fire' })
     expect(fire).toHaveLength(2)
-    for (const button of fire) expect(button).toBeDisabled()
+    expect(fire[0]).toBeEnabled() // welcome: uploaded
+    expect(fire[1]).toBeDisabled() // closing: not uploaded
+
+    fireEvent.click(fire[0]!)
+    expect(stubs.activateCue).toHaveBeenCalledExactlyOnceWith('welcome')
+    expect(await screen.findByText('Accepted')).toBeInTheDocument()
+    expect(screen.getByText(/audio-01: confirmed/)).toBeInTheDocument()
+  })
+
+  it('reports a refusal with its reason when POST /cues/{id}/activate fails, never a claimed success', async () => {
+    stubs.activateCue = () => Promise.reject(new Error('no active show is configured'))
+    await renderAnnouncements()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Fire' })[0]!)
+    expect(await screen.findByText('Refused')).toBeInTheDocument()
+    expect(screen.getByText('no active show is configured')).toBeInTheDocument()
   })
 
   it('disables an announcement whose audio asset has not been uploaded, with that reason', async () => {
     await renderAnnouncements()
-    // welcome resolves to an uploaded sequence, so only it carries the not-wired tag.
-    expect(document.querySelectorAll('.sm-nowire-tag__chip')).toHaveLength(1)
     expect(screen.getByText(/Its audio asset has not been uploaded/)).toBeInTheDocument()
   })
 

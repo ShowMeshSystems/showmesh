@@ -298,6 +298,7 @@ bundles of these (ADR-024).
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
 | `fpp:fallback` | shipped | Track J seam J1: an FPP host fetches its current fallback program and posts its acknowledgement |
 | `show:emergencystop:invoke` | shipped | Lane 17a SM-129: the four emergency-stop trigger routes (stop, stop-power-down, hard-stop arm/fire) |
+| `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares

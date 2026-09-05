@@ -2107,6 +2107,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cues/{id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fire one Cue's activation directly (TRACK-H-cues-and-playlists.md section H4)
+         * @description Requires `cue:activate`. An operator hand-firing one show.cue directly from Live Control's Announcements control - the one path onto this coordinator's own cue.activate dispatch that does not run through the automatic FPP-observation-driven activation loop at all: there is no playlist or FPP entry behind this call, only the operator's own click. `202`, never `200`: the per-node outcomes below are this coordinator's own evidence, gathered synchronously (each node's own result is awaited before this response is written) before this response is written - never a claim of success, and never collapsed into one verdict across nodes. Takes no request body: a manual fire is inherently a fresh operator action every time, never a request this route treats as a retry-replay of an earlier one. A request that would dispatch to ZERO nodes is refused `400`, never answered `202` with an empty `nodes` array: an operator's explicit Fire click that reaches nothing is a refusal to act, not "nothing to report" - `detail` distinguishes no active show being configured from an active show whose Cue catalog resolves this Cue on no node.
+         */
+        post: operations["activateCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/show.playlist": {
         parameters: {
             query?: never;
@@ -4978,6 +4998,26 @@ export interface components {
             serverTime: string;
             run: components["schemas"]["MacroRun"];
             replay: boolean;
+        };
+        /** @description The body of POST /cues/{id}/activate (status 202 - accepted, and each node's own outcome below is this coordinator's own evidence, never a claim of success). */
+        CueActivateResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            cueId: string;
+            /** @description One outcome per node participating in cueId, never a single collapsed verdict: a Cue's outputs may resolve on several nodes, and one node's refusal is never evidence about another's. Empty when no node currently resolves any output for this Cue. */
+            nodes: components["schemas"]["CueActivationNodeOutcome"][];
+        };
+        /** @description One node's own cue.activate dispatch outcome, in the shared "confirmed" | "unconfirmed" | "refused" | "failed" vocabulary (ADR-020) every other command route on this API already reports outcomes in. */
+        CueActivationNodeOutcome: {
+            nodeId: string;
+            /** @description True once this activation reached the node's own cmd topic - never, by itself, evidence the node accepted it. */
+            dispatched: boolean;
+            /** @description True only once the NODE'S OWN result reported this activation authorized and applied. */
+            confirmed: boolean;
+            /** @enum {string} */
+            outcome: "confirmed" | "unconfirmed" | "refused" | "failed";
+            /** @description Always present except when outcome is "confirmed". */
+            outcomeReason?: string;
         };
         /** @description The body of GET /macro-runs. */
         MacroRunsListResponse: {
@@ -10725,6 +10765,36 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    activateCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The show.cue object id to fire. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. One outcome per node participating in this Cue. */
+            202: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueActivateResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };

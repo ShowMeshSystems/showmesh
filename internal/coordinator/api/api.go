@@ -1790,6 +1790,9 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/macros/{id}/runs", h.writeGuard(&scopeShowMacroRun, h.handleSubmitMacroRun))
 	mux.HandleFunc("GET /api/v1/macro-runs", h.readAnyGuard(showConfigReadScopes, h.handleListMacroRuns))
 	mux.HandleFunc("GET /api/v1/macro-runs/{runId}", h.readAnyGuard(showConfigReadScopes, h.handleGetMacroRun))
+	// POST /api/v1/cues/{id}/activate: an operator hand-firing one
+	// Cue directly from Live Control. See cuefire.go's own doc comment.
+	mux.HandleFunc("POST /api/v1/cues/{id}/activate", h.writeGuard(&scopeCueActivate, h.handleActivateCue))
 	// GET/POST /api/v1/config/resolume/composition (Track D seam D-2a,
 	// ADR-032): the stored Resolume composition id map, sourced only from
 	// an operator-uploaded file — never from Resolume's own crashing

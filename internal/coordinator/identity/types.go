@@ -215,6 +215,16 @@ const (
 	// ScopeShowActionInvoke's own doc comment already states for its
 	// route.
 	ScopeShowEmergencyStopInvoke Scope = "show:emergencystop:invoke"
+
+	// ScopeCueActivate gates POST /api/v1/cues/{id}/activate: an
+	// operator hand-firing one Cue's activation directly from Live
+	// Control, outside the automatic FPP-observation-driven activation
+	// loop. Reads stay open by default (ADR-024) - this scope exists only
+	// because firing a Cue changes what the show does right now, the
+	// identical reasoning [ScopeFPPCommand], [ScopeResolumeAction],
+	// [ScopeRenderCommand], [ScopeAudioCommand], and [ScopeNightCommand]
+	// each already carry for their own dispatch surface.
+	ScopeCueActivate Scope = "cue:activate"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -226,7 +236,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeCueActivate}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and

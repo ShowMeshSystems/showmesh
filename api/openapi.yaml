@@ -6360,6 +6360,58 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /cues/{id}/activate:
+    post:
+      operationId: activateCue
+      summary: Fire one Cue's activation directly (TRACK-H-cues-and-playlists.md section H4)
+      description: >-
+        Requires `cue:activate`. An operator hand-firing one show.cue
+        directly from Live Control's Announcements control - the one path
+        onto this coordinator's own cue.activate dispatch that does not
+        run through the automatic FPP-observation-driven activation loop
+        at all: there is no playlist or FPP entry behind this call, only
+        the operator's own click. `202`, never `200`: the per-node outcomes
+        below are this coordinator's own evidence, gathered synchronously
+        (each node's own result is awaited before this response is
+        written) before this response is written - never a claim of
+        success, and never collapsed into one verdict across nodes. Takes
+        no request body: a manual fire is inherently a fresh operator
+        action every time, never a request this route treats as a
+        retry-replay of an earlier one. A request that would dispatch to
+        ZERO nodes is refused `400`, never answered `202` with an empty
+        `nodes` array: an operator's explicit Fire click that reaches
+        nothing is a refusal to act, not "nothing to report" - `detail`
+        distinguishes no active show being configured from an active
+        show whose Cue catalog resolves this Cue on no node.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The show.cue object id to fire.
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Accepted. One outcome per node participating in this Cue.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueActivateResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/show.playlist:
     get:
       operationId: listShowPlaylists
@@ -14506,6 +14558,52 @@ components:
           $ref: "#/components/schemas/MacroRun"
         replay:
           type: boolean
+    CueActivateResponse:
+      type: object
+      description: >-
+        The body of POST /cues/{id}/activate (status 202 - accepted, and
+        each node's own outcome below is this coordinator's own evidence,
+        never a claim of success).
+      required: [serverTime, cueId, nodes]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        cueId:
+          type: string
+        nodes:
+          type: array
+          description: >-
+            One outcome per node participating in cueId, never a single
+            collapsed verdict: a Cue's outputs may resolve on several
+            nodes, and one node's refusal is never evidence about
+            another's. Empty when no node currently resolves any output
+            for this Cue.
+          items:
+            $ref: "#/components/schemas/CueActivationNodeOutcome"
+    CueActivationNodeOutcome:
+      type: object
+      description: >-
+        One node's own cue.activate dispatch outcome, in the shared
+        "confirmed" | "unconfirmed" | "refused" | "failed" vocabulary
+        (ADR-020) every other command route on this API already reports
+        outcomes in.
+      required: [nodeId, dispatched, confirmed, outcome]
+      properties:
+        nodeId:
+          type: string
+        dispatched:
+          type: boolean
+          description: True once this activation reached the node's own cmd topic - never, by itself, evidence the node accepted it.
+        confirmed:
+          type: boolean
+          description: True only once the NODE'S OWN result reported this activation authorized and applied.
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "refused", "failed"]
+        outcomeReason:
+          type: string
+          description: Always present except when outcome is "confirmed".
     MacroRunsListResponse:
       type: object
       description: The body of GET /macro-runs.
