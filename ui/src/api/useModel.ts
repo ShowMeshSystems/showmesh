@@ -89,6 +89,7 @@ import type {
   ConfigAudioSettingsPayload,
   CueCatalogDeployResult,
   ResolumeActionResult,
+  ResyncNodeAssetsResult,
 } from './domain'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
@@ -866,6 +867,10 @@ export function getAssetManifest(): Promise<SchemaAssetManifestResponse> {
 
 export function getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetManifestResponse> {
   return store.getNodeAssetManifest(nodeId)
+}
+
+export function resyncNodeAssets(nodeId: string): Promise<ResyncNodeAssetsResult> {
+  return store.resyncNodeAssets(nodeId)
 }
 
 export function listAudit(filter?: {

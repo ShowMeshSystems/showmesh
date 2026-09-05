@@ -1095,7 +1095,8 @@ func TestGetAssetContentSurvivesServerWriteTimeout(t *testing.T) {
 // countingNudger records how many times an out-of-band sync was requested.
 type countingNudger struct{ n int }
 
-func (c *countingNudger) Nudge() { c.n++ }
+func (c *countingNudger) Nudge()             { c.n++ }
+func (c *countingNudger) RequestNode(string) { c.n++ }
 
 // The nudge call sites are the whole point of AssetSyncNudger existing: the
 // method shipped once with a no-op default and no caller at all, so an

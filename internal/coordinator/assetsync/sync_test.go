@@ -618,6 +618,84 @@ func TestServiceNudgeIsNonBlockingAndCoalesces(t *testing.T) {
 	}
 }
 
+// TestRequestNodeSyncsOnlyTheRequestedNode proves the per-node request path
+// (noderesync.go's own delivery, this package's own RequestNode/
+// syncRequestedNodes) dispatches to exactly the node it named, never to
+// every declared node the way tick's own full-fleet pass does.
+func TestRequestNodeSyncsOnlyTheRequestedNode(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	declareNode(t, st, "render-02")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	createAsset(t, st, "halloween-2026", "finale", store.AssetTargetKindNode, "render-02", "sha256:bbb", "Finale.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
+	seedEmptyCompleteReport(t, st, "render-02", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.RequestNode("render-01")
+	svc.syncRequestedNodes(context.Background())
+
+	if n := len(pub.callsFor("render-01")); n != 1 {
+		t.Fatalf("callsFor(render-01) = %d, want exactly 1", n)
+	}
+	if n := len(pub.callsFor("render-02")); n != 0 {
+		t.Fatalf("callsFor(render-02) = %d, want 0: a request for render-01 must never touch render-02", n)
+	}
+}
+
+// TestRequestNodeDrainsEvenWithAPendingNudge proves a queued node id
+// survives an already-pending, unrelated Nudge: an operator's own request
+// must never be lost to a coincidental full-fleet wake pending from
+// another caller.
+func TestRequestNodeDrainsEvenWithAPendingNudge(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.Nudge()
+	svc.RequestNode("render-01")
+	svc.syncRequestedNodes(context.Background())
+
+	if n := len(pub.callsFor("render-01")); n != 1 {
+		t.Fatalf("callsFor(render-01) = %d, want exactly 1", n)
+	}
+}
+
+// TestRequestNodeWakesRequestNeverNudge is the property that actually
+// matters for noderesync.go's own contract: RequestNode must wake Run
+// through its own request signal, never nudge, because Run only skips
+// tick's full-fleet pass on a request-only wake (see Run's own doc
+// comment). White-box by necessity: proving this by starting Run and
+// counting a second node's dispatches is not a fair test, because Run's
+// OWN initial full pass would legitimately dispatch to every node first,
+// and maybeDispatch's in-flight suppression would then silently absorb
+// whatever RequestNode caused, passing either way.
+func TestRequestNodeWakesRequestNeverNudge(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	svc.RequestNode("render-01")
+
+	select {
+	case <-svc.request:
+	default:
+		t.Fatal("RequestNode() left nothing queued on the request channel")
+	}
+	select {
+	case <-svc.nudge:
+		t.Fatal("RequestNode() also signaled nudge; that would make Run run tick's full-fleet pass on this wake")
+	default:
+	}
+}
+
 // --- HandleMessage: consuming asset.fetch results ---
 
 // resultMessage builds a broker.Message carrying a result envelope for

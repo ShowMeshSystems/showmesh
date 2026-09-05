@@ -161,6 +161,20 @@ type removeNodeAssetResponse struct {
 	Command    removeNodeAssetResult `json:"command"`
 }
 
+// resyncNodeAssetsResult mirrors v1.ResyncNodeAssetsResult: acceptance
+// only, never an outcome.
+type resyncNodeAssetsResult struct {
+	Node       string    `json:"node"`
+	AcceptedAt time.Time `json:"acceptedAt"`
+}
+
+// resyncNodeAssetsResponse is the body of the 202 response from
+// POST /api/v1/nodes/{nodeId}/assets/resync.
+type resyncNodeAssetsResponse struct {
+	ServerTime time.Time              `json:"serverTime"`
+	Resync     resyncNodeAssetsResult `json:"resync"`
+}
+
 // --- the timeout budget: restated from assetstore.UploadBudget ---
 //
 // showmeshctl may not import a coordinator package (the import-graph test
@@ -238,6 +252,8 @@ func cmdAssets(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdAssetsUnused(rest, stdout, stderr, clock)
 	case "remove":
 		return cmdAssetsRemove(rest, stdout, stderr, clock)
+	case "resync":
+		return cmdAssetsResync(rest, stdout, stderr, clock)
 	case "settings":
 		return cmdAssetsSettings(rest, stdout, stderr, clock)
 	default:
@@ -271,6 +287,10 @@ Subcommands:
   remove <nodeId> <contentHash>
                    remove one asset from a node (write, requires
                    asset:write); refused (409) if a Cue still references it
+  resync <nodeId>  ask the coordinator's existing asset-sync service to
+                   re-check this node now (write, requires asset:write);
+                   accepted only - the outcome surfaces later on
+                   "assets manifest"/"assets get" for this node
   settings         read or write the asset store's own configuration
                    (content base URL, upload limit, sync/inventory
                    intervals — Track G seam G-4, ADR-039)
@@ -948,6 +968,56 @@ func cmdAssetsRemove(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprint(stdout, " (replay)")
 	}
 	_, _ = fmt.Fprintln(stdout)
+	return exitOK
+}
+
+func cmdAssetsResync(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl assets resync", stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl assets resync <nodeId> [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nAsk the coordinator's existing asset-sync service to re-check this node")
+		_, _ = fmt.Fprintln(stderr, "now (POST /api/v1/nodes/{nodeId}/assets/resync). This is a write:")
+		_, _ = fmt.Fprintln(stderr, "requires the asset:write scope (admin only). The response is a bare")
+		_, _ = fmt.Fprintln(stderr, "acceptance (202) - it dispatches nothing itself and names no outcome;")
+		_, _ = fmt.Fprintln(stderr, "whatever this node is actually missing surfaces later on \"assets")
+		_, _ = fmt.Fprintln(stderr, "manifest\" or \"assets get\" for this node, from its own next asset report.")
+		_, _ = fmt.Fprintln(stderr, "Refused (400) if the coordinator's asset sync is disabled (assets.settings'")
+		_, _ = fmt.Fprintln(stderr, "contentBaseUrl is not set).")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "assets resync", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	nodeID := rest[0]
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "assets resync", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	var resp resyncNodeAssetsResponse
+	if err := c.postJSON(ctx, "/api/v1/nodes/"+url.PathEscape(nodeID)+"/assets/resync", struct{}{}, &resp); err != nil {
+		return reportError(stderr, "assets resync", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "assets resync", err)
+		}
+		return exitOK
+	}
+	_, _ = fmt.Fprintf(stdout, "node %s: resync accepted at %s\n", resp.Resync.Node, resp.Resync.AcceptedAt.Format(time.RFC3339))
 	return exitOK
 }
 

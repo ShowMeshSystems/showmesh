@@ -11,6 +11,7 @@ const stubs = vi.hoisted(() => ({
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   uploadAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAssetContent: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  resyncNodeAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -22,6 +23,7 @@ vi.mock('../api', async () => {
     getShow: (...args: never[]) => stubs.getShow(...args),
     uploadAsset: (...args: never[]) => stubs.uploadAsset(...args),
     getAssetContent: (...args: never[]) => stubs.getAssetContent(...args),
+    resyncNodeAssets: (...args: never[]) => stubs.resyncNodeAssets(...args),
   }
 })
 
@@ -160,6 +162,26 @@ describe('Shows · Assets tab', () => {
 
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('Re-sync to node calls the resync route for a node-targeted asset and states acceptance', async () => {
+    setup(['asset:write'], [asset()])
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+    let calledWith: string | null = null
+    stubs.resyncNodeAssets = (nodeId: string) => {
+      calledWith = nodeId
+      return Promise.resolve({ node: nodeId, acceptedAt: '2026-08-30T21:09:00Z' })
+    }
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-sync to node' }))
+    await waitFor(() => expect(screen.getByText(/Re-sync accepted/)).toBeInTheDocument())
+    expect(calledWith).toBe('media-front')
+  })
+
+  it('Re-sync to node is disabled for a show-wide asset, which has no single node to resync', async () => {
+    setup(['asset:write'], [asset({ targetKind: 'show', target: '' })])
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for Show-wide' }))
+    const button = await screen.findByRole('button', { name: 'Re-sync to node' })
+    expect(button).toBeDisabled()
   })
 
   it('the upload control is disabled without asset:write and is actually inert', async () => {

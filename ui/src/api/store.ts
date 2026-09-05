@@ -86,6 +86,7 @@ import {
   type NightCommandName,
   type RenderCommandResult,
   type ResolumeInstance,
+  type ResyncNodeAssetsResult,
 } from './domain'
 import { IncompatibleVersionError, UnauthorizedError, isAbortError } from './errors'
 import { SSEParser, type SSEFrame } from './sse'
@@ -245,6 +246,7 @@ type SchemaAssetResponse = components['schemas']['AssetResponse']
 type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
 type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
 type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+type SchemaResyncNodeAssetsResponse = components['schemas']['ResyncNodeAssetsResponse']
 type SchemaAuditResponse = components['schemas']['AuditResponse']
 type SchemaCueCatalogResponse = components['schemas']['CueCatalogResponse']
 type SchemaCueCatalogDeployRequest = components['schemas']['CueCatalogDeployRequest']
@@ -2751,6 +2753,27 @@ export class ApiStore {
         `/nodes/${encodeURIComponent(nodeId)}/assets`,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/nodes/{nodeId}/assets/resync` (asset:write). Nudges the
+   * coordinator's existing asset-sync service to re-check this node now.
+   * Answers 202: acceptance only, never an outcome. The caller re-reads
+   * `getNodeAssetManifest` for evidence, never infers success from this
+   * call resolving.
+   */
+  async resyncNodeAssets(nodeId: string): Promise<ResyncNodeAssetsResult> {
+    const controller = this.beginSideCall()
+    try {
+      const resp = await this.client.postJson<SchemaResyncNodeAssetsResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/assets/resync`,
+        {},
+        controller.signal,
+      )
+      return resp.resync
     } finally {
       this.endSideCall(controller)
     }
