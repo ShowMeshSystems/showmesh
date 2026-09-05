@@ -5602,8 +5602,10 @@ export interface components {
             /** @description The audio.node id this item plays on. Items are not required to share one target - every distinct target among them is its own node the bed plays on, each with its own independent playback progress. */
             target: string;
         };
-        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8), playing on every distinct node its own items[].target names (a list of target nodes, derived from the items themselves - there is no separate "which output(s)" field). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs are the show-boundary fade pair: fadeOutMs fades the bed to silence before it is paused or stopped for a show, fadeInMs fades it back up to maxGainDb after resting returns. They must be configured together, or both omitted for an instant cut exactly as before this pair existed (server-side; not expressible here). */
-        ConfigNightSessionBackgroundAudio: {
+        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8) - a discriminated union of two mutually exclusive forms, distinguished by which of `items` and `mediaPlaylist` is present. The INLINE form (ConfigNightSessionBackgroundAudioInline) plays on every distinct node its own items[].target names (a list of target nodes, derived from the items themselves - there is no separate "which output(s)" field). The REFERENCE form (ConfigNightSessionBackgroundAudioReference) names a media.playlist object whose own items/repeat/resume/itemTransition/ gain/fade fields govern the bed instead - editing that object re-pins the bed on its next apply without writing this session again. Present only when the deployment configures background audio at all; its absence is valid and is not degraded. */
+        ConfigNightSessionBackgroundAudio: components["schemas"]["ConfigNightSessionBackgroundAudioInline"] | components["schemas"]["ConfigNightSessionBackgroundAudioReference"];
+        /** @description The INLINE form of resting.backgroundAudio: items plus repeat/resume/itemTransition/maxGainDb and, optionally, crossfadeMs/fadeOutMs/fadeInMs. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs are the show-boundary fade pair: fadeOutMs fades the bed to silence before it is paused or stopped for a show, fadeInMs fades it back up to maxGainDb after resting returns. They must be configured together, or both omitted for an instant cut exactly as before this pair existed (server-side; not expressible here). mediaPlaylist is not permitted here - naming it selects the reference form instead. */
+        ConfigNightSessionBackgroundAudioInline: {
             items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
             /** @enum {string} */
             repeat: "none" | "item" | "playlist";
@@ -5615,6 +5617,10 @@ export interface components {
             maxGainDb: number;
             fadeOutMs?: number;
             fadeInMs?: number;
+        };
+        /** @description The REFERENCE form of resting.backgroundAudio: mediaPlaylist alone, naming a media.playlist object id whose own items/repeat/resume/itemTransition/gain/fade fields govern the bed. No other property is permitted here - naming any inline-only property selects the inline form instead. */
+        ConfigNightSessionBackgroundAudioReference: {
+            mediaPlaylist: string;
         };
         /** @description night.session.resting (Track F seam F1, RESTING-MODE.md §6-8). endOfNightPlaylist defaults to playlist when absent (server-side). */
         ConfigNightSessionResting: {
@@ -5676,8 +5682,10 @@ export interface components {
             cues: components["schemas"]["ConfigNightSessionCueWrite"][];
             blackoutAfterShowMs: number;
         };
-        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required - an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). fadeOutMs and fadeInMs still must be configured together, or both omitted for an instant cut (server-side; not expressible here). */
-        ConfigNightSessionBackgroundAudioWrite: {
+        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required on the inline form - an absent repeat takes its documented default of "none". A body naming mediaPlaylist alongside any inline-only property, or naming neither form at all, is refused (server-side; not expressible here). */
+        ConfigNightSessionBackgroundAudioWrite: components["schemas"]["ConfigNightSessionBackgroundAudioInlineWrite"] | components["schemas"]["ConfigNightSessionBackgroundAudioReferenceWrite"];
+        /** @description The WRITE shape of the inline form: identical to ConfigNightSessionBackgroundAudioInline except that repeat is not required - an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). fadeOutMs and fadeInMs still must be configured together, or both omitted for an instant cut (server-side; not expressible here). mediaPlaylist is not permitted here - naming it selects the reference form instead. */
+        ConfigNightSessionBackgroundAudioInlineWrite: {
             items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
             /** @enum {string} */
             repeat?: "none" | "item" | "playlist";
@@ -5689,6 +5697,10 @@ export interface components {
             maxGainDb: number;
             fadeOutMs?: number;
             fadeInMs?: number;
+        };
+        /** @description The WRITE shape of the reference form: mediaPlaylist alone, a media.playlist object id checked for existence at write time. No other property is permitted here - naming any inline-only property selects the inline form instead. */
+        ConfigNightSessionBackgroundAudioReferenceWrite: {
+            mediaPlaylist: string;
         };
         /** @description The WRITE shape of night.session.resting: identical to ConfigNightSessionResting except that endOfNightPlaylist and endOfNightRepeat are not required. endOfNightPlaylist, when present, must be non-empty (an explicit "" is refused, not collapsed into "absent" - RESTING-MODE.md's absent/null/empty distinction); when absent it defaults to `playlist`. endOfNightRepeat defaults to false when absent. backgroundAudio carries the ConfigNightSessionBackgroundAudioWrite shape. */
         ConfigNightSessionRestingWrite: {

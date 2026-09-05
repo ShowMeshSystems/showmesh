@@ -18,6 +18,7 @@ import {
   putNightSessionConfig,
   randomUUIDv4,
   type ConfigObjectSummary,
+  type ConfigNightSessionBackgroundAudioInlineWrite,
   type ConfigNightSessionCue,
   type ConfigNightSessionWrite,
   type ShowActionConfigResponse,
@@ -761,6 +762,11 @@ type CueDraft = {
 type BackgroundAudioItemDraft = { itemId: string; show: string; sequence: string; target: string }
 type BackgroundAudioDraft = {
   enabled: boolean
+  // mediaPlaylist is a loaded reference-form session's own media.playlist
+  // id, carried through unedited: this editor has no inline UI for it yet,
+  // so a save with the inline section left off resubmits this reference
+  // unchanged rather than silently deleting it.
+  mediaPlaylist: string
   items: BackgroundAudioItemDraft[]
   repeat: 'none' | 'item' | 'playlist'
   resume: 'resume' | 'restart'
@@ -850,7 +856,7 @@ const OVERRIDE_POLICIES = ['none', 'authorized-operator'] as const
 
 const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', barrier: false, onFailure: 'continue', fadeDurationMs: '', announcementPolicy: '', base: null })
 const blankBackgroundAudioItem = (show = ''): BackgroundAudioItemDraft => ({ itemId: '', show, sequence: '', target: '' })
-const blankBackgroundAudio = (): BackgroundAudioDraft => ({ enabled: false, items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential', crossfadeMs: '', maxGainDb: '', fadeOutMs: '', fadeInMs: '' })
+const blankBackgroundAudio = (): BackgroundAudioDraft => ({ enabled: false, mediaPlaylist: '', items: [], repeat: 'none', resume: 'resume', itemTransition: 'sequential', crossfadeMs: '', maxGainDb: '', fadeOutMs: '', fadeInMs: '' })
 const blankPrerequisite = (): PrerequisiteDraft => ({ kind: 'action', action: '', requireConfirmation: false, delayMs: '' })
 const blankSiteControl = (): SiteControlDraft => ({
   requestThermalProfile: '',
@@ -876,18 +882,25 @@ function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDr
     announcementPolicy: item.announcementPolicy ?? '', base: item,
   })
   const bg = payload.resting.backgroundAudio
+  // A reference-form session ('mediaPlaylist' in bg) has no inline items for
+  // this editor to show yet; its own mediaPlaylist id is kept on the draft
+  // unedited so an otherwise-unrelated save resubmits it as-is
+  // rather than the inline section's blank state silently deleting it.
   const backgroundAudio: BackgroundAudioDraft =
     bg === undefined
       ? blankBackgroundAudio()
-      : {
-          enabled: true,
-          items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target })),
-          repeat: bg.repeat, resume: bg.resume, itemTransition: bg.itemTransition,
-          crossfadeMs: bg.crossfadeMs === undefined ? '' : String(bg.crossfadeMs),
-          maxGainDb: String(bg.maxGainDb),
-          fadeOutMs: bg.fadeOutMs === undefined ? '' : String(bg.fadeOutMs),
-          fadeInMs: bg.fadeInMs === undefined ? '' : String(bg.fadeInMs),
-        }
+      : 'mediaPlaylist' in bg
+        ? { ...blankBackgroundAudio(), mediaPlaylist: bg.mediaPlaylist }
+        : {
+            enabled: true,
+            mediaPlaylist: '',
+            items: bg.items.map((item) => ({ itemId: item.itemId, show: item.show, sequence: item.sequence, target: item.target })),
+            repeat: bg.repeat, resume: bg.resume, itemTransition: bg.itemTransition,
+            crossfadeMs: bg.crossfadeMs === undefined ? '' : String(bg.crossfadeMs),
+            maxGainDb: String(bg.maxGainDb),
+            fadeOutMs: bg.fadeOutMs === undefined ? '' : String(bg.fadeOutMs),
+            fadeInMs: bg.fadeInMs === undefined ? '' : String(bg.fadeInMs),
+          }
   const powerOn = payload.siteControl?.presentationPowerOn
   const powerOff = payload.siteControl?.presentationPowerOff
   const siteControl: SiteControlDraft = {
@@ -928,9 +941,9 @@ type SiteControlWrite = NonNullable<ConfigNightSessionWrite['siteControl']>
 type InterlockWrite = NonNullable<ConfigNightSessionWrite['interlocks']>[number]
 
 function buildBackgroundAudio(audio: BackgroundAudioDraft): { ok: true; value: BackgroundAudioWrite | undefined } | { ok: false; error: string } {
-  if (!audio.enabled) return { ok: true, value: undefined }
+  if (!audio.enabled) return { ok: true, value: audio.mediaPlaylist === '' ? undefined : { mediaPlaylist: audio.mediaPlaylist } }
   if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or disable it.' }
-  const items: BackgroundAudioWrite['items'] = []
+  const items: ConfigNightSessionBackgroundAudioInlineWrite['items'] = []
   for (const [index, item] of audio.items.entries()) {
     if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '' || item.target.trim() === '') {
       return { ok: false, error: `Background audio item ${index + 1} needs an item id, show, sequence, and target node.` }

@@ -328,6 +328,33 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 		"audio.node %q declares every capability %v this configured resting.backgroundAudio session requires", nodeID, needed)}
 }
 
+// nightCheckBackgroundAudioReadiness is seam F5's own resting.
+// backgroundAudio readiness entry point (RESTING-MODE.md §13), covering
+// both wire forms: the reference form's own missing-or-tombstoned check -
+// DecodeNightSessionPayload's write-time refusal has no power over a
+// playlist object deleted AFTER the session was saved - and, resolved
+// either way, the same asset/item-transition/output-capability checks the
+// inline form has always run.
+func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now time.Time, show string, ba *config.NightSessionBackgroundAudio) []nightReadinessCheck {
+	resolved := ba
+	if ba.MediaPlaylist != "" {
+		payload, _, ok := nightResolveMediaPlaylist(ctx, h.deps, ba.MediaPlaylist)
+		if !ok {
+			return []nightReadinessCheck{{
+				name: "resting:background-audio-media-playlist", health: nightHealthFailed(),
+				reason: fmt.Sprintf("media.playlist %q is missing or has been deleted", ba.MediaPlaylist),
+			}}
+		}
+		resolved = nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload)
+	}
+	checks := []nightReadinessCheck{h.nightCheckBackgroundAudioAssets(ctx, show, resolved)}
+	for _, nodeID := range resolved.OutputNodeIDs() {
+		checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, nodeID, resolved))
+		checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, nodeID, resolved))
+	}
+	return checks
+}
+
 // nightCheckAnnouncementAssets is §13's own announcement-asset bullet -
 // see this file's own top doc comment for why it is always not_verifiable
 // here.

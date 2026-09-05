@@ -134,6 +134,49 @@ func mustCreateRestingSessionWithBackgroundAudio(t *testing.T, st *store.Store, 
 	return rec
 }
 
+// mustCreateMediaPlaylist creates id's first media.playlist revision (or,
+// if id already exists, its next one) with payload and activates it,
+// returning the activated revision number - resting.backgroundAudio's own
+// reference-form owner triple under test.
+func mustCreateMediaPlaylist(t *testing.T, st *store.Store, id string, payload config.MediaPlaylistPayload) int64 {
+	t.Helper()
+	ctx := context.Background()
+	raw, err := config.EncodeMediaPlaylistPayload(payload)
+	if err != nil {
+		t.Fatalf("encode media.playlist payload: %v", err)
+	}
+	nextRevision := int64(1)
+	if obj, err := st.GetConfigObject(ctx, config.MediaPlaylistConfigKind, id); err == nil {
+		nextRevision = obj.CurrentRevision + 1
+	} else if _, cerr := st.CreateConfigObject(ctx, config.MediaPlaylistConfigKind, id); cerr != nil {
+		t.Fatalf("create media.playlist object: %v", cerr)
+	}
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.MediaPlaylistConfigKind, ObjectID: id, Revision: nextRevision, PayloadJSON: raw,
+		CreatedByPrincipalID: "test", CreatedByPrincipalName: "test", Source: "api",
+	}); err != nil {
+		t.Fatalf("create media.playlist revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.MediaPlaylistConfigKind, id, nextRevision); err != nil {
+		t.Fatalf("activate media.playlist revision: %v", err)
+	}
+	return nextRevision
+}
+
+// twoItemMediaPlaylistPayload mirrors twoItemBackgroundAudioConfig's own
+// two-item shape, as a media.playlist object's payload instead of an
+// inline resting.backgroundAudio block.
+func twoItemMediaPlaylistPayload(show, node, repeat, resume, itemTransition string) config.MediaPlaylistPayload {
+	return config.MediaPlaylistPayload{
+		Label: "shared bed", Show: show,
+		Items: []config.MediaPlaylistItem{
+			{Kind: config.MediaPlaylistItemKindAsset, Asset: config.NightSessionAssetRef{Show: show, Sequence: "bg-1", Target: node}},
+			{Kind: config.MediaPlaylistItemKindAsset, Asset: config.NightSessionAssetRef{Show: show, Sequence: "bg-2", Target: node}},
+		},
+		Repeat: repeat, Resume: resume, ItemTransition: itemTransition, MaxGainDb: -10,
+	}
+}
+
 func confirmedResultForAction(action, sessionID string, outcome string) mqttproto.ResultPayload {
 	return mqttproto.ResultPayload{
 		Outcome: mqttproto.OutcomeConfirmed,
@@ -176,6 +219,17 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	if !ok {
 		t.Fatalf("params.playlist = %v, want a JSON object", pub.lastParams["playlist"])
 	}
+	// The inline form's own owner triple, unchanged from before the
+	// reference form existed: the night.session config object itself.
+	if playlist["ownerKind"] != nightBackgroundAudioOwnerKindSession {
+		t.Fatalf("playlist.ownerKind = %v, want %q", playlist["ownerKind"], nightBackgroundAudioOwnerKindSession)
+	}
+	if playlist["ownerId"] != rec.ConfigObjectID {
+		t.Fatalf("playlist.ownerId = %v, want %q", playlist["ownerId"], rec.ConfigObjectID)
+	}
+	if playlist["ownerRevision"] != float64(rec.ConfigRevision) {
+		t.Fatalf("playlist.ownerRevision = %v, want %v", playlist["ownerRevision"], rec.ConfigRevision)
+	}
 	if playlist["repeat"] != config.NightSessionBackgroundRepeatPlaylist {
 		t.Fatalf("playlist.repeat = %v, want %q", playlist["repeat"], config.NightSessionBackgroundRepeatPlaylist)
 	}
@@ -202,6 +256,114 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	}
 	if items[1]["itemId"] != "track-2" || items[1]["assetId"] != "asset-2" {
 		t.Fatalf("playlist.items[1] = %v, want track-2/asset-2", items[1])
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_ReferenceFormPinsToMediaPlaylist proves
+// the reference form's own dispatch rule: a session whose
+// resting.backgroundAudio names a media.playlist dispatches an apply
+// pinning ownerKind "media.playlist", that object's own id and revision,
+// and its own items - never the session's own identity, and never an
+// empty playlist.
+func TestNightAdvanceBackgroundAudio_ReferenceFormPinsToMediaPlaylist(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	revision := mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action = %q, want audio.session.apply", pub.lastAction)
+	}
+	playlist, ok := pub.lastParams["playlist"].(map[string]any)
+	if !ok {
+		t.Fatalf("params.playlist = %v, want a JSON object", pub.lastParams["playlist"])
+	}
+	if playlist["ownerKind"] != config.MediaPlaylistConfigKind {
+		t.Fatalf("playlist.ownerKind = %v, want %q", playlist["ownerKind"], config.MediaPlaylistConfigKind)
+	}
+	if playlist["ownerId"] != "planetary-bed" {
+		t.Fatalf("playlist.ownerId = %v, want %q (never the night.session's own id %q)", playlist["ownerId"], "planetary-bed", rec.ConfigObjectID)
+	}
+	if playlist["ownerRevision"] != float64(revision) {
+		t.Fatalf("playlist.ownerRevision = %v, want %v", playlist["ownerRevision"], revision)
+	}
+	itemsAny, ok := playlist["items"].([]any)
+	if !ok || len(itemsAny) != 2 {
+		t.Fatalf("playlist.items = %v, want 2 items from the referenced media.playlist", playlist["items"])
+	}
+	items := make([]map[string]any, len(itemsAny))
+	for i, it := range itemsAny {
+		m, ok := it.(map[string]any)
+		if !ok {
+			t.Fatalf("playlist.items[%d] = %v, want a JSON object", i, it)
+		}
+		items[i] = m
+	}
+	if items[0]["assetId"] != "asset-1" || items[1]["assetId"] != "asset-2" {
+		t.Fatalf("playlist.items = %v, want asset-1 then asset-2", items)
+	}
+}
+
+// TestNightResolveBackgroundAudio_EditingPlaylistChangesResolutionWithoutSessionWrite
+// proves editing the referenced media.playlist alone - a second config
+// revision on the SAME object, the night.session never rewritten - changes
+// what the next apply would dispatch: a new owner revision and new items.
+func TestNightResolveBackgroundAudio_EditingPlaylistChangesResolutionWithoutSessionWrite(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-3", "node-a", "asset-3")
+	rev1 := mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	resolvedBefore, ownerBefore, ok := h.nightResolveBackgroundAudio(context.Background(), rec, ba)
+	if !ok {
+		t.Fatalf("resolve before edit: ok = false, want true")
+	}
+	if ownerBefore.Revision != rev1 || len(resolvedBefore.Items) != 2 {
+		t.Fatalf("resolved before edit = %+v (owner %+v), want revision %d and 2 items", resolvedBefore, ownerBefore, rev1)
+	}
+
+	editedPayload := twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	editedPayload.Items = append(editedPayload.Items, config.MediaPlaylistItem{
+		Kind: config.MediaPlaylistItemKindAsset, Asset: config.NightSessionAssetRef{Show: "halloween", Sequence: "bg-3", Target: "node-a"},
+	})
+	rev2 := mustCreateMediaPlaylist(t, st, "planetary-bed", editedPayload)
+	if rev2 != rev1+1 {
+		t.Fatalf("rev2 = %d, want %d", rev2, rev1+1)
+	}
+
+	sessionObjBefore, err := st.GetConfigObject(context.Background(), config.NightSessionConfigKind, rec.ConfigObjectID)
+	if err != nil {
+		t.Fatalf("get night.session object: %v", err)
+	}
+
+	resolvedAfter, ownerAfter, ok := h.nightResolveBackgroundAudio(context.Background(), rec, ba)
+	if !ok {
+		t.Fatalf("resolve after edit: ok = false, want true")
+	}
+	if ownerAfter.Revision != rev2 {
+		t.Fatalf("ownerAfter.Revision = %d, want %d (the edited playlist's own new revision)", ownerAfter.Revision, rev2)
+	}
+	if len(resolvedAfter.Items) != 3 {
+		t.Fatalf("resolvedAfter.Items = %+v, want 3 items after the edit", resolvedAfter.Items)
+	}
+
+	sessionObjAfter, err := st.GetConfigObject(context.Background(), config.NightSessionConfigKind, rec.ConfigObjectID)
+	if err != nil {
+		t.Fatalf("get night.session object after edit: %v", err)
+	}
+	if sessionObjAfter.CurrentRevision != sessionObjBefore.CurrentRevision {
+		t.Fatalf("night.session CurrentRevision changed from %d to %d; editing the referenced playlist must never write the session",
+			sessionObjBefore.CurrentRevision, sessionObjAfter.CurrentRevision)
 	}
 }
 
