@@ -1215,4 +1215,17 @@ describe('Show Night', () => {
     await screen.findByDisplayValue('Winter Ridge')
     expect(captured.body?.resting).not.toHaveProperty('backgroundAudio')
   })
+
+  it('keeps a loaded session’s referenced playlist offered and selected even when the current list does not report it', async () => {
+    // A bed for another show, or one deleted since this session last saved: the
+    // fetch never reports it, but the session still names it, so the picker must
+    // not silently render as if the session had no bed.
+    mockListConfigObjects([{ id: 'other-bed', label: 'Other Bed' }])
+    stubs.getNightSessionConfig = () => Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'stale-bed'))
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const picker = await screen.findByLabelText('Or reference a media playlist')
+    expect(picker).toHaveValue('stale-bed')
+    expect(within(picker).getByRole('option', { name: 'stale-bed' })).toBeInTheDocument()
+  })
 })
