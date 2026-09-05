@@ -550,7 +550,15 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 // which is exactly the stale-catalog refusal this type exists to close.
 // pin == nil (ADR-033 program mode) resolves live, unchanged from before
 // pinning existed.
-func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation, pin *ShowPin) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
+//
+// reconnectedAt is [broker.BrokerState.ConnectedSince]: the last time this
+// coordinator's own broker connection came up, or the zero time if it has
+// never connected. [cueAssetsPresent] uses it to give a node one
+// inventoryInterval to publish a fresh report after THIS coordinator comes
+// back from an outage, before counting the outage itself against the
+// node's own staleness window (SM-521) -- a broker outage the node rode
+// out cleanly must not read as a node-side asset fault.
+func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, reconnectedAt time.Time, nodeID string, act cueactivation.Activation, pin *ShowPin) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
 	var active assetsync.ActiveShow
 	if pin != nil {
 		active = pin.Active
@@ -595,7 +603,7 @@ func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInt
 			return false
 		}
 		var present bool
-		present, assetReason, assetErr = cueAssetsPresent(ctx, st, now, inventoryInterval, nodeID, entry)
+		present, assetReason, assetErr = cueAssetsPresent(ctx, st, now, inventoryInterval, reconnectedAt, nodeID, entry)
 		return present
 	})
 	if assetErr != nil {
@@ -674,7 +682,23 @@ func knownCueRevisions(catalog assetsync.Catalog) map[string]int64 {
 // a state with evidence, never a silent no-op" applied to WHICH asset is
 // missing and WHY, never left for an operator to guess at. Empty when
 // present is true.
-func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, entry cuecatalog.Entry) (present bool, reason string, err error) {
+//
+// reconnectedAt (Authorize's own doc comment) extends the staleness
+// deadline to reconnectedAt.Add(inventoryInterval) whenever that is later
+// than the ordinary report.ReportedAt.Add(StalenessWindow(inventoryInterval))
+// deadline AND reconnectedAt is after report.ReportedAt -- i.e. only when
+// this coordinator's own most recent reconnection happened after the last
+// report it received, so the node has not yet had a chance to publish a
+// fresh one on the new connection (SM-521: the outage, not the node, is
+// what made the report look stale). A reconnectedAt at or before
+// report.ReportedAt means the report already postdates the reconnect (an
+// ordinary continuously-connected staleness, or one this coordinator has
+// never been connected long enough to see) and never extends the deadline
+// -- this is also what keeps the zero time.Time{} ("never connected") from
+// ever granting an allowance, since it is never after a real ReportedAt.
+// The extension only ever pushes the deadline later, never earlier, so it
+// can only turn a refusal into an authorization, never the reverse.
+func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, reconnectedAt time.Time, nodeID string, entry cuecatalog.Entry) (present bool, reason string, err error) {
 	report, err := st.GetNodeAssetReport(ctx, nodeID)
 	switch {
 	case err == nil:
@@ -683,7 +707,13 @@ func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inven
 	default:
 		return false, "", fmt.Errorf("get node asset report: %w", err)
 	}
-	if now.After(report.ReportedAt.Add(assetsync.StalenessWindow(inventoryInterval))) {
+	deadline := report.ReportedAt.Add(assetsync.StalenessWindow(inventoryInterval))
+	if reconnectedAt.After(report.ReportedAt) {
+		if reconnectDeadline := reconnectedAt.Add(inventoryInterval); reconnectDeadline.After(deadline) {
+			deadline = reconnectDeadline
+		}
+	}
+	if now.After(deadline) {
 		return false, fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
 			entry.CueID, nodeID, report.ReportedAt.Format(time.RFC3339)), nil
 	}

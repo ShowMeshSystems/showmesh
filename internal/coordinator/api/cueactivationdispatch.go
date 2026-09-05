@@ -45,6 +45,19 @@ import (
 // exactly the "did this node actually see and refuse it" evidence H3
 // spec section 6 exists to preserve.
 
+// BrokerConnectionState is [Dependencies.BrokerConnection]'s own
+// dependency shape: this coordinator's own MQTT broker connection, reduced
+// to the one fact [cueactivate.Authorize]'s reconnect-staleness allowance
+// needs. *broker.BrokerManager satisfies this directly via its own
+// ConnectedSince method, no adapter needed, matching RenderPublisher and
+// AudioSessionPublisher's identical "the real dependency already has this
+// method" wiring immediately below in this file.
+type BrokerConnectionState interface {
+	// ConnectedSince returns the last time this coordinator's own broker
+	// connection came up, or the zero time if it has never connected.
+	ConnectedSince() time.Time
+}
+
 // cueActivationConfirmDeadline bounds how long a cue.activate dispatch
 // waits for the node's own result-topic reply — mirrors
 // cueCatalogDeployConfirmDeadline's identical role and reasoning one file
@@ -165,7 +178,8 @@ func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, ac
 
 func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) cueActivationDispatchOutcome {
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
-	refusalOutcome, refusalReason, cueOutputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act, pin)
+	reconnectedAt := h.deps.BrokerConnection.ConnectedSince()
+	refusalOutcome, refusalReason, cueOutputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, reconnectedAt, nodeID, act, pin)
 	if err != nil {
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("authorize cue activation for node %q: %w", nodeID, err)}
 	}

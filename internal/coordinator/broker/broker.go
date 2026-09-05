@@ -195,6 +195,17 @@ type BrokerState struct {
 	// than a staleness window is not proof of current health.
 	ObservedAt time.Time
 
+	// ConnectedSince is when this coordinator's own broker connection most
+	// recently transitioned from disconnected to connected. Unlike Since,
+	// it never moves on a disconnect: it survives a later outage so a
+	// caller can still ask "when did we last come back up", not only
+	// "how long has the CURRENT state held". Zero when this coordinator
+	// has never connected at all. Consumed by internal/coordinator/
+	// cueactivate's reconnect-staleness allowance (SM-521): a control-plane
+	// outage must not be counted against a node's own inventory-report
+	// staleness window.
+	ConnectedSince time.Time
+
 	// Rejected is true when the most recent connection attempt failed
 	// because the broker authenticated the CONNECT packet and explicitly
 	// refused it (an MQTT v5 CONNACK reason code in the authorization
@@ -616,6 +627,9 @@ func (b *BrokerManager) setConnected(connected bool) {
 	now := b.now()
 	if connected != b.state.Connected {
 		b.state.Since = now
+		if connected {
+			b.state.ConnectedSince = now
+		}
 	}
 	b.state.Connected = connected
 	if connected {
@@ -624,6 +638,13 @@ func (b *BrokerManager) setConnected(connected bool) {
 		b.state.RejectReason = ""
 	}
 	b.state.ObservedAt = now
+}
+
+// ConnectedSince returns the most recent time this coordinator's own broker
+// connection came up (BrokerState.ConnectedSince's own doc comment), or the
+// zero time if it has never connected. Safe for concurrent use.
+func (b *BrokerManager) ConnectedSince() time.Time {
+	return b.State().ConnectedSince
 }
 
 // setRejected records a fresh observation of a CONNACK authorization
