@@ -187,16 +187,23 @@ func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // ownerRevision, repeat, resume, requestedTransition, items — items reuse
 // the exact object shape audio.media.probe's params.items already
 // defines), outputs (a string array), mixPolicy, and ceiling (a linear
-// [pkgaudio.Ceiling], optional; an agent that predates this field simply
-// never advertised it, and a caller that omits it leaves the session's
-// ceiling exactly as it was). Gain, fade, and bookmark are not wired
-// here: gain and fade belong to the separate audio.gain.set/
-// audio.gain.fade surface, and a bookmark is session-internal state this
-// package manages itself (Pause writes one; nothing here accepts one
-// from a caller). expiresInMs additionally refreshes the session's
-// retirement deadline ([pkgaudio.SessionDesiredState.Expiry]) to this
-// agent's own now() plus the given duration: a coordinator-stamped field
-// an operator need not send.
+// [pkgaudio.Ceiling], optional; a caller that omits it leaves the
+// session's ceiling exactly as it was). This agent's own
+// rejectUnknownKeys refuses the WHOLE apply, not merely the ceiling
+// field, if a caller sends "ceiling" against an agent build that
+// predates this key: the coordinator's own safety net against that is
+// capability-gated, never sending "ceiling" to a node whose live
+// advertisement does not confirm "audio.playback.ceiling"
+// (internal/coordinator/api/nightbackgroundaudio.go's
+// audioNodeConfirmsCeiling), not anything enforced here. Gain, fade, and
+// bookmark are not wired here: gain and fade belong to the separate
+// audio.gain.set/audio.gain.fade surface, and a bookmark is
+// session-internal state this package manages itself (Pause writes one;
+// nothing here accepts one from a caller). expiresInMs additionally
+// refreshes the session's retirement deadline
+// ([pkgaudio.SessionDesiredState.Expiry]) to this agent's own now() plus
+// the given duration: a coordinator-stamped field an operator need not
+// send.
 var audioSessionApplyKnownKeys = map[string]bool{
 	"sourceRole": true, "media": true, "playlist": true, "outputs": true,
 	"ltcStartOffset": true, "mixPolicy": true, "expiresInMs": true, "ceiling": true,

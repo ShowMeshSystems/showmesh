@@ -12,6 +12,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -202,16 +203,56 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	if items[1]["itemId"] != "track-2" || items[1]["assetId"] != "asset-2" {
 		t.Fatalf("playlist.items[1] = %v, want track-2/asset-2", items[1])
 	}
-	// ba.MaxGainDb (-10, twoItemBackgroundAudioConfig's own fixed value)
-	// travels on this SAME apply as a linear ceiling, so the node enforces
-	// it on every path gain takes effect, not only at the moments this
-	// controller happens to compute and send a gain.
+}
+
+// TestNightAdvanceBackgroundAudio_SendsCeilingWhenNodeConfirmsCapability
+// proves the SEND side of the capability gate: ba.MaxGainDb (-10,
+// twoItemBackgroundAudioConfig's own fixed value) travels on this SAME
+// apply as a linear ceiling only once node-a's own live capability
+// advertisement declares audio.playback.ceiling, so the node enforces it
+// on every path gain takes effect, not only at the moments this
+// controller happens to compute and send a gain.
+func TestNightAdvanceBackgroundAudio_SendsCeilingWhenNodeConfirmsCapability(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithGenericCapabilities("node-a", audioPlaybackCeilingCapabilityID),
+	})
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
 	ceiling, ok := pub.lastParams["ceiling"].(float64)
 	if !ok {
 		t.Fatalf("params.ceiling = %v, want the linear ceiling derived from maxGainDb", pub.lastParams["ceiling"])
 	}
 	if wantCeiling := float64(pkgaudio.CeilingFromDb(-10)); math.Abs(ceiling-wantCeiling) > 1e-9 {
 		t.Fatalf("params.ceiling = %v, want %v (the linear value of maxGainDb -10)", ceiling, wantCeiling)
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_OmitsCeilingWhenNodeDoesNotConfirmCapability
+// is the OMIT side, and the load-bearing case: sending "ceiling"
+// unconditionally to a node that has never advertised
+// audio.playback.ceiling would fail the whole apply at that agent's own
+// rejectUnknownKeys (internal/agent/audiosessionops.go), never merely
+// leave the ceiling unenforced, so the params map must have NO "ceiling"
+// KEY at all here, not a zero or null value, for a node this coordinator
+// cannot currently confirm anything about (the default fixture: no Hello
+// ever published for node-a).
+func TestNightAdvanceBackgroundAudio_OmitsCeilingWhenNodeDoesNotConfirmCapability(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if _, present := pub.lastParams["ceiling"]; present {
+		t.Fatalf("params has a \"ceiling\" key (%v) for a node that has never confirmed audio.playback.ceiling, want the key absent entirely", pub.lastParams["ceiling"])
 	}
 }
 

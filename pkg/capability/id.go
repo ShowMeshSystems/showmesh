@@ -76,6 +76,14 @@ var knownIDs = map[ID]struct{}{
 	"audio.transition.sequential": {},
 	"audio.transition.gapless":    {},
 	"audio.transition.crossfade":  {},
+
+	// A session's standing per-apply gain ceiling, reserved and shipped
+	// 2026-09-05 alongside the fourteen above: see
+	// internal/agent/audiocapabilities.go for where a node actually
+	// advertises this and internal/coordinator/api/nightbackgroundaudio.go
+	// for why the coordinator sends a wire ceiling only when a node's own
+	// live advertisement confirms it.
+	"audio.playback.ceiling": {},
 }
 
 // withdrawnIDs are identifiers ARCHITECTURE section 6 records as replaced:
