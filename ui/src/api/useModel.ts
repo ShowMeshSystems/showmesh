@@ -42,6 +42,7 @@ import type {
   ConfigShowCue,
 
   ConfigShowPlaylist,
+  ConfigMediaPlaylist,
   ConfigShowWrite,
   CreatePrincipalRequest,
   CurrentRunsResponse,
@@ -115,6 +116,7 @@ type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigR
 type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
 
 type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+type SchemaMediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -599,6 +601,7 @@ export function listConfigObjects(
     | 'show.surface'
     | 'show.cue'
     | 'show.playlist'
+    | 'media.playlist'
     | 'night.session'
     | 'audio.node',
   show?: string,
@@ -823,6 +826,22 @@ export function putShowPlaylist(id: string, payload: ConfigShowPlaylist): Promis
 
 export function getShowPlaylistRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowPlaylistRevisions(id)
+}
+
+export function getMediaPlaylist(id: string): Promise<SchemaMediaPlaylistConfigResponse> {
+  return store.getMediaPlaylist(id)
+}
+
+export function putMediaPlaylist(id: string, payload: ConfigMediaPlaylist): Promise<SchemaMediaPlaylistConfigResponse> {
+  return store.putMediaPlaylist(id, payload)
+}
+
+export function getMediaPlaylistRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getMediaPlaylistRevisions(id)
+}
+
+export function deleteMediaPlaylist(id: string): Promise<void> {
+  return store.deleteMediaPlaylist(id)
 }
 
 export function getShowActive(): Promise<SchemaShowActiveConfigResponse> {

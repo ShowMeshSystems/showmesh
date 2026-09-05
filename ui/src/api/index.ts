@@ -154,6 +154,11 @@ export type {
   ConfigShowPlaylistEntry,
   ConfigShowPlaylist,
   ShowPlaylistConfigResponse,
+
+  // Media Playlists screen: media.playlist authoring.
+  ConfigMediaPlaylistItem,
+  ConfigMediaPlaylist,
+  MediaPlaylistConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -336,6 +341,10 @@ export {
   getShowPlaylist,
   putShowPlaylist,
   getShowPlaylistRevisions,
+  getMediaPlaylist,
+  putMediaPlaylist,
+  getMediaPlaylistRevisions,
+  deleteMediaPlaylist,
   getShowAction,
   putShowAction,
   getShowActionRevisions,
