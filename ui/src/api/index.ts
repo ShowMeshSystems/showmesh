@@ -115,6 +115,9 @@ export type {
   // macro run (ADR-029).
   ActionBinding,
   ActionInvocationResult,
+  // Firing one Cue directly from Live Control.
+  CueActivateResponse,
+  CueActivationNodeOutcome,
   ResolumeCompositionDeckSummary,
   ResolumeCompositionLayerGroup,
   ResolumeCompositionLayer,
@@ -342,6 +345,7 @@ export {
   getActionBinding,
   listActionBindings,
   invokeAction,
+  activateCue,
   getShowMacro,
   putShowMacro,
   getShowMacroRevisions,

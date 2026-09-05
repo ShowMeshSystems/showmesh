@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ApiError,
+  activateCue,
   advanceAudioSession,
   applyAudioSession,
   armEmergencyStopHardStop,
@@ -40,6 +41,7 @@ import {
   unmuteAudioSessionOutput,
   type AudioSessionCommandResult,
   type ConfigObjectSummary,
+  type CueActivationNodeOutcome,
   type EmergencyStopInstanceOutcome,
   type EmergencyStopResult,
   type FPPCommandResult,
@@ -59,8 +61,6 @@ import {
   Input,
   LifecycleCommands,
   Notice,
-  NotWired,
-  NotWiredBanner,
   RuledStrip,
   Section,
   Segmented,
@@ -856,9 +856,9 @@ export function LiveControl() {
 }
 
 /**
- * Cues that declare an announcement output. The mock's Fire button is drawn
- * here to its final shape and is inert: the API has no POST /cues/{id}/fire
- * or equivalent. Ruled 2026-08-29, D-008.
+ * Cues that declare an announcement output. Fire calls POST
+ * /cues/{id}/activate: accepted, then each node's own outcome,
+ * never a claimed success.
  */
 type AnnouncementCue = {
   id: string
@@ -871,9 +871,59 @@ type AnnouncementCue = {
   uploaded: boolean
 }
 
+/** One cue row's own Fire attempt: in flight, or its own reported per-node outcomes, or a refusal before any node was ever reached. */
+type AnnouncementFireState =
+  | { kind: 'firing' }
+  | { kind: 'reported'; nodes: CueActivationNodeOutcome[] }
+  | { kind: 'refused'; message: string }
+
+function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | undefined }) {
+  if (state === undefined || state.kind === 'firing') return null
+  if (state.kind === 'refused') {
+    return (
+      <div className="sm-outcome">
+        <StatusPair tone="bad" label="Refused" />
+        <p className="sm-outcome__detail">{state.message}</p>
+      </div>
+    )
+  }
+  if (state.nodes.length === 0) {
+    return (
+      <div className="sm-outcome">
+        <StatusPair tone="warn" label="Accepted" />
+        <p className="sm-outcome__detail">Accepted, but no node currently resolves this cue.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="sm-outcome">
+      <StatusPair tone="warn" label="Accepted" />
+      <p className="sm-outcome__detail">Each node reports its own outcome below; this is not a report that it finished playing.</p>
+      {state.nodes.map((n) => (
+        <p key={n.nodeId} className="sm-small">
+          <StatusPair tone={instanceOutcomeTone(n.outcome)} label={`${n.nodeId}: ${n.outcome}`} />
+          {n.outcomeReason !== undefined && n.outcomeReason !== '' ? `: ${n.outcomeReason}` : ''}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 function Announcements({ show }: { show: string | null }) {
   const [cues, setCues] = useState<AnnouncementCue[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [fireState, setFireState] = useState<Record<string, AnnouncementFireState>>({})
+
+  const fireCue = useCallback((cueId: string) => {
+    setFireState((s) => ({ ...s, [cueId]: { kind: 'firing' } }))
+    activateCue(cueId)
+      .then((resp) => {
+        setFireState((s) => ({ ...s, [cueId]: { kind: 'reported', nodes: resp.nodes } }))
+      })
+      .catch((err: unknown) => {
+        setFireState((s) => ({ ...s, [cueId]: { kind: 'refused', message: describeApiError(err) } }))
+      })
+  }, [])
 
   useEffect(() => {
     if (show === null) {
@@ -939,49 +989,47 @@ function Announcements({ show }: { show: string | null }) {
           detail="Shows › Cues is where an announcement output is added to a cue."
         />
       ) : (
-        <>
-          <NotWiredBanner
-            what="Firing an announcement"
-            missing={<code className="sm-data">POST /cues/{'{id}'}/fire</code>}
-            detail="Until it exists, an announcement runs only when its Show Night transition runs."
-          />
-          <ul className="sm-plain-list">
-            {cues.map((cue) => (
-              <li key={cue.id} className="sm-annc">
-                <div>
-                  <p>
-                    <span className="sm-data">{cue.id}</span>
-                  </p>
+        <ul className="sm-plain-list">
+          {cues.map((cue) => (
+            <li key={cue.id} className="sm-annc">
+              <div>
+                <p>
+                  <span className="sm-data">{cue.id}</span>
+                </p>
+                <p className="sm-small sm-muted">
+                  {cue.policy === 'duck' && cue.duckGainDb !== undefined
+                    ? `Ducks the bed to ${cue.duckGainDb} dB`
+                    : cue.policy === 'interrupt'
+                      ? 'Interrupts the bed'
+                      : `Mixes with the bed`}
+                  {` · ${(cue.fadeMillis / 1000).toFixed(1)} s fade`}
+                </p>
+                {!cue.uploaded && (
                   <p className="sm-small sm-muted">
-                    {cue.policy === 'duck' && cue.duckGainDb !== undefined
-                      ? `Ducks the bed to ${cue.duckGainDb} dB`
-                      : cue.policy === 'interrupt'
-                        ? 'Interrupts the bed'
-                        : `Mixes with the bed`}
-                    {` · ${(cue.fadeMillis / 1000).toFixed(1)} s fade`}
+                    {cue.sequence === null
+                      ? 'This cue declares no audio output, so there is nothing to play.'
+                      : 'Its audio asset has not been uploaded.'}{' '}
+                    <Link to="/assets">Show Assets</Link>
                   </p>
-                  {!cue.uploaded && (
-                    <p className="sm-small sm-muted">
-                      {cue.sequence === null
-                        ? 'This cue declares no audio output, so there is nothing to play.'
-                        : 'Its audio asset has not been uploaded.'}{' '}
-                      <Link to="/assets">Show Assets</Link>
-                    </p>
-                  )}
-                </div>
-                {cue.uploaded ? (
-                  <NotWired>
-                    <Button variant="primary">Fire</Button>
-                  </NotWired>
-                ) : (
-                  <Button variant="primary" disabled title="Its audio asset has not been uploaded.">
-                    Fire
-                  </Button>
                 )}
-              </li>
-            ))}
-          </ul>
-        </>
+                <AnnouncementFireOutcome state={fireState[cue.id]} />
+              </div>
+              {cue.uploaded ? (
+                <Button
+                  variant="primary"
+                  disabled={fireState[cue.id]?.kind === 'firing'}
+                  onClick={() => fireCue(cue.id)}
+                >
+                  {fireState[cue.id]?.kind === 'firing' ? 'Firing…' : 'Fire'}
+                </Button>
+              ) : (
+                <Button variant="primary" disabled title="Its audio asset has not been uploaded.">
+                  Fire
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </Section>
   )

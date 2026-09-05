@@ -512,6 +512,38 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 	return activations, nil
 }
 
+// ResolveDirectCueActivations builds one [cueactivation.Activation] per
+// node participating in cueID for a directly-fired activation: Live
+// Control's operator "Fire" control, which has no FPP playlist
+// entry behind it at all - [cueactivation.Activation]'s own doc comment
+// already names this case ("EntryID is empty for a directly activated
+// announcement"). It resolves the active show and every node's Cue
+// catalog LIVE, always, exactly as ADR-033 program mode already does
+// (pin == nil below): a hand-fired announcement is an explicit,
+// immediate operator action, not an automatic evidence-driven activation,
+// so there is no mid-show edit for a frozen pin to insulate it from - the
+// operator firing right now is asking to authorize against the Cue
+// exactly as currently defined.
+//
+// occurrenceNonce must be unique per call, never reused across two
+// distinct operator clicks: it is this call's own substitute for
+// [store.FPPPlaylistEntryObservationRecord.EntryOccurrenceSequence],
+// which activationID hashes into every Activation's own ActivationID, so
+// two distinct manual fires of the identical Cue must never hash to the
+// same ActivationID and be mistaken for a replay of one another. The
+// caller owns generating it.
+func ResolveDirectCueActivations(ctx context.Context, st *store.Store, now time.Time, cueID, runnerInstance string, occurrenceNonce int64) (map[string]cueactivation.Activation, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return nil, fmt.Errorf("cueactivate: resolve active show: %w", err)
+	}
+	if !active.Configured {
+		return map[string]cueactivation.Activation{}, nil
+	}
+	obs := store.FPPPlaylistEntryObservationRecord{ObservedAt: now, EntryOccurrenceSequence: occurrenceNonce}
+	return resolveActivationsForCue(ctx, st, active, "", 0, "", cueID, obs, runnerInstance, nil)
+}
+
 // Authorize is TRACK-H-H3-SPEC.md section 6's coordinator-side refusal
 // check, run INDEPENDENTLY of [Decide]: it re-resolves the active show and
 // nodeID's own Cue catalog FRESH, right now, and calls [cueauth.CheckLazy]

@@ -87,6 +87,7 @@ import type {
   AudioSettingsConfigResponse,
   ConfigAudioNode,
   ConfigAudioSettingsPayload,
+  CueActivateResponse,
   CueCatalogDeployResult,
   ResolumeActionResult,
   ResyncNodeAssetsResult,
@@ -648,6 +649,10 @@ export function listActionBindings(show?: string): Promise<ActionBinding[]> {
 
 export function invokeAction(id: string): Promise<ActionInvocationResult> {
   return store.invokeAction(id)
+}
+
+export function activateCue(cueId: string): Promise<CueActivateResponse> {
+  return store.activateCue(cueId)
 }
 
 export function getShowMacro(id: string): Promise<SchemaShowMacroConfigResponse> {

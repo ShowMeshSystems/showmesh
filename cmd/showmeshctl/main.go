@@ -226,6 +226,7 @@ Commands:
   cue revisions <id>                  list cue revision history, newest first
   cue delete --confirm <id>           tombstone this cue (write); revision history stays
                                        readable via "cue revisions"
+  cue activate <id>                   fire this cue directly, on every node it resolves to
   playlist list [--show <id>]         enumerate show.playlist objects, optionally by show
   playlist get <id>                   show one playlist's full definition
   playlist set <id>                   write a new playlist revision (write, full replacement)

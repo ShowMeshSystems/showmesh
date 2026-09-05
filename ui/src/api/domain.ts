@@ -281,6 +281,10 @@ export type ResolumeActionResponse = components['schemas']['ResolumeActionRespon
 // macro run (ADR-029).
 export type ActionBinding = components['schemas']['ActionBinding']
 export type ActionInvocationResult = components['schemas']['ActionInvocationResult']
+// Firing one Cue directly from Live Control, outside the
+// automatic FPP-observation-driven activation loop.
+export type CueActivateResponse = components['schemas']['CueActivateResponse']
+export type CueActivationNodeOutcome = components['schemas']['CueActivationNodeOutcome']
 // The full stored composition id map (decks, layer groups, layers,
 // columns, clips, persistent clips) — distinct from
 // ResolumeCompositionSummary above, which is the display-only subset.

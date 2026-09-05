@@ -209,6 +209,9 @@ type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse'
 type SchemaCreateMacroRunRequest = components['schemas']['CreateMacroRunRequest']
 type SchemaMacroRunChangedEvent = components['schemas']['MacroRunChangedEvent']
 type SchemaMacroRunSummary = components['schemas']['MacroRunSummary']
+// POST /cues/{id}/activate: an operator hand-firing one Cue
+// directly from Live Control's Announcements control.
+type SchemaCueActivateResponse = components['schemas']['CueActivateResponse']
 // Track D seam D-2a (ADR-032).
 type SchemaResolumeCompositionResponse = components['schemas']['ResolumeCompositionResponse']
 type SchemaResolumeCompositionUploadResponse = components['schemas']['ResolumeCompositionUploadResponse']
@@ -2165,6 +2168,27 @@ export class ApiStore {
         ACTION_INVOKE_REQUEST_TIMEOUT_MS,
       )
       return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/cues/{id}/activate`: fire one show.cue directly,
+   * on every node it resolves to - the same direct-fire path Live
+   * Control's Announcements control uses, never through a playlist or an
+   * FPP observation. Takes no body: every call is a fresh dispatch, never
+   * a retry-replay of an earlier one. Returns the coordinator's own
+   * per-node outcomes as-is, never inferred from this call's HTTP success.
+   */
+  async activateCue(cueId: string): Promise<SchemaCueActivateResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaCueActivateResponse>(
+        `/cues/${encodeURIComponent(cueId)}/activate`,
+        undefined,
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }
