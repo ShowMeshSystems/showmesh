@@ -117,6 +117,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
 | `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
 | `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
+| `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -1321,6 +1322,11 @@ reservation costs nothing.
 **Track B took no schema version.** Its render state travels through the
 existing observations table via a collector `Sink`, so the v7 it had reserved
 was released and went to Step 9.
+
+**media.playlist took no schema version.** The v30 tombstone-delete path in
+`internal/coordinator/store/config.go` is kind-agnostic, so media.playlist
+joins the same delete-by-tombstone set v30 already gave every other
+per-object configuration kind with no migration of its own.
 
 A track that needs a schema change requests the next version number here
 before writing the migration. Two branches writing migration `v7`
