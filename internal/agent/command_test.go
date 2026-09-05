@@ -835,6 +835,59 @@ func TestHandleMessageAssetFetchEndToEnd(t *testing.T) {
 	}
 }
 
+// TestHandleMessageAssetInventoryRequestEndToEnd proves
+// "asset.inventory.request" is reachable through the real allowlist (no
+// swapped-in test op), takes no params, touches nothing on disk, reports
+// OutcomeConfirmed, and signals the SAME asset inventory trigger channel
+// asset.fetch and asset.remove already do, so the coordinator's own
+// reconnect dispatch (broker.go's OnConnectionUp) makes a node republish
+// its inventory immediately rather than waiting for its next tick.
+func TestHandleMessageAssetInventoryRequestEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	trigger := make(chan struct{}, 1)
+	clock := &fakeClock{t: time.Date(2026, 9, 5, 4, 0, 0, 0, time.UTC)}
+	h := newCommandHandler(testNodeID, dir, "", trigger, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	cmd := mqttproto.CmdPayload{
+		CommandID:          "cmd-inv-req-1",
+		IdempotencyKey:     "idem-inv-req-1",
+		Action:             "asset.inventory.request",
+		Target:             mqttproto.CmdTarget{Kind: "node", ID: testNodeID},
+		Issuer:             mqttproto.CmdIssuer{PrincipalID: "principal-1", PrincipalName: "operator"},
+		ConfirmationMethod: confirmationMethodEvidence,
+	}
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("len(calls) = %d, want 1", len(calls))
+	}
+	result := decodeResultFromCall(t, calls[0])
+	if result.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("Outcome = %q, want %q; reason = %q", result.Outcome, mqttproto.OutcomeConfirmed, result.Reason)
+	}
+	if result.Evidence == nil || result.Evidence.Signal != "node.asset.inventory_requested" {
+		t.Fatalf("Evidence = %+v, want Signal %q", result.Evidence, "node.asset.inventory_requested")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading asset dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("asset dir has %d entries, want 0: asset.inventory.request must never write to disk", len(entries))
+	}
+
+	select {
+	case <-trigger:
+	default:
+		t.Fatalf("assetFetchTrigger was not signalled after a completed asset.inventory.request")
+	}
+}
+
 // TestHandleMessageAssetFetchFailureCarriesReasonAndSignal pins this
 // seam's agent-side fix: a failed asset.fetch's published result must
 // carry BOTH the free-text Reason (err.Error(), already true before this

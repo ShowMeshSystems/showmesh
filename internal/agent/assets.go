@@ -303,6 +303,26 @@ func (o assetRemoveOperation) run(ctx context.Context, params map[string]any, no
 	}, nil
 }
 
+// assetInventoryRequestOperation is the OperationFunc for
+// "asset.inventory.request": no params, touches nothing on disk, and exists
+// only to be a genuinely-executed command that command.go's own trigger
+// check recognizes (alongside "asset.fetch" and "asset.remove") so this
+// node republishes its asset inventory immediately rather than waiting for
+// its next scheduled tick. The coordinator sends this once on its own
+// broker reconnect, so a node that rode out the outage cleanly gets to
+// prove its inventory is current sooner than the ordinary interval would.
+type assetInventoryRequestOperation struct{}
+
+func (assetInventoryRequestOperation) run(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
+	appliedAt := now()
+	return OperationResult{
+		Confirmed:  true,
+		Signal:     "node.asset.inventory_requested",
+		ExecutedAt: appliedAt,
+		ObservedAt: appliedAt,
+	}, nil
+}
+
 // readBackAsset re-opens path from disk and re-hashes it, reporting whether
 // the on-disk content still matches wantHash and its actual size. This is a
 // distinct, separately-coded step from the hash computed during download

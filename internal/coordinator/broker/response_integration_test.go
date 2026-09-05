@@ -153,7 +153,7 @@ func newConnectedTestBrokerManager(t *testing.T, brokerURL, clientID string) *Br
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	bm, err := NewBrokerManager(ctx, config.Config{MQTTBroker: brokerURL, MQTTClientID: clientID}, integrationTestLogger(), nil, nil)
+	bm, err := NewBrokerManager(ctx, config.Config{MQTTBroker: brokerURL, MQTTClientID: clientID}, integrationTestLogger(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerManager(%s): %v", clientID, err)
 	}
@@ -510,7 +510,7 @@ func TestIntegrationFastResponderRepublishesOnCommand(t *testing.T) {
 			if err := responder.Publish(pubCtx, responseTopic, 1, false, []byte("on")); err != nil {
 				t.Errorf("responder republish: %v", err)
 			}
-		})
+		}, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerManager(responder): %v", err)
 	}

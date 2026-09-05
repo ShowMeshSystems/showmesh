@@ -320,10 +320,24 @@ func Run() int {
 		}
 	}
 	subs := append(inv.Subscriptions(), broker.Subscription{Filter: mqttproto.SubscribeResult, QoS: 1})
+	// reconnectNodeLister feeds broker.go's own reconnect dispatch:
+	// st.ListNodes reduced to node IDs, the same *st every other
+	// Dependencies field on this coordinator already reads directly.
+	reconnectNodeLister := func(ctx context.Context) ([]string, error) {
+		nodes, err := st.ListNodes(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.NodeID
+		}
+		return ids, nil
+	}
 	bm, err = broker.NewBrokerManager(ctx, cfg, logger, subs, func(m broker.Message) {
 		inv.HandleMessage(m)
 		assetSyncHandler(m)
-	})
+	}, reconnectNodeLister)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		_ = st.Close()
@@ -599,6 +613,11 @@ func Run() int {
 		// with no adapter either.
 		AudioPublisher: bm,
 		AudioSessions:  st,
+		// BrokerConnection: the SAME bm already satisfies
+		// api.BrokerConnectionState (ConnectedSince) with no adapter,
+		// matching RenderPublisher/AudioPublisher's identical wiring
+		// immediately above.
+		BrokerConnection: bm,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.

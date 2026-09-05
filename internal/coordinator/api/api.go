@@ -363,6 +363,18 @@ type Dependencies struct {
 	// exact defaults the old startup-snapshot fields used to fall back to.
 	AssetSettings AssetSettingsSource
 
+	// BrokerConnection reports when this coordinator's own MQTT broker
+	// connection last came up, threaded into [cueactivate.Authorize]'s
+	// reconnect-staleness allowance (cueactivationdispatch.go): a
+	// control-plane outage this coordinator itself rode out must not be
+	// counted against a node's own asset inventory staleness window. In
+	// practice the real value is the SAME *broker.BrokerManager wired as
+	// [Dependencies.RenderPublisher] and [Dependencies.AudioPublisher]. A
+	// nil field is replaced by [noBrokerConnectionState], whose
+	// ConnectedSince is always the zero time, meaning "never connected",
+	// never an open-ended allowance.
+	BrokerConnection BrokerConnectionState
+
 	// AssetSyncNudger is Track E seam E6's out-of-band sync trigger — see
 	// [AssetSyncNudger]'s own doc comment. In practice the real value is
 	// *assetsync.Service, wired by coordinator.go. A nil field is replaced
@@ -646,6 +658,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetSettings == nil {
 		d.AssetSettings = noAssetSettingsSource{}
 	}
+	if d.BrokerConnection == nil {
+		d.BrokerConnection = noBrokerConnectionState{}
+	}
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
 	}
@@ -885,6 +900,14 @@ func (noAssetSettingsSource) MaxUploadBytes() int64  { return assetstore.Default
 func (noAssetSettingsSource) InventoryInterval() time.Duration {
 	return defaultAssetManifestInventoryInterval
 }
+
+// noBrokerConnectionState is [Dependencies.BrokerConnection]'s nil-safe
+// default: ConnectedSince always reports the zero time, "never connected",
+// so an unwired dependency can never grant [cueactivate.Authorize]'s
+// reconnect-staleness allowance.
+type noBrokerConnectionState struct{}
+
+func (noBrokerConnectionState) ConnectedSince() time.Time { return time.Time{} }
 
 // noResolumeReferenceResolver is [Dependencies.ResolumeReferences]'s
 // nil-safe default: every method reports

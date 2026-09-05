@@ -2,6 +2,7 @@ package cueactivate
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
 // --- fixtures, mirroring internal/coordinator/fppreconcile's and
@@ -300,7 +302,7 @@ func TestAuthorizeCrossShowRefusesDispatchingNothing(t *testing.T) {
 	putShow(t, st, "show-2", "Show Two")
 	putActiveShow(t, st, "show-2")
 
-	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act, nil)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", act, nil)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -339,7 +341,7 @@ func TestAuthorizeStaleGenerationRefused(t *testing.T) {
 	// now older than what the coordinator holds.
 	putActiveShow(t, st, "show-1")
 
-	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act, nil)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", act, nil)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -729,7 +731,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 		t.Fatalf("no activation built for node-1/cue-other")
 	}
 
-	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", ownAct, nil)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", ownAct, nil)
 	if err != nil {
 		t.Fatalf("Authorize(cue-own): %v", err)
 	}
@@ -738,7 +740,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 			"an unrelated cue's missing asset must never refuse it", outcome)
 	}
 
-	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", otherAct, nil)
+	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", otherAct, nil)
 	if err != nil {
 		t.Fatalf("Authorize(cue-other): %v", err)
 	}
@@ -804,7 +806,7 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 		if !ok {
 			t.Fatalf("no activation built for node-1 before the edit")
 		}
-		outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", before, pin)
+		outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", before, pin)
 		if err != nil {
 			t.Fatalf("Authorize (before edit): %v", err)
 		}
@@ -835,7 +837,7 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 		// identity; this is the stale-catalog refusal storm's own
 		// non-occurrence, proven directly rather than inferred from the
 		// tuple alone.
-		outcome, _, _, ok, err = Authorize(context.Background(), st, now, testInterval, "node-1", after, pin)
+		outcome, _, _, ok, err = Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", after, pin)
 		if err != nil {
 			t.Fatalf("Authorize (after edit, pinned): %v", err)
 		}
@@ -904,7 +906,7 @@ func TestAuthorizeRefusesASequenceThatWasNeverUploaded(t *testing.T) {
 		t.Fatalf("no activation built for node-1")
 	}
 
-	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act, nil)
+	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", act, nil)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -1020,5 +1022,126 @@ func TestDecideEvidenceBrokenWithNonResolvedOutcomeHasNothingToUndo(t *testing.T
 	}
 	if len(dec.EvidenceBroken) != 0 {
 		t.Fatalf("EvidenceBroken = %+v, want empty: nothing was resolved from this evidence before it broke", dec.EvidenceBroken)
+	}
+}
+
+// --- cueAssetsPresent: reconnect-staleness allowance ---
+//
+// The reported incident: the coordinator lost its own broker connection for
+// several minutes, reconnected cleanly, and then refused Wake Up for about
+// a minute because it counted its OWN disconnected time against
+// showmesh-node-01's inventory-report staleness window. The node never
+// lost a file and kept the show running throughout. These tests exercise
+// cueAssetsPresent directly (a synthetic cuecatalog.Entry with no declared
+// Render/Audio output) so only the report-freshness branch this fix
+// touches is under test, never the asset-hash branches beneath it.
+
+func TestCueAssetsPresentStaleWhileConnectedStillRefused(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(10000, 0).UTC()
+	reportedAt := now.Add(-4 * testInterval) // older than StalenessWindow (3x)
+
+	// The coordinator's own last reconnect was long before this report was
+	// even received: it was connected the whole time the node stopped
+	// reporting, so this is a genuine staleness, not an outage artifact,
+	// and must refuse exactly as it always has.
+	reconnectedAt := reportedAt.Add(-10 * testInterval)
+	putFreshReport(t, st, "node-1", reportedAt)
+
+	present, reason, err := cueAssetsPresent(context.Background(), st, now, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent: %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: the report is genuinely stale and the coordinator was connected throughout")
+	}
+	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
+	if reason != want {
+		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
+	}
+}
+
+func TestCueAssetsPresentNeverReportedStillRefused(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(10000, 0).UTC()
+
+	// A very recent reconnect must not turn "never reported" into
+	// "trusted": the allowance only ever extends a freshness deadline that
+	// a report must already exist to have.
+	reconnectedAt := now.Add(-1 * time.Second)
+
+	present, reason, err := cueAssetsPresent(context.Background(), st, now, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent: %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: node-1 has never reported its asset inventory at all")
+	}
+	want := `cue "cue-1": node "node-1" has never reported its asset inventory, so it cannot be trusted to hold anything`
+	if reason != want {
+		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
+	}
+}
+
+func TestCueAssetsPresentNeverConnectedNoOpenEndedAllowance(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(10000, 0).UTC()
+	reportedAt := now.Add(-4 * testInterval)
+	putFreshReport(t, st, "node-1", reportedAt)
+
+	// Zero value: this coordinator has never connected to the broker at
+	// all (a fresh start against an unreachable broker). It must not read
+	// as "just reconnected" and grant an allowance.
+	present, reason, err := cueAssetsPresent(context.Background(), st, now, testInterval, time.Time{}, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent: %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: a coordinator that has never connected must not get an open-ended staleness allowance")
+	}
+	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
+	if reason != want {
+		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
+	}
+}
+
+// TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires is the
+// fix itself: a report received before an outage, now individually stale,
+// is not refused for one inventoryInterval after this coordinator's own
+// reconnect, but the allowance is not permanent immunity, and a node that
+// stays silent past that one interval is refused again.
+func TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires(t *testing.T) {
+	st := openTestStore(t)
+	base := time.Unix(10000, 0).UTC()
+	reportedAt := base.Add(-4 * testInterval) // already stale by base
+	reconnectedAt := base.Add(-30 * time.Second)
+	putFreshReport(t, st, "node-1", reportedAt)
+
+	// Grant: only 30s of this coordinator's own one-interval grace period
+	// has elapsed since reconnect.
+	present, reason, err := cueAssetsPresent(context.Background(), st, base, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent (within grace): %v", err)
+	}
+	if !present {
+		t.Fatalf("present = false (reason %q), want true: the node's own report predates a reconnect that happened within one inventoryInterval of now", reason)
+	}
+
+	// Expire: the SAME reconnect, now two intervals in the past. The node
+	// still never reported, so the allowance has run out.
+	later := reconnectedAt.Add(2 * testInterval)
+	present, reason, err = cueAssetsPresent(context.Background(), st, later, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent (after grace expires): %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: the reconnect allowance grants one inventoryInterval, not permanent immunity")
+	}
+	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
+	if reason != want {
+		t.Fatalf("reason = %q, want %q", reason, want)
 	}
 }

@@ -99,7 +99,7 @@ func buildIntegrationBrokerRegistry(ctx context.Context, cfg config.Config, logg
 			MQTTUsername: b.Username,
 			MQTTPassword: b.Password,
 		}
-		bm, err := broker.NewBrokerManager(ctx, synth, logger, nil, nil)
+		bm, err := broker.NewBrokerManager(ctx, synth, logger, nil, nil, nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("coordinator: build integration broker %q: %w", b.ID, err)
 		}
