@@ -1597,6 +1597,12 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 // (not_verifiable, excluded from outcome - see [nightCheckState]). None
 // of this touches the store transactionally; every read here is the
 // ordinary non-tx form.
+//
+// nightcatalogreadiness.go's own per-participating-node catalog-currency
+// check runs here too: every node holding an unacknowledged catalog
+// revision for the active show fails readiness, naming both revisions,
+// unless a deploy is currently held safely pending for it, in which case
+// it warns instead of failing.
 func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, payload config.NightSessionPayload, interlockChecks []nightReadinessCheck) ([]nightReadinessCheck, string) {
 	instanceIDs := map[string]bool{payload.ShowPlaylist.FPPInstanceID: true, payload.Resting.FPPInstanceID: true}
 	var checks []nightReadinessCheck
@@ -1641,6 +1647,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	for _, p := range restingPlaylists {
 		checks = append(checks, nightCheckRestingAssetExactVariant(p.prefix, p.playlist))
 	}
+	checks = append(checks, h.nightCheckCatalogCurrent(ctx, now, payload.Show)...)
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))

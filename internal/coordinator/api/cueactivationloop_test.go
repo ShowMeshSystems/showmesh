@@ -631,6 +631,40 @@ func TestNextPlaylistEntryCueIDUnknownEntryID(t *testing.T) {
 	}
 }
 
+// TestShouldLogCueActivationRefusalBacksOffOnIdenticalRepeat is Part 4's
+// own narrow coverage: an identical, still-unresolved refusal must log
+// once, not once per tick; a genuinely new fact (a different node, or a
+// changed NodeOutcome for the same node) must still log on its own first
+// occurrence; and a refusal that recurs after being cleared by a
+// confirmed activation is a fresh episode, not a continuation, and must
+// log again even when it happens to produce the identical NodeOutcome
+// string as before.
+func TestShouldLogCueActivationRefusalBacksOffOnIdenticalRepeat(t *testing.T) {
+	h := &handlers{logger: testLogger()}
+
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-a", "stale-catalog") {
+		t.Fatal("first occurrence should log")
+	}
+	if h.shouldLogCueActivationRefusal("instance-1", "node-a", "stale-catalog") {
+		t.Fatal("an identical, still-unresolved refusal must not log again")
+	}
+	if h.shouldLogCueActivationRefusal("instance-1", "node-a", "stale-catalog") {
+		t.Fatal("a third identical tick must still not log")
+	}
+
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-b", "stale-catalog") {
+		t.Fatal("a different node's first occurrence should log")
+	}
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-a", "unknown-cue") {
+		t.Fatal("a changed NodeOutcome for the same node should log again")
+	}
+
+	h.clearCueActivationRefusalLog("instance-1", "node-a")
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-a", "unknown-cue") {
+		t.Fatal("after a confirmed activation clears the entry, an identical refusal recurring later is a fresh episode and must log again")
+	}
+}
+
 // dispatchPrepareAheadAudio's own revision derivation (act.EvidenceAt plus
 // a step past every AudioSessionStep* constant) is proven in
 // cueactivationdispatch_test.go's

@@ -1527,6 +1527,23 @@ func (o Options) withDefaults() Options {
 type API struct {
 	Handler http.Handler
 	Hub     *Hub
+
+	// h is the SAME *handlers instance wired into Handler above, kept only
+	// so [API.AutoDeployCueCatalog] can delegate to it. Every dependency
+	// that method needs (CurrentRuns, AssetManifests, Commands,
+	// AudioPublisher, Identity) is already set on it by the time New
+	// returns, since this field is assigned last.
+	h *handlers
+}
+
+// AutoDeployCueCatalog implements fallbackreconcile.CatalogDeployer (see
+// cuecatalogautodeploy.go) by delegating to the handlers instance this API
+// wraps. coordinator.go wires *API itself as the deployer it hands
+// fallbackreconcile.Service.SetCatalogDeployer, so this package need not
+// import fallbackreconcile at all: Go's structural interface satisfaction
+// is enough.
+func (a *API) AutoDeployCueCatalog(ctx context.Context, now time.Time, nodeID string) {
+	a.h.AutoDeployCueCatalog(ctx, now, nodeID)
 }
 
 // New builds an [API] from deps and opts. It does not start anything: no
@@ -2207,5 +2224,5 @@ func New(deps Dependencies, opts Options) *API {
 		withIdentity(deps.Identity, h.loginLimiter, opts.Logger, opts.Clock, opts.TrustClientAddr),
 	)
 
-	return &API{Handler: handler, Hub: hub}
+	return &API{Handler: handler, Hub: hub, h: h}
 }

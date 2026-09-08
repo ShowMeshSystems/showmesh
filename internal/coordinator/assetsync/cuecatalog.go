@@ -206,6 +206,25 @@ type Catalog struct {
 	Conflicts  []CatalogConflict
 }
 
+// HasAnyOutput reports whether c resolves at least one non-empty output
+// (render, audio, LTC, or announcement) for any Cue: whether the
+// node c was resolved for actually participates in the active show at
+// all. [internal/coordinator/fppreconcile]'s own node-catalog readiness
+// condition and [internal/coordinator/cueactivate/decide.go]'s unexported
+// hasAnyOutput both answer this identical question independently (the
+// latter is unexported and that package is out of bounds to import here);
+// this method exists so callers that only need the resolved [Catalog]
+// itself, never cueactivate's own participation set, have one place to
+// ask it from Catalog directly.
+func (c Catalog) HasAnyOutput() bool {
+	for _, e := range c.Entries {
+		if e.Outputs.Render != nil || e.Outputs.Audio != nil || e.Outputs.LTC != nil || e.Outputs.Announcement != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // CatalogConflict is one H0.5 exclusive-claim collision [ResolveCueCatalog]
 // found between two Cues neither authoring-time validation nor
 // [sameSinglePlaylist]'s exemption ruled out. CueA/CueB are sorted

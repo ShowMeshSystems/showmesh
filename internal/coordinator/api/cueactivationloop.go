@@ -329,9 +329,16 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 					// ever arrived — recorded durably either way (see
 					// writeCueActivationOutcomeAudit); this log line is
 					// operator-visible evidence at the moment it happens,
-					// not the only record of it.
-					h.logWarn("cue activation loop: node did not confirm this activation",
-						"instanceUuid", obs.InstanceUUID, "nodeId", outcome.NodeID, "nodeOutcome", outcome.NodeOutcome)
+					// not the only record of it. An identical, still-
+					// unresolved refusal backs off to logging once rather
+					// than once per tick: see shouldLogCueActivationRefusal's
+					// own doc comment.
+					if h.shouldLogCueActivationRefusal(obs.InstanceUUID, outcome.NodeID, outcome.NodeOutcome) {
+						h.logWarn("cue activation loop: node did not confirm this activation",
+							"instanceUuid", obs.InstanceUUID, "nodeId", outcome.NodeID, "nodeOutcome", outcome.NodeOutcome)
+					}
+				case outcome.Dispatched && outcome.Confirmed:
+					h.clearCueActivationRefusalLog(obs.InstanceUUID, outcome.NodeID)
 				}
 			}
 		}
@@ -419,6 +426,41 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 		// Nothing to dispatch or hold — see [cueactivate.State]'s own doc
 		// comment.
 	}
+}
+
+// shouldLogCueActivationRefusal reports whether cueActivationTickOne's own
+// "node did not confirm this activation" log line should fire again for
+// (instanceUUID, nodeID) carrying nodeOutcome: only when nodeOutcome
+// differs from the last one already logged for that node, since an
+// operator cannot act on a repeated, identical, unactionable refusal any
+// faster than the first time it was seen, and writeCueActivationOutcomeAudit
+// already keeps the durable record a repeated log line would only
+// duplicate. The very first occurrence for a key always logs (no prior
+// entry to match).
+func (h *handlers) shouldLogCueActivationRefusal(instanceUUID, nodeID, nodeOutcome string) bool {
+	key := instanceUUID + "|" + nodeID
+	h.cueActivationRefusalLogMu.Lock()
+	defer h.cueActivationRefusalLogMu.Unlock()
+	if last, ok := h.cueActivationRefusalLog[key]; ok && last == nodeOutcome {
+		return false
+	}
+	if h.cueActivationRefusalLog == nil {
+		h.cueActivationRefusalLog = make(map[string]string)
+	}
+	h.cueActivationRefusalLog[key] = nodeOutcome
+	return true
+}
+
+// clearCueActivationRefusalLog drops (instanceUUID, nodeID)'s own
+// remembered refusal once a confirmed activation proves the node is no
+// longer stuck: a later refusal for the same node is a fresh episode, not
+// a continuation of the one already surfaced, and must log again even if
+// it happens to produce the identical NodeOutcome string.
+func (h *handlers) clearCueActivationRefusalLog(instanceUUID, nodeID string) {
+	key := instanceUUID + "|" + nodeID
+	h.cueActivationRefusalLogMu.Lock()
+	defer h.cueActivationRefusalLogMu.Unlock()
+	delete(h.cueActivationRefusalLog, key)
 }
 
 // evidenceBrokenFailToBlackTargets resolves evidenceBroken's own per-node
