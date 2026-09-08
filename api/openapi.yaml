@@ -14894,6 +14894,17 @@ components:
         coalescedSincePreviousAcknowledged:
           type: integer
           description: Gap evidence, 0 when none.
+        playlistLoop:
+          type: integer
+          description: >-
+            FPP's own mainPlaylist pass counter for the running playlist,
+            0 on the first pass and incrementing once per completed pass
+            (FPP-PLUGIN-COORDINATOR-CONTRACTS.md 1.8). Absent when the
+            plugin's callback did not supply one, which is how a plugin
+            predating the field behaves; absent and 0 are different, so a
+            first pass never compares equal to no report. Corroborating
+            evidence, never identity: it is not an input to either hash,
+            so an entry key is unchanged by it.
         unavailable:
           type: string
           enum:
@@ -15014,6 +15025,10 @@ components:
           format: date-time
         coalescedSincePreviousAcknowledged:
           type: integer
+        playlistLoop:
+          type: integer
+          description: >-
+            As submitted, when the plugin supplied one. Absent otherwise.
         receivedAt:
           type: string
           format: date-time

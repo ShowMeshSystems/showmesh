@@ -77,6 +77,24 @@ func fppObservationEntryKeyMismatchProblem(derived, submitted string) v1.Problem
 	}
 }
 
+// playlistLoopChanged reports whether FPP's playlist pass counter moved
+// between two observations (contract §1.8). Absent on both sides is NOT a
+// change: a plugin that never reports the counter must behave exactly as it
+// did before the field existed, so every plugin already installed keeps
+// working against a coordinator that understands it. Absent on one side only
+// IS a change, because a plugin that starts or stops reporting has told us
+// something. And nil is never treated as 0, since 0 is a real first pass.
+func playlistLoopChanged(incoming, stored *int64) bool {
+	switch {
+	case incoming == nil && stored == nil:
+		return false
+	case incoming == nil || stored == nil:
+		return true
+	default:
+		return *incoming != *stored
+	}
+}
+
 func fppObservationConflictProblem(detail string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
@@ -284,6 +302,12 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 	if req.Position != nil {
 		rec.Position = int64(*req.Position)
 	}
+	// Carried, not defaulted: absent stays absent so it compares equal to
+	// another absent, and 0 stays a real first pass (contract §1.8).
+	if req.PlaylistLoop != nil {
+		v := int64(*req.PlaylistLoop)
+		rec.PlaylistLoop = &v
+	}
 
 	// Step 9-10: sequence comparison and store, inside one transaction
 	// see [FPPObservationStore]'s own doc comment for why the read that
@@ -314,18 +338,27 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 				}
 				return store.ErrFPPPlaylistEntryObservationSequenceConflict
 			}
-			// schemaV18's own rule: a fresh occurrence begins whenever this
-			// observation reports action "start" (FPP entering an entry,
-			// whether for the first time or looping back into one it
-			// already visited — EntryKey alone cannot tell those apart,
-			// since a loop's second visit derives the identical key) or
-			// names a different entry than the one last accepted. Anything
-			// else — an ordinary "playing" tick, "stop", "query_next", or
-			// "unknown" for the SAME entry — carries the prior occurrence
-			// forward unchanged, so repeat ticks inside one occurrence keep
-			// deriving the same [cueactivate] ActivationID and dedup to one
-			// dispatch.
-			if action == fppidentity.ActionStart || rec.EntryKey != existing.EntryKey {
+			// A fresh occurrence begins on any of three signals, and each
+			// covers a case the others cannot (contract §1.8):
+			//
+			//   1. action "start", FPP entering an entry. Fires on FPP 9.
+			//      FPP 10 never sends it at all, so it is dead there, but it
+			//      is correct on the major the fleet runs today and removing
+			//      it would break that major.
+			//   2. a different entry than the one last accepted.
+			//   3. a different playlist pass counter. This is the only one
+			//      that catches a playlist looping back into an entry it
+			//      already visited, because that visit derives the identical
+			//      EntryKey and, on FPP 10, arrives with no "start".
+			//
+			// Anything else, an ordinary "playing" tick, "stop",
+			// "query_next", or "unknown" for the SAME entry on the SAME
+			// pass, carries the prior occurrence forward unchanged, so
+			// repeat ticks inside one occurrence keep deriving the same
+			// [cueactivate] ActivationID and dedup to one dispatch.
+			if action == fppidentity.ActionStart ||
+				rec.EntryKey != existing.EntryKey ||
+				playlistLoopChanged(rec.PlaylistLoop, existing.PlaylistLoop) {
 				rec.EntryOccurrenceSequence = rec.Sequence
 			} else {
 				rec.EntryOccurrenceSequence = existing.EntryOccurrenceSequence
@@ -539,6 +572,10 @@ func mapFPPPlaylistEntryObservation(rec store.FPPPlaylistEntryObservationRecord,
 	if rec.Unavailable == "" {
 		pos := int(rec.Position)
 		out.Position = &pos
+	}
+	if rec.PlaylistLoop != nil {
+		loop := int(*rec.PlaylistLoop)
+		out.PlaylistLoop = &loop
 	}
 	if endpointID != "" {
 		out.EndpointID = &endpointID
