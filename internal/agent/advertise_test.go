@@ -114,13 +114,16 @@ func resetCapabilityCacheForTest(t *testing.T) {
 }
 
 // resetCapabilityGateForTest resets capabilityGate to its zero value
-// before and after t, matching resetCapabilityCacheForTest's own
-// convention: this gate is process-lifetime state shared across every
-// test in this package.
+// before t; this gate is process-lifetime state shared across every test
+// in this package. Its cleanup waits for the gate to return to idle
+// first, so a triggered run cannot outlive the test that started it.
 func resetCapabilityGateForTest(t *testing.T) {
 	t.Helper()
 	capabilityGate.reset()
-	t.Cleanup(capabilityGate.reset)
+	t.Cleanup(func() {
+		waitForCapabilityGateIdle(t, 2*time.Second)
+		capabilityGate.reset()
+	})
 }
 
 // waitForCapabilityGateIdle blocks until capabilityGate has no run in
@@ -389,6 +392,7 @@ func TestPublishAdvertisementACLRejectionLogsDistinctlyAndStillAttemptsOnline(t 
 // publishAdvertisement's hello/online pair at all.
 func TestPublishAdvertisementReturnsPromptlyWhenCapabilityDetectionHangs(t *testing.T) {
 	resetCapabilityCacheForTest(t)
+	resetCapabilityGateForTest(t)
 
 	// capabilityDetectionTimeout is a var precisely so this test can shrink
 	// it, matching pipeline/probe.go's probeTimeout convention; restored via
