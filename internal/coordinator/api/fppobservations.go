@@ -7,7 +7,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
+	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -129,17 +133,25 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		return
 	}
 
-	// Step 4: decode and canonicalize. Malformed JSON, an unknown field,
-	// trailing content, or a duplicate member name is refused but NOT
-	// audited (contract §1.6: only step 5 onward is audited). Canonicalizing
-	// here, not later, is what puts a duplicate member name at this
-	// unaudited step: encoding/json.Decoder accepts one silently (last
-	// value wins) and does not check dec.More(), so without this the
-	// coordinator's own parser would be the first thing to notice, after
-	// schema and identity validation had already run and been audited.
+	// Step 4: decode and canonicalize. Malformed JSON, trailing content, or
+	// a duplicate member name is refused but NOT audited (contract §1.6:
+	// only step 5 onward is audited). Canonicalizing here, not later, is
+	// what puts a duplicate member name at this unaudited step:
+	// encoding/json.Decoder accepts one silently (last value wins) and does
+	// not check dec.More(), so without this the coordinator's own parser
+	// would be the first thing to notice, after schema and identity
+	// validation had already run and been audited.
+	//
+	// A member this coordinator does not know is IGNORED, not refused, and
+	// is reported back in ignoredFields. Refusing it made upgrade order
+	// fatal: a plugin sending a field its coordinator predates would have
+	// every observation rejected, the coordinator would see no playlist
+	// entries, and no Cue would fire. The reverse order was always safe.
+	// Reporting the names is what keeps the thing strict decoding actually
+	// bought, which is that a misspelled member is visible rather than
+	// silently dropped.
 	var req v1.FPPPlaylistEntryObservationRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: "+err.Error()))
 		return
@@ -148,6 +160,7 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: trailing content after the JSON value"))
 		return
 	}
+	ignoredFields := unknownFPPObservationMembers(raw)
 	// bodyHash is the canonical form's hash, reused below both for the
 	// stored record and for step 9's replay comparison; contract §1.3:
 	// replay detection is over the canonical form of what was sent, not
@@ -472,8 +485,16 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		Replay:              replay,
 		Reconciliation:      reconciliation,
 		OperatorInstruction: operatorInstruction,
+		IgnoredFields:       ignoredFields,
 		ServerTime:          formatTime(now),
 	})
+	// Logged here, on the way out of a 200, and not at the decode above:
+	// the warning says the members "were ignored", which is only true of an
+	// observation that was actually accepted. A body refused for a
+	// duplicate member name or for a missing identity field had nothing
+	// ignored, it had everything refused, and saying otherwise would be an
+	// operator reading a warning about the wrong problem.
+	h.logNewUnknownFPPObservationMembers(rec.InstanceUUID, ignoredFields)
 }
 
 // handleListFPPPlaylistEntryObservations serves
@@ -639,4 +660,106 @@ func (h *handlers) handleDeleteFPPPlaylistEntryObservation(w http.ResponseWriter
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxReportedUnknownFPPObservationMembers bounds how many unknown member
+// names one response repeats back. The body is already bounded at 16 KiB,
+// so this is not the only bound, but a caller should not be able to choose
+// how large the coordinator's reply and log line are by sending a hundred
+// junk members. A plugin with more than this many unknown members has a
+// problem the first few names already describe.
+const maxReportedUnknownFPPObservationMembers = 8
+
+// fppObservationKnownMembers is every JSON member name
+// [v1.FPPPlaylistEntryObservationRequest] declares, read from the struct
+// tags rather than listed here, so adding a field to that type cannot
+// leave this behind reporting the new field as unknown.
+var fppObservationKnownMembers = sync.OnceValue(func() map[string]struct{} {
+	t := reflect.TypeOf(v1.FPPPlaylistEntryObservationRequest{})
+	known := make(map[string]struct{}, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			known[name] = struct{}{}
+		}
+	}
+	return known
+})
+
+// unknownFPPObservationMembers returns the sorted names of raw's top-level
+// members that [v1.FPPPlaylistEntryObservationRequest] does not declare,
+// capped at [maxReportedUnknownFPPObservationMembers]. Nil when there are
+// none, which is the ordinary case, so the response omits the field
+// entirely for every well-formed observation.
+//
+// raw has already decoded into the request struct by the time this runs,
+// so it is a JSON object and re-parsing it cannot fail in a way the caller
+// has to handle; an error here is reported as "no unknown members" rather
+// than turning a request that already parsed into a refusal.
+func unknownFPPObservationMembers(raw []byte) []string {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil
+	}
+	known := fppObservationKnownMembers()
+	var unknown []string
+	for name := range members {
+		if _, ok := known[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if unknown == nil {
+		return nil
+	}
+	slices.Sort(unknown)
+	if len(unknown) > maxReportedUnknownFPPObservationMembers {
+		unknown = unknown[:maxReportedUnknownFPPObservationMembers]
+	}
+	return unknown
+}
+
+// unknownMemberLog remembers the last set of unknown member names logged
+// for each instance so a plugin posting a misspelled field several times a
+// second produces one log line, not a flood. Keyed by instance uuid and
+// bounded by the number of instances, which is the fleet size.
+type unknownMemberLog struct {
+	mu   sync.Mutex
+	last map[string]string
+}
+
+// shouldLog reports whether names differs from what was last logged for
+// instanceUUID, and records names as the new last. An instance that stops
+// sending unknown members and later starts again logs again, which is the
+// intent: the transition is the event worth a line.
+func (l *unknownMemberLog) shouldLog(instanceUUID string, names []string) bool {
+	joined := strings.Join(names, ",")
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last == nil {
+		l.last = make(map[string]string)
+	}
+	if l.last[instanceUUID] == joined {
+		return false
+	}
+	l.last[instanceUUID] = joined
+	return true
+}
+
+// logNewUnknownFPPObservationMembers writes one warning the first time an
+// instance's set of unknown member names appears, and nothing on the
+// repeats. Warning rather than error: the observation was accepted, and a
+// coordinator running in front of a newer plugin is an ordinary upgrade
+// state, not a fault.
+func (h *handlers) logNewUnknownFPPObservationMembers(instanceUUID string, names []string) {
+	if len(names) == 0 {
+		// Still recorded, so an instance that stops sending them and
+		// starts again logs the second time too.
+		h.fppUnknownMembers.shouldLog(instanceUUID, names)
+		return
+	}
+	if !h.fppUnknownMembers.shouldLog(instanceUUID, names) {
+		return
+	}
+	h.logWarn("fpp playlist entry observation carried members this coordinator does not know; they were ignored",
+		"instanceUuid", instanceUUID, "ignoredFields", strings.Join(names, ","))
 }

@@ -74,7 +74,8 @@ true when either side ships.
 
 ## 1. Playlist-entry observation ingestion
 
-**Status: SHIPPED.** Both sides are built.
+**Status: SHIPPED,** except §1.8, which carries its own status: both sides are
+built for everything else in this section.
 
 ### 1.1 Endpoint and authorization
 
@@ -351,10 +352,18 @@ In order:
 2. Check `fpp:observe`; refuse `403` naming the scope.
 3. Bound the body at 16384 bytes; refuse `413` on overflow.
 4. Decode, and canonicalize the raw body. Refuse `400` on malformed JSON,
-   unknown fields, trailing content after the object, or a duplicate member
-   name. A duplicate member name matters here and not merely as pedantry: a
-   permissive decoder keeps the last `sequence` while a reader of the same
-   bytes sees the first.
+   trailing content after the object, or a duplicate member name. A duplicate
+   member name matters here and not merely as pedantry: a permissive decoder
+   keeps the last `sequence` while a reader of the same bytes sees the first.
+   A member the coordinator does not know is **ignored**, not refused. Its
+   name is returned in the response's `ignoredFields` array, sorted, capped at
+   eight, and absent when there were none. Refusing an unknown member made
+   upgrade order fatal rather than merely wrong: a plugin sending a field its
+   coordinator predates had every observation rejected, so the coordinator saw
+   no entries and fired no Cues, and the symptom looked like a broken plugin.
+   Reporting the names keeps what strict decoding bought, which is that a
+   misspelled member is visible rather than silently dropped. **A plugin must
+   not treat `ignoredFields` as a failure**: the observation was accepted.
 5. Refuse `400` when `schemaVersion` is not `1`.
 6. Refuse `400` when `instanceUuid` is absent or empty.
 7. Refuse `400` when `action` is outside the fixed vocabulary, when
@@ -402,7 +411,7 @@ non-active show must never activate anything.
 | No credential | 401 | `unauthorized` |
 | Missing `fpp:observe` | 403 | `forbidden` |
 | Body over 16384 bytes | 413 | `payload-too-large` |
-| Malformed body, unknown field | 400 | `invalid-parameter` |
+| Malformed body, trailing content, duplicate member | 400 | `invalid-parameter` |
 | Unsupported `schemaVersion` | 400 | `unsupported-observation-schema-version` |
 | Missing `instanceUuid` | 400 | `invalid-parameter` |
 | Invalid enum, hash, or position | 400 | `invalid-parameter` |
@@ -413,6 +422,11 @@ non-active show must never activate anything.
 | Sequence regression | 409 | `conflict` |
 
 ### 1.8 Entry occurrence and `playlistLoop`
+
+**Status: coordinator SHIPPED, plugin NOT BUILT.** The coordinator accepts
+`playlistLoop` and uses it as the third term of the occurrence rule. No plugin
+sends it yet, so §1's blanket "both sides are built" does not cover this
+section.
 
 An entry OCCURRENCE is one visit to one playlist entry. Repeat ticks inside a
 visit belong to the same occurrence; a later visit to the same entry is a new
@@ -450,13 +464,21 @@ Three properties of that rule are load bearing:
   because another one now covers the common case would break the major the
   fleet currently runs.
 
-**Upgrade order is not free: the coordinator goes first.** §1.6 step 4 refuses a
-body carrying an unknown field, and that refusal rejects the whole observation
-rather than ignoring the member. So a plugin that sends `playlistLoop` to a
-coordinator that predates this section has every observation refused with `400`,
-and a coordinator receiving no observations activates no Cues at all. Upgrading
+**Upgrade order is not free: the coordinator goes first.** A coordinator that
+predates this section refuses a body carrying an unknown field, and that
+refusal rejects the whole observation rather than ignoring the member. So a
+plugin that sends `playlistLoop` to such a coordinator has every observation
+refused with `400`, and a coordinator receiving no observations activates no
+Cues at all. Measured rather than argued: the identical body posts `200` without
+the member and `400` with it, `json: unknown field "playlistLoop"`. Upgrading
 the coordinator first is safe in both directions, because the field is optional
 and an older plugin simply never sends it.
+
+§1.6 step 4 no longer refuses an unknown member: it ignores it and names it in
+the response's `ignoredFields`. That does **not** retire the ordering above for
+this field. It changes what a coordinator carrying that change accepts, and
+every coordinator built before it still refuses, so the coordinator-first order
+stands until no coordinator predating that change is left in the fleet.
 
 ## 2. Brightness transition gain
 

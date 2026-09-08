@@ -5181,6 +5181,8 @@ export interface components {
             reconciliation?: "identity-unavailable" | "unbound" | "stale-import" | "unknown-entry" | "evidence-mismatch" | "cross-show" | "resolved";
             /** @description Absent unless `reconciliation` is one of `stale-import`, `unknown-entry`, `evidence-mismatch`, or `cross-show`; the same text `FPPPlaylistEntryReconciliationResponse.operatorInstruction` carries otherwise. */
             operatorInstruction?: string;
+            /** @description The sorted names of top-level members of the submitted body this coordinator does not know, absent when there were none and capped at 8. They did not stop the observation being accepted: an unknown member is ignored, because refusing it would make a plugin newer than its coordinator lose every observation. Present so a misspelled member is visible to whoever sent it rather than silently dropped. */
+            ignoredFields?: string[];
             /** Format: date-time */
             serverTime: string;
         };
@@ -11626,7 +11628,7 @@ export interface operations {
                     "application/json": components["schemas"]["FPPPlaylistEntryObservationResponse"];
                 };
             };
-            /** @description Malformed body, unknown field, trailing content, or a duplicate member name (`invalid-parameter`), missing `instanceUuid` (`invalid-parameter`), an invalid `action`/`unavailable`/hash/`position` (`invalid-parameter`), an identity field missing when `unavailable` is absent, or `playlistHash`/`entryKey` present when `unavailable` is present (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-observation-schema-version`), or a derived `entryKey` that disagrees with the submitted one (`observation-entry-key-mismatch`). */
+            /** @description Malformed body, trailing content, or a duplicate member name (`invalid-parameter`), missing `instanceUuid` (`invalid-parameter`), an invalid `action`/`unavailable`/hash/`position` (`invalid-parameter`), an identity field missing when `unavailable` is absent, or `playlistHash`/`entryKey` present when `unavailable` is present (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-observation-schema-version`), or a derived `entryKey` that disagrees with the submitted one (`observation-entry-key-mismatch`). */
             400: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

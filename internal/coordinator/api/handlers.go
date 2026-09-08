@@ -86,6 +86,15 @@ type handlers struct {
 	// in one process.
 	discoveryRunInFlight atomic.Bool
 
+	// fppUnknownMembers dedupes the warning fppobservations.go writes when
+	// a plugin sends a member this coordinator does not know, so a
+	// misspelled field posted on every tick is one log line rather than a
+	// flood. In-memory and per-*handlers for the same reason
+	// discoveryRunInFlight above is (ADR-012, one coordinator process);
+	// losing it across a restart just means the next observation logs once
+	// more.
+	fppUnknownMembers unknownMemberLog
+
 	// nightCueHooks is Track F seam F4's own crash-injection seam for
 	// RESTING-MODE.md §7.1.1's commit/dispatch boundary — see
 	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero
