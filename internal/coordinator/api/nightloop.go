@@ -198,13 +198,24 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// fade-out-night.
 }
 
+// nightBackgroundAudioFadeDownDispatchMargin absorbs one night-loop tick's
+// worth of scheduling slack: this check only ever runs when a real tick
+// lands, which can be up to one whole interval after the instant it was
+// first true, so the due threshold is pulled that much earlier to keep
+// the fade-down's own completion (dispatch + fadeOutMs) at or before E
+// even under that worst-case tick alignment.
+const nightBackgroundAudioFadeDownDispatchMargin = 1 * time.Second
+
 // nightBackgroundAudioFadeDownDue is nightTick's own second switch's gate
 // for resting-intershow and transition-to-show: true once now has reached
-// E minus resting.backgroundAudio.fadeOutMs, the bed's own pre-boundary
+// E minus resting.backgroundAudio.fadeOutMs minus
+// [nightBackgroundAudioFadeDownDispatchMargin], the bed's own pre-boundary
 // lead (RESTING-MODE.md §7.1's "E - audio lead   begin audio fade",
 // applied to the bed the same way [nightEnterShowLeadMs] applies it to
-// enterShow cues). False whenever the boundary is not yet armed with a
-// known E (nothing to lead against yet) or resting.backgroundAudio is
+// enterShow cues) padded for this tick-driven check's own scheduling
+// slack, so the fade-down still completes BY E rather than merely
+// starting in time to. False whenever the boundary is not yet armed with
+// a known E (nothing to lead against yet) or resting.backgroundAudio is
 // absent or carries no fadeOutMs - the unconfigured case is unchanged from
 // before this existed: the bed keeps playing at full gain until Live, then
 // cuts instantly (nightStopBackgroundAudioIfRunningForNode's own
@@ -227,7 +238,7 @@ func (h *handlers) nightBackgroundAudioFadeDownDue(ctx context.Context, now time
 	if !ok || resolved.FadeOutMs == nil {
 		return false
 	}
-	lead := time.Duration(*resolved.FadeOutMs) * time.Millisecond
+	lead := time.Duration(*resolved.FadeOutMs)*time.Millisecond + nightBackgroundAudioFadeDownDispatchMargin
 	return !now.Before(boundary.ExpectedAt.Add(-lead))
 }
 
@@ -904,6 +915,16 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 		if problem != nil {
 			reason = "refused: " + problem.Detail
 			terminal = nightRefusalIsTerminal(problem)
+		}
+		// The only line this window gets: every tick this dispatch spends
+		// backing off (nightDispatchRetryBackoff, checked above on a later
+		// tick) writes nothing further, so an operator watching the log
+		// has only this one line to learn the launch did not happen on
+		// time and why.
+		if terminal {
+			h.logWarn("night loop: startPlaylist was refused and will not be retried", "sessionId", rec.ID, "purpose", purpose, "instanceId", instanceID, "playlist", playlist, "reason", reason)
+		} else {
+			h.logWarn("night loop: startPlaylist did not launch on this attempt; retrying after a backoff", "sessionId", rec.ID, "purpose", purpose, "instanceId", instanceID, "playlist", playlist, "reason", reason, "backoffMs", nightDispatchRetryBackoff.Milliseconds())
 		}
 		next := nightContentAnchor{
 			Purpose: purpose, FPPInstanceID: instanceID, Playlist: playlist,
