@@ -141,20 +141,52 @@ else
   if [ "$already_adopted" -eq 1 ]; then
     echo "install.sh: user $SERVICE_USER already exists and is already this host's agent service account (per $UNIT_DEST); adopting it as-is (uid=$existing_uid, shell=$existing_shell, home=$existing_home)"
   else
+    # A home directory equal to STATE_DIR means one of two different
+    # things, and they must not be told apart by the unit file alone: it
+    # is either this installer's own account (safe to adopt) or a human
+    # account that happens to collide with STATE_DIR (unsafe). Recognise
+    # the installer's own shape first -- system uid, nologin-equivalent
+    # shell, and home == STATE_DIR, all three together -- the same test
+    # main uses to accept a pre-existing "showmesh" account outright. uid
+    # and shell are a positive-recognition rule for that one combination,
+    # never a general requirement: an ordinary login account whose home
+    # sits somewhere else is still adopted below with no such test.
+    sys_uid_max=999
+    if [ -r /etc/login.defs ]; then
+      configured_max="$(awk '$1 == "SYS_UID_MAX" { print $2 }' /etc/login.defs)"
+      if [ -n "$configured_max" ]; then
+        sys_uid_max="$configured_max"
+      fi
+    fi
+    shell_is_nologin=0
+    case "$existing_shell" in
+      */nologin|*/false) shell_is_nologin=1 ;;
+    esac
+    installer_own_shape=0
+    if [ "$existing_uid" -le "$sys_uid_max" ] && [ "$shell_is_nologin" -eq 1 ] \
+      && [ "$existing_home" = "$STATE_DIR" ]; then
+      installer_own_shape=1
+    fi
+
     # STATE_DIR is chowned and chmod 0750'd by this script below. An
     # account whose home directory equals STATE_DIR, or whose home is an
     # ancestor directory of it, would have that install step take
     # ownership of part of the account's real home tree rather than of the
-    # agent's own state directory.
+    # agent's own state directory -- unless that account is this
+    # installer's own, in which case STATE_DIR is exactly what its home is
+    # supposed to be.
     home_hazard=0
-    case "$STATE_DIR" in
-      "$existing_home"|"$existing_home"/*) home_hazard=1 ;;
-    esac
-    if [ "$home_hazard" -eq 1 ]; then
+    if [ "$installer_own_shape" -ne 1 ]; then
+      case "$STATE_DIR" in
+        "$existing_home"|"$existing_home"/*) home_hazard=1 ;;
+      esac
+    fi
+    if [ "$installer_own_shape" -eq 1 ]; then
+      echo "install.sh: user $SERVICE_USER already exists (system account, matches the shape this installer creates: uid=$existing_uid, shell=$existing_shell, home=$existing_home); adopting it"
+    elif [ "$home_hazard" -eq 1 ]; then
       echo "install.sh: refusing to adopt existing account '$SERVICE_USER' (home=$existing_home) as the agent's service account: installing chowns and chmod 0750s $STATE_DIR, which is that account's home directory or an ancestor of it. Use a different account name: edit SERVICE_USER in $SCRIPT_DIR/install.sh, then re-run." >&2
       exit 1
-    fi
-    if [ "${SHOWMESH_ADOPT_EXISTING_ACCOUNT:-}" = "1" ]; then
+    elif [ "${SHOWMESH_ADOPT_EXISTING_ACCOUNT:-}" = "1" ]; then
       echo "install.sh: SHOWMESH_ADOPT_EXISTING_ACCOUNT=1 set; adopting existing account '$SERVICE_USER' (uid=$existing_uid, shell=$existing_shell, home=$existing_home) as the agent's service account"
     else
       echo "install.sh: refusing to adopt existing account '$SERVICE_USER' (uid=$existing_uid, shell=$existing_shell, home=$existing_home) as the agent's service account: this is a fresh install (no systemd unit on this host currently names it as the agent's account), so it may be an unrelated account that happens to share this name. If it should run the agent, re-run with SHOWMESH_ADOPT_EXISTING_ACCOUNT=1 set. If it should not, edit SERVICE_USER in $SCRIPT_DIR/install.sh to use a different account name, then re-run." >&2
