@@ -74,7 +74,8 @@ true when either side ships.
 
 ## 1. Playlist-entry observation ingestion
 
-**Status: SHIPPED.** Both sides are built.
+**Status: SHIPPED,** except §1.8, which carries its own status: both sides are
+built for everything else in this section.
 
 ### 1.1 Endpoint and authorization
 
@@ -422,6 +423,11 @@ non-active show must never activate anything.
 
 ### 1.8 Entry occurrence and `playlistLoop`
 
+**Status: coordinator SHIPPED, plugin NOT BUILT.** The coordinator accepts
+`playlistLoop` and uses it as the third term of the occurrence rule. No plugin
+sends it yet, so §1's blanket "both sides are built" does not cover this
+section.
+
 An entry OCCURRENCE is one visit to one playlist entry. Repeat ticks inside a
 visit belong to the same occurrence; a later visit to the same entry is a new
 one. Track H derives its Cue activation identity from the occurrence, so two
@@ -458,13 +464,21 @@ Three properties of that rule are load bearing:
   because another one now covers the common case would break the major the
   fleet currently runs.
 
-**Upgrade order is not free: the coordinator goes first.** §1.6 step 4 refuses a
-body carrying an unknown field, and that refusal rejects the whole observation
-rather than ignoring the member. So a plugin that sends `playlistLoop` to a
-coordinator that predates this section has every observation refused with `400`,
-and a coordinator receiving no observations activates no Cues at all. Upgrading
+**Upgrade order is not free: the coordinator goes first.** A coordinator that
+predates this section refuses a body carrying an unknown field, and that
+refusal rejects the whole observation rather than ignoring the member. So a
+plugin that sends `playlistLoop` to such a coordinator has every observation
+refused with `400`, and a coordinator receiving no observations activates no
+Cues at all. Measured rather than argued: the identical body posts `200` without
+the member and `400` with it, `json: unknown field "playlistLoop"`. Upgrading
 the coordinator first is safe in both directions, because the field is optional
 and an older plugin simply never sends it.
+
+§1.6 step 4 no longer refuses an unknown member: it ignores it and names it in
+the response's `ignoredFields`. That does **not** retire the ordering above for
+this field. It changes what a coordinator carrying that change accepts, and
+every coordinator built before it still refuses, so the coordinator-first order
+stands until no coordinator predating that change is left in the fleet.
 
 ## 2. Brightness transition gain
 
