@@ -104,7 +104,7 @@ jobs:
           echo "--- CHANGELOG.md section for $version ---"
           cat changelog-section.md
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: changelog-section
           path: changelog-section.md
@@ -212,7 +212,7 @@ jobs:
       # here would collide across legs when the release job merges both
       # artifacts into one directory. The release job recomputes one
       # SHA256SUMS once both tarballs are staged together.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: node-agent-amd64
           path: dist/node-agent/*.tar.gz
@@ -264,7 +264,7 @@ jobs:
 
       # See node-agent-amd64's own comment: only the tarball, the release
       # job computes one combined SHA256SUMS once both are staged.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: node-agent-arm64
           path: dist/node-agent/*.tar.gz
