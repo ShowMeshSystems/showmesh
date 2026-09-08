@@ -1826,6 +1826,24 @@ func DecodeLWTPayload(env Envelope) (LWTPayload, error) {
 	return p, nil
 }
 
+// preserveExactRevision replaces p.Params["revision"] with the exact
+// json.Number from raw: ShowMesh's revisions exceed float64's 2^53
+// exact range, so json.Unmarshal already lost precision by this point.
+func preserveExactRevision(p *CmdPayload, raw json.RawMessage) {
+	if _, present := p.Params["revision"]; !present {
+		return
+	}
+	var shell struct {
+		Params struct {
+			Revision json.Number `json:"revision"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &shell); err != nil {
+		return
+	}
+	p.Params["revision"] = shell.Params.Revision
+}
+
 // DecodeCmdPayload decodes env.Payload as a [CmdPayload]. It returns an
 // [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeCmdV1], an
 // error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
@@ -1842,6 +1860,7 @@ func DecodeCmdPayload(env Envelope) (CmdPayload, error) {
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
+	preserveExactRevision(&p, env.Payload)
 	if err := p.Validate(); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
