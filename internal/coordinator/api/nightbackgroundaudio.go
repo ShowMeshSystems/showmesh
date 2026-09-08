@@ -379,7 +379,8 @@ func (h *handlers) nightRunAudioCommand(ctx context.Context, now time.Time, rec 
 			return row, nil
 		}
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cueName)
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cueName, target, idemKey, issuer, revision)
+		// nil fade: a background-audio step has no cue definition to read one from.
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cueName, target, idemKey, issuer, revision, nil)
 	case errors.Is(err, store.ErrNightCueOutboxNotFound):
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cueName)
 		// The no-rewind guarantee, restored from durable history rather
@@ -408,7 +409,8 @@ func (h *handlers) nightRunAudioCommand(ctx context.Context, now time.Time, rec 
 		if row.State == nightCueStateResolved || row.State == nightCueStateAmbiguous {
 			return row, nil
 		}
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cueName, target, idemKey, issuer, revision)
+		// nil fade: a background-audio step has no cue definition to read one from.
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cueName, target, idemKey, issuer, revision, nil)
 	default:
 		return store.NightCueOutboxRecord{}, err
 	}

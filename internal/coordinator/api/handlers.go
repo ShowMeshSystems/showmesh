@@ -101,6 +101,11 @@ type handlers struct {
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
 
+	// nightGainWriter substitutes the night lighting cue's transition-gain
+	// write - see [nightTransitionGainWriter] (nightlightinggain.go). Nil
+	// in production; only a test ever sets it.
+	nightGainWriter nightTransitionGainWriter
+
 	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
 	// intent gate state. See [emergencyStopArmStore]'s own doc comment
 	// for why this is in-memory, unpersisted, and a single-process
