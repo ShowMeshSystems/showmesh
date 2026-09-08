@@ -259,6 +259,24 @@ func nightBackgroundAudioStepsForNode(history []nightBackgroundAudioHistoryRow, 
 	return out
 }
 
+// nightBackgroundAudioLatestFadeDownDispatchedAt returns nodeID's own most
+// recent fadedown step's DispatchedAt from already-read history, or the
+// zero time.Time when no fadedown has ever been dispatched for this node.
+// The one anchor every fade-completion guard in this file shares: a check
+// anchored to anything else (a session's own StateEnteredAt, or evidence
+// with no floor on its own age) can be satisfied by elapsed time that has
+// nothing to do with the fade actually in flight.
+func nightBackgroundAudioLatestFadeDownDispatchedAt(history []nightBackgroundAudioHistoryRow, nodeID string) time.Time {
+	var latest time.Time
+	for _, row := range nightBackgroundAudioStepsForNode(history, nodeID) {
+		if row.Step.Kind != nightBGStepFadeDown || row.Row.DispatchedAt == nil {
+			continue
+		}
+		latest = *row.Row.DispatchedAt
+	}
+	return latest
+}
+
 // nightBackgroundAudioHistory returns every step ever recorded for rec's
 // background-audio session, across every node and every cycle, sorted
 // stably by Row.CreatedAt/rowid (the store's own insertion order). Used
@@ -540,12 +558,23 @@ const audioSessionFadeStateInProgress string = "in_progress"
 // this fade is meant to precede before this coordinator has ever heard
 // from the session risks racing a ramp it cannot yet see, and racing it
 // is exactly the defect this function exists to prevent.
-func nightBackgroundAudioFadeSettled(audio NodeAudioLister, now time.Time, nodeID, sessionID string) bool {
+//
+// notBefore fences the evidence itself, matching resolveConfirmationEvidence's
+// own ADR-003 fence (fppcommand_evidence.go): the node audio collector
+// (internal/coordinator/collector/nodeaudio) holds only a node's single
+// most recent report, so an observation collected before this fade's own
+// dispatch instant predates the fade and can never report it settled, no
+// matter what value it carries. Pass the zero time.Time to disable the
+// fence for a caller with no dispatch instant to fence against.
+func nightBackgroundAudioFadeSettled(audio NodeAudioLister, now, notBefore time.Time, nodeID, sessionID string) bool {
 	for _, o := range audio.NodeAudioObservations(nodeID) {
 		if o.Signal != audioSessionFadeStateSignalID || o.Resource.Kind != observation.ResourceAudioSession || o.Resource.ID != sessionID {
 			continue
 		}
 		if o.StateAt(now) != observation.StateCurrent {
+			return false
+		}
+		if o.CollectedAt.Before(notBefore) {
 			return false
 		}
 		return o.Value != audioSessionFadeStateInProgress
@@ -760,11 +789,11 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 			h.logWarn("night loop: background audio: a prior pause did not confirm; leaving it for an operator", "sessionId", rec.ID, "outcome", latest.Row.Outcome)
 			return
 		}
-		h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, history)
+		h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, ba, history)
 
 	case nightBGStepResume:
 		if !confirmed {
-			h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, history) // retry under a fresh revision: never wedge here.
+			h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, ba, history) // retry under a fresh revision: never wedge here.
 			return
 		}
 		if ba.FadeInMs != nil {
@@ -901,13 +930,35 @@ func (h *handlers) nightMaybeRefreshBackgroundAudioExpiry(ctx context.Context, n
 	}
 }
 
-func (h *handlers) nightBackgroundAudioResume(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, history []nightBackgroundAudioHistoryRow) {
+// nightBackgroundAudioResume dispatches audio.session.resume and, when it
+// resolves confirmed within this SAME call, immediately chains into the
+// fade-in half of the pair - never left for a separate tick to notice.
+// audio.session.resume carries no gain of its own (pkg/agent's own
+// Resume takes no such param): the node resumes at whatever gain the
+// fade-down before the pause already pinned there (its own dispatch
+// target, recorded the instant that fade was accepted, per
+// [nightBackgroundAudioFadeDown]'s own doc comment - never the ramp's
+// merely-in-progress value), so a resume with nothing chained after it is
+// audibly silent, not just administratively incomplete, until something
+// raises the gain again. A resume that does not resolve confirmed here
+// falls back to the ordinary per-tick advance ([nightAdvanceBackgroundAudioForNode]'s
+// own case nightBGStepResume), unchanged.
+func (h *handlers) nightBackgroundAudioResume(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameResume(int(revision))
 	target := nightAudioTarget(nodeID, sessionID, "audio.session.resume", map[string]any{})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history); err != nil {
+	row, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, target, revision, history)
+	if err != nil {
 		h.logWarn("night loop: background audio: resume failed", "sessionId", rec.ID, "error", err)
+		return
 	}
+	if ba.FadeInMs == nil || row.State != nightCueStateResolved || row.Outcome != nightCueOutcomeConfirmed {
+		return
+	}
+	extended := append(append([]nightBackgroundAudioHistoryRow{}, history...), nightBackgroundAudioHistoryRow{
+		Step: nightBackgroundAudioStep{Seq: int(revision), Kind: nightBGStepResume}, Row: row, NodeID: nodeID, Parsed: true,
+	})
+	h.nightBackgroundAudioFadeUp(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, *ba.FadeInMs, extended)
 }
 
 // nightBackgroundAudioStop issues the ordinary (non-interrupt) suspend
@@ -1041,7 +1092,15 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 
 	confirmed := latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed
 	if latest.Step.Kind == nightBGStepFadeDown && confirmed {
-		if !nightBackgroundAudioFadeSettled(h.deps.Audio, now, nodeID, sessionID) {
+		// latest.Row.DispatchedAt is always set once a row reaches
+		// resolved (nightDispatchAndPersistCue marks it before ever
+		// dispatching), so this fences out any evidence the collector
+		// held from before THIS fade was sent.
+		fadeDispatchedAt := time.Time{}
+		if latest.Row.DispatchedAt != nil {
+			fadeDispatchedAt = *latest.Row.DispatchedAt
+		}
+		if !nightBackgroundAudioFadeSettled(h.deps.Audio, now, fadeDispatchedAt, nodeID, sessionID) {
 			return // the ramp is still running; never let pause/stop race it (see nightBackgroundAudioFadeSettled's own doc comment).
 		}
 		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
@@ -1114,33 +1173,49 @@ func (h *handlers) nightClearBackgroundAudioAtEndSession(ctx context.Context, no
 		return
 	}
 	sessionID := nightBackgroundAudioSessionID(rec)
+	history, herr := h.nightBackgroundAudioHistory(ctx, rec)
+	if herr != nil {
+		h.logWarn("night loop: end-session: failed to read background-audio history; clearing without a fade-dispatch anchor", "sessionId", rec.ID, "error", herr)
+	}
 	for _, nodeID := range resolved.OutputNodeIDs() {
-		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, rec.StateEnteredAt, nodeID, sessionID, resolved.FadeOutMs)
+		fadeDispatchedAt := nightBackgroundAudioLatestFadeDownDispatchedAt(history, nodeID)
+		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, fadeDispatchedAt, nodeID, sessionID, resolved.FadeOutMs)
 	}
 }
 
 // nightEndSessionClearFadeGuardMargin is how much longer than the
-// configured fade-out [nightEndSessionClearMayProceed] waits past
-// StateEnteredAt before forcing the clear regardless of fade state: one
-// night-loop tick's worth of slack (matching defaultNightLoopInterval)
-// for the fade-settled observation to catch up.
+// configured fade-out [nightEndSessionClearMayProceed] waits past the
+// fade's own dispatch instant before forcing the clear regardless of fade
+// state: one night-loop tick's worth of slack (matching
+// defaultNightLoopInterval) for the fade-settled observation to catch up.
 const nightEndSessionClearFadeGuardMargin = 1 * time.Second
 
 // nightEndSessionClearMayProceed reports whether an end-session clear may
 // dispatch now. No fadeOutMs configured means yes immediately, unchanged
 // from today. Otherwise it waits for [nightBackgroundAudioFadeSettled],
-// but never past stateEnteredAt+fadeOutMs+margin: a stuck or silent node
-// (fadeSettled returns false forever with no CURRENT observation at all)
-// must never hold end-session open indefinitely.
-func (h *handlers) nightEndSessionClearMayProceed(now, stateEnteredAt time.Time, nodeID, sessionID string, fadeOutMs *int) bool {
+// fenced to fadeDispatchedAt, but never past
+// fadeDispatchedAt+fadeOutMs+margin: a stuck or silent node (fadeSettled
+// returns false forever with no CURRENT observation at all) must never
+// hold end-session open indefinitely. fadeDispatchedAt is the SAME anchor
+// both halves of this guard share - see
+// [nightBackgroundAudioLatestFadeDownDispatchedAt]'s own doc comment for
+// why anchoring the timeout to anything else (this session's own
+// StateEnteredAt, in particular) lets elapsed time that has nothing to do
+// with the fade satisfy it. No fadedown has ever been dispatched
+// (fadeDispatchedAt zero) means there is nothing in flight to wait for at
+// all, so this proceeds immediately, same as fadeOutMs == nil.
+func (h *handlers) nightEndSessionClearMayProceed(now, fadeDispatchedAt time.Time, nodeID, sessionID string, fadeOutMs *int) bool {
 	if fadeOutMs == nil {
 		return true
 	}
-	if nightBackgroundAudioFadeSettled(h.deps.Audio, now, nodeID, sessionID) {
+	if nightBackgroundAudioFadeSettled(h.deps.Audio, now, fadeDispatchedAt, nodeID, sessionID) {
+		return true
+	}
+	if fadeDispatchedAt.IsZero() {
 		return true
 	}
 	bound := time.Duration(*fadeOutMs)*time.Millisecond + nightEndSessionClearFadeGuardMargin
-	return now.Sub(stateEnteredAt) >= bound
+	return now.Sub(fadeDispatchedAt) >= bound
 }
 
 // nightClearBackgroundAudioAtEndSessionForNode is
@@ -1151,8 +1226,8 @@ func (h *handlers) nightEndSessionClearMayProceed(now, stateEnteredAt time.Time,
 // from the ordinary resting-exit path is never cut off by this clear;
 // when the guard holds, [handlers.nightRetryEndSessionClear]'s own
 // per-tick retry (below) is what eventually dispatches it.
-func (h *handlers) nightClearBackgroundAudioAtEndSessionForNode(ctx context.Context, now, stateEnteredAt time.Time, nodeID, sessionID string, fadeOutMs *int) {
-	if !h.nightEndSessionClearMayProceed(now, stateEnteredAt, nodeID, sessionID, fadeOutMs) {
+func (h *handlers) nightClearBackgroundAudioAtEndSessionForNode(ctx context.Context, now, fadeDispatchedAt time.Time, nodeID, sessionID string, fadeOutMs *int) {
+	if !h.nightEndSessionClearMayProceed(now, fadeDispatchedAt, nodeID, sessionID, fadeOutMs) {
 		return
 	}
 	clearRevision := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) + 1
@@ -1280,7 +1355,12 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 	// node once, so only a node whose SYNCHRONOUS attempt also failed
 	// is left unrecovered by this tick-based safety net.
 	sessionID := nightBackgroundAudioSessionID(rec)
-	if !h.nightEndSessionClearMayProceed(now, rec.StateEnteredAt, nodeIDs[0], sessionID, resolved.FadeOutMs) {
+	history, herr := h.nightBackgroundAudioHistory(ctx, rec)
+	if herr != nil {
+		h.logWarn("night loop: end-session clear retry: failed to read background-audio history; retrying without a fade-dispatch anchor", "sessionId", rec.ID, "error", herr)
+	}
+	fadeDispatchedAt := nightBackgroundAudioLatestFadeDownDispatchedAt(history, nodeIDs[0])
+	if !h.nightEndSessionClearMayProceed(now, fadeDispatchedAt, nodeIDs[0], sessionID, resolved.FadeOutMs) {
 		return // fade still ramping and within bound; retried again next tick.
 	}
 	h.nightDispatchEndSessionClearRetry(ctx, now, rec, nodeIDs[0], sessionID, anchor)

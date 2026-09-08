@@ -421,6 +421,130 @@ func TestNightAdvanceTransitionToShow_UnrelatedPlaylistRunning_Refuses(t *testin
 	}
 }
 
+// TestNightAdvanceTransitionToShow_BusyRefusalLogsAndRetriesAfterBackoff
+// closes the rig's own silent gap: a launch refused as busy (the same
+// non-terminal ProblemTypeFPPStartPlaylistBusy shape as the test above)
+// used to leave nothing behind between the launch instant and the
+// eventual retry - no log line, nothing an operator watching the
+// coordinator could read to learn why the show had not launched on time.
+// Three calls at real wall-clock spacing exercise the whole window: the
+// refusal itself (must log exactly once), a tick still inside
+// nightDispatchRetryBackoff (must add nothing further - the wait itself
+// stays quiet by design, never spammed), and a tick past the backoff once
+// the obstruction has cleared (the retry must land and reach live).
+func TestNightAdvanceTransitionToShow_BusyRefusalLogsAndRetriesAfterBackoff(t *testing.T) {
+	now := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	obs := &mutableObservationLister{}
+	obs.set([]observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "someone-elses-playlist", now),
+	})
+	gotArgs := new([]string)
+	cmdSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Command == "Start Playlist" && len(body.Args) > 0 {
+			*gotArgs = body.Args
+			// Stamped at THIS call's own live now, not a fixed test
+			// instant - this fixture drives several calls at distinct
+			// wall-clock times, unlike setupTransitionToShowTest.
+			obs.add(
+				statusObservation("player-01", fppStatusValuePlaying, now),
+				playlistNameObservation("player-01", body.Args[0], now),
+				positionMSObservation("player-01", 0, now),
+			)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Playlist Starting"))
+	}))
+	t.Cleanup(cmdSrv.Close)
+
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	deps := Dependencies{
+		NightSessions: st, Observations: obs, Identity: svc, Config: st,
+		FPP: &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: cmdSrv.URL}}},
+	}.withDefaults()
+	opts := Options{}.withDefaults()
+	var logBuf bytes.Buffer
+	h := &handlers{
+		deps: deps, clock: clock, logger: slog.New(slog.NewTextHandler(&logBuf, nil)),
+		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline, fppCommandPollInterval: opts.FPPCommandPollInterval,
+	}
+
+	enteredAt := now.Add(-time.Minute)
+	rec := store.NightSessionRecord{
+		ID: "sess-1", ConfigObjectID: "halloween-main", ConfigRevision: 1,
+		State: nightStateTransitionToShow, StateEnteredAt: enteredAt,
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &enteredAt, LastTickAt: &now}),
+	}
+	if err := st.CreateNightSession(context.Background(), rec, now); err != nil {
+		t.Fatalf("create night session: %v", err)
+	}
+	payload := config.NightSessionPayload{
+		Show:         "halloween-2026",
+		Label:        "test",
+		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "player-01", Playlist: "halloween-show"},
+		Resting:      config.NightSessionResting{FPPInstanceID: "player-01", Playlist: "halloween-resting", EndOfNightPlaylist: "halloween-resting"},
+		EnterShow:    config.NightSessionEnterShow{BlackoutHoldMs: 6000},
+	}
+	payloadJSON, err := config.EncodeNightSessionPayload(payload)
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	if _, err := st.CreateConfigObject(context.Background(), config.NightSessionConfigKind, "halloween-main"); err != nil {
+		t.Fatalf("create config object: %v", err)
+	}
+	if _, err := st.CreateConfigRevision(context.Background(), store.ConfigRevisionRecord{
+		Kind: config.NightSessionConfigKind, ObjectID: "halloween-main", Revision: 1,
+		PayloadJSON: payloadJSON, Source: "api",
+	}); err != nil {
+		t.Fatalf("create config revision: %v", err)
+	}
+
+	h.nightAdvanceTransitionToShow(context.Background(), now, rec)
+	if len(*gotArgs) != 0 {
+		t.Fatalf("Start Playlist args after the first refused attempt = %v, want none", *gotArgs)
+	}
+	if n := strings.Count(logBuf.String(), "startPlaylist did not launch on this attempt"); n != 1 {
+		t.Fatalf("log line count after the refusal = %d, want exactly 1: %s", n, logBuf.String())
+	}
+	if got := mustGetCurrentSession(t, st); got.State != nightStateTransitionToShow {
+		t.Fatalf("state after the refusal = %q, want still %q", got.State, nightStateTransitionToShow)
+	}
+
+	// Still inside the backoff window: this must stay exactly as silent
+	// as it was before this fix - no further log line, no dispatch.
+	now = now.Add(3 * time.Second)
+	h.nightAdvanceTransitionToShow(context.Background(), now, mustGetCurrentSession(t, st))
+	if n := strings.Count(logBuf.String(), "startPlaylist did not launch on this attempt"); n != 1 {
+		t.Fatalf("log line count mid-backoff = %d, want still 1 (the wait itself must stay quiet): %s", n, logBuf.String())
+	}
+	if len(*gotArgs) != 0 {
+		t.Fatalf("Start Playlist args mid-backoff = %v, want none (still backing off)", *gotArgs)
+	}
+
+	// The obstruction clears (the observed playlist is now this session's
+	// own resting playlist, replace-eligible per nightShowLaunchIfBusy)
+	// and the backoff has elapsed: the retry lands.
+	now = now.Add(nightDispatchRetryBackoff + time.Second)
+	obs.set([]observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "halloween-resting", now),
+	})
+	h.nightAdvanceTransitionToShow(context.Background(), now, mustGetCurrentSession(t, st))
+	if len(*gotArgs) < 1 || (*gotArgs)[0] != "halloween-show" {
+		t.Fatalf("Start Playlist args once the backoff elapsed and the obstruction cleared = %v, want [halloween-show, ...]", *gotArgs)
+	}
+	if final := mustGetCurrentSession(t, st); final.State != nightStateLive {
+		t.Fatalf("state once the retry landed = %q, want %q", final.State, nightStateLive)
+	}
+}
+
 // No current evidence at all: identity cannot be established, so this
 // must refuse exactly like the unrelated-playlist case, with its own
 // reason, and never advance.
