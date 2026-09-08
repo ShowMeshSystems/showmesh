@@ -4,7 +4,7 @@ Thanks for looking. This document covers how to build and test, and — more imp
 
 ## Getting set up
 
-Requirements: Go 1.25+, Node 22+, Docker (for the Compose bundle and integration tests), `make`.
+Requirements: Go 1.26+, Node 22+, Docker (for the Compose bundle and integration tests), `make`.
 
 ```sh
 git clone https://github.com/ShowMeshSystems/showmesh.git
@@ -26,7 +26,7 @@ make check     # what CI runs on the fast path
 
 Both integration targets sit behind the `integration` build tag and never run as part of `make test` or `make check`.
 
-CI runs on Go 1.25.0 and 1.26.5 across Linux and macOS with the race detector, builds the coordinator CGo-free, and builds the multi-arch image. A behavior verified only on macOS is **not** verified for this project — CI's first run caught a Linux-only `SO_REUSEADDR` difference that is now recorded in ADR-013.
+CI runs on Go 1.26.6 across Linux and macOS with the race detector, builds the coordinator CGo-free, and builds the multi-arch image. A behavior verified only on macOS is **not** verified for this project: CI's first run caught a Linux-only `SO_REUSEADDR` difference that is now recorded in ADR-013.
 
 ## Before you write code
 
@@ -116,10 +116,10 @@ Merges to `main` require these checks from the CI workflow to pass, matched
 by exact job name: `lint`, `vuln`, `ui`, `docker`, and `test-gate`.
 `test-gate` needs the whole `test` go-version matrix and fails unless every
 leg succeeded; its own name stays stable across a matrix version bump, so
-bumping `test`'s Go versions cannot silently rename the required check the
-way requiring `test (1.25.0)` and `test (1.26.6)` directly would have. These
-are deterministic: the same commit produces the same result, which is what
-makes it safe to block merges on them.
+bumping `test`'s Go version cannot silently rename the required check the
+way requiring `test (1.26.6)` directly would have. These are deterministic:
+the same commit produces the same result, which is what makes it safe to
+block merges on them.
 
 The CI workflow's `integration`, `integration-fppmqtt`, and
 `integration-broker` jobs, plus `test-integration-fpp` from the separate

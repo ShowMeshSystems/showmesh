@@ -4724,11 +4724,14 @@ paths:
       operationId: putShowAction
       summary: Write a new show.action revision (Step 9)
       description: >-
-        Requires `config:write` (admin only). `show` must name an existing
-        `show` config object (`GET /config/show`); a nonexistent show is
-        refused naming the missing id. This is a write-time check only -
-        an existing revision written before this check shipped still
-        reads, lists, and runs unchanged. `safetyClass` is required and
+        Requires `config:write` (admin only). `show` is immutable: a PUT
+        that changes an existing object's `show` is refused, naming both,
+        with problem type `show-config-cross-show-reference`. `show` must
+        name an existing `show` config object (`GET /config/show`); a
+        nonexistent show is refused naming the missing id. This is a
+        write-time check only - an existing revision written before this
+        check shipped still reads, lists, and runs unchanged. `safetyClass`
+        is required and
         must agree with an `fpp` target's own registered primitive safety
         class; an `mqtt` target's `broker` must name a broker this
         deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no
@@ -4934,10 +4937,12 @@ paths:
       operationId: putShowMacro
       summary: Write a new show.macro revision (Step 9)
       description: >-
-        Requires `config:write` (admin only). `show` must name an existing
-        `show` config object, refused naming the missing id otherwise
-        (write-time only; an existing revision keeps reading, listing, and
-        running unchanged). `steps` is required, must
+        Requires `config:write` (admin only). `show` is immutable: a PUT
+        that changes an existing object's `show` is refused, naming both,
+        with problem type `show-config-cross-show-reference`. `show` must
+        name an existing `show` config object, refused naming the missing
+        id otherwise (write-time only; an existing revision keeps reading,
+        listing, and running unchanged). `steps` is required, must
         contain 1-32 entries, each `id` unique, each `action` resolving to
         an existing `show.action` object **in this macro's own show** - a
         step naming an action belonging to a different show is refused,
@@ -6021,8 +6026,10 @@ paths:
       operationId: putShowSurface
       summary: Write a new show.surface revision (Track E, ADR-026)
       description: >-
-        Requires `config:write` (admin only). `show` must name an existing
-        `show` object; `node` must name a declared node - this coordinator
+        Requires `config:write` (admin only). `show` is immutable: a PUT
+        that changes an existing object's `show` is refused, naming both,
+        with problem type `show-config-cross-show-reference`. `show` must
+        name an existing `show` object; `node` must name a declared node - this coordinator
         deliberately does NOT check the node's advertised NDI/HDMI
         capability, which is observed state and absent whenever a node is
         offline (checking it would manufacture absence from a node that
