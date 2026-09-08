@@ -1639,6 +1639,90 @@ func TestNightClearBackgroundAudioAtEndSession_ClearsNotStops(t *testing.T) {
 	}
 }
 
+// TestNightClearBackgroundAudioAtEndSession_TombstonedReferencedPlaylistStillClearsDispatchedNode
+// is half 2's own bypass proof: the playlist is tombstoned
+// DIRECTLY through the store, never through handleDeleteMediaPlaylist, so
+// half 1's refuse branch is never even reached, let alone consulted - this
+// proves the fix, not the guard. With the referenced media.playlist gone,
+// end-session's own bed cleanup must still reach the node this controller's
+// OWN dispatch history shows the bed was actually applied to, deriving that
+// node list from nightBackgroundAudioDispatchedNodeIDs rather than from the
+// (now-missing) playlist's own OutputNodeIDs.
+func TestNightClearBackgroundAudioAtEndSession_TombstonedReferencedPlaylistStillClearsDispatchedNode(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countBeforeTombstone := pub.count()
+
+	// The bypass: tombstones the config object directly through the store,
+	// never through handleDeleteMediaPlaylist (mediaplaylist.go) - half 1's
+	// refuseIfActive guard is never on this call path at all.
+	if _, err := st.TombstoneConfigObject(context.Background(), config.MediaPlaylistConfigKind, "planetary-bed"); err != nil {
+		t.Fatalf("tombstone media.playlist directly through the store: %v", err)
+	}
+	if _, _, ok := h.nightResolveBackgroundAudio(context.Background(), rec, ba); ok {
+		t.Fatalf("nightResolveBackgroundAudio still resolves planetary-bed after tombstoning it; the bypass did not take")
+	}
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if got := pub.count(); got != countBeforeTombstone+1 {
+		t.Fatalf("publish count after end-session with a tombstoned referenced playlist = %d, want %d (the bed on node-a must still be cleared)", got, countBeforeTombstone+1)
+	}
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_InlineBackgroundAudioClearsUnaffectedByHistoryDerivedNodeList
+// is half 2's own no-regression proof: inline resting.backgroundAudio (no
+// media.playlist reference at all - the shape every existing installation
+// uses) still clears exactly as before now that the node list comes from
+// dispatch history rather than ba.OutputNodeIDs().
+func TestNightClearBackgroundAudioAtEndSession_InlineBackgroundAudioClearsUnaffectedByHistoryDerivedNodeList(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countBeforeEndSession := pub.count()
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if got := pub.count(); got != countBeforeEndSession+1 {
+		t.Fatalf("publish count after end-session for inline backgroundAudio = %d, want %d", got, countBeforeEndSession+1)
+	}
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+}
+
 // countActionDispatches counts every command pub actually put on the wire
 // (never one that failed before publish) whose action is action.
 func countActionDispatches(pub *fakeAudioPublisher, action string) int {

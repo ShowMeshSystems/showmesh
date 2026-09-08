@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -120,12 +122,56 @@ func (h *handlers) handleGetMediaPlaylistRevisions(w http.ResponseWriter, r *htt
 }
 
 // handleDeleteMediaPlaylist serves DELETE /api/v1/config/media.playlist/{id}:
-// a tombstone. Nothing in this codebase's reference graph names a
-// media.playlist id from another configuration object (night.session's own
-// inline resting.backgroundAudio block is a separate, independent bed), so
-// there is no dangling reference to consider on this side.
+// a tombstone. night.session's own resting.backgroundAudio can name a
+// media.playlist by id (the reference form, nightbackgroundaudio.go's
+// nightResolveBackgroundAudio); refuseMediaPlaylistIfReferencedByRunningNightSession
+// is this kind's own refuseIfActive, refusing exactly while that reference
+// is still live.
 func (h *handlers) handleDeleteMediaPlaylist(w http.ResponseWriter, r *http.Request) {
-	h.handleDeleteShowConfigObject(w, r, config.MediaPlaylistConfigKind, nil)
+	id := r.PathValue("id")
+	h.handleDeleteShowConfigObject(w, r, config.MediaPlaylistConfigKind, h.refuseMediaPlaylistIfReferencedByRunningNightSession(id))
+}
+
+// refuseMediaPlaylistIfReferencedByRunningNightSession is
+// handleDeleteMediaPlaylist's own refuseIfActive (showconfig.go's
+// deleteConfigObjectRevision), mirroring refuseShowIfActive/
+// refuseNightSessionIfActive's shared shape (showobjects.go, nightsession.go)
+// one operation over: read the live "what is running now" state, and refuse
+// with the SAME errConfigObjectCurrentlyActive/ProblemTypeConfigObjectCurrentlyActive
+// those two already use, rather than minting a second problem type for the
+// same "refused because something is running" refusal.
+//
+// Unlike show.active/night.session.active, there is no live singleton
+// naming "the media.playlist a running night currently uses" - the
+// reference lives inside the CURRENT night session's own pinned
+// resting.backgroundAudio.mediaPlaylist field, so this reads that session
+// directly (store.Tx.GetCurrentNightSession, the same row nightTick itself
+// drives) rather than a config object. A session that was never created, or
+// whose State already reached nightStateStopped (the night has ended), is
+// not running and never refuses here - deleting between nights stays
+// allowed.
+func (h *handlers) refuseMediaPlaylistIfReferencedByRunningNightSession(playlistID string) func(ctx context.Context, tx *store.Tx) error {
+	return func(ctx context.Context, tx *store.Tx) error {
+		rec, ok, err := tx.GetCurrentNightSession(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok || rec.State == nightStateStopped {
+			return nil
+		}
+		payload, perr := h.getPinnedNightSessionPayloadTx(ctx, tx, rec)
+		if perr != nil {
+			return perr
+		}
+		ba := payload.Resting.BackgroundAudio
+		if ba == nil || ba.MediaPlaylist != playlistID {
+			return nil
+		}
+		return &errConfigObjectCurrentlyActive{
+			kind: config.MediaPlaylistConfigKind, id: playlistID,
+			activeKind: fmt.Sprintf("night.session %q's resting.backgroundAudio", rec.ConfigObjectID),
+		}
+	}
 }
 
 func mapConfigMediaPlaylistItems(items []config.MediaPlaylistItem) []v1.ConfigMediaPlaylistItem {
