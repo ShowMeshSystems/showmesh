@@ -183,17 +183,27 @@ export function nextStartVerdict(session: NightSessionState | null, nowIso: stri
   const when = at === null ? 'at an unrecorded time' : `at ${at}`
   const ago = age === null ? '' : `, ${formatDuration(age)} ago`
 
-  if (readiness.outcome === 'ready' && readiness.fresh && readiness.sameEpoch) {
+  // ready and ready_with_warnings both mean "will start" on the server
+  // (nightStartNightTx never inspects outcome; only sameEpoch/fresh and any
+  // configured interlock actually withhold start-night). Only the epoch and
+  // freshness gate genuinely withholds the start, independent of outcome,
+  // so a warned-but-stale or warned-but-earlier-epoch result still gates,
+  // for that reason, never for the outcome itself.
+  const willStart = readiness.outcome === 'ready' || readiness.outcome === 'ready_with_warnings'
+  if (willStart && readiness.fresh && readiness.sameEpoch) {
+    const warned = readiness.outcome === 'ready_with_warnings'
     return {
-      tone: 'good',
-      state: 'Next start clear',
-      fact: `Readiness passed ${when}${ago}, from this epoch. ${passed} of ${readiness.checks.length} checks.`,
+      tone: warned ? 'warn' : 'good',
+      state: warned ? 'Next start warned' : 'Next start clear',
+      fact: warned
+        ? `Readiness passed with a warning ${when}${ago}, from this epoch. ${passed} of ${readiness.checks.length} checks. The night will start; review readiness before it does.`
+        : `Readiness passed ${when}${ago}, from this epoch. ${passed} of ${readiness.checks.length} checks.`,
       detail: null,
-      action: false,
+      action: warned,
     }
   }
   const why: string[] = []
-  if (readiness.outcome !== 'ready') why.push(`the last run reported ${readiness.outcome}`)
+  if (!willStart) why.push(`the last run reported ${readiness.outcome}`)
   if (!readiness.sameEpoch) why.push('it ran in an earlier epoch')
   if (!readiness.fresh) why.push('it is no longer fresh')
   return {

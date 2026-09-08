@@ -1,4 +1,4 @@
-import type { Model, NightBackgroundAudio, NightCue, NightReadinessCheck, NightSessionState } from '../api'
+import type { Model, NightBackgroundAudio, NightCue, NightReadiness, NightReadinessCheck, NightSessionState } from '../api'
 import type { Tone } from '../kit'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 import { findSignal, transportState } from './liveControlModel'
@@ -133,9 +133,15 @@ export function nextTransition(model: Model): NextTransition {
   return { known: true, remainingSeconds: Math.max(0, total.value - elapsed.value), source: instance.instanceId }
 }
 
-/** The outcome enum reads as a verdict in a sentence, not as a bare word. */
-const READINESS_WORD: Record<string, string> = {
+/**
+ * The outcome enum reads as a verdict in a sentence, not as a bare word.
+ * Keyed by the generated outcome union (not `Record<string, string>`) so
+ * the next widening of that union is a compile error here, not a rendered
+ * "undefined" on this screen.
+ */
+const READINESS_WORD: Record<NonNullable<NightReadiness['outcome']>, string> = {
   ready: 'Passed',
+  ready_with_warnings: 'Passed, with a warning',
   not_ready: 'Did not pass',
   unknown: 'Could not be determined',
 }

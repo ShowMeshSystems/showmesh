@@ -159,6 +159,31 @@ describe('Dashboard', () => {
     expect(verdict?.fact).toContain('14 of 14 checks')
   })
 
+  it('does not gate the next start when the run is ready_with_warnings, fresh and this epoch, and warns instead of reading as a pass or a refusal', () => {
+    const verdict = nextStartVerdict(session({ outcome: 'ready_with_warnings' }), '2026-08-28T21:07:00Z')
+    expect(verdict?.state).not.toBe('Next start clear')
+    expect(verdict?.state).not.toBe('Next start gated')
+    expect(verdict?.tone).toBe('warn')
+    expect(verdict?.gated).not.toBe(true)
+    expect(verdict?.fact).toMatch(/will start/i)
+  })
+
+  it('still gates the next start for a ready_with_warnings run that is no longer fresh, naming the freshness reason and not the outcome', () => {
+    const verdict = nextStartVerdict(session({ outcome: 'ready_with_warnings', fresh: false }), '2026-08-28T21:07:00Z')
+    expect(verdict?.state).toBe('Next start gated')
+    expect(verdict?.gated).toBe(true)
+    expect(verdict?.fact).toContain('no longer fresh')
+    expect(verdict?.fact).not.toContain('ready_with_warnings')
+  })
+
+  it('still gates the next start for a ready_with_warnings run from an earlier epoch, naming the epoch reason and not the outcome', () => {
+    const verdict = nextStartVerdict(session({ outcome: 'ready_with_warnings', sameEpoch: false }), '2026-08-29T01:34:00Z')
+    expect(verdict?.state).toBe('Next start gated')
+    expect(verdict?.gated).toBe(true)
+    expect(verdict?.fact).toContain('earlier epoch')
+    expect(verdict?.fact).not.toContain('ready_with_warnings')
+  })
+
   it('never reads an unknown readiness state as a pass', () => {
     const base = session({})
     const readiness = { ...base.readiness }
