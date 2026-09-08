@@ -9147,6 +9147,32 @@ components:
           $ref: "#/components/schemas/Evidence"
         heartbeat:
           $ref: "#/components/schemas/Evidence"
+    NodeShowParticipation:
+      type: object
+      description: >-
+        The coordinator's own answer to whether this node participates in
+        the show currently active. The UI renders this value directly and
+        must never infer participation from any other field.
+        "not_configured" is the ordinary state before an operator has
+        activated a show, never a determination failure; "unknown" means
+        participation could not be determined and must never be treated as
+        "not_participating". show names the active show this was computed
+        against, empty when none could be identified. reason is always
+        populated for "unknown" and "not_configured", optional otherwise.
+      required: [state, show, reason]
+      properties:
+        state:
+          type: string
+          enum: [participating, not_participating, unknown, not_configured]
+        show:
+          type: string
+          description: >-
+            Empty only for "not_configured" and for "unknown" when no show
+            could even be identified before catalog resolution was
+            attempted - honest absence, never a bug: a real show id is
+            never empty.
+        reason:
+          type: [string, "null"]
     Node:
       type: object
       description: >-
@@ -9156,7 +9182,7 @@ components:
       required:
         [nodeId, label, platform, agentVersion, bootId, startedAt,
          firstSeenAt, updatedAt, capabilities, controlPlane, evidence,
-         declaration, render, audio, fppConnect]
+         declaration, showParticipation, render, audio, fppConnect]
       properties:
         nodeId:
           type: string
@@ -9187,6 +9213,8 @@ components:
           $ref: "#/components/schemas/NodeEvidence"
         declaration:
           $ref: "#/components/schemas/NodeDeclaration"
+        showParticipation:
+          $ref: "#/components/schemas/NodeShowParticipation"
         render:
           type: array
           description: >-

@@ -75,6 +75,11 @@
         "notSeenAsOfRunId": null,
         "notSeenAsOfRunFinishedAt": null
       },
+      "showParticipation": {
+        "state": "not_configured",
+        "show": "",
+        "reason": "no asset manifest store is configured on this coordinator"
+      },
       "render": [],
       "audio": [],
       "fppConnect": []
@@ -144,6 +149,11 @@
         "lastDiscoveredAt": null,
         "notSeenAsOfRunId": null,
         "notSeenAsOfRunFinishedAt": null
+      },
+      "showParticipation": {
+        "state": "not_configured",
+        "show": "",
+        "reason": "no asset manifest store is configured on this coordinator"
       },
       "render": [],
       "audio": [],
