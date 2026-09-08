@@ -3,8 +3,9 @@
 **Audience:** an agent or engineer writing real code in `ui/src`, either changing a screen the
 rebuild delivered or adding a new one. **This document is normative.** It states the rules as the
 code holds them, not the history. For *why* a decision was made, see
-`DESIGN-DECISIONS-AND-API-FACTS.md` (the design-session record) alongside it, and
-`docs/ui-rebuild/OPEN-DECISIONS.md` for the owner's rulings, which amend this file.
+`DESIGN-DECISIONS-AND-API-FACTS.md` (the design-session record) alongside it. The owner's rulings
+from the rebuild are folded into section 11 of this file; an open UI decision is an issue in the
+tracker, never a working file here.
 
 **Where it lives:** `docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md`, referenced from
 `AGENTS.md` and `CLAUDE.md` so it is loaded before any UI work.
@@ -491,3 +492,126 @@ Do not invent these; state their absence instead. Checked against the code on 20
 
 Audio action authoring is no longer on this list: Shows › Automation offers `integration: 'audio'`
 in both the new-action and edit-action forms, with its own target editor.
+
+---
+
+## 11. Rulings appendix, folded 2026-09-08
+
+The owner ruled on thirty-one questions raised while the operator UI was rebuilt, between
+2026-08-29 and 2026-09-08. They were kept in a working file that has now been retired, because a
+question that is still open must not live only in this repository. Each ruling is restated here as a
+rule the guide carries, not as the history that produced it. Where a ruling is already stated in an
+earlier section, this appendix does not repeat it.
+
+**An open UI decision is an issue in the tracker.** Nothing in `docs/` is a queue of questions
+waiting for the owner, and no working file collects them again.
+
+### Standing rules
+
+1. **Density ships in the kit, and no screen switches it.** Every control and row reads its height
+   from `--ctrl-h` / `--row-h`, with the compact and gloved variants defined beside them in
+   `ui/src/kit/styles/controls.css`. The specimen exposes the axis for inspection; nothing else does.
+2. **The coordinator's build string lives once, in the rail footer.** Version on one line, short
+   commit on the next, in the faint text token, with the full commit in the `title`. It is not in the
+   chrome bar, whose horizontal room belongs to the now-playing group, and not on Monitor.
+3. **A route with no mock folds into the mocked screen that owns its subject.** Playlist readiness
+   and FPP playlist definitions fold into the playlist configuration page; night sessions are Show
+   Night; the asset manifest is its own Monitor facet, which amends the four-facet list in section 3;
+   top-level `/assets` is a rail destination built from the assets mock.
+4. **Dashboard is the mock's three blocks: Readiness, Needs you, System health.** The presentation
+   path belongs to Monitor Fleet, which already carries per-surface state per row. Recent activity
+   belongs to Monitor Activity and the rail badge. The lifecycle strip belongs to Show Night. Clock
+   skew belongs to the chrome, because it invalidates every age on every screen. Data freshness is
+   the page lede, not a banner.
+5. **An attention count states the count and nothing more.** "N items" is the whole of it. Saying an
+   item is not stopping tonight's show is a claim about dependency, and the coordinator reports each
+   resource's own health rather than what the running show depends on, so the UI does not get to say
+   it. Deriving the claim client side is refused permanently, not deferred. The same rule governs
+   Monitor's "Needs an operator" aside.
+6. **Night-session commands ship enabled and report the coordinator's own refusal.** Predicting
+   validity would mean a second copy of the coordinator's state table in the browser, across
+   preparation epochs, monotonic finalization, interlock overrides and degraded-session ambiguity,
+   and the copy would drift. Keep the mock's disabled-state copy as the string template so that a
+   per-command withheld reason, when the coordinator reports one, is a data swap and not a layout
+   change.
+7. **Show Night's rail states what the session reports.** Current cycle, whether more cycles are
+   open, whether the end of night has been requested, and a footnote that earlier cycles are not
+   listed. If a bounded, event-derived timeline is ever used as a stopgap, the retention boundary is
+   drawn in the rail itself. A rail that looks complete and is not is worse than an honest partial
+   one.
+8. **A control the coordinator cannot serve is built to its final drawn shape, rendered inert, and
+   warned about loudly.** `NotWiredBanner` sits above the section and names what the control would do
+   and the endpoint that does not exist. `NotWired` wraps a single control, forces `disabled`, and
+   tags it in place so the warning cannot be scrolled away from the button it describes. Amber, not
+   red: nothing has failed. Two limits, both of which hold:
+   - **It covers controls, not data.** A number, a time or a row the coordinator never reported is
+     still never invented. A drawn timeline the API cannot fill is built with its unknown entries
+     marked unreported, never filled with plausible values.
+   - **A control disabled from a reported fact is not "not wired".** It is an ordinary disabled
+     control carrying its real reason. Only a missing endpoint earns the treatment.
+9. **Creation is part of the product, and a draft asks for the minimum the contract requires.** Show,
+   playlist, action and macro creation are all built, from the object-creation mock, which is
+   normative for every creation and edit surface including Settings and Access. Where the contract
+   refuses an empty object, the draft asks for the first entry: a playlist asks for its first entry,
+   and for the FPP runner its instance and imported FPP playlist, because the write is refused
+   without them.
+10. **Access carries a per-principal Administration group.** Role change, enable, disable and reset
+    password, each with typed confirmation on the sharp ones, and the signed-in principal cannot
+    disable its own row. "Read only" is derived from the viewer role.
+11. **A config write re-reads the object's revision and refuses a stale save.** Every editor goes
+    through the shared guarded-save path, and the contract carries a revision precondition on every
+    config PUT so that a client that skips the guard is still refused rather than silently winning.
+12. **The show pill and the mode badge open a popover, not a modal and not a link.** This overrides
+    the "nothing is a modal" rule for these two controls only. The gesture is three steps: the
+    popover lists the options with the current one marked; Apply is disabled until the pick differs;
+    a browser confirm then names the exact change in plain language, and only its acceptance sends
+    the write, through the same guarded save every other editor uses.
+13. **The inspector is a floating right-side drawer, not a column.** `Panes` keeps its list as the
+    page body and renders its aside inside `Drawer` while the screen has a selection; it is retired
+    as a two-column layout. Selection stays the screen's own state, closing the drawer clears it, and
+    picking another row swaps the content without closing. Node detail renders the same way, in a
+    wide drawer over Monitor Fleet, with deep links and every existing link target still working.
+14. **One page width.** `--page-max` in `ui/src/kit/styles/shell.css` is the only cap. A screen may
+    adjust its padding; it may not set a width.
+15. **Show Night and Live Control build their lifecycle commands from one shared spec builder**, in
+    the mock's cell order. A command's option renders inside that command's own cell, under its
+    consequence line, never beside the button.
+16. **Live Control's playlist field is a select over imported FPP playlist definitions** for the
+    instance in question, falling back to a typed name only when no definition is known for it. It is
+    an archive of what was published to the coordinator, not FPP's live catalog, and the copy says so.
+17. **The audio session transport lives in one drawer behind one button.** The section keeps a
+    one-line count of known sessions; which one is open is drawer state, not a coordinator fact, so
+    the caption does not claim it.
+18. **Operator copy carries no architecture prose and no fabricated examples.** Section 5 is the
+    rule: a helper line is one sentence, a screen carries at most one required caveat, and a mock's
+    invented show or asset name is never shipped as example copy.
+19. **A control or a piece of evidence is never dropped as a side effect of a layout change.** The
+    per-node signal rows survived the move into the drawer for this reason, and render as a Signals
+    section directly after Identity with the count scoped to the node.
+20. **A drawn control with no field behind it and no design for one is dropped, not stamped.** The
+    playlist editor's "resume where it left off" checkbox went this way: playhead resume across a
+    restart is a real feature needing its own design, not something to back into from a control found
+    by inspection.
+
+### Where the work is not finished
+
+These are ruled, and the rule is stated above, but the code or the contract has not caught up. Each
+is an issue in the tracker; none of them is a question waiting in this repository.
+
+- **The playlist mismatch policy is inert with a note beside it.** The API serves `mismatchPolicy`
+  per playlist and the design intends it to follow show versus program mode instead, so the control
+  is disabled, the stored value is written back unchanged, and the note says it is not settable here
+  yet. Section 10 item 3 carries the same statement.
+- **Rebinding a playlist to a re-imported FPP definition is inert.** The write exists; the
+  carry-over rule for a cue binding whose FPP entry is gone from the new definition does not, and
+  neither does the way a partial carry-over is shown before saving. Doing it silently is the failure
+  mode being avoided.
+- **Three facts the design draws and the API does not report** are owed to the contract rather than
+  inferred in the browser: a staleness signal tying a cue's render sequence to FPP's imported
+  definitions; a per-asset sync verdict, which today would mean joining the manifest on a runtime
+  filename that the identity model says is not identity; and a lasting record that an asset became
+  current through a rollback, which is reported only on the response to the call that performed it.
+- **Media playlists move into the show's Playlists tab** with a type column and a type choice at
+  creation, replacing the separate tab they shipped in. The night session's inline-or-reference
+  presentation for background audio is held pending the owner's own testing; do not change that
+  editor's presentation until it is ruled.

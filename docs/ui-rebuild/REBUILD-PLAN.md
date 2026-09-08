@@ -15,7 +15,7 @@ Normative sources, in this order:
    `Object Creation.dc.html` is the newest and is normative for every creation
    and edit surface, Settings and Access included.
 4. `docs/design_handoff_operator_ui_overhaul/DESIGN-DECISIONS-AND-API-FACTS.md` (verified identifiers)
-5. `OPEN-DECISIONS.md` in this directory (Eric's rulings; they amend the guide)
+5. Section 11 of the design guide (the owner's rulings from this rebuild)
 
 ## Why this is a rebuild and not a fix
 
@@ -61,8 +61,8 @@ freshness and absence classification, FPP signal lookup, the derived numbers the
 guide's §7 lists, the exact wording of scope-denial reasons. Where the rule is
 in `api/openapi.yaml`, `pkg/capability/id.go`, or
 `DESIGN-DECISIONS-AND-API-FACTS.md`, I re-derive it from there. Where a rule
-exists only in a deleted file and I cannot source it, it goes on the
-`OPEN-DECISIONS.md` list rather than being reinvented quietly.
+exists only in a deleted file and I cannot source it, it becomes a Linear
+issue rather than being reinvented quietly.
 
 ## Ground rules
 
@@ -127,7 +127,7 @@ Fixed procedure. No deviation.
    order, exactly. No prepended header, no appended section.
 2. Inventory every control on the current built page and assign each one to a
    mock block.
-3. Anything with no home in a mock block goes on `OPEN-DECISIONS.md` before the
+3. Anything with no home in a mock block becomes a Linear issue before the
    page is written. Eric rules: fold into an existing block, add a new block in
    the kit language, or drop it. I do not decide this and I do not stall the
    rest of the screen for it: the ruled items land in a follow-up PR for that
@@ -169,8 +169,8 @@ button cluster; every mock is `h1` plus one muted subtitle line.
 
 ### Routes with no mock
 
-Ruled 2026-08-29 in `OPEN-DECISIONS.md` D-003. Each folds into a mocked screen
-rather than getting invented layout.
+Ruled 2026-08-29, and carried in the design guide's section 11. Each folds
+into a mocked screen rather than getting invented layout.
 
 - **Playlist readiness** folds into the playlist configuration page, not Show
   Night. It is an authoring-time verdict about a playlist.
@@ -249,7 +249,7 @@ unreachable.
 ## Done, per screen
 
 - Blocks and order match the mock.
-- Every old control is placed, or listed in `OPEN-DECISIONS.md` for a ruling.
+- Every old control is placed, or raised as a Linear issue for a ruling.
 - No `ui/src/styles` import and no old component import remains.
 - `document.querySelectorAll('main h2, main h3')` returns the section labels the
   mock names, and they are real headings, not styled spans.

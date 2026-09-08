@@ -185,7 +185,7 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
             <Callout>
               Sync runs on upload and on a timer, never because a show started. Nodes always play from their own disk, so a node missing an asset is a
               readiness fault found before a show, not during one. Node-by-node sync state is Monitor &rsaquo; Manifest's own facet, not this tab; see{' '}
-              <Link to="/monitor/manifest">Monitor &rsaquo; Manifest</Link> and docs/ui-rebuild/OPEN-DECISIONS.md D-016.
+              <Link to="/monitor/manifest">Monitor &rsaquo; Manifest</Link>.
             </Callout>
 
             <p className="sm-small sm-muted sm-stack-4">
@@ -332,9 +332,8 @@ function AssetGroupRows({
 
 /**
  * A history entry's own annotation, derived purely from the group's row
- * data (hash equality), never from a persisted "was rolled back" flag,
- * `GET /assets` carries no such field (docs/ui-rebuild/OPEN-DECISIONS.md
- * D-016).
+ * data (hash equality), never from a persisted "was rolled back" flag:
+ * `GET /assets` carries no such field.
  */
 function historyAnnotation(entry: Asset, history: readonly Asset[]): string | null {
   const currentEntry = history.find((e) => e.current)

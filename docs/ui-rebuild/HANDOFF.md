@@ -1,7 +1,8 @@
 # Operator UI rebuild: handoff
 
-Read this, then `REBUILD-PLAN.md`, then `OPEN-DECISIONS.md`.
-`CONTROL-INVENTORY.md` is the record of what the deleted UI could do.
+Read this, then `REBUILD-PLAN.md`, then section 11 of the design guide, which
+carries the owner's rulings from this rebuild. `CONTROL-INVENTORY.md` is the
+record of what the deleted UI could do.
 
 ## What state the work is in
 
@@ -19,7 +20,7 @@ three owner review rounds have been applied on top of it since:
   drawer over Monitor › Fleet, one page width with no per-screen exceptions,
   inline chip alignment, the `ReorderButtons` pattern, Live Control rebuilt on
   the kit with one `LifecycleCommands` element and a playlist select, and the
-  copy pass. These are D-023 to D-029 in `OPEN-DECISIONS.md`.
+  copy pass. These are the round-three rulings in the design guide's section 11.
 
 **`main` was merged into the branch on 2026-09-01** at `a257ad8`, which is the
 first time `main` and this branch have met. The branch is 177 commits ahead of
@@ -75,9 +76,9 @@ split it.
 ## What to do next
 
 Every screen is rebuilt, the stale-write retrofit and Phase 2 landed as #217,
-and Track C's per-asset sync verdict landed as #218. `OPEN-DECISIONS.md` opens
-with the ruling index and now runs to D-029; `REBUILD-PLAN.md` carries the
-per-screen state. What is left:
+and Track C's per-asset sync verdict landed as #218. The design guide's
+section 11 carries every ruling from this rebuild; `REBUILD-PLAN.md` carries
+the per-screen state. What is left:
 
 1. Merge #301, then the reconcile pass for the controls `main` gained while the
    branch was held (emergency stop, the newer audio commands), one screen at a
@@ -181,9 +182,9 @@ printing an empty change list.
 
 - The mock is the specification. Extract its block list and order, and match it
   exactly. No prepended header, no appended section.
-- The goal is not feature parity. A control with no home in a mock goes to
-  `OPEN-DECISIONS.md` for Eric with options and a recommendation. Never shove it
-  in, and never drop it silently.
+- The goal is not feature parity. A control with no home in a mock becomes a
+  Linear issue for Eric with the question, the options and a recommendation.
+  Never shove it in, and never drop it silently.
 - A control the API cannot serve is still built, to the shape the mock draws,
   inert, and marked with the kit's `NotWiredBanner` and `NotWired`. Ruled by
   Eric 2026-08-29 as D-010; it replaces the earlier "state the absence instead"

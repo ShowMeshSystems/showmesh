@@ -396,7 +396,7 @@ function FPPPlaylistEditor({
                 {...props}
                 value={binding.instanceUuid}
                 disabled
-                title="Rebinding this playlist to a different FPP instance or playlist needs a reconciliation flow the mock does not fully specify; see docs/ui-rebuild/OPEN-DECISIONS.md D-013."
+                title="Rebinding this playlist to a different FPP instance or playlist needs a reconciliation flow the mock does not fully specify."
               >
                 <option value={binding.instanceUuid}>{instanceLabel}</option>
               </Select>
@@ -408,7 +408,7 @@ function FPPPlaylistEditor({
                 {...props}
                 value={binding.playlistName}
                 disabled
-                title="Rebinding this playlist to a different FPP instance or playlist needs a reconciliation flow the mock does not fully specify; see docs/ui-rebuild/OPEN-DECISIONS.md D-013."
+                title="Rebinding this playlist to a different FPP instance or playlist needs a reconciliation flow the mock does not fully specify."
               >
                 <option value={binding.playlistName}>{binding.playlistName}</option>
               </Select>
@@ -430,7 +430,7 @@ function FPPPlaylistEditor({
           ]}
         />
         <Button
-          title="Reconciling a re-imported definition against existing cue bindings needs a flow the mock does not fully specify; see docs/ui-rebuild/OPEN-DECISIONS.md D-013."
+          title="Reconciling a re-imported definition against existing cue bindings needs a flow the mock does not fully specify."
           disabled
         >
           Re-import
