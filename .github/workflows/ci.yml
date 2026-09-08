@@ -544,6 +544,13 @@ jobs:
           # golangci-lint release; bump deliberately alongside .golangci.yml.
           # Matches GOLANGCI_LINT_VERSION in the Makefile's lint fallback.
           version: v2.6.2
+          # The action's own `config verify` step fetches its JSON schema
+          # over the public internet before linting even starts, so a
+          # required check can fail on a website instead of on our code.
+          # A malformed .golangci.yml still surfaces, just later: as a
+          # parse failure from the lint run itself rather than an upfront
+          # schema error.
+          verify: false
 
   ui:
     # A separate job, not a step folded into `test` above, specifically so
