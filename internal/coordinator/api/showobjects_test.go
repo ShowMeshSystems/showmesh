@@ -893,3 +893,90 @@ func TestPutShowActiveRevisionPreconditionWiring(t *testing.T) {
 		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 }
+
+// --- show immutability: refuseShowChange wired into show.surface ---
+
+// TestPutShowSurfaceRejectsShowChange is showcueplaylist_test.go's
+// TestPutShowCueRejectsShowChange, on show.surface: a PUT that re-points an
+// existing surface at a different show is refused rather than silently
+// accepted as an ordinary full replacement, and the stored revision is left
+// untouched.
+func TestPutShowSurfaceRejectsShowChange(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	mustPutShow(t, api, token, "christmas-2026", `{"name":"Christmas 2026"}`)
+	mustDeclareNode(t, st, "render-01")
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/garage", validSurfaceBodyNDI,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.surface: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	movedBody := `{
+		"show": "christmas-2026",
+		"name": "Garage Door",
+		"node": "render-01",
+		"channelRange": {"startChannel": 1, "channelCount": 3600},
+		"geometry": {"width": 40, "height": 30, "pixelFormat": "rgb"},
+		"frameRate": 40,
+		"output": {"transport": "ndi", "ndi": {"sourceName": "ShowMesh Garage"}}
+	}`
+	moveReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/garage", movedBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	moveResp, moveBody := doRawRequest(t, api.Handler, moveReq)
+	if moveResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (show is immutable); body: %s", moveResp.StatusCode, moveBody)
+	}
+	problem := decodeMap(t, moveBody)
+	wantType := showConfigValidationProblemTypes[config.ValidationCodeCrossShowReference]
+	if problem["type"] != wantType {
+		t.Errorf("problem.type = %v, want %v", problem["type"], wantType)
+	}
+	detail, _ := problem["detail"].(string)
+	if !containsAll(detail, "show:") {
+		t.Errorf("problem.detail = %q, want it to name the \"show\" field, not some other refusal that happens to also be a 400", detail)
+	}
+	if !containsAll(detail, "halloween-2026") || !containsAll(detail, "christmas-2026") {
+		t.Errorf("problem.detail = %q, want it to name both the stored and incoming show", detail)
+	}
+
+	// The stored revision must be untouched: a refusal that still commits
+	// is the failure mode worth catching, not just a non-200 status.
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.surface/garage", map[string]string{"Authorization": "Bearer " + token})
+	get := decodeMap(t, getBody)
+	if get["revision"] != float64(1) {
+		t.Fatalf("stored revision = %v, want 1 (the refused write must not have created a second revision); body: %s", get["revision"], getBody)
+	}
+	payload := get["payload"].(map[string]any)
+	if payload["show"] != "halloween-2026" {
+		t.Fatalf("stored show = %v, want halloween-2026 (the refused write must not have moved the surface); body: %s", payload["show"], getBody)
+	}
+}
+
+// TestPutShowSurfaceAcceptsFirstTimePut proves refuseShowChange's own
+// "nothing stored yet" case reaches the wire: a first-time PUT of a
+// show.surface id (no active revision to compare against) is accepted,
+// never refused as if it were changing a stored show.
+func TestPutShowSurfaceAcceptsFirstTimePut(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	mustDeclareNode(t, st, "render-01")
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/garage", validSurfaceBodyNDI,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (first-time PUT has no stored show to compare against); body: %s", resp.StatusCode, body)
+	}
+	put := decodeMap(t, body)
+	if put["revision"] != float64(1) {
+		t.Errorf("revision = %v, want 1", put["revision"])
+	}
+}

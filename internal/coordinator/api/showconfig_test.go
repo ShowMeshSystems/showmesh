@@ -906,3 +906,185 @@ func TestPutShowMacroRevisionPreconditionWiring(t *testing.T) {
 		t.Fatalf("If-None-Match against an already-created macro: status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 }
+
+// --- show immutability: refuseShowChange wired into show.action
+// and show.macro ---
+
+const validShowActionFPPBodyChristmas = `{
+	"show": "christmas-2026",
+	"label": "Start the main show",
+	"safetyClass": "none",
+	"target": {
+		"integration": "fpp",
+		"instanceId": "player-01",
+		"primitive": "startPlaylist",
+		"params": {"playlist": "Christmas Main", "ifBusy": "refuse"}
+	}
+}`
+
+// TestPutShowActionRejectsShowChange is showcueplaylist_test.go's
+// TestPutShowCueRejectsShowChange, on show.action.
+func TestPutShowActionRejectsShowChange(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShow(t, api, token, "christmas-2026", `{"name":"christmas-2026"}`)
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.action: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	moveReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBodyChristmas,
+		map[string]string{"Authorization": "Bearer " + token})
+	moveResp, moveBody := doRawRequest(t, api.Handler, moveReq)
+	if moveResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (show is immutable); body: %s", moveResp.StatusCode, moveBody)
+	}
+	problem := decodeMap(t, moveBody)
+	wantType := showConfigValidationProblemTypes[config.ValidationCodeCrossShowReference]
+	if problem["type"] != wantType {
+		t.Errorf("problem.type = %v, want %v", problem["type"], wantType)
+	}
+	detail, _ := problem["detail"].(string)
+	if !containsAll(detail, "show:") {
+		t.Errorf("problem.detail = %q, want it to name the \"show\" field, not some other refusal that happens to also be a 400", detail)
+	}
+	if !containsAll(detail, "halloween-2026") || !containsAll(detail, "christmas-2026") {
+		t.Errorf("problem.detail = %q, want it to name both the stored and incoming show", detail)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.action/start-main-show", map[string]string{"Authorization": "Bearer " + token})
+	get := decodeMap(t, getBody)
+	if get["revision"] != float64(1) {
+		t.Fatalf("stored revision = %v, want 1 (the refused write must not have created a second revision); body: %s", get["revision"], getBody)
+	}
+	payload := get["payload"].(map[string]any)
+	if payload["show"] != "halloween-2026" {
+		t.Fatalf("stored show = %v, want halloween-2026 (the refused write must not have moved the action); body: %s", payload["show"], getBody)
+	}
+}
+
+// TestPutShowActionAcceptsFirstTimePut proves refuseShowChange's own
+// "nothing stored yet" case reaches the wire for show.action.
+func TestPutShowActionAcceptsFirstTimePut(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (first-time PUT has no stored show to compare against); body: %s", resp.StatusCode, body)
+	}
+	put := decodeMap(t, body)
+	if put["revision"] != float64(1) {
+		t.Errorf("revision = %v, want 1", put["revision"])
+	}
+}
+
+// TestPutShowMacroRejectsShowChange is TestPutShowActionRejectsShowChange's
+// macro twin. The macro's step must reference an action belonging to the
+// macro's OWN show (DecodeShowMacroPayload's own rule), so the "moved"
+// write references a second, christmas-2026 action rather than reusing the
+// halloween-2026 one - otherwise decode would refuse it before
+// refuseShowChange ever runs, and this test would not be exercising the
+// code it claims to.
+func TestPutShowMacroRejectsShowChange(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShow(t, api, token, "christmas-2026", `{"name":"christmas-2026"}`)
+
+	actionHalloween := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/action-h", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, actionHalloween); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.action/action-h: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	actionChristmas := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/action-c", validShowActionFPPBodyChristmas,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, actionChristmas); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.action/action-c: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	macroReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/begin-set", validShowMacroBody("action-h"),
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, macroReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.macro: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	movedBody := `{
+		"show": "christmas-2026",
+		"label": "Begin set",
+		"steps": [
+			{
+				"id": "start",
+				"action": "action-c",
+				"localFallback": {"class": "coordinator-required", "reason": "the coordinator dispatches this step"}
+			}
+		]
+	}`
+	moveReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/begin-set", movedBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	moveResp, moveBody := doRawRequest(t, api.Handler, moveReq)
+	if moveResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (show is immutable); body: %s", moveResp.StatusCode, moveBody)
+	}
+	problem := decodeMap(t, moveBody)
+	wantType := showConfigValidationProblemTypes[config.ValidationCodeCrossShowReference]
+	if problem["type"] != wantType {
+		t.Errorf("problem.type = %v, want %v", problem["type"], wantType)
+	}
+	detail, _ := problem["detail"].(string)
+	if !containsAll(detail, "show:") {
+		t.Errorf("problem.detail = %q, want it to name the \"show\" field, not some other refusal that happens to also be a 400", detail)
+	}
+	if !containsAll(detail, "halloween-2026") || !containsAll(detail, "christmas-2026") {
+		t.Errorf("problem.detail = %q, want it to name both the stored and incoming show", detail)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.macro/begin-set", map[string]string{"Authorization": "Bearer " + token})
+	get := decodeMap(t, getBody)
+	if get["revision"] != float64(1) {
+		t.Fatalf("stored revision = %v, want 1 (the refused write must not have created a second revision); body: %s", get["revision"], getBody)
+	}
+	payload := get["payload"].(map[string]any)
+	if payload["show"] != "halloween-2026" {
+		t.Fatalf("stored show = %v, want halloween-2026 (the refused write must not have moved the macro); body: %s", payload["show"], getBody)
+	}
+}
+
+// TestPutShowMacroAcceptsFirstTimePut proves refuseShowChange's own
+// "nothing stored yet" case reaches the wire for show.macro.
+func TestPutShowMacroAcceptsFirstTimePut(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+
+	actionReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.action/start-main-show", validShowActionFPPBody,
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, actionReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT show.action: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.macro/begin-set", validShowMacroBody("start-main-show"),
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (first-time PUT has no stored show to compare against); body: %s", resp.StatusCode, body)
+	}
+	put := decodeMap(t, body)
+	if put["revision"] != float64(1) {
+		t.Errorf("revision = %v, want 1", put["revision"])
+	}
+}
