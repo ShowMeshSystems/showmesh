@@ -1074,6 +1074,37 @@ func TestInvariant5_UnknownReadinessNeverBlocksStartNight(t *testing.T) {
 	}
 }
 
+// TestNightOutcomeFromChecks_WorstDegradedYieldsReadyWithWarnings proves
+// the ruling this seam adds: a checks list whose worst participating
+// health is degraded (nothing failed, nothing unknown) maps to
+// "ready_with_warnings", not the "ready" a pre-seam build would have
+// reported for the identical evidence, and not "not_ready" either: the
+// night can still start.
+func TestNightOutcomeFromChecks_WorstDegradedYieldsReadyWithWarnings(t *testing.T) {
+	checks := []nightReadinessCheck{
+		{name: "fpp:player-01:reachable", health: nightHealthHealthy(), reason: "ok"},
+		{name: "catalog:node-catalog-stale:render-01", health: nightHealthDegraded(), reason: "a deploy is held"},
+	}
+	if got := nightOutcomeFromChecks(checks); got != "ready_with_warnings" {
+		t.Fatalf("outcome with worst=degraded = %q, want ready_with_warnings", got)
+	}
+}
+
+// TestNightOutcomeFromChecks_FailedBeatsDegradedIntoNotReady proves
+// degraded never masks a real failure: a checks list carrying both a
+// degraded check and a failed check must still report "not_ready", the
+// same severity ordering nightHealthSeverity already ranks (failed above
+// degraded above unknown above healthy) and this seam does not change.
+func TestNightOutcomeFromChecks_FailedBeatsDegradedIntoNotReady(t *testing.T) {
+	checks := []nightReadinessCheck{
+		{name: "catalog:node-catalog-stale:render-01", health: nightHealthDegraded(), reason: "a deploy is held"},
+		{name: "fpp:player-02:reachable", health: nightHealthFailed(), reason: "unreachable"},
+	}
+	if got := nightOutcomeFromChecks(checks); got != "not_ready" {
+		t.Fatalf("outcome with a failed check alongside a degraded one = %q, want not_ready", got)
+	}
+}
+
 // --- invariant 6: power-down with no power configuration ---
 
 func TestInvariant6_PowerDownWithNoPowerConfigReachesStoppedWithoutError(t *testing.T) {

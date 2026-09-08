@@ -31,12 +31,12 @@ import (
 //
 // Part 3's own WARN-not-FAIL distinction lives here too, on the SAME
 // per-node check: a stale node whose deploy is currently held safely
-// pending (see [handlers.cueCatalogAutoDeployHold]) reports healthy with a
-// reason explaining the hold, rather than failing readiness outright.
-// This file's own [nightCheckNodeCatalogCurrent] is the one place that
-// FAIL/WARN split is made, so it never needs a new [nightCheckState]
-// value: the distinction is carried entirely in free-text reason, exactly
-// as [fppreconcile.Report.Warning] does for its own, separate readiness
+// pending (see [handlers.cueCatalogAutoDeployHold]) reports degraded with a
+// reason explaining the hold, rather than failing readiness outright. This
+// file's own [nightCheckNodeCatalogCurrent] is the one place that FAIL/WARN
+// split is made, and the free-text reason still distinguishes a genuinely
+// running cue from stale/uncertain playback evidence, exactly as
+// [fppreconcile.Report.Warning] does for its own, separate readiness
 // surface.
 
 // nightCatalogCurrentCheckPrefix names every check this file produces,
@@ -136,7 +136,7 @@ func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Ti
 				"node %q has not acknowledged the active show's required catalog revision %q (acknowledged revision: %q); a deploy is held because this node's own playback evidence is stale or unreadable rather than confirmed idle (%s), and will apply automatically once fresh evidence shows nothing running",
 				nodeID, catalog.Revision, ackRevision, hold.Reason)
 		}
-		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: reason}, true
+		return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: reason}, true
 	}
 
 	return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(

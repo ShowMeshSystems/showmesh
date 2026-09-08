@@ -294,9 +294,10 @@ func nightCheckRestingAssetDuration(ctx context.Context, deps Dependencies, list
 		reason: fmt.Sprintf("resolved duration %dms from %q", res.DurationMS, res.Filename)}
 }
 
-func nightHealthHealthy() nightCheckState { return nightCheckState(observation.HealthHealthy) }
-func nightHealthFailed() nightCheckState  { return nightCheckState(observation.HealthFailed) }
-func nightHealthUnknown() nightCheckState { return nightCheckState(observation.HealthUnknown) }
+func nightHealthHealthy() nightCheckState  { return nightCheckState(observation.HealthHealthy) }
+func nightHealthFailed() nightCheckState   { return nightCheckState(observation.HealthFailed) }
+func nightHealthUnknown() nightCheckState  { return nightCheckState(observation.HealthUnknown) }
+func nightHealthDegraded() nightCheckState { return nightCheckState(observation.HealthDegraded) }
 
 func nightParseCueOffsets(cues []config.NightSessionCue) []int {
 	out := make([]int, 0, len(cues))
