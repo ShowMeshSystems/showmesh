@@ -1827,8 +1827,7 @@ func DecodeLWTPayload(env Envelope) (LWTPayload, error) {
 }
 
 // preserveExactRevision replaces p.Params["revision"] with the exact
-// json.Number from raw: ShowMesh's revisions exceed float64's 2^53
-// exact range, so json.Unmarshal already lost precision by this point.
+// json.Number decoded from raw, if present and numeric.
 func preserveExactRevision(p *CmdPayload, raw json.RawMessage) {
 	if _, present := p.Params["revision"]; !present {
 		return
@@ -1860,6 +1859,9 @@ func DecodeCmdPayload(env Envelope) (CmdPayload, error) {
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
+	// p.Params["revision"] comes out a json.Number here, unlike every
+	// other number in p.Params (float64): nanosecond-scale revisions
+	// exceed float64's exact integer range.
 	preserveExactRevision(&p, env.Payload)
 	if err := p.Validate(); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)

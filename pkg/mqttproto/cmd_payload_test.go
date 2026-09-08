@@ -555,3 +555,23 @@ func TestDecodeCmdPayloadPreservesAdjacentNanosecondRevisions(t *testing.T) {
 			applyRevision, prepareRevision, applyN.String())
 	}
 }
+
+// TestDecodeCmdPayloadRevisionTypeIsJSONNumber guards the type alone, at
+// a small revision: a value-only check still passes if the decode ever
+// reverts to float64, since a small revision round-trips through
+// float64 exactly. Only a type assertion catches that regression.
+func TestDecodeCmdPayloadRevisionTypeIsJSONNumber(t *testing.T) {
+	p := validCmdPayload()
+	p.Params = map[string]any{"sessionId": "s1", "invocationId": "inv-1", "revision": uint64(3)}
+	env, err := NewCmdEnvelope(fixedClock(time.Now()), "media-03", p)
+	if err != nil {
+		t.Fatalf("NewCmdEnvelope: %v", err)
+	}
+	decoded, err := DecodeCmdPayload(env)
+	if err != nil {
+		t.Fatalf("DecodeCmdPayload: %v", err)
+	}
+	if _, ok := decoded.Params["revision"].(json.Number); !ok {
+		t.Fatalf("Params[\"revision\"] = %#v (%T), want json.Number", decoded.Params["revision"], decoded.Params["revision"])
+	}
+}
