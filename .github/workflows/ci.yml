@@ -179,7 +179,10 @@ jobs:
           set -eu
           max_attempts=3
           attempt=1
-          until go mod download; do
+          # SCRATCH PROOF ONLY, not part of the real change: point attempt 1
+          # at an unreachable proxy so it fails deterministically, and let
+          # attempt 2+ use the real proxy so the retry can recover.
+          until { if [ "$attempt" -eq 1 ]; then GOPROXY=http://127.0.0.1:1/ go mod download; else go mod download; fi; }; do
             if [ "$attempt" -ge "$max_attempts" ]; then
               echo "Download dependencies: attempt $attempt/$max_attempts failed; giving up" >&2
               exit 1
