@@ -503,15 +503,45 @@ Adding any second writer to it defeats the seam.
 ### 2.2 The coordinator-facing write
 
 The night-session controller writes the transition gain by POSTing to the
-resident plugin component, on the FPP host, at the plugin's own HTTP path:
+resident plugin component, on the FPP host, at:
 
 ```text
-POST /api/plugin/showmesh/brightness/transition-gain
+POST /api/plugin-apis/showmesh/brightness/transition-gain
 ```
 
-The plugin opens no listening socket of its own to serve this. The route
-registers on fppd's own web server: on FPP 10 through Plugin API 6's
-`registerPluginApi`, on FPP 9 through the libhttpserver adapter. See section
+**That is the address. It is not the path the plugin registers**, and the two
+are different strings on purpose. The plugin registers
+`/showmesh/brightness/transition-gain` with its own major's web server; the
+`/api/plugin-apis` prefix is what FPP's Apache requires to reach it.
+
+The distinction is load bearing rather than cosmetic, because a route can
+register successfully, appear in the host's own route table, and still answer
+`404` to every real caller. Three facts make the single address above
+trustworthy on both majors:
+
+- **The plugin's server is unreachable from the LAN.** FPP 10's drogon binds
+  `127.0.0.1:32322`. FPP 9's libhttpserver binds the same way, and
+  `APIServer::Init` says so in its own comment ("so we only allow access via
+  127.0.0.1"). Apache is not optional; it is the only way in.
+- **Apache proxies plugin routes under exactly one prefix, and both majors
+  carry the identical rule.** `RewriteRule ^plugin-apis/(.*)$
+  http://localhost:32322/$1 [P]`. Everything else under `/api/` falls through
+  to FPP's own PHP API, which answers `404` for an unknown path. A registered
+  path that itself begins with `/api` still works, but only at an address
+  carrying `/api` twice.
+- **Both majors register on the server that prefix reaches**, despite sharing
+  no registration API. FPP 10 uses Plugin API 6's `registerPluginApi()`. FPP 9
+  uses `registerApis(httpserver::webserver*)`, and FPP calls it with the same
+  `m_ws` that carries `/fppd`, `/commands` and `/models`. Two registration
+  APIs, one address, and that is a fact about where each one lands rather than
+  a coincidence of matching rewrite rules.
+
+FPP 10 additionally forbids the internal namespace through the proxy
+(`RewriteRule ^plugin-apis/internal(/.*)?$ - [F,L]`); FPP 9 has no such rule.
+Nothing here goes near `internal`, but the difference is recorded so it is not
+read as universal.
+
+The plugin opens no listening socket of its own to serve this. See section
 3.1 for the general rule this instance of a plugin-served route follows.
 
 **This route is unauthenticated.** It accepts any caller reachable on the
