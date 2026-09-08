@@ -109,6 +109,15 @@ type cueCatalogAutoDeployHoldResult struct {
 // anything running because nothing is happening," and treating silence as
 // uncertain would mean automatic deploy never fires for the one case this
 // whole feature exists to fix.
+//
+// "Fresh" is checked explicitly via run.Freshness.State, never inferred
+// from Playback.State alone: a run's last REPORTED state can read "idle"
+// or "stopped" while that evidence itself is stale (the reporting source
+// went quiet after a Cue started, rather than because nothing started).
+// Reading a stale "idle" the same as a current one would clear the hold
+// on exactly the evidence this whole gate exists to distrust, so a
+// non-current Freshness.State holds as uncertain regardless of what
+// Playback.State literally says.
 func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, nodeID string) cueCatalogAutoDeployHoldResult {
 	snap, err := h.deps.CurrentRuns.Snapshot(ctx, now)
 	if err != nil {
@@ -118,12 +127,17 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 	for _, run := range snap.Runs {
 		switch run.Runner {
 		case currentrun.RunnerFPP:
+			if run.Freshness.State != string(observation.StateCurrent) {
+				return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
+					Reason: fmt.Sprintf("fpp run %q's playback evidence is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
+			}
 			switch run.Playback.State {
 			case "playing":
 				return cueCatalogAutoDeployHoldResult{Hold: true,
 					Reason: fmt.Sprintf("fpp run %q is currently playing", run.ID)}
 			case "stopped", "idle":
-				// Confirmed idle; keep scanning the rest of the snapshot.
+				// Fresh evidence, confirmed idle; keep scanning the rest of
+				// the snapshot.
 			default:
 				return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
 					Reason: fmt.Sprintf("fpp run %q's playback state is %q rather than confirmed idle", run.ID, run.Playback.State)}
@@ -139,9 +153,13 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 			if !targetsNode {
 				continue
 			}
+			if run.Freshness.State != string(observation.StateCurrent) {
+				return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
+					Reason: fmt.Sprintf("audio session %q's playback evidence is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
+			}
 			switch run.Playback.State {
 			case "stopped", "idle", "ready":
-				// Confirmed idle; keep scanning.
+				// Fresh evidence, confirmed idle; keep scanning.
 			case "playing", "paused":
 				return cueCatalogAutoDeployHoldResult{Hold: true,
 					Reason: fmt.Sprintf("audio session %q on this node is %s", run.ID, run.Playback.State)}

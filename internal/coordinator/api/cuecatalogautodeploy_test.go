@@ -76,7 +76,8 @@ func TestAutoDeployCueCatalog_DeploysWhenNothingRunning(t *testing.T) {
 // on whatever catalog it is actually executing.
 func TestAutoDeployCueCatalog_HeldWhenActivationRunning(t *testing.T) {
 	api, st, pub, _ := newCueCatalogAutoDeployFixture(t, []currentrun.Run{
-		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP, Playback: currentrun.Playback{State: "playing"}},
+		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+			Playback: currentrun.Playback{State: "playing"}, Freshness: currentrun.Freshness{State: "current"}},
 	})
 
 	api.AutoDeployCueCatalog(context.Background(), testNow, "render-01")
@@ -86,5 +87,28 @@ func TestAutoDeployCueCatalog_HeldWhenActivationRunning(t *testing.T) {
 	}
 	if _, err := st.GetNodeCueCatalogAck(context.Background(), "render-01"); err != store.ErrNodeCueCatalogAckNotFound {
 		t.Fatalf("GetNodeCueCatalogAck after a held auto-deploy: err = %v, want ErrNodeCueCatalogAckNotFound (the node must stay on whatever it already held)", err)
+	}
+}
+
+// TestAutoDeployCueCatalog_HeldWhenPlaybackEvidenceIsStale is a regression
+// test for a real reviewed defect: a run whose LAST REPORTED state reads
+// idle must still hold when that evidence itself is not fresh, because a
+// stale idle reading can predate a Cue that started after the reporting
+// source went quiet. Reading staleness as "confirmed idle" would let an
+// automatic deploy land under a Cue this coordinator simply has not heard
+// about yet.
+func TestAutoDeployCueCatalog_HeldWhenPlaybackEvidenceIsStale(t *testing.T) {
+	api, st, pub, _ := newCueCatalogAutoDeployFixture(t, []currentrun.Run{
+		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+			Playback: currentrun.Playback{State: "idle"}, Freshness: currentrun.Freshness{State: "stale"}},
+	})
+
+	api.AutoDeployCueCatalog(context.Background(), testNow, "render-01")
+
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0: stale playback evidence must hold, not be read as confirmed idle", pub.count())
+	}
+	if _, err := st.GetNodeCueCatalogAck(context.Background(), "render-01"); err != store.ErrNodeCueCatalogAckNotFound {
+		t.Fatalf("GetNodeCueCatalogAck after a stale-evidence hold: err = %v, want ErrNodeCueCatalogAckNotFound", err)
 	}
 }

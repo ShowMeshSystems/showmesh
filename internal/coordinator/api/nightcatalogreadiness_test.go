@@ -158,7 +158,8 @@ func TestNightCheckCatalogCurrent_HealthyWhenAcknowledged(t *testing.T) {
 // not to block the night from starting.
 func TestNightCheckCatalogCurrent_WarnsWhileDeployHeldForRunningCue(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
-		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP, Playback: currentrun.Playback{State: "playing"}},
+		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+			Playback: currentrun.Playback{State: "playing"}, Freshness: currentrun.Freshness{State: "current"}},
 	})
 	if err := st.PutNodeCueCatalogAck(context.Background(), store.NodeCueCatalogAckRecord{
 		NodeID: "render-01", Revision: "stale-revision", ShowID: "halloween-2026", Generation: 1, AcknowledgedAt: testNow,
@@ -193,7 +194,8 @@ func TestNightCheckCatalogCurrent_WarnsWhileDeployHeldForRunningCue(t *testing.T
 // is anything to go look at.
 func TestNightCheckCatalogCurrent_WarnsWithUncertainEvidenceNamedSeparately(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
-		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP, Playback: currentrun.Playback{State: "unavailable"}},
+		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+			Playback: currentrun.Playback{State: "unavailable"}, Freshness: currentrun.Freshness{State: "current"}},
 	})
 	if err := st.PutNodeCueCatalogAck(context.Background(), store.NodeCueCatalogAckRecord{
 		NodeID: "render-01", Revision: "stale-revision", ShowID: "halloween-2026", Generation: 1, AcknowledgedAt: testNow,
@@ -204,6 +206,32 @@ func TestNightCheckCatalogCurrent_WarnsWithUncertainEvidenceNamedSeparately(t *t
 	check := nightCatalogCurrentCheck(t, api)
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("health = %q, want healthy (warned, not failed); reason: %s", check.health, check.reason)
+	}
+	if !strings.Contains(check.reason, "stale or unreadable") {
+		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)
+	}
+}
+
+// TestNightCheckCatalogCurrent_WarnsWhenPlaybackEvidenceIsStale is a
+// regression test for a real reviewed defect: a run whose last reported
+// state reads idle must still warn as held, uncertain evidence, not read
+// as confirmed idle, when that evidence itself is stale (a stale idle
+// reading can predate a Cue that started after the reporting source went
+// quiet).
+func TestNightCheckCatalogCurrent_WarnsWhenPlaybackEvidenceIsStale(t *testing.T) {
+	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
+		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+			Playback: currentrun.Playback{State: "idle"}, Freshness: currentrun.Freshness{State: "stale"}},
+	})
+	if err := st.PutNodeCueCatalogAck(context.Background(), store.NodeCueCatalogAckRecord{
+		NodeID: "render-01", Revision: "stale-revision", ShowID: "halloween-2026", Generation: 1, AcknowledgedAt: testNow,
+	}); err != nil {
+		t.Fatalf("PutNodeCueCatalogAck: %v", err)
+	}
+
+	check := nightCatalogCurrentCheck(t, api)
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("health = %q, want healthy (warned, not failed): stale evidence must hold, not be read as confirmed idle; reason: %s", check.health, check.reason)
 	}
 	if !strings.Contains(check.reason, "stale or unreadable") {
 		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)
