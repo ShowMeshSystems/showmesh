@@ -124,7 +124,7 @@ describe('Settings tab strip', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders the Resolume settings tab and the Access link, which navigates out rather than rendering a panel', () => {
+  it('renders the Resolume settings tab and the Access link, which navigates out rather than rendering a panel', async () => {
     stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
@@ -146,7 +146,7 @@ describe('Settings tab strip', () => {
     ])
 
     fireEvent.click(within(nav).getByRole('link', { name: /Access/ }))
-    expect(screen.getByText('access page')).toBeInTheDocument()
+    expect(await screen.findByText('access page')).toBeInTheDocument()
   })
 
   it("renders the mock's h2 label on Appearance, a tab with no coordinator read", () => {
@@ -284,7 +284,7 @@ describe('Settings › Connections', () => {
 
     await waitFor(() => expect(screen.getByTestId('mqtt-hosts')).toBeInTheDocument())
     fireEvent.click(within(screen.getByTestId('mqtt-hosts')).getByRole('button', { name: 'Add a host override' }))
-    fireEvent.change(screen.getByLabelText('Host id'), { target: { value: 'barn-player' } })
+    fireEvent.change(await screen.findByLabelText('Host id'), { target: { value: 'barn-player' } })
     fireEvent.change(screen.getByLabelText('HostName'), { target: { value: 'FPP-Barn' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save connections' }))
 
@@ -597,7 +597,7 @@ describe('Settings › Node routing', () => {
 
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Zone' }))
-    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'lobby' } })
+    fireEvent.change(await screen.findByLabelText('Zone'), { target: { value: 'lobby' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
