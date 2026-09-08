@@ -97,23 +97,29 @@ func TestMigrateV27ReKeysAudioSessionsByNode(t *testing.T) {
 		return r
 	}
 
+	// createdAt/updatedAt are asserted in migrateV31FixedWidthTimestamps's
+	// fixed nine-digit-fraction format (queries.go's timeLayout), not the
+	// trimmed text these rows were seeded with: migrate runs every
+	// pending migration up to maxMigrationVersion(), which is v31 or
+	// later, and v31 rewrites every stored timestamp column, including
+	// this one, on its way past.
 	got := readRow("node-a", "cue")
 	want := row{nodeID: "node-a", id: "cue", desiredJSON: `{"sourceRole":"show","node":"a"}`, revision: 5,
-		createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:05:00Z"}
+		createdAt: "2026-08-01T00:00:00.000000000Z", updatedAt: "2026-08-01T00:05:00.000000000Z"}
 	if got != want {
 		t.Errorf("node-a/cue = %+v, want %+v", got, want)
 	}
 
 	got = readRow("node-a", "blackAndSilence")
 	want = row{nodeID: "node-a", id: "blackAndSilence", desiredJSON: `{"sourceRole":"blackAndSilence"}`, revision: 2,
-		createdAt: "2026-08-02T00:00:00Z", updatedAt: "2026-08-02T00:00:00Z"}
+		createdAt: "2026-08-02T00:00:00.000000000Z", updatedAt: "2026-08-02T00:00:00.000000000Z"}
 	if got != want {
 		t.Errorf("node-a/blackAndSilence = %+v, want %+v", got, want)
 	}
 
 	got = readRow("node-b", "cue-b")
 	want = row{nodeID: "node-b", id: "cue-b", desiredJSON: `{"sourceRole":"show","node":"b-only"}`, revision: 9,
-		createdAt: "2026-08-03T00:00:00Z", updatedAt: "2026-08-03T01:00:00Z"}
+		createdAt: "2026-08-03T00:00:00.000000000Z", updatedAt: "2026-08-03T01:00:00.000000000Z"}
 	if got != want {
 		t.Errorf("node-b/cue-b = %+v, want %+v", got, want)
 	}
@@ -210,16 +216,20 @@ func TestMigrateV27AppliesToAStoreStampedAtMainsShippedMaximum(t *testing.T) {
 		return r
 	}
 
+	// See the identical note in TestMigrateV27ReKeysAudioSessionsByNode:
+	// these literals are v31's fixed nine-digit-fraction format, not the
+	// trimmed text seeded below, because migrate runs every pending
+	// migration up to maxMigrationVersion(), which rewrites this column.
 	got := readRow("node-p", "cue")
 	want := row{desiredJSON: `{"sourceRole":"show","node":"p"}`, revision: 4,
-		createdAt: "2026-08-20T00:00:00Z", updatedAt: "2026-08-20T00:03:00Z"}
+		createdAt: "2026-08-20T00:00:00.000000000Z", updatedAt: "2026-08-20T00:03:00.000000000Z"}
 	if got != want {
 		t.Errorf("node-p/cue = %+v, want %+v", got, want)
 	}
 
 	got = readRow("node-q", "blackAndSilence")
 	want = row{desiredJSON: `{"sourceRole":"blackAndSilence"}`, revision: 8,
-		createdAt: "2026-08-21T00:00:00Z", updatedAt: "2026-08-21T00:01:00Z"}
+		createdAt: "2026-08-21T00:00:00.000000000Z", updatedAt: "2026-08-21T00:01:00.000000000Z"}
 	if got != want {
 		t.Errorf("node-q/blackAndSilence = %+v, want %+v", got, want)
 	}
@@ -240,7 +250,7 @@ func TestMigrateV27AppliesToAStoreStampedAtMainsShippedMaximum(t *testing.T) {
 	// node-p's original "cue" row must still be exactly as migrated.
 	got = readRow("node-p", "cue")
 	want = row{desiredJSON: `{"sourceRole":"show","node":"p"}`, revision: 4,
-		createdAt: "2026-08-20T00:00:00Z", updatedAt: "2026-08-20T00:03:00Z"}
+		createdAt: "2026-08-20T00:00:00.000000000Z", updatedAt: "2026-08-20T00:03:00.000000000Z"}
 	if got != want {
 		t.Errorf("node-p/cue mutated by node-q's insert of the same id: got %+v, want %+v", got, want)
 	}
