@@ -1,3 +1,4 @@
+import type { Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ApiStore } from './store'
 import { getStoredToken, setStoredToken } from './token'
@@ -703,6 +704,7 @@ describe('ApiStore: supplementary coverage', () => {
     // the freshly fetched page, instead of reconciling by seq, is
     // exactly the defect this test is written to catch.
     let streamAttempt = 0
+    let firstStreamSocket: Socket | undefined
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
@@ -715,15 +717,13 @@ describe('ApiStore: supplementary coverage', () => {
           snapshotRequired: true,
         })
         if (thisAttempt === 1) {
+          firstStreamSocket = req.socket
           setTimeout(() => {
             writeSSEFrame(res, 'event.recorded', {
               serverTime: new Date().toISOString(),
               event: makeEvent(2, { summary: 'live, seen before the reconnect' }),
             })
           }, 20)
-          setTimeout(() => {
-            req.socket.destroy()
-          }, 60)
         }
         return
       }
@@ -748,6 +748,11 @@ describe('ApiStore: supplementary coverage', () => {
     await waitFor(() => store.getSnapshot().events.some((e) => e.seq === 2), {
       message: 'the live event.recorded frame before the reconnect was never applied',
     })
+
+    // Drop the connection only now that the live frame is demonstrably
+    // applied, so the reconnect can never race the frame's own arrival.
+    firstStreamSocket?.destroy()
+
     await waitFor(() => streamAttempt >= 2, { message: 'store never reconnected' })
     await waitFor(() => store.getSnapshot().connection.kind === 'live', {
       message: 'store never returned to live after reconnect',
@@ -1963,6 +1968,7 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
     }
 
     let streamAttempt = 0
+    let firstStreamSocket: Socket | undefined
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
@@ -1975,6 +1981,7 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
           snapshotRequired: true,
         })
         if (thisAttempt === 1) {
+          firstStreamSocket = req.socket
           setTimeout(() => {
             writeSSEFrame(res, 'fpp.observations.changed', {
               serverTime: new Date().toISOString(),
@@ -1983,11 +1990,6 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
               removed: [],
             })
           }, 20)
-          setTimeout(() => {
-            // No closing frame at all -- an ordinary interruption per
-            // api/openapi.yaml's /stream description.
-            req.socket.destroy()
-          }, 50)
         }
         return
       }
@@ -2009,6 +2011,12 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
       () => findSignal(findInstance(store, 'fpp-fleet')?.observations ?? [], 'fpp.uptime.seconds')?.value === deltaValueBeforeDrop,
       { message: 'the pre-drop delta was never applied' },
     )
+
+    // Drop the connection only now that the delta is demonstrably applied --
+    // no closing frame at all, an ordinary interruption per
+    // api/openapi.yaml's /stream description -- so the reconnect can never
+    // race the delta's own arrival.
+    firstStreamSocket?.destroy()
 
     await waitFor(() => streamAttempt >= 2, { message: 'store never reconnected' })
     await waitFor(() => store.getSnapshot().connection.kind === 'live', {
