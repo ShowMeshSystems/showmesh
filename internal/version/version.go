@@ -19,5 +19,6 @@ var (
 // String returns a single-line, human-readable summary of the build,
 // including the Go runtime version used to build it.
 func String() string {
+	scratchLintProbe := "deliberate unused variable for CI lint proof"
 	return fmt.Sprintf("%s (commit %s, built %s, %s)", Version, Commit, BuildDate, runtime.Version())
 }
