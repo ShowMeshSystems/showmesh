@@ -15,6 +15,7 @@ const stubs = vi.hoisted(() => ({
   getFPPPlaylistDefinitionEntries: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPlaylistReadiness: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getMediaPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -30,6 +31,7 @@ vi.mock('../api', async () => {
     getFPPPlaylistDefinitionEntries: (...args: never[]) => stubs.getFPPPlaylistDefinitionEntries(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getFPPPlaylistReadiness: (...args: never[]) => stubs.getFPPPlaylistReadiness(...args),
+    getMediaPlaylist: (...args: never[]) => stubs.getMediaPlaylist(...args),
   }
 })
 
@@ -406,11 +408,21 @@ describe('Shows · Playlists tab editing', () => {
       return renderWorkspace({ session: signedIn(scopes) })
     }
 
-    it('renders nothing below the runner gate until it is answered, and the footer says Runner required', async () => {
+    it('renders nothing below the type gate until it is answered, and the footer says Type required', async () => {
       setupDraft()
       await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
       expect(screen.getByRole('heading', { name: 'New playlist' })).toBeInTheDocument()
+      expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
+      expect(screen.getByText('Type required')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Create playlist' })).toBeDisabled()
+    })
+
+    it('renders nothing below the runner gate until it is answered, once Show playlist is picked, and the footer says Runner required', async () => {
+      setupDraft()
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
       expect(screen.getByText('Runner required')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Create playlist' })).toBeDisabled()
@@ -420,6 +432,7 @@ describe('Shows · Playlists tab editing', () => {
       setupDraft()
       await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'ShowMesh audio' }))
       expect(screen.getByLabelText('Name')).toBeInTheDocument()
       expect(screen.getByRole('group', { name: 'Repeat' })).toBeInTheDocument()
@@ -431,6 +444,7 @@ describe('Shows · Playlists tab editing', () => {
       setupDraft()
       await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Show playlist' }))
       fireEvent.click(screen.getByRole('button', { name: 'ShowMesh audio' }))
       fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Background Music' } })
       fireEvent.change(screen.getByRole('combobox', { name: 'Cue' }), { target: { value: 'cue-1' } })
@@ -446,6 +460,49 @@ describe('Shows · Playlists tab editing', () => {
       setupDraft([])
       await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
       expect(screen.getByRole('button', { name: 'New playlist' })).toBeDisabled()
+    })
+
+    it('picking Media playlist reveals the media playlist creation form, id field and first item included', async () => {
+      setupDraft()
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Media playlist' }))
+      expect(screen.getByRole('heading', { name: 'New media playlist' })).toBeInTheDocument()
+      expect(screen.getByLabelText('Id')).toBeInTheDocument()
+      expect(screen.getByText(/the first item is part of creation/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Create media playlist' })).toBeDisabled()
+    })
+  })
+
+  describe('the combined table', () => {
+    it('reads Show playlist / Media playlist in the Type column, and Runner faint "Not applicable" on the media row', async () => {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => {
+        if (kind === 'show.playlist') return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [summary()] })
+        if (kind === 'media.playlist') return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [{ id: 'mp1', label: 'Resting bed', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z' }] })
+        return withCues(kind, [])
+      }
+      stubs.listAssets = assetsEmpty
+      stubs.getShowPlaylist = (id: string) => Promise.resolve(playlistResponse(fppPlaylist(), id))
+      stubs.getMediaPlaylist = (id: string) =>
+        Promise.resolve({
+          serverTime: '2026-08-30T21:00:00Z', kind: 'media.playlist' as const, id, revision: 1,
+          payload: {
+            label: 'Resting bed', show: 'winter-ridge-2026',
+            items: [{ kind: 'asset' as const, show: 'winter-ridge-2026', sequence: 'winter-loop', target: 'node-1' }],
+            repeat: 'none' as const, resume: 'resume' as const, itemTransition: 'sequential' as const, maxGainDb: -6,
+          },
+          updatedAt: '2026-08-30T18:22:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api' as const,
+        })
+
+      renderWorkspace({ session: signedIn(['config:write']) })
+      const showRow = await screen.findByRole('row', { name: 'Edit Main Show' })
+      expect(within(showRow).getByText('Show playlist')).toBeInTheDocument()
+      expect(within(showRow).getByText('FPP runner')).toBeInTheDocument()
+
+      const mediaRow = await screen.findByRole('row', { name: 'Edit Resting bed' })
+      expect(within(mediaRow).getByText('Media playlist')).toBeInTheDocument()
+      expect(within(mediaRow).getByText('Not applicable')).toBeInTheDocument()
     })
   })
 })

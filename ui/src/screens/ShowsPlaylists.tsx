@@ -3,8 +3,10 @@ import { Link, useParams } from 'react-router-dom'
 import {
   getFPPPlaylistDefinitionEntries,
   getFPPPlaylistReadiness,
+  getMediaPlaylist,
   getShowPlaylist,
   getShowPlaylistRevisions,
+  listConfigObjects,
   listFPPPlaylistDefinitions,
   putShowPlaylist,
   type ConfigObjectSummary,
@@ -13,6 +15,7 @@ import {
   type FPPPlaylistDefinitionEntry,
   type FPPPlaylistDefinitionMetadata,
   type FPPPlaylistReadinessResponse,
+  type MediaPlaylistConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
 import { randomUUIDv4 } from '../api/uuid'
@@ -23,26 +26,38 @@ import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
-import { cueLabel, fppInstanceLabel, fppInstanceRoute, newerDefinition, playlistRows, slugify } from './showsModel'
+import { audioAssetOptions, cueLabel, fppInstanceLabel, fppInstanceRoute, newerDefinition, playlistRows, slugify, type AudioAssetOption } from './showsModel'
+import { MediaPlaylistDraft, MediaPlaylistEditor } from './ShowsMediaPlaylists'
 
 type Playlist = ShowPlaylistConfigResponse
+type MediaPlaylist = MediaPlaylistConfigResponse
 
 type ListState =
   | { kind: 'loading' }
-  | { kind: 'loaded'; cues: ConfigObjectSummary[]; playlists: Playlist[] }
+  | { kind: 'loaded'; cues: ConfigObjectSummary[]; playlists: Playlist[]; mediaPlaylists: MediaPlaylist[]; assets: readonly AudioAssetOption[] }
   | { kind: 'failed'; reason: string }
 
-function usePlaylists(showId: string): { state: ListState; reload: () => void; updatePlaylist: (response: Playlist) => void } {
+/** Loads show.playlist and media.playlist together: one table, one list read per kind, so the Type column has both kinds to draw from. */
+function usePlaylists(showId: string): {
+  state: ListState
+  reload: () => void
+  updatePlaylist: (response: Playlist) => void
+  updateMediaPlaylist: (response: MediaPlaylist) => void
+  removeMediaPlaylist: (id: string) => void
+} {
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<ListState>({ kind: 'loading' })
 
   useEffect(() => {
     let cancelled = false
     setState({ kind: 'loading' })
-    fetchShowContents(showId)
-      .then(async (contents) => {
-        const playlists = await fetchShowPlaylists(contents.playlists)
-        if (!cancelled) setState({ kind: 'loaded', cues: contents.cues, playlists })
+    Promise.all([fetchShowContents(showId), listConfigObjects('media.playlist', showId)])
+      .then(async ([contents, mediaSummaries]) => {
+        const [playlists, mediaPlaylists] = await Promise.all([
+          fetchShowPlaylists(contents.playlists),
+          Promise.all(mediaSummaries.objects.map((s) => getMediaPlaylist(s.id))),
+        ])
+        if (!cancelled) setState({ kind: 'loaded', cues: contents.cues, playlists, mediaPlaylists, assets: audioAssetOptions(contents.assets) })
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
@@ -55,8 +70,14 @@ function usePlaylists(showId: string): { state: ListState; reload: () => void; u
   const updatePlaylist = (response: Playlist) => {
     setState((prev) => (prev.kind === 'loaded' ? { ...prev, playlists: prev.playlists.map((p) => (p.id === response.id ? response : p)) } : prev))
   }
+  const updateMediaPlaylist = (response: MediaPlaylist) => {
+    setState((prev) => (prev.kind === 'loaded' ? { ...prev, mediaPlaylists: prev.mediaPlaylists.map((p) => (p.id === response.id ? response : p)) } : prev))
+  }
+  const removeMediaPlaylist = (id: string) => {
+    setState((prev) => (prev.kind === 'loaded' ? { ...prev, mediaPlaylists: prev.mediaPlaylists.filter((p) => p.id !== id) } : prev))
+  }
 
-  return { state, reload: () => setAttempt((n) => n + 1), updatePlaylist }
+  return { state, reload: () => setAttempt((n) => n + 1), updatePlaylist, updateMediaPlaylist, removeMediaPlaylist }
 }
 
 type FPPEvidence = {
@@ -112,17 +133,53 @@ function useReadiness(playlistId: string | null): { state: ReadinessState; check
   return { state, check }
 }
 
+type Selection = { kind: 'show' | 'media'; id: string } | null
+
+/** One row per playlist of either kind, for the combined table: a Type column names which kind, Runner keeps its show.playlist values and reads "Not applicable" on a media.playlist row rather than inventing one. */
+type CombinedRow = {
+  kind: 'show' | 'media'
+  id: string
+  label: string
+  detail: string
+  typeLabel: string
+  runnerLabel: string
+}
+
+function combinedRows(playlists: readonly Playlist[], mediaPlaylists: readonly MediaPlaylist[]): CombinedRow[] {
+  const showRows: CombinedRow[] = playlistRows(playlists).map((row) => ({
+    kind: 'show',
+    id: row.id,
+    label: row.label,
+    detail: row.detail,
+    typeLabel: 'Show playlist',
+    runnerLabel: row.runnerLabel,
+  }))
+  const mediaRows: CombinedRow[] = mediaPlaylists.map((playlist) => ({
+    kind: 'media',
+    id: playlist.id,
+    label: playlist.payload.label,
+    detail: `${playlist.payload.repeat === 'none' ? 'No repeat' : `Repeat ${playlist.payload.repeat}`} · ${playlist.payload.items.length} ${playlist.payload.items.length === 1 ? 'item' : 'items'}`,
+    typeLabel: 'Media playlist',
+    runnerLabel: 'Not applicable',
+  }))
+  return [...showRows, ...mediaRows]
+}
+
 export function ShowsPlaylists() {
   const { id: showId = '' } = useParams<{ id: string }>()
   const model = useModelContext()
-  const { state, reload, updatePlaylist } = usePlaylists(showId)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const { state, reload, updatePlaylist, updateMediaPlaylist, removeMediaPlaylist } = usePlaylists(showId)
+  const [selected, setSelected] = useState<Selection>(null)
   const [drafting, setDrafting] = useState(false)
+  const [draftType, setDraftType] = useState<'' | 'show' | 'media'>('')
 
   const playlists = state.kind === 'loaded' ? state.playlists : []
-  const selected = playlists.find((p) => p.id === selectedId) ?? null
-  const evidence = useFPPEvidence(!drafting && selected !== null && selected.payload.runner === 'fpp' ? selected : null)
-  const readiness = useReadiness(drafting ? null : (selected?.id ?? null))
+  const mediaPlaylists = state.kind === 'loaded' ? state.mediaPlaylists : []
+  const assets = state.kind === 'loaded' ? state.assets : []
+  const selectedShow = selected !== null && selected.kind === 'show' ? (playlists.find((p) => p.id === selected.id) ?? null) : null
+  const selectedMedia = selected !== null && selected.kind === 'media' ? (mediaPlaylists.find((p) => p.id === selected.id) ?? null) : null
+  const evidence = useFPPEvidence(!drafting && selectedShow !== null && selectedShow.payload.runner === 'fpp' ? selectedShow : null)
+  const readiness = useReadiness(drafting ? null : (selectedShow?.id ?? null))
   const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
   if (state.kind === 'loading') {
@@ -150,14 +207,16 @@ export function ShowsPlaylists() {
     )
   }
 
-  const rows = playlistRows(playlists)
+  const rows = combinedRows(playlists, mediaPlaylists)
   const closeInspector = () => {
     setDrafting(false)
-    setSelectedId(null)
+    setDraftType('')
+    setSelected(null)
   }
+  const inspectorLabelledBy = (drafting ? draftType === 'media' : selected?.kind === 'media') ? 'mp-editor' : 'pl-editor'
 
   return (
-    <Panes inspectorOpen={drafting || selected !== null} onInspectorClose={closeInspector} inspectorLabelledBy="pl-editor" inspectorWidth="wide">
+    <Panes inspectorOpen={drafting || selected !== null} onInspectorClose={closeInspector} inspectorLabelledBy={inspectorLabelledBy} inspectorWidth="wide">
       <div>
         <Section
           id="pl-list"
@@ -166,7 +225,8 @@ export function ShowsPlaylists() {
             <Button
               onClick={() => {
                 setDrafting(true)
-                setSelectedId(null)
+                setDraftType('')
+                setSelected(null)
               }}
               disabled={drafting || !createGate.allowed}
               title={!createGate.allowed ? createGate.reason : undefined}
@@ -180,31 +240,33 @@ export function ShowsPlaylists() {
           ) : (
             <div className="sm-stack-3">
               <TableWrap label="Playlists, scrollable">
-                <Table minWidth={480}>
+                <Table minWidth={520}>
                   <thead>
                     <tr>
                       <th scope="col">Playlist</th>
+                      <th scope="col">Type</th>
                       <th scope="col">Runner</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map((row) => (
                       <SelectableRow
-                        key={row.id}
-                        selected={selected?.id === row.id}
+                        key={`${row.kind}:${row.id}`}
+                        selected={selected?.kind === row.kind && selected.id === row.id}
                         onActivate={() => {
-                          setSelectedId(row.id)
+                          setSelected({ kind: row.kind, id: row.id })
                           setDrafting(false)
                         }}
                         ariaLabel={`Edit ${row.label}`}
                       >
                         <td>
                           <strong>{row.label}</strong>
-                          {selected?.id === row.id && <span className="sm-viewing">Editing</span>}
+                          {selected?.kind === row.kind && selected.id === row.id && <span className="sm-viewing">Editing</span>}
                           <br />
                           <span className="sm-small sm-muted">{row.detail}</span>
                         </td>
-                        <td className="sm-small sm-muted">{row.runnerLabel}</td>
+                        <td className="sm-small sm-muted">{row.typeLabel}</td>
+                        <td className="sm-small sm-muted">{row.kind === 'media' ? <span className="sm-faint">{row.runnerLabel}</span> : row.runnerLabel}</td>
                       </SelectableRow>
                     ))}
                   </tbody>
@@ -227,26 +289,54 @@ export function ShowsPlaylists() {
           <PlaylistDraft
             showId={showId}
             cues={state.kind === 'loaded' ? state.cues : []}
+            assets={assets}
             model={model}
+            type={draftType}
+            onTypeChange={setDraftType}
             onCreated={(response) => {
-              setSelectedId(response.id)
+              setSelected({ kind: 'show', id: response.id })
               setDrafting(false)
               reload()
             }}
-            onDiscard={() => setDrafting(false)}
+            onCreatedMedia={(response) => {
+              setSelected({ kind: 'media', id: response.id })
+              setDrafting(false)
+              reload()
+            }}
+            onDiscard={() => {
+              setDrafting(false)
+              setDraftType('')
+            }}
             onOpenExisting={(id) => {
-              setSelectedId(id)
+              setSelected({ kind: 'show', id })
+              setDrafting(false)
+            }}
+            onOpenExistingMedia={(id) => {
+              setSelected({ kind: 'media', id })
               setDrafting(false)
             }}
           />
         )}
 
-        {!drafting && selected !== null && selected.payload.runner === 'fpp' && (
-          <FPPPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} evidence={evidence} readiness={readiness} model={model} onSaved={updatePlaylist} />
+        {!drafting && selectedShow !== null && selectedShow.payload.runner === 'fpp' && (
+          <FPPPlaylistEditor playlist={selectedShow} cues={state.kind === 'loaded' ? state.cues : []} evidence={evidence} readiness={readiness} model={model} onSaved={updatePlaylist} />
         )}
 
-        {!drafting && selected !== null && selected.payload.runner === 'showmesh-audio' && (
-          <AudioPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} model={model} onSaved={updatePlaylist} />
+        {!drafting && selectedShow !== null && selectedShow.payload.runner === 'showmesh-audio' && (
+          <AudioPlaylistEditor playlist={selectedShow} cues={state.kind === 'loaded' ? state.cues : []} model={model} onSaved={updatePlaylist} />
+        )}
+
+        {!drafting && selectedMedia !== null && (
+          <MediaPlaylistEditor
+            playlist={selectedMedia}
+            assets={assets}
+            model={model}
+            onSaved={updateMediaPlaylist}
+            onDeleted={(id) => {
+              removeMediaPlaylist(id)
+              closeInspector()
+            }}
+          />
         )}
       </aside>
     </Panes>
@@ -826,6 +916,14 @@ const RUNNER_OPTIONS: readonly { value: Runner; label: string }[] = [
   { value: 'showmesh-audio', label: 'ShowMesh audio' },
 ]
 
+/** The type gate in front of the runner gate: which kind of playlist this draft becomes. */
+type PlaylistType = 'show' | 'media'
+
+const TYPE_OPTIONS: readonly { value: PlaylistType; label: string }[] = [
+  { value: 'show', label: 'Show playlist' },
+  { value: 'media', label: 'Media playlist' },
+]
+
 /** The newest definition per playlist name, for one instance: what "the FPP playlist" picker offers. */
 function latestDefinitionsByName(definitions: readonly FPPPlaylistDefinitionMetadata[], instanceUuid: string): FPPPlaylistDefinitionMetadata[] {
   const byName = new Map<string, FPPPlaylistDefinitionMetadata>()
@@ -840,17 +938,27 @@ function latestDefinitionsByName(definitions: readonly FPPPlaylistDefinitionMeta
 function PlaylistDraft({
   showId,
   cues,
+  assets,
   model,
+  type,
+  onTypeChange,
   onCreated,
+  onCreatedMedia,
   onDiscard,
   onOpenExisting,
+  onOpenExistingMedia,
 }: {
   showId: string
   cues: ConfigObjectSummary[]
+  assets: readonly AudioAssetOption[]
   model: ReturnType<typeof useModelContext>
+  type: '' | PlaylistType
+  onTypeChange: (type: '' | PlaylistType) => void
   onCreated: (response: Playlist) => void
+  onCreatedMedia: (response: MediaPlaylist) => void
   onDiscard: () => void
   onOpenExisting: (id: string) => void
+  onOpenExistingMedia: (id: string) => void
 }) {
   const [runner, setRunner] = useState<Runner | ''>('')
   const [name, setName] = useState('')
@@ -972,32 +1080,54 @@ function PlaylistDraft({
       .finally(() => setCreating(false))
   }
 
+  if (type === 'media') {
+    return <MediaPlaylistDraft showId={showId} assets={assets} model={model} onCreated={onCreatedMedia} onDiscard={onDiscard} onOpenExisting={onOpenExistingMedia} />
+  }
+
   return (
-    <Section id="pl-editor" title="New playlist" eyebrow={runner === '' ? 'Draft · gate unanswered' : runner === 'fpp' ? 'Draft · FPP' : 'Draft · ShowMesh audio'}>
-      <Segmented<Runner | ''>
-        label="Runner"
-        value={runner}
-        options={RUNNER_OPTIONS}
-        onChange={(value) => {
-          setRunner(value as Runner)
-          setInstanceUuid('')
-          setPlaylistHash('')
-          setBoundCue('')
-          setAudioCue('')
-        }}
-      />
+    <Section
+      id="pl-editor"
+      title="New playlist"
+      eyebrow={type === '' ? 'Draft · gate unanswered' : runner === '' ? 'Draft · gate unanswered' : runner === 'fpp' ? 'Draft · FPP' : 'Draft · ShowMesh audio'}
+    >
+      <Segmented<'' | PlaylistType> label="Type" value={type} options={TYPE_OPTIONS} onChange={onTypeChange} />
       <p className="sm-small sm-faint">
-        Stored as <span className="sm-data">fpp</span> or <span className="sm-data">showmesh-audio</span>, and immutable once
-        created, like the id: an FPP playlist and an audio playlist are different objects with different bindings.
+        A show playlist is a list of cues a runner steps through. A media playlist is a list of things the audio
+        engine plays as a bed.
       </p>
 
-      {runner === '' && (
+      {type === '' && (
         <p className="sm-small sm-muted">
-          The rest of the form appears once a runner is picked. It is not shown disabled: half of it would be fields this playlist can never have.
+          The rest of the form appears once a type is picked. It is not shown disabled: half of it would be fields this playlist can never have.
         </p>
       )}
 
-      {runner !== '' && (
+      {type === 'show' && (
+        <>
+          <Segmented<Runner | ''>
+            label="Runner"
+            value={runner}
+            options={RUNNER_OPTIONS}
+            onChange={(value) => {
+              setRunner(value as Runner)
+              setInstanceUuid('')
+              setPlaylistHash('')
+              setBoundCue('')
+              setAudioCue('')
+            }}
+          />
+          <p className="sm-small sm-faint">
+            Stored as <span className="sm-data">fpp</span> or <span className="sm-data">showmesh-audio</span>, and immutable once
+            created, like the id: an FPP playlist and an audio playlist are different objects with different bindings.
+          </p>
+
+          {runner === '' && (
+            <p className="sm-small sm-muted">
+              The rest of the form appears once a runner is picked. It is not shown disabled: half of it would be fields this playlist can never have.
+            </p>
+          )}
+
+          {runner !== '' && (
         <div className="sm-grid sm-form-column">
           <Field label="Name">{(props) => <Input {...props} value={name} onChange={(e) => onNameChange(e.target.value)} />}</Field>
           <Field label="Id" help="From the name, editable until created. Night session definitions bind playlists by id.">
@@ -1123,8 +1253,10 @@ function PlaylistDraft({
                 )}
               </Field>
             )}
-          </div>
-        </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {taken && (
@@ -1156,7 +1288,9 @@ function PlaylistDraft({
           Discard
         </Button>
         <span className="sm-small sm-muted sm-push-end">
-          {runner === '' ? (
+          {type === '' ? (
+            'Type required'
+          ) : runner === '' ? (
             'Runner required'
           ) : (
             <>
