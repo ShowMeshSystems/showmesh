@@ -299,10 +299,26 @@ func Run() int {
 		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger, fppConnectStatus)
 	}
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
-
 	// assetSync is constructed further down (it needs bm itself as its
-	// Publisher), but bm's OWN construction needs assetSync.HandleMessage
+	// Publisher), but inv's own construction needs assetSync's
+	// TriggerIfResyncIntentPrecedes wired in as its ResyncIntentTrigger:
+	// the identical forward-reference shape onHello/bm above already uses,
+	// one dependency earlier, since inv itself is what bm's own
+	// subscriptions are built from just below. resyncIntentTrigger takes
+	// assetSync's CURRENT value on every call, not its value at closure
+	// creation time, so a report arriving before assetSync exists (there
+	// should be none this early, but nothing guarantees it) is silently a
+	// no-op rather than a nil-pointer panic.
+	var assetSync *assetsync.Service
+	resyncIntentTrigger := inventory.ResyncIntentTriggerFunc(func(nodeID string, reportedAt time.Time) {
+		if assetSync != nil {
+			assetSync.TriggerIfResyncIntentPrecedes(nodeID, reportedAt)
+		}
+	})
+
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
+
+	// bm's OWN construction needs assetSync.HandleMessage
 	// wired in as part of the ONE process-wide message handler, the
 	// identical forward-reference shape as onHello/bm just above, the
 	// other direction: assetSyncHandler is a closure taking the pointer's
@@ -313,7 +329,8 @@ func Run() int {
 	// fixed subscription set here as a literal, matching
 	// assetsync.Service.Subscriptions()'s own filter exactly, rather than
 	// calling that method on an instance that does not exist yet.
-	var assetSync *assetsync.Service
+	// assetSync itself is declared above, ahead of inv's own construction,
+	// for resyncIntentTrigger's identical forward-reference need.
 	assetSyncHandler := func(m broker.Message) {
 		if assetSync != nil {
 			assetSync.HandleMessage(m)
@@ -613,6 +630,13 @@ func Run() int {
 		// with no adapter either.
 		AudioPublisher: bm,
 		AudioSessions:  st,
+		// InventoryRequester: the SAME bm already satisfies
+		// api.InventoryRequester (RequestNodeInventory) with no adapter,
+		// matching RenderPublisher/AudioPublisher's identical wiring
+		// above. This is what makes POST /nodes/{nodeId}/assets/resync ask
+		// the node for a fresh report instead of always answering the
+		// no-op noInventoryRequester default's internal error.
+		InventoryRequester: bm,
 		// BrokerConnection: the SAME bm already satisfies
 		// api.BrokerConnectionState (ConnectedSince) with no adapter,
 		// matching RenderPublisher/AudioPublisher's identical wiring

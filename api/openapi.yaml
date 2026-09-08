@@ -8565,14 +8565,18 @@ paths:
   /nodes/{nodeId}/assets/resync:
     post:
       operationId: resyncNodeAssets
-      summary: Ask the existing asset-sync service to re-check this node now
+      summary: Ask this node for a fresh inventory report and repair against it
       description: >-
         Behind `asset:write`, the same write-authority scope as `POST
-        .../assets/remove`. Dispatches no command of its own: it nudges the
-        existing asset-sync service (Track E seam E6, `assetsync.Service`)
-        to run its own gap-driven tick now, for every declared node
-        including this one, instead of waiting out its own sync interval -
-        the identical hook `POST /assets` (upload) already uses.
+        .../assets/remove`. Asks nodeId for a fresh asset inventory report
+        now, stamped with the authenticated caller as issuer, and records
+        that this node has an outstanding re-sync intent. Neither of those
+        waits for the node. The repair itself (the existing asset-sync
+        service's gap-driven dispatch, the same mechanism `POST /assets`
+        upload already nudges) runs later, triggered by the node's own next
+        live asset inventory report once that report is fresher than this
+        intent - never on a wall-clock timer, and never against a report
+        already on hand when this request was accepted.
 
 
         Answers `202`, never `200`: accepted, and never confirmed by
@@ -8580,7 +8584,8 @@ paths:
         confirmation loop of its own. Whether anything was actually
         missing, and whether a dispatched `asset.fetch` succeeded, is never
         claimed here; that evidence surfaces later, from the node's own next
-        asset report, on `GET /nodes/{nodeId}/assets`.
+        asset report, on `GET /nodes/{nodeId}/assets`. A node that never
+        answers simply leaves the intent outstanding.
 
 
         `400` when `assets.settings`' `contentBaseUrl` is not set: with sync
@@ -17861,8 +17866,9 @@ components:
         The 202 body of POST /nodes/{nodeId}/assets/resync: acceptance
         only, never an outcome (this route holds no confirmation loop of
         its own - see that operation's own description). The re-sync
-        itself runs on the existing asset-sync service's own gap-driven
-        dispatch; its result surfaces later on GET /nodes/{nodeId}/assets.
+        itself runs later, triggered by this node's own next live asset
+        inventory report; its result surfaces later on
+        GET /nodes/{nodeId}/assets.
       required: [serverTime, resync]
       additionalProperties: false
       properties:
@@ -17882,6 +17888,14 @@ components:
         acceptedAt:
           type: string
           format: date-time
+        inventoryRequestCommandId:
+          type: string
+          description: >-
+            The commandId of the asset.inventory.request this route
+            published to node, naming the outstanding request the repair
+            is waiting on. Omitted when publishing it failed; the node's
+            outstanding re-sync intent still stands and still runs off its
+            own next ordinary report.
     FallbackProgramRenderActivation:
       type: object
       description: >-
