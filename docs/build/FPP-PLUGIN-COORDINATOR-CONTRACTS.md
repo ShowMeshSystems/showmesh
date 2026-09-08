@@ -40,16 +40,27 @@ serve an inbound brightness route, and ADR-013 is about UDP 32320 MultiSync
 port sharing, not HTTP routing; it says nothing that forbids a route. Per
 owner ruling (2026-08-23): the plugin opens no listening socket of its own,
 but it may register narrow, idempotent, evidence-returning routes on fppd's
-own web server, and section 2.2's brightness route ships unauthenticated this
-season, matching the unauthenticated-by-default posture SECURITY.md and
-RES-015 §7.4 already record for fppd's own web UI and API. A bearer credential is deferred to a future season as a
-separate tracked item. See sections 2.2, 2.3, and 3.1.
+own web server, and section 2.2's brightness route is specified to be
+unauthenticated when it is built, matching the unauthenticated-by-default
+posture SECURITY.md and RES-015 §7.4 already record for fppd's own web UI and
+API. A bearer credential is deferred to a future season as a separate tracked
+item. See sections 2.2, 2.3, and 3.1.
 
 Nothing here has run against a real FPP host. The contract is verified by unit
 tests and by the shared fixtures in
 [`test/fixtures/fpp/`](../../test/fixtures/fpp/README.md), on both sides.
 
+**Every numbered section below carries a build status on its own heading, and
+that status is the only thing in this document a reader may treat as a claim
+about what exists.** A frozen shape and a shipped behavior read identically in
+prose, so prose here describes the CONTRACT and never implies an
+implementation. A section that says what the plugin "does" is saying what this
+contract requires of it, not reporting what is deployed. Keep the status lines
+true when either side ships.
+
 ## 1. Playlist-entry observation ingestion
+
+**Status: SHIPPED.** Both sides are built.
 
 ### 1.1 Endpoint and authorization
 
@@ -388,6 +399,8 @@ non-active show must never activate anything.
 
 ## 2. Brightness transition gain
 
+**Status: DESIGNED, NOT BUILT.** Neither side serves this. See 2.4.
+
 ### 2.1 The composition
 
 RES-018 §1, restated so implementers do not have to re-derive it:
@@ -484,6 +497,9 @@ is not a claim that either exists.
 
 ## 3. Playlist definition publication
 
+**Status: SHIPPED**, apart from the coordinator-triggered republish, which has
+no agreed shape yet.
+
 Frozen 2026-08-22 for Track H seam H2. Section 1 gives the coordinator a
 playlist hash and an entry key. Neither says what the playlist contains, so
 neither can be authored against: an operator binding a ShowMesh Cue to FPP
@@ -521,7 +537,8 @@ is narrower than it once looked. The plugin opens no listening socket of its
 own; the general rule is that it **may** register narrow, idempotent,
 evidence-returning inbound routes on fppd's own web server — on FPP 10
 through Plugin API 6's `registerPluginApi`, on FPP 9 through the
-libhttpserver adapter — as section 2.2's brightness route already does. It
+libhttpserver adapter. That is the mechanism section 2.2's brightness route is
+DESIGNED to use, and which nothing in the plugin uses yet (see 2.4). It
 never opens a second listener, never proxies FPP, and never serves a value
 the coordinator has not verified. That general permission does not, by
 itself, favor a read route for the definition: the plugin already needs an
@@ -669,18 +686,26 @@ the route needs no sequence: the key is the content.
 Retries use the same bounded backoff and the same visible local status as
 section 1's observation delivery.
 
-### 3.8 What the plugin must add
+### 3.8 What the plugin had to add
 
-Stated plainly, because as of 2026-08-22 none of it exists:
+None of this existed when this section was frozen on 2026-08-22. All of it
+shipped afterwards; verified against the plugin runtime on 2026-09-08 and
+listed here with where it landed, so the next reader does not re-derive it:
 
 - Retain the canonical definition past the hash call.
-  `resolveEntryIdentity()` already computes `IdentityResolution::canonicalDefinition`
-  and the runtime discards it.
+  `resolveEntryIdentity()` computes `IdentityResolution::canonicalDefinition`,
+  which now reaches `publishDefinition()` rather than being discarded.
 - The outbound HTTP client section 1 already requires, carrying this second
-  route.
+  route. `CoordinatorClient::publishDefinition()` posts to `kDefinitionPath`.
 - Enumeration of the playlist directory at start, and the bounded re-scan.
-- No inbound HTTP route, no second listener, and no change to the callback
-  thread's bounded copy-and-return.
+  The start-up sweep and `kDefinitionRescanIntervalMillis` (60 s) in the
+  runtime's worker.
+- The posted-hash set section 3.7 describes is `heldDefinitions_`, keyed on
+  instance UUID and playlist hash, in memory only, so a restart re-posts.
+
+Still true, and still a constraint rather than a task: no inbound HTTP route,
+no second listener, and no change to the callback thread's bounded
+copy-and-return.
 
 ### 3.9 What this section does not do
 
@@ -693,6 +718,8 @@ Stated plainly, because as of 2026-08-22 none of it exists:
   it, exactly as section 1.6 requires for an observation.
 
 ## 4. Shared fixtures
+
+**Status: SHIPPED.** The files exist and both sides consume them.
 
 `test/fixtures/fpp/` holds plain JSON data files, consumable by any language.
 They are deliberately not a Go package and not a shared module: the plugin
