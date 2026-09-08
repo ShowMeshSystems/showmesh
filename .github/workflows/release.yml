@@ -220,23 +220,31 @@ jobs:
 
   node-agent-arm64:
     needs: [resolve]
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # A native arm64 runner, not an emulated one. Under QEMU this job took
+    # 24.3 minutes on 2026-09-03 and exceeded 25 minutes on 2026-09-08, so a
+    # tag would have pushed both images and then lost the release to a
+    # timeout twenty five minutes later. Native runners are available to this
+    # repository because it is public.
+    runs-on: ubuntu-24.04-arm
+    # Secondary guard only. This number is chosen against two emulated
+    # samples, not measured on a native runner; the point of the runner
+    # change is that it should never be approached.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
+      # No QEMU setup here, deliberately: the runner is already arm64, so
+      # emulating the target would reintroduce the cost this job exists to
+      # avoid. The amd64 leg has never needed it either.
 
       # The native agent links go-gst and libltc (CGO_ENABLED=1), which
       # cannot cross-compile the way the CGo-free FPP plugin does: it has
       # to be built by a compiler and linker that target arm64 for real.
-      # Emulate the target under QEMU instead, run a real debian:trixie
-      # userspace inside it, and build there with `make package-node-agent`
-      # so the packaging step (naming, SHA256SUMS, self-verify) stays the
-      # exact same code path as the FPP plugin's and the amd64 leg's.
-      - name: Build and package the node agent (arm64, under QEMU)
+      # Run a real debian:trixie userspace on the arm64 runner and build
+      # there with `make package-node-agent` so the packaging step (naming,
+      # SHA256SUMS, self-verify) stays the exact same code path as the FPP
+      # plugin's and the amd64 leg's.
+      - name: Build and package the node agent (arm64)
         run: |
           set -eux
           mkdir -p dist/node-agent
@@ -261,6 +269,24 @@ jobs:
               go version
               make package-node-agent NODE_AGENT_VERSION="$NODE_AGENT_VERSION"
             '
+
+      # Read the architecture off the artifact itself, never off the runner
+      # label. A runner label is a request; this is what was produced. The
+      # same discipline caught a mislabelled base image on a developer
+      # machine, and a wrong-architecture agent would install and then fail
+      # on the node rather than here.
+      - name: The packaged binary really is arm64
+        run: |
+          set -euxo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          tarball="dist/node-agent/showmesh-node-agent_${version}_linux_arm64.tar.gz"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP" showmesh-node-agent/showmesh-agent-native
+          described="$(file -b "$RUNNER_TEMP/showmesh-node-agent/showmesh-agent-native")"
+          echo "$described"
+          case "$described" in
+            *"ELF 64-bit LSB"*"ARM aarch64"*) ;;
+            *) echo "::error::packaged agent is not arm64: $described" >&2; exit 1 ;;
+          esac
 
       # See node-agent-amd64's own comment: only the tarball, the release
       # job computes one combined SHA256SUMS once both are staged.
