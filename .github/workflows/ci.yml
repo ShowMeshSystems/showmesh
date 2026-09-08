@@ -202,6 +202,8 @@ jobs:
         # mean an empty run.
         run: |
           set -eu
+          echo "TEMPORARY PROOF FAILURE: deliberately failing this step to test aggregation, remove before merge" >&2
+          exit 1
           if [ "$(go env CGO_ENABLED)" != "1" ]; then
             echo "CGO_ENABLED is not 1; every engine test would be excluded." >&2
             exit 1
