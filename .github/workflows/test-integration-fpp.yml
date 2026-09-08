@@ -120,7 +120,7 @@ jobs:
             -e HOME=/tmp \
             -e SHOWMESH_FPP_TEST_PREBUILT \
             -v "$HOME/.docker":/tmp/.docker:ro \
-            golang:1.25.0-trixie \
+            golang:1.26.6-trixie \
             bash -euxo pipefail -c '
               apt-get update -o Acquire::Retries=2
               # The cgo build dependencies go in their own apt call and are

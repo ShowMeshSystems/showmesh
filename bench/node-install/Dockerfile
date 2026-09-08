@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     systemd \
     && rm -rf /var/lib/apt/lists/*
 
-# Go toolchain, pinned to go.mod's own `go 1.25.0` directive rather than
+# Go toolchain, pinned to go.mod's own `go 1.26.0` directive rather than
 # whatever golang-go happens to package on trixie.
 #
 # BuildKit sets TARGETARCH from the platform actually being built, so the
@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG TARGETARCH
 ARG GOARCH=${TARGETARCH}
 RUN test -n "${GOARCH}" || { echo "GOARCH is empty: BuildKit did not set TARGETARCH. Pass --build-arg GOARCH=amd64|arm64." >&2; exit 1; } \
-    && curl -fsSL "https://go.dev/dl/go1.25.0.linux-${GOARCH}.tar.gz" -o /tmp/go.tar.gz \
+    && curl -fsSL "https://go.dev/dl/go1.26.0.linux-${GOARCH}.tar.gz" -o /tmp/go.tar.gz \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz \
     && /usr/local/go/bin/go version
