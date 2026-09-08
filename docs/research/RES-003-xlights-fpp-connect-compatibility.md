@@ -2,7 +2,7 @@
 
 [Architecture](../architecture/ARCHITECTURE.md#3-system-architecture) · [Tracker](README.md) · [MultiSync research](RES-002-fpp-multisync-compatibility.md)
 
-Status: planned (renderer delivery decided; compat surface **L1, source-verified 2026-08-13**, **amended and re-pinned 2026-08-25 in section 10**; integration L0) · Risk: high · Verification: L1 for the FPP Connect compatibility surface in sections 9 and 10; L0 for everything requiring a live xLights
+Status: planned (renderer delivery decided; compat surface **L1, source-verified 2026-08-13**, **amended and re-pinned 2026-08-25 in section 10**; **discovery and upload L2 against a live xLights 2026-08-30, section 11**; the rest of integration L0) · Risk: high · Verification: L1 for the FPP Connect compatibility surface in sections 9 and 10, except the discovery, port, chunked-upload and show-binding claims that section 11 raises to L2; L0 for everything still requiring a live xLights, which section 11.3 lists
 
 ## Decision to make
 
@@ -116,10 +116,14 @@ Directories: `sequences` for FSEQ, `effects` for `.eseq`, `music` for audio, `vi
 
 ### 9.7 Smallest viable surface, in build order
 
+**This list is four items short of what a real upload needs. It was derived from what xLights requires to discover a target and transfer a file, and it missed two calls the client makes around that transfer. Sections 9.7c and 9.7d record both, each observed directly against a live xLights on 2026-08-30. The viable surface is six items, not four.**
+
 1. **UDP ping responder** in the v3 layout, with a `typeId` in `1..0x7F` and a mode other than `"master"`. Without this nothing else matters. Risk: choosing a `typeId` that collides with a real hardware class.
 2. **`GET /api/system/info`** with `uuid`, version at 7.1 or above, mode, and `channelRanges`.
 3. **`GET /api/fppd/multiSyncSystems`** with a correct self-entry.
 4. **`PATCH /api/file/{dir}`** chunked upload.
+5. **`GET /api/models`**, a bare JSON array. Section 9.7c: xLights calls it unprompted before the transfer, and a 404 is an error against the target.
+6. **`GET /api/system/fppd/restart`**, both the plain and the `?quick=1` form. Section 9.7d: xLights calls it after the transfer and reads a 404 as the upload having failed.
 
 ### 9.7a A second surface this pass did not cover: the Controllers tab
 
@@ -200,6 +204,20 @@ ERROR - Error on GET "http://192.168.130.244/api/models"    Response Code: 404
 **This narrows section 9.6's source-reading conclusion.** That conclusion, read from `FPP::SetOutputs()` and the dialog's dropdown wiring, was that the models push is opt-in and defaults to "None" — true of the `POST`, and still true of it. It did not anticipate xLights issuing an unconditional `GET` as part of the ordinary upload flow regardless of that dropdown's state. The two facts do not contradict each other; the second was simply never traced, because nothing in section 9's or 9.7b's call-graph reading followed the `GET` side of the models exchange at all.
 
 **Consequence for this listener.** `GET /api/models` must be served (a bare JSON array, `[]` for a node with no configured surface, `200` always), or every otherwise-successful upload reports a red error to the operator. `POST /api/models` remains exactly as deferred as section 9.6 and TRACK-E-FPP-CONNECT.md's explicitly-deferred list state: nothing about this observation touches the `/config.php` identity gate or the upstream vendor-listing question, since xLights' `GET` never reaches `AuthenticateAndUpdateVersions()`.
+
+### 9.7d The upload ends with a `fppd` restart call, and a 404 there reads as a failed upload (L2, direct observation, 2026-08-30)
+
+**Fact, direct client observation from the same live session as 9.7c.** xLights finishes an FPP Connect upload by calling `GET /api/system/fppd/restart?quick=1` against the target. The listener did not serve that path, and the client reported the target as an error:
+
+```
+ERROR - Error on GET "/api/system/fppd/restart?quick=1"    Response Code: 404
+```
+
+The transfer itself had already succeeded. A 131,586,970 byte sequence was received in chunks, assembled, hashed and bound to its show, and the only call that failed was the one after it. An operator watching the dialog saw a red failure on a target that had in fact taken the whole file.
+
+**Why section 9's reading missed it.** The compatibility surface in 9.7 was derived from the calls that make a target eligible and the call that moves the bytes. Nothing in that call graph reaches the client's own post-transfer completion step, so the restart call was never traced, exactly as the `GET` side of the models exchange was never traced.
+
+**Consequence for this listener.** The path is answered with the success shape the client expects and nothing is done: a ShowMesh render node has no `fppd`, and an uploaded sequence needs no restart to be usable. Restarting anything in response to this call would interrupt a render for a client-side bookkeeping step. What the response body has to contain for the client to accept it is a source-reading question that this observation does not answer; it establishes only that a 404 is read as failure.
 
 ### 9.8 What this research could not determine
 
@@ -432,6 +450,38 @@ The five questions section 9 and the Track E seam document left open were answer
 - **Whether the owner's xLights build matches `ae379c0`'s range semantics.** If his build is older and genuinely uses `start-len`, section 10.1's formatter ships every node the wrong channels. Confirming the running build's behaviour is the first thing the bench should do.
 - Whether either pin corresponds to a shipping release tag.
 - Section 9.8's list is otherwise unchanged: the HTML-sniffing fallback, cross-major-version server behaviour, and xLights' credential behaviour are all still unexamined.
+
+## 11. The first live xLights session, 2026-08-30
+
+**Status of this section: L2 for what the session exercised, and nothing more.** For the first time, an unmodified xLights on the owner's own machine drove a ShowMesh render node on his own network. Everything in sections 9 and 10 up to this point was read from source. This section records only what was observed, and section 11.3 is deliberately the longest of the three.
+
+The session's purpose was not this record: it was a show rehearsal, and the FPP Connect observations are a by-product of it. It is therefore not the bench described in section 9.9, which stays outstanding, and its acceptance list stays unchanged.
+
+**Conditions, and one gap in them.** The node ran agent builds `233340f` and `e41cfbe` across the runs, on the owner's rehearsal network, against a real FPP target present in the same session. **The xLights version was not recorded.** That is a real defect in this evidence: the ladder's L2 asks for recorded versions, and one half of the pair is missing. Every claim below is therefore L2 against an unrecorded client build, and the first thing the section 9.9 bench must do is write the version down.
+
+### 11.1 What the session established
+
+- **A ShowMesh render node is discoverable and selectable in a real FPP Connect dialog.** The client reached the node, listed it, and uploaded to it. That exercises the eligibility gate in 9.1 end to end: the UDP ping responder, the provisional `typeId` of `0x7F` chosen in 10.2, and the HTTP contact requirement all held against a real client rather than against a reading of one. The provisional type value is still not registered upstream, and this observation does not change that.
+- **Port 80 and the chunked `PATCH` transfer work as read.** 10.4's hardcoded-port conclusion and 9.4's chunked-upload protocol both survived contact: a 131,586,970 byte sequence arrived, assembled, hashed and bound to its show.
+- **The show binding by playlist name works from the client side.** The upload bound to a ShowMesh show through the playlist path 10.6 describes, without an operator naming it anywhere else.
+- **Two calls the source reading missed are mandatory in practice**, recorded as 9.7c and 9.7d: the unprompted `GET /api/models` before the transfer, and the `fppd` restart call after it. Both were 404s, and both made a wholly successful upload report as a failure.
+
+### 11.2 What the session found wrong on the ShowMesh side
+
+Recorded here because they are evidence about this compatibility surface, not just defects. Each was fixed separately and none of the fixes has itself been driven from a real xLights.
+
+- The two missing endpoints above.
+- A node installed by the shipped instructions silently failed to register the uploads it received, because of the credential it was provisioned with.
+- Uploading a sequence's audio superseded that sequence's own FSEQ, breaking its render.
+
+### 11.3 What the session did not establish, and what still needs the bench
+
+- **The channel-range semantics question in 10.8 is still open.** The received sequence had an empty matrix range, and that was traced to the client rather than to this listener: the same xLights run uploaded the same sequence to a real FPP, which answers the models call, and that copy had exactly the same empty range. So the sparseness observed says nothing either way about whether the owner's build reads `start-end` or `start-len`. Confirming that a node receives a sparse FSEQ containing exactly its own advertised channels remains unproven, and it is the acceptance criterion this record most needs.
+- **Authentication posture is untouched.** The session was unauthenticated throughout. Nothing exercised the client's credential behaviour, and nothing exercised a node refusing an unauthenticated write. Section 9.8's last bullet stands exactly as written.
+- **The disk bounds an automatic upload path implies are unmeasured.** One large file arrived successfully. No bound was approached, none was enforced, and nothing was observed about what happens when one is.
+- **The Controllers tab and the `/config.php` identity path in 9.7b were not exercised**, and remain deliberately unimplemented. The binding observed here is the playlist-name path, not a controller entry.
+- **Nothing about cross-version server behaviour, the HTML-sniffing fallback, or an HTTP-only device with no UDP responder** was touched. Section 9.8's list is otherwise unchanged.
+- **The seven acceptance criteria of the section 9.9 bench are not met.** This session covered parts of one of them. The bench is still the gate, and this record does not move above L2 for anything, or to L2 for anything section 11.1 does not name.
 
 ## Decision, fallback, and revalidation
 
