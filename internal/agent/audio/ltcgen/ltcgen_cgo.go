@@ -141,7 +141,9 @@ func (e *Encoder) NextFrame() ([]byte, pkgaudio.LTCTimecode, error) {
 	tc := pkgaudio.LTCTimecode(fmt.Sprintf("%02d:%02d:%02d:%02d", int(t.hours), int(t.mins), int(t.secs), int(t.frame)))
 
 	n := C.showmesh_ltc_frame_s16le(e.enc, (*C.int16_t)(unsafe.Pointer(&e.buf[0])), C.size_t(len(e.buf)))
-	if n == C.size_t(^uint64(0)) {
+	// The sentinel is whatever all-ones is on THIS target, matching the C
+	// helper's own (size_t)-1: size_t is 32 bits on armv7 and 64 on amd64.
+	if n == ^C.size_t(0) {
 		return nil, "", fmt.Errorf("ltcgen: libltc frame exceeded the %d-sample scratch buffer", len(e.buf))
 	}
 	if n == 0 {

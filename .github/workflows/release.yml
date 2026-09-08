@@ -270,19 +270,15 @@ jobs:
           path: dist/node-agent/*.tar.gz
           retention-days: 7
 
-  # There is deliberately no node-agent-armv7 job. It was built and tested
-  # against a real linux/arm/v7 debian:trixie container under QEMU: the
-  # GStreamer 1.26/libltc dev packages this leg needs all install cleanly,
-  # but the cgo build itself fails independent of packaging or CI plumbing:
-  #
-  #   internal/agent/audio/ltcgen/ltcgen_cgo.go:144:19: constant
-  #   18446744073709551615 overflows _Ctype_size_t
-  #
-  # That is a 32-bit-target C portability bug (a 64-bit-only constant
-  # assigned to size_t, which is 32 bits on armv7), not a missing
-  # development package, and fixing it is a Go source change outside this
-  # workflow's own scope. Ship amd64 and arm64 only until it is fixed;
-  # falling back to a CGo-free build here would ship a silent agent with
+  # There is still no node-agent-armv7 job, but no longer because the build
+  # cannot succeed. The 32-bit size_t constant that blocked it is fixed, and
+  # the agent now builds and links under a real linux/arm/v7 debian:trixie
+  # container. What remains is packaging: `go env GOOS GOARCH` names that
+  # tarball linux_arm, not linux_armv7, so it does not follow the pattern the
+  # release job's explicit amd64/arm64 filenames and combined SHA256SUMS
+  # assume. Adding the leg means changing those names, which cannot be
+  # verified without a full release run. Ship amd64 and arm64 until that is
+  # done; falling back to a CGo-free build here would ship a silent agent with
   # no audio engine, which is worse than shipping fewer platforms.
 
   release:
