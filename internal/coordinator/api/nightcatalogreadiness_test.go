@@ -151,12 +151,12 @@ func TestNightCheckCatalogCurrent_HealthyWhenAcknowledged(t *testing.T) {
 	}
 }
 
-// TestNightCheckCatalogCurrent_WarnsWhileDeployHeldForRunningCue is
+// TestNightCheckCatalogCurrent_HeldDeployReportsHealthyWithHoldReason is
 // acceptance criterion 2's own readiness half: a stale node with a
 // currently playing FPP run warns rather than fails, and the aggregate
 // outcome stays ready: a held deploy is expected to apply on its own,
 // not to block the night from starting.
-func TestNightCheckCatalogCurrent_WarnsWhileDeployHeldForRunningCue(t *testing.T) {
+func TestNightCheckCatalogCurrent_HeldDeployReportsHealthyWithHoldReason(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
 		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
 			Playback: currentrun.Playback{State: "playing"}, Freshness: currentrun.Freshness{State: "current"}},
@@ -187,12 +187,12 @@ func TestNightCheckCatalogCurrent_WarnsWhileDeployHeldForRunningCue(t *testing.T
 	}
 }
 
-// TestNightCheckCatalogCurrent_WarnsWithUncertainEvidenceNamedSeparately
+// TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsHealthyWithUncertainReason
 // proves the owner's own distinction: a hold caused by evidence this
 // coordinator cannot currently confirm is worded differently from a hold
 // caused by a genuinely running Cue, so an operator knows whether there
 // is anything to go look at.
-func TestNightCheckCatalogCurrent_WarnsWithUncertainEvidenceNamedSeparately(t *testing.T) {
+func TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsHealthyWithUncertainReason(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
 		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
 			Playback: currentrun.Playback{State: "unavailable"}, Freshness: currentrun.Freshness{State: "current"}},
@@ -212,13 +212,13 @@ func TestNightCheckCatalogCurrent_WarnsWithUncertainEvidenceNamedSeparately(t *t
 	}
 }
 
-// TestNightCheckCatalogCurrent_WarnsWhenPlaybackEvidenceIsStale is a
-// regression test for a real reviewed defect: a run whose last reported
-// state reads idle must still warn as held, uncertain evidence, not read
-// as confirmed idle, when that evidence itself is stale (a stale idle
-// reading can predate a Cue that started after the reporting source went
-// quiet).
-func TestNightCheckCatalogCurrent_WarnsWhenPlaybackEvidenceIsStale(t *testing.T) {
+// TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsHealthyWithUncertainReason
+// is a regression test for a real reviewed defect: a run whose last
+// reported state reads idle must still warn as held, uncertain evidence,
+// not read as confirmed idle, when that evidence itself is stale (a stale
+// idle reading can predate a Cue that started after the reporting source
+// went quiet).
+func TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsHealthyWithUncertainReason(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
 		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
 			Playback: currentrun.Playback{State: "idle"}, Freshness: currentrun.Freshness{State: "stale"}},
