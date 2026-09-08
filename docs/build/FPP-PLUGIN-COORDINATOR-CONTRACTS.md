@@ -18,6 +18,20 @@ definition publication. RES-018 decided the design; this file fixes the
 exact bytes so the plugin and the coordinator can be built independently and
 still meet.
 
+**2026-09-08 amendment:** §1.2 gains an optional `playlistLoop`, and §1.8 is
+new. FPP 10 never delivers the playlist `start` callback action to a plugin
+(`Playlist::PlayImpl()` sets status to PLAYING before `Start()` reads it, so its
+fresh-start test always evaluates to "playing"; verified against the pinned FPP
+10.0 source at `370e62ed7e8c8318da6ee5b01312b8b75082d952`). Without `start`, a
+playlist looping back into an entry could not be told from its first visit,
+because a loop's second visit derives the identical entry key, so a repeating
+playlist stopped re-firing its Cue. `playlistLoop` carries FPP's own pass
+counter, which both majors already hand the plugin, and which the plugin
+previously discarded. Per owner ruling (2026-09-08): the fleet is moving to FPP
+10, so this is fixed rather than accepted as a limitation. Entry identity is
+unchanged; see §1.8 for why the `start` term stays and why the upgrade order
+matters.
+
 **2026-08-26 correction:** sections 1.2 and 1.3 left the canonical spelling
 of `section` implicit — described as "FPP playlist section" with no fixed
 vocabulary. Two independently correct implementations each read that as a
@@ -112,6 +126,7 @@ generous for every legitimate observation.
 | `sequence` | integer | yes | Monotonic per-instance event sequence. See §1.5. |
 | `observedAtMillis` | integer | yes | Plugin observation time, epoch milliseconds. |
 | `coalescedSincePreviousAcknowledged` | integer | yes | Gap evidence, `0` when none. |
+| `playlistLoop` | integer | no | FPP's own mainPlaylist pass counter for the running playlist, `0` on the first pass. Absent when the callback did not supply one. See §1.8. |
 | `unavailable` | string | no | Absent, or one of the §1.4 reasons. |
 
 `instanceUuid`, `sequence`, `observedAtMillis`, `action`, `schemaVersion`, and
@@ -396,6 +411,52 @@ non-active show must never activate anything.
 | Derived entry key mismatch | 400 | `observation-entry-key-mismatch` |
 | Reused sequence, different body | 409 | `conflict` |
 | Sequence regression | 409 | `conflict` |
+
+### 1.8 Entry occurrence and `playlistLoop`
+
+An entry OCCURRENCE is one visit to one playlist entry. Repeat ticks inside a
+visit belong to the same occurrence; a later visit to the same entry is a new
+one. Track H derives its Cue activation identity from the occurrence, so two
+ticks inside one visit dedup to a single dispatch while a second visit
+dispatches again.
+
+The entry key alone cannot separate those two cases. A playlist looping back
+into an entry derives the identical key on its second visit, because the key is
+a function of the entry's identity and not of when it was reached.
+
+`playlistLoop` is what separates them. It carries FPP's own mainPlaylist pass
+counter for the running playlist, verbatim, from the same callback that
+supplies every other field in §1.2. It is `0` on the first pass and increments
+once per completed pass. It is corroborating evidence and never identity: it is
+not an input to either hash in §1.3, so an entry's key is unchanged by it.
+
+The coordinator begins a new occurrence when the action is `start`, OR the
+entry key differs from the last accepted one, OR `playlistLoop` differs from
+the last accepted one. Any of the three is sufficient.
+
+Three properties of that rule are load bearing:
+
+- **Absent compares equal to absent.** A plugin that sends no `playlistLoop`
+  behaves exactly as it did before this field existed, so no deployed plugin
+  changes behavior when a coordinator that understands the field is installed
+  in front of it.
+- **`0` is a value, not an absence.** A plugin reporting the first pass and a
+  plugin reporting nothing must not compare equal, which is why the field is
+  omitted rather than sent as zero when the callback did not supply it.
+- **The `start` term stays.** FPP 9 fires the playlist `start` action and the
+  first term alone is sufficient there. FPP 10 never fires it
+  (`Playlist::PlayImpl()` flips status before `Start()` reads it), so on that
+  major the third term is what provides the property. Removing a correct term
+  because another one now covers the common case would break the major the
+  fleet currently runs.
+
+**Upgrade order is not free: the coordinator goes first.** §1.6 step 4 refuses a
+body carrying an unknown field, and that refusal rejects the whole observation
+rather than ignoring the member. So a plugin that sends `playlistLoop` to a
+coordinator that predates this section has every observation refused with `400`,
+and a coordinator receiving no observations activates no Cues at all. Upgrading
+the coordinator first is safe in both directions, because the field is optional
+and an older plugin simply never sends it.
 
 ## 2. Brightness transition gain
 
