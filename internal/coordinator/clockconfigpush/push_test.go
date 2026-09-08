@@ -14,7 +14,7 @@ import (
 
 // wireRevision reads params["revision"] as the exact int64
 // mqttproto.DecodeCmdPayload now recovers it as (json.Number), failing
-// the test if it decoded as anything else — matches audioconfigpush's
+// the test if it decoded as anything else. Matches audioconfigpush's
 // identical helper, one push surface over.
 func wireRevision(t *testing.T, params map[string]any) int64 {
 	t.Helper()
