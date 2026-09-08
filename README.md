@@ -20,9 +20,9 @@ ShowMesh is under active development toward a first public pre-release. What shi
 
 | | |
 |---|---|
-| **Works today** | Coordinator and agent over MQTT with capability advertisement, Last Will liveness, and SQLite inventory. Read-only FPP polling normalized into an observation model with provenance and freshness. A versioned public REST API with an SSE change stream. Authenticated principals, roles as scope bundles, and audit attribution. Show configuration (shows, surfaces, cues, playlists, macros, logical actions) with macro and action execution tracked to a run. A three-level emergency stop: immediate stop, stop with a forced graceful shutdown, and an armed hard stop. Multi-node audio sessions (prepare, start, pause, resume, seek, stop, gain and fade, mute) on ShowMesh's own GStreamer audio engine. GStreamer-based render surfaces (apply, clear, restart, transport probe). Resolume Arena instance control, composition configuration, and crash recovery. FPP Connect playlist integration with reconciliation and readiness. A signed asset store with node and cue-catalog deployment, and a signed FPP fallback program. A CLI (`showmeshctl`) and a browser SPA, both as independent clients of that API. Docker Compose bundle. CI on Go 1.25/1.26, Linux and macOS, race detector, multi-arch image build, real-broker integration tests. |
+| **Works today** | Coordinator and agent over MQTT with capability advertisement, Last Will liveness, and SQLite inventory. Read-only FPP polling normalized into an observation model with provenance and freshness. A versioned public REST API with an SSE change stream. Authenticated principals, roles as scope bundles, and audit attribution. Show configuration (shows, surfaces, cues, playlists, macros, logical actions) with macro and action execution tracked to a run. A three-level emergency stop: immediate stop, stop with a forced graceful shutdown, and an armed hard stop. Every level dispatches concurrently to all three target kinds, so it blacks projection and silences audio as well as stopping playout, and reports an outcome per target. A single node can also be silenced on its own, unconditionally, from the API and the CLI. Multi-node audio sessions (prepare, start, pause, resume, seek, stop, gain and fade, mute) on ShowMesh's own GStreamer audio engine. Reusable background-audio playlists (`media.playlist`) with their own routes, CLI verbs and screen, which a night session can reference instead of carrying an inline block, so editing the playlist re-pins the nodes without touching the session. An operator can fire an announcement cue by hand from Live Control and see each node's own outcome. GStreamer-based render surfaces (apply, clear, restart, transport probe). Resolume Arena instance control, composition configuration, and crash recovery. FPP Connect playlist integration with reconciliation and readiness. A signed asset store with node and cue-catalog deployment, an operator view of the assets a node holds that no cue uses with a per-node remove and re-sync, and a signed FPP fallback program. A tombstone delete for every per-object configuration kind, which keeps every revision readable after the object is gone. A CLI (`showmeshctl`) and a browser SPA, both as independent clients of that API. Docker Compose bundle, and a tag-driven release workflow that publishes coordinator and UI images plus node agent packages, with `VERSION`, `CHANGELOG.md` and a written cut procedure. CI on Go 1.25/1.26, Linux and macOS, race detector, multi-arch image build, real-broker integration tests. |
 | **Does not exist** | The general controlled-device provider model for third-party hardware such as projectors, amplifiers, or relays. Resolume is a dedicated media-engine integration, not an instance of that model. Any reconciler that automatically closes the gap between desired and observed show state, deliberately, because that loop is ShowMesh becoming a second scheduler. |
-| **Not verified** | Almost everything hardware- or network-dependent, with one narrow exception: a prebuilt arm64 build of the node agent has been installed and run on a real Raspberry Pi 3B+, which proves the install path and the ABI, not any show behavior on that node. The audio engine ran once against a real M4 interface, found defects that were fixed at the unit and loopback level only, and none of those fixes has been re-verified against real audio hardware since; multi-node audio has never run with more than one physical audio node. The MultiSync wire protocol is proven against a containerized `fppd`, not against a real player, a real clock, or a real switch. A real Arena instance was driven once, on 2026-08-15, against the operator's own composition; that evidence predates every later Track D review round and has not been re-run against the code as it stands. No render surface has ever driven a real projector or wall: one bench run fell back to counting frames on a diagnostic sink because the build had no real output sink to drive, and no write has ever been pointed at the deployed fleet. |
+| **Not verified** | Almost everything hardware- or network-dependent, with one narrow exception: a prebuilt arm64 build of the node agent has been installed and run on a real Raspberry Pi 3B+, which proves the install path and the ABI, not any show behavior on that node. The audio engine ran once against a real M4 interface, found defects that were fixed at the unit and loopback level only, and none of those fixes has been re-verified against real audio hardware since; multi-node audio has never run with more than one physical audio node. The MultiSync wire protocol is proven against a containerized `fppd`, not against a real player, a real clock, or a real switch. A real Arena instance was driven once, on 2026-08-15, against the operator's own composition; that evidence predates every later Track D review round and has not been re-run against the code as it stands. No ShowMesh FPP plugin build has been installed on a real FPP player, and no release tag has been cut, so no published image, package or plugin artifact has ever been pulled or installed by anyone. No render surface has ever driven a real projector or wall: one bench run fell back to counting frames on a diagnostic sink because the build had no real output sink to drive, and no write has ever been pointed at the deployed fleet. |
 
 That gap is deliberate and documented, not a backlog that got away. The project uses an explicit **evidence ladder**: L0 assumption, L1 source-verified, L2 bench, L3 integrated, L4 resilient, and no claim is written down at a level it has not earned. Each research record in [`docs/research/`](docs/research/README.md) carries its current rung and the specific experiment that would raise it.
 
@@ -68,7 +68,7 @@ The first command is FPP's own `Stop Now`, and it is **not** reported successful
                             ╎  Never MQTT. Never through the coordinator.
 ```
 
-**Stack:** Go 1.25 (coordinator, agent, CLI), TypeScript/React/Vite (Operator UI), MQTT/Mosquitto (control plane), SQLite via `modernc.org/sqlite` (storage: pure Go, because the coordinator must build CGo-free for a static distroless multi-arch image), GStreamer (media, when media lands), Apache-2.0.
+**Stack:** Go 1.25 (coordinator, agent, CLI), TypeScript/React/Vite (Operator UI), MQTT/Mosquitto (control plane), SQLite via `modernc.org/sqlite` (storage: pure Go, because the coordinator must build CGo-free for a static distroless multi-arch image), GStreamer (the render and audio engines, both shipping), Apache-2.0.
 
 ---
 
@@ -80,8 +80,11 @@ Requires Docker and Docker Compose.
 git clone https://github.com/ShowMeshSystems/showmesh.git
 cd showmesh/deploy
 cp .env.example .env
-docker compose up -d --build
+./mosquitto/generate-credentials.sh   # required once, before the first up
+make -C .. deploy-up
 ```
+
+Neither of the last two lines is optional. The bundled Mosquitto refuses anonymous connections and will not start without the password file that script writes, and `docker compose up -d --build` on its own now refuses to start: the Compose file requires the version, commit and build-date variables that `make deploy-up` derives from the checked-out ref, because a coordinator that cannot say which commit it is running is not a safe thing to fall back to. See [`deploy/README.md`](deploy/README.md).
 
 Then:
 
@@ -93,6 +96,8 @@ open http://localhost:8081                 # Operator UI
 ```
 
 Or use the CLI, built from this repo: `showmeshctl nodes`, `showmeshctl fpp`, `showmeshctl events`, `showmeshctl watch`.
+
+Building from source is currently the only way to run it. Pushing a `v<VERSION>` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which publishes the coordinator and Operator UI images to GHCR and the node agent packages as release assets, and `deploy/docker-compose.published.yml` runs the bundle from those images with `SHOWMESH_RELEASE_VERSION` set. **No tag has been cut yet**, so there is nothing published to pull. [`docs/RELEASING.md`](docs/RELEASING.md) is the cut procedure and the versioning scheme; the FPP plugin lives and versions in its own repository and is not part of this release.
 
 > **Security posture, stated plainly:** by default the API's **reads** are open to anyone who can reach the port, and the coordinator logs a warning saying so at startup. Its **writes** are not: every write requires an authenticated principal holding the named scope ([ADR-024](docs/decisions/ADR-024-identity-authorization-and-audit.md)), and there are now writes across configuration, show control, audio, and render surfaces. Reads are open deliberately, so that a credential problem never costs an operator sight of their show; close them with `SHOWMESH_API_CLOSE_READS=true`. See [SECURITY.md](SECURITY.md) and [`deploy/README.md`](deploy/README.md) before exposing it beyond an isolated show VLAN.
 
@@ -137,6 +142,7 @@ The design package is authoritative and predates the code.
 - [Audio Engine specification](docs/architecture/AUDIO-ENGINE.md): entirely unverified design intent, labelled as such
 - [Architecture decision records](docs/decisions/README.md) · [Research tracker](docs/research/README.md)
 - [Build plan](docs/build/BUILD-PLAN.md) · [Build log](docs/build/BUILD-LOG.md): ordered steps with status, and the chronological session record
+- [Release procedure](docs/RELEASING.md) · [Changelog](CHANGELOG.md): the versioning scheme and cut procedure, and what each version changed
 - [Engineering lessons](docs/build/LESSONS.md): defects this project has actually shipped and caught, and the rules that came out of them
 
 ---
@@ -161,7 +167,7 @@ These are the decisions that shape everything else. Each links to its ADR.
 
 **Audio deliberately does not follow the MultiSync slew/jump model** ([ADR-017](docs/decisions/ADR-017-showmesh-owns-audience-audio.md)–[ADR-019](docs/decisions/ADR-019-audio-device-loss-fails-silent.md)). Nodes play complete local files on their own audio clock, never a sample-position stream; drift is corrected discretely at track boundaries, never by continuous rate manipulation. Audio device loss fails *silent*: a recorded exception to the local-fallback rule, because uncontrolled routing and gain into an FM transmitter is worse than silence.
 
-Full set: [ADR-001 through ADR-024](docs/decisions/README.md), all Accepted except ADR-021, superseded by ADR-024. New durable constraints require a new ADR; superseding evidence requires a superseding ADR. The architecture spec is never silently edited to match new findings.
+Full set: [ADR-001 through ADR-048](docs/decisions/README.md), all Accepted except ADR-021, superseded by ADR-024. New durable constraints require a new ADR; superseding evidence requires a superseding ADR. The architecture spec is never silently edited to match new findings.
 
 ---
 
