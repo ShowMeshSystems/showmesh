@@ -190,7 +190,16 @@ install -m 0755 -o root -g root "$BIN_SRC" "$BIN_DEST.new"
 mv -f "$BIN_DEST.new" "$BIN_DEST"
 
 # --- systemd unit ---
-install -m 0644 -o root -g root "$UNIT_SRC" "$UNIT_DEST"
+# Templated rather than copied verbatim: the unit must run the agent as
+# whatever account this script actually created or adopted (SERVICE_USER /
+# SERVICE_GROUP), not the shipped default. The already-adopted check above
+# greps UNIT_DEST for "^User=$SERVICE_USER$", so this substitution must keep
+# producing exactly that line.
+UNIT_TMP="$(mktemp)"
+sed -e "s/^User=.*/User=$SERVICE_USER/" -e "s/^Group=.*/Group=$SERVICE_GROUP/" \
+  "$UNIT_SRC" > "$UNIT_TMP"
+install -m 0644 -o root -g root "$UNIT_TMP" "$UNIT_DEST"
+rm -f "$UNIT_TMP"
 
 # A real node host runs systemd as PID 1; a container used only to prove
 # this script's file/user/permission behavior (bench/node-install) does
