@@ -29,47 +29,87 @@ The **Current state** block at the top of this file is overwritten each session:
 ---
 ## Current state
 
-> **`main` is at `1fbda2b`** (2026-09-02 early morning). After the 2026-09-01
-> evening wave closed at `b4a60ae`, three more merges landed late that night
-> (#298 the evening build-log entry, #301 the wholesale Operator UI rebuild
-> fold at `58678ff`, and #302), and eight merged in the 2026-09-02 overnight
-> session recorded in the newest dated entry below (#303 through #309 and
-> #312, `58678ff` to `1fbda2b`). Two pull requests are deliberately held open
-> pending browser evidence (#310, #311; see the entry). Every 2026-09-02 merge
-> carried a full green GitHub check rollup verified against its final head
-> commit at merge time; two of them record an authorized single rerun of one
-> audio-engine CI timing test beside the original red. No post-merge CI run on
-> `main` itself has been read for this block.
+> **`main` is at `6dfecdd`** (2026-09-05 08:29 CDT). Forty-five pull requests
+> merged between the 2026-09-02 tip `1fbda2b` and this commit, in two recorded
+> sessions: thirty-three on 2026-09-03 and 2026-09-04, the pre-release build
+> (`02e456b` through `41152b5`), and twelve on 2026-09-05, the weekend build
+> (`1c0f4d0` through `6dfecdd`). The two newest dated entries below are those
+> records. Every count and commit identifier in this block is read from
+> `git log` on `main`; every gate statement is read from a pull request's own
+> verification record, a lane handoff's gate line, or a GitHub run identifier,
+> never from a builder's unsupported summary.
 >
-> **`feature/operator-ui-overhaul-2` is merged**: its fold #301 landed at
-> `58678ff` late on 2026-09-01, replacing the operator UI wholesale (the UI
-> test suite went from 90 files to 41 with the deleted screens; the backfill
-> and the dropped-control inventory are filed). The reconcile pass it deferred
-> is under way: its worklist is committed at
-> [UI-RECONCILE-WORKLIST.md](UI-RECONCILE-WORKLIST.md) (#307), and the first
-> two restorations are the held-open #310 and #311.
-> **Two branches remain deliberately off `main`.**
-> `dev/multi-audio` is 12 ahead and 64 behind and is **superseded as a
-> branch**: its content was rebuilt directly onto `main` and merged as #280 on
-> 2026-09-01, so the branch remains only as history and must not be folded.
-> `dev/clock-sync` holds Lane 22's seam I1 and is 1 ahead, 101 behind,
-> unchanged since 2026-08-28.
+> **A release spine exists and the release workflow has been run once on
+> `main`.** `VERSION`, `CHANGELOG.md` and the cut procedure in
+> [RELEASING.md](../RELEASING.md) shipped in #318 (`916ef71`); the tag-driven
+> workflow that publishes coordinator and UI images, node agent packages and a
+> GitHub pre-release entry shipped in #327 (`39e514a`); the one-tester
+> quickstart and the `SHOWMESH_RELEASE_VERSION` documentation shipped in #329
+> (`8d8b8e5`). `.github/workflows/release.yml` run `33816138250`, a
+> `workflow_dispatch` on `main` at 2026-09-03T23:06:41Z, concluded `success`.
+> **No release tag has been cut and nothing has been published**, so no
+> published image or package has been pulled or installed by anyone. The armv7
+> node agent package is not produced by that workflow: the cgo build fails on
+> 32-bit and is filed separately.
 >
-> **Schema versions on `main` run to v29.** v29 (the nullable
-> `evidence_broken_at_millis` marker on `fpp_playlist_entry_observations`)
-> shipped in #309. v28 (media type joins asset identity) shipped in #294; v27
-> (the `audio_sessions` re-key) is shipped, not reserved, a correction to this
-> block's previous wording verified against the register on `main`. v30
-> onward is free.
+> **Emergency stop, node silence and dispatch deadlines are on `main`.** All
+> three emergency-stop levels now black projection and silence audio with
+> per-kind outcomes (#334, `d5a8a54`), with the Operator UI control in #315
+> (`646e759`). An unconditional per-node `audio.node.silence` reaches the agent
+> (#326, `8a20130`), the coordinator route and the `showmeshctl` verb (#332,
+> `1c2079d`). Every dispatcher carries a wire deadline (#328, `7df8899`) and
+> every dispatch-and-await route now holds the operator's HTTP connection open
+> long enough to report an unconfirmed outcome instead of returning 502
+> (#341, `5840517`).
+>
+> **`media.playlist` is a configuration kind with routes, CLI verbs, a screen
+> and a night-session reference.** The kind and its validation landed in #344
+> (`1c0f4d0`), the routes, OpenAPI
+> paths and the `showmeshctl media-playlist` verbs in #350 (`be6ee1c`), the
+> Media Playlists screen in #353 (`7d659ea`), the night-session reference form
+> and its controller pin in #354 (`5f4a31b`), and the night-session picker in
+> #355 (`6dfecdd`). An operator can also fire an announcement cue by hand from
+> Live Control, with per-node outcomes and a visible refusal when nothing would
+> dispatch (#352, `012e021`).
+>
+> **Schema versions on `main` run to v30, and v31 onward is free.** v30 adds
+> the nullable `config_objects.deleted_at` tombstone marker that gives every
+> per-object configuration kind a delete (#331, `ed67488`). `media.playlist`
+> took no schema version, because the v30 tombstone path is kind-agnostic.
 > [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is the register; builders
-> never edit it.
+> never edit it. Four identifiers were minted on 2026-09-05 and are recorded
+> there: the `media.playlist` configuration kind, the `audio.playback.ceiling`
+> node capability, the `asset.inventory.request` agent operation and the
+> `cue:activate` scope.
 >
-> **No hardware, deployed-fleet, browser, or live-show verification was
-> performed for anything merged on 2026-09-01 or 2026-09-02.** The stated acceptance gaps
-> (the `ldd -r` mechanism against a real library regression, the media-type
-> rig reproduction, prepare-ahead's audible effect at a cue transition, and
-> expiry behaviour over a real fleet reconnect) are the owner's and remain
-> open; each dated entry names its own.
+> **The FPP plugin can be installed on FPP 10 without compiling on the
+> player.** The prebuilt-object work is in the plugin and packaging
+> repositories, not this one: plugin `main` is at `9628aeb` (pull requests #21,
+> #22, #23 and #24) and fpp-showmesh at `e96de47` (pull request #9). Every
+> result there is containerized. **Nothing has been installed on a real FPP
+> player, no artifact has been published, and the verified-version set holds
+> exactly one entry, 10.0.0**, so every other FPP 10 point release still
+> compiles on the player.
+>
+> **Two branches remain deliberately off `main`,** unchanged by either session.
+> `dev/multi-audio` is superseded as a branch: its content was rebuilt directly
+> onto `main` and merged as #280 on 2026-09-01, so the branch remains only as
+> history and must not be folded. `dev/clock-sync` holds Lane 22's seam I1 and
+> is unchanged since 2026-08-28.
+>
+> **No hardware, deployed-fleet or live-show verification was performed for
+> anything merged on 2026-09-03, 2026-09-04 or 2026-09-05.** Browser evidence
+> exists for four of the forty-five merges and is named in the dated entries;
+> in each case it was collected against a disposable bench coordinator on
+> isolated ports, never against the rehearsal stack or the fleet. The rig
+> checks the two sessions asked for are the owner's and remain open; each dated
+> entry names its own.
+>
+> **Red gate and CI runs from both sessions are recorded and none is retired by
+> a later green.** They are listed in the two dated entries. All of them are
+> wall-clock timing assertions or teardown contamination in packages the diffs
+> did not touch, except the three real defects one gate found in its own diff
+> on #331, which were fixed before that pull request merged.
 > ---
 >
 > *The paragraphs below describe earlier lanes and are kept for continuity.*
@@ -99,6 +139,88 @@ The **Current state** block at the top of this file is overwritten each session:
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
 
 ---
+
+## 2026-09-05 (weekend build: prepare-ahead audio revisions, end-of-night fade, broker-reconnect inventory, draw-state sample time, gain ceiling on the wire, node asset re-sync, the `media.playlist` kind with routes, screen and night-session reference, hand-fired announcements; `main` `41152b5` to `6dfecdd`)
+
+**Goal:** close the operator-facing defects the 2026-09-01 test session left open that are buildable without hardware, and land the `media.playlist` configuration kind end to end, from the store contract to the night-session picker.
+
+**Completed:** twelve pull requests merged between 03:30 and 08:30 CDT, in merge order.
+
+- #344 (`1c0f4d0`) added the `media.playlist` configuration kind: decode, validate and tombstone delete, sharing the background-audio rules with the night session through three helpers extracted into `nightsession.go` that take the caller's own field path, so night-session error strings are byte-identical to what they were. `kind: cue` is refused as reserved. No schema version was allocated, because the v30 tombstone path is kind-agnostic.
+- #346 (`3b8c49a`) derived the prepare-ahead audio staging revisions from `act.EvidenceAt` and moved the staging step constants past `AudioSessionStepStop`, so the dispatch is stable across ticks of one activation.
+- #347 (`b8cd221`) added an operator-invoked `POST /api/v1/nodes/{nodeId}/assets/resync` under `asset:write`, its `showmeshctl` verb, its OpenAPI entry, and wired the two previously inert controls on Node detail and Assets. Re-import from FPP was deliberately not built: the plugin contract forbids a coordinator-side fetch and the plugin has no publication code, so an endpoint would ship inert.
+- #348 (`c23e1fb`) withheld end-of-night's background-audio clear until the configured fade settles, on both the synchronous path and the tick retry, bounded so a stuck node still ends the night.
+- #345 (`a991376`) carried the background-audio gain ceiling onto the wire, gated on a node advertising the newly minted `audio.playback.ceiling` capability. Without that gate a coordinator carrying the field would have made every older agent refuse every background-audio apply.
+- #349 (`fd33766`) gave a reconnecting coordinator one report interval before counting its own absence against a node's inventory staleness window, and added the minted `asset.inventory.request` operation so it can pull a fresh report rather than wait. A deployed agent built before this refuses the operation as unknown, harmlessly.
+- #350 (`be6ee1c`) added the `media.playlist` routes mirroring `show.playlist`, the OpenAPI paths, the regenerated UI types and the full `showmeshctl media-playlist` verb set. The CLI verbs are in the same pull request because `TestEveryWritePathHasACLIVerb` refuses a write route with no verb.
+- #351 (`1169836`) stamped the draw-state signal group from the frame writer's own sampling time instead of the last pipeline transition, so Monitor stops reading a live surface as a day stale.
+- #353 (`7d659ea`) added the Media Playlists screen: list, detail, create, edit and delete.
+- #352 (`012e021`) let an operator fire an announcement cue directly from Live Control under the minted `cue:activate` scope, with per-node accepted-then-evidence outcomes, and made a click that would dispatch to zero nodes refuse visibly with the two causes distinguished instead of reporting success.
+- #354 (`5f4a31b`) let a night session name `{ mediaPlaylist: "<id>" }` instead of an inline block, modelled as a `oneOf` of the inline and reference forms, each refused without the other. The controller pin becomes ownerKind `media.playlist` with that object's id and revision, so editing the playlist re-pins the node without touching the session; readiness fails naming the playlist id when the reference is missing or tombstoned.
+- #355 (`6dfecdd`) added the `media.playlist` picker to the night session's background audio.
+
+**Decisions made:**
+
+- Four identifiers were minted by the orchestrator and are recorded in [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md): the `media.playlist` configuration kind, the `audio.playback.ceiling` node capability, the `asset.inventory.request` agent operation and the `cue:activate` scope.
+- `resting.backgroundAudio` is modelled as a `oneOf` of the inline form and a reference form carrying `mediaPlaylist` only, rather than a blanket loosening of the required fields, following the `FPPCommandRequest` precedent already in `api/openapi.yaml`.
+
+**Questions raised with the owner:** five, all left open at stand-down and none resolved in this session. Where the Media Playlists screen belongs, since no mock exists and it shipped as a sibling tab beside show playlists. How an operator chooses between the inline background-audio form and a playlist reference, where the existing enabled flag currently does double duty. Whether deleting a referenced `media.playlist` while a night is running should stop the bed: today both paths return early when the reference will not resolve and the coordinator logs a warning, because the stop path derives its node list from the playlist's own items. Whether a coordinator-to-plugin republish command is wanted, which is what re-import from FPP would need. And the `node.multisync.*` signals reading two days old in Monitor, which was traced to the agent stamping them only on a bind attempt and was not filed.
+
+**Deferred:**
+
+- One store defect was filed rather than fixed: every timestamp-ordered list in the store can come back out of order, because RFC3339Nano trims trailing zeros and the `Z` suffix breaks lexical ordering. Twenty-one queries are affected. It is a product defect that presents as a flaky test, and it was surfaced by a gate red on a branch that changed no Go file.
+- Gate reliability work was deferred by the owner's word, so none of the red runs below was filed.
+
+**Verification gates:** every merge carried a local gate on its exact pushed head and a GitHub check rollup; the per-pull-request evidence is in the session's handoffs. No hardware, deployed-fleet, agent-runtime or live-show evidence was produced by any lane.
+
+- Browser evidence exists for three of the twelve: #347's route against a disposable coordinator on isolated ports, and #353 and #355, each corroborated by reading the disposable bench coordinator's own SQLite store rather than from the builder's account. #355's saved night session's `payload_json` contained `"backgroundAudio": {"mediaPlaylist": "bench-bed"}`, the reference form. All three benches were confirmed torn down; the rehearsal stack was untouched.
+- #351's own issue asks for a browser check during a cue transition. It was not performed and is on the owner's rig list.
+- Four red runs stand on the record and none is retired by its later green. `TestCloseTearsDownThreeConcurrentPlayingBranches` on #344 CI run `33952991584` attempt 1 and again on #353's first local gate, dispositioned as the filed gstengine cross-test contamination in a package neither diff touched. The `ApiStore: dispose() actually stops the loop` UI store test on #345 CI run `33955677441` attempt 1 and on #349 CI run `33957250795` attempt 1, twice in one night, in a file neither diff touched. `TestRegistryAwaitResponseResolvesPublishAndSubscribeToOneBroker` on #350 CI run `33957624687` attempt 1, matching the filed two-second live-MQTT deadline signature exactly. And `TestLTCConfiguredDoesNotSlowProgramPlayback` on #354's local gate at `18e0b2a9`, measuring a 615 ms run-ahead against a 260 ms window, recorded under its own name rather than folded into the known LTC onset cluster.
+- One CI rerun on #345 was started by a builder against instruction. It is recorded for attribution because it consumed that pull request's single authorized rerun.
+- `pr-ready-check` is not satisfied for #350 or #354: in both cases it was run while CI was still in flight, refused, and was not re-run once CI settled. The orchestrator's own pre-merge check stood in its place. This is recorded as a gap, not as a pass.
+- Two builder gates were judged unreportable rather than passed and were re-run by their manager: one void on CPU saturation, one that reported no CPU samples at all. Both re-runs agreed with the builder's own logs.
+
+## 2026-09-03 to 2026-09-04 (pre-release build: release spine and release workflow, three-level emergency stop, per-node audio silence, wire deadlines on every dispatch route, tombstone delete for every configuration kind, unused-asset removal, README rewritten to the shipped contract, prebuilt FPP 10 plugin objects; `main` `1fbda2b` to `41152b5`)
+
+**Goal:** put the repository in a state a first pre-release tag could be cut from, and close the operator-facing defects that would otherwise consume the 2026-09-09 to 13 test days.
+
+**Completed:** thirty-three pull requests merged onto `main` across four lanes and three waves, `02e456b` through `41152b5`, plus four in the FPP plugin repository and one in the packaging repository. Grouped by what they change rather than by merge order.
+
+- **Release spine.** #318 (`916ef71`) added `VERSION`, `CHANGELOG.md` and the cut procedure in [RELEASING.md](../RELEASING.md). #327 (`39e514a`) added the tag-driven workflow publishing coordinator and UI images, node agent packages and a GitHub pre-release entry. #329 (`8d8b8e5`) scrubbed the example addresses out of `deploy/.env.example` and documented `SHOWMESH_RELEASE_VERSION`. #323 (`08b6cd9`) rewrote the README status table against the shipped API contract.
+- **Emergency stop and silence.** #334 (`d5a8a54`) made all three stop levels black projection and silence audio with per-kind outcomes; #315 (`646e759`) added the three-level control to the Operator UI. #326 (`8a20130`) added the agent-side `audio.node.silence`, an unconditional per-node emergency stop, and #332 (`1c2079d`) its coordinator route and `showmeshctl` subcommand at parity.
+- **Commands that used to hang or lie.** #328 (`7df8899`) set wire deadlines on the render, cue catalog and cue activation dispatchers. #341 (`5840517`) extended the HTTP write deadline on every dispatch-and-await route, so an honest unconfirmed outcome can reach the client. #338 (`fd5ed4f`) made a node report engine restore status as a signal, distinguishing retrying from exhausted. #336 (`81bfdc4`) made `showmeshctl` send `If-Match` by default on every config PUT, and #335 (`13d7aeb`) added `showmeshctl audio session show` for CLI evidence parity.
+- **Node and configuration hygiene.** #331 (`ed67488`) added a tombstone delete for every per-object configuration kind, minting schema v30. #337 (`9e32df8`) let an operator see and remove the assets a node holds that no cue uses, which needed two new routes, four response types, the `asset.remove` operation and the `node.asset.removed` signal. #339 (`14f12c7`) reported a dangling macro step or playlist entry before it runs. #320 (`22bc16b`) set `LimitNOFILE=65536` on the node agent systemd unit and #322 (`d76c0a5`) removed nginx's implicit upload body limit and fixed the upload error ordering.
+- **FPP and Resolume.** #325 (`5f6e5c7`) added an operator-facing notice for a mismatched FPP reconciliation and #330 (`539d00a`) returned the reconciliation verdict on the observation receipt, so a re-import clears the notice. #324 (`1d3ba03`) registered the plugin warning by its message rather than a minted id, superseding the reservation #321 (`f76aa81`) had made. #333 (`23c70ee`) returned site control, interlocks and the resting fade pair from `night.session`.
+- **Wave 3, the 2026-09-01 test-session defects.** #342 (`965c5d5`) made start-night run readiness again when the stored result has aged out and refuse only if that fresh pass fails, rather than refusing on age alone. #343 (`41152b5`) scheduled the resting bed's fade-down to complete at the show boundary rather than start there.
+- **Held-over browser work from 2026-09-02, and the audio session revision repair.** #310 (`2d3a08f`) and #311 (`00786ad`), both held the previous night pending browser evidence, merged. #314 (`f42be31`) carried audio session revisions as exact int64 and showed what is playing; #319 (`b7c02c3`) repaired the UI test that still expected the old revision type. #316 (`659221c`) let an operator address the audio sessions this coordinator mints and #317 (`6b1c470`) confirmed a gain the engine honored instead of demanding float equality. The dependabot bump #253 (`02e456b`) merged in the same window.
+- **Outside this repository.** The FPP plugin can now be installed on FPP 10 without compiling on the player: prebuilt objects per architecture, digest-locked release manifest entries, and an installer that fetches by digest and falls back to compiling. Plugin `main` reached `9628aeb` through pull requests #21, #22, #23 and #24; packaging repository fpp-showmesh reached `e96de47` through its pull request #9.
+
+**Decisions made:**
+
+- The plugin warning is registered by its message rather than by a minted identifier, which supersedes the identifier #321 had reserved the same morning.
+- `media.playlist` did not exist yet; schema v30 belongs to the tombstone delete. v31 onward is free, per [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md).
+- The README status badge stays at pre-alpha. The badge tracks live-show and hardware evidence, not API surface, so a larger shipped contract is not a reason to move it.
+- `showmeshctl`'s `If-Match` precedence is an explicit flag, then a revision carried in the operator's own payload, then a fresh read; `--force` sends none, and a not-yet-created object sends none so first creation still works.
+
+**Questions raised with the owner:** two were left with him at stand-down. Whether to publish the candidate plugin release artifacts, which is the one thing standing between the prebuilt chain and a real install: the objects build, the manifest locks them, the installer fetches and verifies them, and the bench proves both paths, all against locally served artifacts. And whether `CHANGELOG.md`'s 0.1.0 entry needs extending before a tag, since it was written before the last night of merges.
+
+**Deferred:**
+
+- The armv7 node agent package is not produced by the release workflow: the cgo build fails on 32-bit. Filed separately.
+- Two follow-ups were noticed and deliberately not absorbed: a pre-flight binding check for the macro-step-to-action and playlist-entry-to-cue edges, and the emergency-stop Resolume fan-out attributing each result to an instance it was not scoped to, which is unreachable while the schema caps Resolume instances at one.
+- Three known environment reds were left as known reds rather than fixed, by the owner's word: gstengine cross-test contamination and two load-sensitive test flakes.
+
+**Verification gates:** every merge carried a local gate on its exact pushed head and a GitHub check rollup, with the per-pull-request evidence in the session's handoffs. Certification content for #327 and #329 was written by the orchestrator from the manager's own message after that manager's session was lost in a Mac crash, and both files say so.
+
+- `.github/workflows/release.yml` run `33816138250`, a `workflow_dispatch` on `main` at 2026-09-03T23:06:41Z, concluded `success`. That is the only end-to-end exercise of the release path, and it is a dispatch rather than a tag. **No tag has been cut and nothing has been published**, so no published image or package has been pulled or installed.
+- #329 did not run `make check` and did not need to: it changes `deploy/.env.example` and `deploy/README.md` only. `docker compose config -q` was run instead on three configurations, including the negative case where the required variables are absent and the file correctly refuses. #323 is README-only and ran a documentation gate: the whole rendered file read start to finish and every relative link in the edited sections resolved with `test -f`, since this repository has no link checker.
+- Browser evidence exists for #334, against a real coordinator with the three grouped outcome tables observed. Its audio node was a throwaway responder speaking the wire protocol rather than a real agent, and the check predates the write-deadline commit in the same pull request. #333's browser check ran against a disposable bench coordinator on isolated ports, torn down afterwards.
+- The 502 that #341 fixes was found at that bench, not in the brief: nginx logged an upstream close for a request the coordinator was still handling, because the shared ten-second write timeout is shorter than every dispatch-confirm deadline in the API.
+- Six known environment reds were recorded verbatim across the lanes with their dispositions and none was retired by a later green: the start-onset LTC red, gstengine cross-test contamination against two different victim tests, the UI store `waitFor` red, a `settings.test.tsx` label red, and a wall-clock night-prepare-site flake a builder disclosed itself rather than letting three green reruns bury.
+- Two reds were not environment reds. #331's first gate found three real defects in its own diff, including a migration that was not replay-safe, all fixed before merge. #318's first gate failed on two Live Control tests that were reproduced failing on unmodified `main` at the same commit, caused by #311's assertions expecting the revision type #314 had changed, and fixed on `main` by #319.
+- One CI run, `33851992920`, was cancelled deliberately by the orchestrator after a job hung past cancel-in-progress, against a head that was superseded anyway. It is recorded as a cancellation with no test name.
+- The packaging repository has no CI. Its suite was run locally at the merged head: 319 passed, 0 failed.
+- **No hardware, deployed-fleet or live-show evidence was produced or claimed by any lane.** Nothing has been installed on a real FPP player; every plugin result is containerized. The cross-host reproducibility of the prebuilt objects is a two-host result for amd64 and armv7, and arm64 was built on one host only. Real-host ARMv7 compile time is unmeasured; the emulated 12.7x ratio is a property of the emulator, not evidence about ARM silicon.
 
 ## 2026-09-02 (overnight wave: invocation reason text, per-host FPP MQTT staleness, OnFailure abort coverage, derivation-invalid boundary retries, UI reconcile worklist, framewriter stall test, evidence-broken marker schema v29, config PUT precondition coverage complete; `main` `58678ff` to `1fbda2b`)
 
@@ -145,10 +267,10 @@ The **Current state** block at the top of this file is overwritten each session:
 
 - **Three owner review rounds are applied on the branch**, on top of the 2026-08-30 per-screen stack. Round one is `3734b72` (timecode offsets, terse copy, the transport row, now-playing absence, signed-out plates, the issued credential). Round two runs `1e03010` to `208c82e` (macro step editing, the chrome-bar show and mode pickers, fallback-program evidence, principal administration, the audio session transport, the kit `Drawer`, every inspector floated into it, and a layout pass). Round three runs `d5d5d6e` to `ec3991a` (node detail into a 960px drawer over Monitor › Fleet, one page width with every per-screen cap deleted, inline chip alignment, the `ReorderButtons` pattern, Live Control rebuilt on the kit with one `LifecycleCommands` element and a playlist select fed by imported FPP playlist definitions, the audio session drawer, and a copy pass that cut architecture prose and fabricated example names).
 - **`main` was merged into the branch** at `a257ad8`, the first time the two have met. The branch is 177 commits ahead of `main` at `289806e` and 0 behind it. Pull request #301 was opened on 2026-09-01 on the owner's instruction after his click-through of the round-three build.
-- The seven round-three rulings are recorded as **D-023 to D-029** in [docs/ui-rebuild/OPEN-DECISIONS.md](../ui-rebuild/OPEN-DECISIONS.md), with the commit that applied each.
+- The seven round-three rulings are recorded as **D-023 to D-029**, with the commit that applied each. They are kept with the operator UI design guide, [UI-DESIGN-GUIDE.md](../design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md); the working file they were first written in has since been retired.
 - Documentation brought into line with the code: [UI-DESIGN-GUIDE.md](../design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md) rewritten from `ui/src` (tokens against `kit/styles/tokens.css`, layout against `shell.css` and `drawer.css`, the screen map against `app/App.tsx`, the component rules against the kit, and the pre-PR checklist gaining the defect classes that pass jsdom and fail in a browser); `AGENTS.md` and `CLAUDE.md` now point UI work at the guide and the kit rule; `docs/ui-rebuild/HANDOFF.md` and `REBUILD-PLAN.md` state the branch's real position; `CONTROL-INVENTORY.md` marks three node rows as not carried into the drawer, with the reason for each.
 
-**Decisions made:** none by this entry. D-023 to D-029 are Eric's, given live during round three and recorded in `OPEN-DECISIONS.md`.
+**Decisions made:** none by this entry. D-023 to D-029 are Eric's, given live during round three and recorded with the operator UI design guide.
 
 **Questions raised with the owner:** none.
 
