@@ -25,9 +25,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackcompile"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/fallbackprogram"
@@ -80,6 +84,25 @@ const RefreshWindow = fallbackcompile.ProgramTTL / 2
 // package needs only one import for both.
 type Signer = fallbackcompile.Signer
 
+// CatalogDeployer attempts to deploy nodeID's currently-required cue
+// catalog when doing so is safe, called by [Service.autoDeployStaleCatalogs]
+// once per candidate node after a reconcile pass observes
+// fallbackcompile.OutcomeMissingCatalogAcknowledgement (Part 2's own
+// trigger, see reconcileOnce/reconcileHost below). Best-effort and
+// synchronous from this package's point of view: it returns nothing, and
+// a slow or failing attempt for one node must never hold up the rest of
+// this reconcile pass or any other host's own compile.
+//
+// Implemented by the API layer (internal/coordinator/api), which alone
+// holds the dispatch path (cuecatalogdeploy.go) and the node-activity
+// evidence a hold decision needs (cuecatalogautodeploy.go). This package
+// is deliberately given no HTTP or MQTT dependency of its own to make that
+// call directly, and never derives node activity or dispatches
+// cuecatalog.deploy a second way.
+type CatalogDeployer interface {
+	AutoDeployCueCatalog(ctx context.Context, now time.Time, nodeID string)
+}
+
 // Service is this package's own reconciliation loop: on its own tick
 // interval and on every [Service.Nudge], it recompiles and republishes
 // every participating FPP host's fallback program, on
@@ -95,6 +118,12 @@ type Service struct {
 
 	interval time.Duration
 	nudge    chan struct{}
+
+	// catalogDeployer is Part 2's own auto-deploy trigger. See
+	// [CatalogDeployer]'s own doc comment and [SetCatalogDeployer]. nil (the
+	// zero value) disables auto-deploy entirely: reconcileOnce still
+	// compiles, logs, and audits exactly as before this field existed.
+	catalogDeployer CatalogDeployer
 }
 
 // NewService constructs a [Service]. audit may be nil: a coordinator that
@@ -114,6 +143,15 @@ func NewService(st *store.Store, signer Signer, audit AuditWriter, logger *slog.
 		interval: interval, nudge: make(chan struct{}, 1),
 	}
 }
+
+// SetCatalogDeployer wires d as this Service's own Part 2 auto-deploy
+// trigger. Not a [NewService] parameter: coordinator.go constructs this
+// Service well before the API layer that implements [CatalogDeployer]
+// exists, and every other Service field is a plain constructor argument
+// with no such ordering constraint (see that file's own comment on why
+// this one is set later). Call it once, before [Service.Run] starts; it is
+// not safe to call concurrently with a reconcile pass.
+func (s *Service) SetCatalogDeployer(d CatalogDeployer) { s.catalogDeployer = d }
 
 // Nudge requests an immediate reconciliation pass, coalescing: a Nudge
 // while one is already pending is a no-op, matching
@@ -155,17 +193,37 @@ func (s *Service) reconcileOnce(ctx context.Context) {
 		s.logger.Warn("fallback reconcile: list participating fpp hosts failed", "error", err)
 		return
 	}
+	var missingAck bool
 	for _, instanceUUID := range hosts {
-		s.reconcileHost(ctx, instanceUUID)
+		if s.reconcileHost(ctx, instanceUUID) {
+			missingAck = true
+		}
+	}
+	// Part 2's own trigger: reuse the exact condition reconcileHost's own
+	// Compile call just detected (fallbackcompile.OutcomeMissingCatalogAcknowledgement),
+	// rather than a second detector on its own schedule. Compile's own
+	// Result only ever names the first node it happened to refuse a given
+	// host's program on, never the complete set, so autoDeployStaleCatalogs
+	// resolves the full candidate list itself.
+	if missingAck && s.catalogDeployer != nil {
+		s.autoDeployStaleCatalogs(ctx, s.now())
 	}
 }
 
-func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) {
+// reconcileHost compiles and, on success, publishes the current fallback
+// program for instanceUUID. A refusal is logged and audited, and leaves
+// whatever was previously published untouched, TRACK-J-fpp-fallback.md
+// J1: "A refusal is a visible, reported condition, never a silently
+// smaller program." Its own return reports only whether THIS host's
+// compile refused specifically with
+// fallbackcompile.OutcomeMissingCatalogAcknowledgement, reconcileOnce's
+// own signal for whether an auto-deploy pass is worth running this cycle.
+func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) bool {
 	now := s.now()
 	result, err := fallbackcompile.Compile(ctx, s.st, s.signer, instanceUUID, now)
 	if err != nil {
 		s.logger.Warn("fallback reconcile: compile failed", "fppInstanceUuid", instanceUUID, "error", err)
-		return
+		return false
 	}
 	if result.Outcome != fallbackcompile.OutcomePublished {
 		s.logger.Warn("fallback reconcile: compile refused", "fppInstanceUuid", instanceUUID,
@@ -176,16 +234,16 @@ func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) {
 			Params:        map[string]any{"outcome": string(result.Outcome)},
 			OutcomeReason: result.Reason,
 		})
-		return
+		return result.Outcome == fallbackcompile.OutcomeMissingCatalogAcknowledgement
 	}
 
 	changed, err := s.publishIfChanged(ctx, result.Program, now)
 	if err != nil {
 		s.logger.Warn("fallback reconcile: publish failed", "fppInstanceUuid", instanceUUID, "error", err)
-		return
+		return false
 	}
 	if !changed {
-		return
+		return false
 	}
 	s.writeAudit(ctx, identity.AuditEntry{
 		Timestamp: now, PrincipalID: systemPrincipalID, PrincipalName: systemPrincipalName,
@@ -193,6 +251,53 @@ func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) {
 		Params:        map[string]any{"packageId": result.Program.Program.PackageID, "revision": result.Program.Program.Revision},
 		OutcomeReason: "published",
 	})
+	return false
+}
+
+// autoDeployStaleCatalogs resolves the active show's full participating-
+// node set independently (fallbackcompile.Compile itself stops at the
+// first node it finds missing an acknowledgement, so its own Result never
+// names the complete candidate list), and asks s.catalogDeployer to
+// attempt every node whose acknowledgement is not current, reusing
+// [fppreconcile.NodeCatalogAckStatus], the one place that resolution is
+// made, exactly as [fallbackcompile.Compile] itself does. The deployer
+// alone decides whether a given attempt is safe (a running activation
+// holds it) and performs the actual dispatch; this loop only identifies
+// candidates and never touches cuecatalog.deploy itself.
+func (s *Service) autoDeployStaleCatalogs(ctx context.Context, now time.Time) {
+	active, err := assetsync.ResolveActiveShow(ctx, s.st)
+	if err != nil {
+		s.logger.Warn("fallback reconcile: resolve active show for auto-deploy failed", "error", err)
+		return
+	}
+	if !active.Configured {
+		return
+	}
+	nodes, err := s.st.ListNodeDeclarations(ctx)
+	if err != nil {
+		s.logger.Warn("fallback reconcile: list node declarations for auto-deploy failed", "error", err)
+		return
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, s.st, active, n.NodeID)
+		if err != nil {
+			s.logger.Warn("fallback reconcile: resolve cue catalog for auto-deploy failed", "node", n.NodeID, "error", err)
+			continue
+		}
+		if !catalog.HasAnyOutput() {
+			continue
+		}
+		status, _, _, err := fppreconcile.NodeCatalogAckStatus(ctx, s.st, n.NodeID, catalog.Revision)
+		if err != nil {
+			s.logger.Warn("fallback reconcile: resolve node catalog ack status for auto-deploy failed", "node", n.NodeID, "error", err)
+			continue
+		}
+		if status == v1.CueCatalogStatusCurrent {
+			continue
+		}
+		s.catalogDeployer.AutoDeployCueCatalog(ctx, now, n.NodeID)
+	}
 }
 
 // publishIfChanged stores signed as instanceUUID's current fallback

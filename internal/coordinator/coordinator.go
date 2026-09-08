@@ -923,6 +923,15 @@ func Run() int {
 	apiInst := api.New(apiDeps, apiOpts)
 	hub = apiInst.Hub
 
+	// Part 2 (catalog-currency auto-deploy)'s own wiring: *api.API
+	// structurally satisfies fallbackreconcile.CatalogDeployer
+	// (AutoDeployCueCatalog, api.go), so fallbackReconcile's own periodic
+	// missing-acknowledgement detection can trigger a real deploy without
+	// this package importing anything new or fallbackreconcile importing
+	// api. See cuecatalogautodeploy.go's own doc comment for the dispatch
+	// and safety-hold logic this delegates to.
+	fallbackReconcile.SetCatalogDeployer(apiInst)
+
 	// Resolve any command a PRIOR process left dispatched-but-unresolved
 	// (a crash, a kill, or an abandoned client connection between dispatch
 	// and outcome) before it can sit blank forever. Called SYNCHRONOUSLY,

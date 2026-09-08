@@ -181,22 +181,70 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		}
 	}
 
+	res := h.dispatchCueCatalogDeploy(ctx, now, nodeID, idempotencyKey, cueCatalogDeployIssuer{
+		PrincipalID: issuerID, PrincipalName: issuerName, Form: ac.result.Form, CredentialID: ac.result.CredentialID,
+	})
+	switch {
+	case res.Err != nil:
+		h.writeInternalError(w, now, "deploy cue catalog", res.Err)
+	case res.Problem != nil:
+		writeProblem(w, h.logger, now, *res.Problem)
+	default:
+		jsonWrite(w, v1.CueCatalogDeployResponse{ServerTime: formatTime(h.now()), Command: res.Result})
+	}
+}
+
+// cueCatalogDeployIssuer is who a cuecatalog.deploy dispatch is attributed
+// to in its command row and audit entries, mirroring cueActivationIssuer's
+// identical shape and reasoning (cueactivationdispatch.go). Passed in
+// explicitly so [handlers.dispatchCueCatalogDeploy] needs no *http.Request
+// or authContext of its own: the automatic-deploy trigger
+// (cuecatalogautodeploy.go) has neither, and attributes its own dispatches
+// to a genuine system principal rather than borrowing whichever operator
+// most recently authenticated.
+type cueCatalogDeployIssuer struct {
+	PrincipalID   string
+	PrincipalName string
+	Form          identity.CredentialForm
+	CredentialID  string
+}
+
+// dispatchCueCatalogDeployResult is [handlers.dispatchCueCatalogDeploy]'s
+// own result: exactly one of Result (a completed dispatch, confirmed or
+// not), Problem (a caller-facing refusal), or Err (an internal failure) is
+// set.
+type dispatchCueCatalogDeployResult struct {
+	Result  v1.CueCatalogDeployResult
+	Problem *v1.Problem
+	Err     error
+}
+
+// dispatchCueCatalogDeploy resolves nodeID's currently-required cue
+// catalog and dispatches cuecatalog.deploy, per this file's own top comment
+// on the dispatch discipline every call here follows. Both
+// handlePostNodeCueCatalogDeploy (which additionally parses the request
+// and handles idempotency-key replay before calling this) and the
+// automatic-deploy trigger (AutoDeployCueCatalog, cuecatalogautodeploy.go)
+// share this one path; neither dispatches cuecatalog.deploy any other way.
+func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, nodeID, idempotencyKey string, issuer cueCatalogDeployIssuer) dispatchCueCatalogDeployResult {
+	if h.deps.AssetManifests == nil || h.deps.Commands == nil {
+		return dispatchCueCatalogDeployResult{Err: errors.New("no asset manifest store or command store is configured on this coordinator")}
+	}
+
 	// The catalog is resolved by THIS coordinator, never accepted from the
 	// caller — the identical "a caller's claim is not evidence" rule build
 	// item 5 fixes on the acknowledge route one file over.
 	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
 	if err != nil {
-		h.writeInternalError(w, now, "resolve active show", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("resolve active show: %w", err)}
 	}
 	if !active.Configured {
-		writeProblem(w, h.logger, now, invalidParameterProblem("no active show is configured; there is no catalog to deploy"))
-		return
+		p := invalidParameterProblem("no active show is configured; there is no catalog to deploy")
+		return dispatchCueCatalogDeployResult{Problem: &p}
 	}
 	catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
 	if err != nil {
-		h.writeInternalError(w, now, "resolve cue catalog", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("resolve cue catalog: %w", err)}
 	}
 	// TRACK-H-cues-and-playlists.md section H5 build item 2's own ruling: a
 	// claim conflict is DATA on the resolved catalog (assetsync.Catalog.
@@ -206,27 +254,24 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 	// reachable through this API (and showmeshctl, which prints a Problem's
 	// Detail verbatim), not only a log line.
 	if len(catalog.Conflicts) > 0 {
-		writeProblem(w, h.logger, now, cueCatalogClaimConflictProblem(nodeID, catalog.Conflicts))
-		return
+		p := cueCatalogClaimConflictProblem(nodeID, catalog.Conflicts)
+		return dispatchCueCatalogDeployResult{Problem: &p}
 	}
 
 	raw, err := json.Marshal(cueCatalogDeployWireParams{
 		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision, Entries: catalog.Entries,
 	})
 	if err != nil {
-		h.writeInternalError(w, now, "encode cuecatalog.deploy params", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("encode cuecatalog.deploy params: %w", err)}
 	}
 	var params map[string]any
 	if err := json.Unmarshal(raw, &params); err != nil {
-		h.writeInternalError(w, now, "decode cuecatalog.deploy params back into a map", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("decode cuecatalog.deploy params back into a map: %w", err)}
 	}
 
 	paramsJSON, err := canonicalParamsJSON(params)
 	if err != nil {
-		h.writeInternalError(w, now, "encode params", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("encode params: %w", err)}
 	}
 	identityJSON, _ := json.Marshal(cueCatalogDeployRequestIdentity{NodeID: nodeID, Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision})
 
@@ -234,7 +279,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 	rec := store.CommandRecord{
 		ID: commandID, IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
 		TargetKind: "node", TargetID: nodeID, ParamsJSON: paramsJSON,
-		IssuerPrincipalID: issuerID, IssuerPrincipalName: issuerName,
+		IssuerPrincipalID: issuer.PrincipalID, IssuerPrincipalName: issuer.PrincipalName,
 		CallerIntent:       store.FormatCallerIntent(store.CallerIntentCueCatalogDeploy, string(identityJSON)),
 		ConfirmationMethod: "evidence", State: "pending",
 	}
@@ -244,58 +289,51 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		if errors.As(err, &dup) {
 			result, problem := resolveCueCatalogDeployReplay(dup.Existing, nodeID)
 			if problem != nil {
-				writeProblem(w, h.logger, now, *problem)
-				return
+				return dispatchCueCatalogDeployResult{Problem: problem}
 			}
-			jsonWrite(w, v1.CueCatalogDeployResponse{ServerTime: formatTime(h.now()), Command: result})
-			return
+			return dispatchCueCatalogDeployResult{Result: result}
 		}
-		h.writeInternalError(w, now, "insert cue catalog deploy command", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("insert cue catalog deploy command: %w", err)}
 	}
 
 	cmdTopic, err := mqttproto.CmdTopic(nodeID)
 	if err != nil {
-		h.writeInternalError(w, now, "build cmd topic", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("build cmd topic: %w", err)}
 	}
 	resultTopic, err := mqttproto.ResultTopic(nodeID, commandID)
 	if err != nil {
-		h.writeInternalError(w, now, "build result topic", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("build result topic: %w", err)}
 	}
 	deadline := now.Add(cueCatalogDeployWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,
-		Issuer:             mqttproto.CmdIssuer{PrincipalID: issuerID, PrincipalName: issuerName},
+		Issuer:             mqttproto.CmdIssuer{PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName},
 		ConfirmationMethod: "evidence",
 		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, nodeID, payload)
 	if err != nil {
-		h.writeInternalError(w, now, "build cmd envelope", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("build cmd envelope: %w", err)}
 	}
 	rawEnv, err := json.Marshal(env)
 	if err != nil {
-		h.writeInternalError(w, now, "marshal cmd envelope", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("marshal cmd envelope: %w", err)}
 	}
 
-	h.writeCueCatalogDeployAudit(ctx, now, identity.AuditDispatch, ac, nodeID, commandID, idempotencyKey, catalog, "")
+	h.writeCueCatalogDeployAudit(ctx, now, identity.AuditDispatch, issuer, nodeID, commandID, idempotencyKey, catalog, "")
 
 	// From here on, every write is on bgCtx: the command is already
 	// durably recorded and about to be dispatched, and a caller walking
-	// away (an abandoned HTTP client) must not be able to abort the
-	// dispatch or its post-dispatch bookkeeping — matching audiodispatch.
-	// go's identical bgCtx cutover.
+	// away (an abandoned HTTP client, or a caller that cancels ctx for its
+	// own reasons) must not be able to abort the dispatch or its
+	// post-dispatch bookkeeping, matching audiodispatch.go's identical
+	// bgCtx cutover.
 	bgCtx := context.WithoutCancel(ctx)
 
 	dispatchedAt := now
 	if h.deps.AudioPublisher == nil {
-		h.writeInternalError(w, now, "deploy cue catalog", errors.New("no command publish-and-await capability is configured on this coordinator"))
-		return
+		return dispatchCueCatalogDeployResult{Err: errors.New("no command publish-and-await capability is configured on this coordinator")}
 	}
 	msg, err := h.deps.AudioPublisher.AwaitResponse(bgCtx, broker.ResponseRequest{
 		PublishTopic: cmdTopic, PublishPayload: rawEnv,
@@ -316,9 +354,8 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 				ResolvedAt: &resolvedAt, State: strPtr("failed"), ResultJSON: strPtr(string(resultJSON)),
 				OutcomeState: strPtr("collection_failed"), OutcomeReason: strPtr(err.Error()),
 			})
-			h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, "failed: "+err.Error())
-			h.writeInternalError(w, now, "dispatch cuecatalog.deploy", err)
-			return
+			h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, issuer, nodeID, commandID, idempotencyKey, catalog, "failed: "+err.Error())
+			return dispatchCueCatalogDeployResult{Err: fmt.Errorf("dispatch cuecatalog.deploy: %w", err)}
 		}
 		// Published, but no reply arrived (deadline, or the await itself
 		// failed) — an honest "unconfirmed" outcome, not a caller error.
@@ -330,17 +367,13 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 			ResolvedAt: &resolvedAt, State: strPtr("resolved"), ResultJSON: strPtr(string(resultJSON)),
 			OutcomeState: strPtr("not_collected"), OutcomeReason: strPtr(reason),
 		})
-		h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, "unconfirmed: "+reason)
-		jsonWrite(w, v1.CueCatalogDeployResponse{
-			ServerTime: formatTime(h.now()),
-			Command: v1.CueCatalogDeployResult{
-				CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
-				Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
-				Outcome: mqttproto.OutcomeUnconfirmed, Reason: reason,
-				DispatchedAt: strPtr(formatTime(dispatchedAt)),
-			},
-		})
-		return
+		h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, issuer, nodeID, commandID, idempotencyKey, catalog, "unconfirmed: "+reason)
+		return dispatchCueCatalogDeployResult{Result: v1.CueCatalogDeployResult{
+			CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
+			Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
+			Outcome: mqttproto.OutcomeUnconfirmed, Reason: reason,
+			DispatchedAt: strPtr(formatTime(dispatchedAt)),
+		}}
 	}
 
 	env2, err := mqttproto.DecodeEnvelope(msg.Payload)
@@ -349,8 +382,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		res, err = mqttproto.DecodeResultPayload(env2)
 	}
 	if err != nil {
-		h.writeInternalError(w, now, "decode cuecatalog.deploy result", err)
-		return
+		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("decode cuecatalog.deploy result: %w", err)}
 	}
 
 	acknowledgedRevision := ""
@@ -366,7 +398,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		DispatchedAt: &dispatchedAt, ResolvedAt: &resolvedAt, State: strPtr("resolved"),
 		ResultJSON: strPtr(string(resultJSON)), OutcomeState: strPtr(res.Outcome), OutcomeReason: strPtr(res.Reason),
 	})
-	h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, res.Outcome+": "+res.Reason)
+	h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, issuer, nodeID, commandID, idempotencyKey, catalog, res.Outcome+": "+res.Reason)
 
 	// The node reports which revision it now holds via THIS command's own
 	// result — see internal/agent/cuecatalogops.go's deploy, whose
@@ -404,15 +436,12 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 	}
 
 	resolvedFmt := formatTime(resolvedAt)
-	jsonWrite(w, v1.CueCatalogDeployResponse{
-		ServerTime: formatTime(h.now()),
-		Command: v1.CueCatalogDeployResult{
-			CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
-			Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
-			Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: acknowledgedRevision,
-			DispatchedAt: strPtr(formatTime(dispatchedAt)), ResolvedAt: &resolvedFmt,
-		},
-	})
+	return dispatchCueCatalogDeployResult{Result: v1.CueCatalogDeployResult{
+		CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
+		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
+		Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: acknowledgedRevision,
+		DispatchedAt: strPtr(formatTime(dispatchedAt)), ResolvedAt: &resolvedFmt,
+	}}
 }
 
 // cueCatalogDeployRequestIdentity is the caller's own unresolved request
@@ -573,13 +602,13 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 // (renderdispatch.go): refusing to push a catalog because the audit log
 // could not be written would make an unwritable audit log a way to keep a
 // node's rendering permanently discarded at every boot.
-func (h *handlers) writeCueCatalogDeployAudit(ctx context.Context, now time.Time, kind identity.AuditKind, ac authContext, nodeID, commandID, idempotencyKey string, catalog assetsync.Catalog, note string) {
+func (h *handlers) writeCueCatalogDeployAudit(ctx context.Context, now time.Time, kind identity.AuditKind, issuer cueCatalogDeployIssuer, nodeID, commandID, idempotencyKey string, catalog assetsync.Catalog, note string) {
 	if h.deps.Identity == nil {
 		return
 	}
 	entry := identity.AuditEntry{
-		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
-		Form: ac.result.Form, CredentialID: ac.result.CredentialID,
+		Timestamp: now, PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName,
+		Form: issuer.Form, CredentialID: issuer.CredentialID,
 		Action: auditActionCueCatalogDeploy, Target: nodeID,
 		IdempotencyKey: idempotencyKey, Kind: kind, CommandID: commandID,
 		Params: map[string]any{"show": catalog.Show, "generation": catalog.Generation, "revision": catalog.Revision},

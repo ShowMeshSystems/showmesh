@@ -111,6 +111,18 @@ type handlers struct {
 	// (e.g. a dispatched command appearing in a fake publisher) that can
 	// still be running well after that side effect is observed.
 	cueActivationFailToBlackWG sync.WaitGroup
+
+	// cueActivationRefusalLog dedupes cueActivationTickOne's own "node did
+	// not confirm this activation" log line (cueactivationloop.go): keyed
+	// by instanceUuid+"|"+nodeId, it holds the last NodeOutcome already
+	// logged for that node, so an identical, still-unresolved refusal logs
+	// once rather than every tick. The durable record
+	// (writeCueActivationOutcomeAudit) is unaffected, only this repeated
+	// log line backs off. Cleared whenever that node's own activation is
+	// later confirmed, so a genuinely new episode (even one that happens
+	// to produce the identical NodeOutcome string) logs again.
+	cueActivationRefusalLogMu sync.Mutex
+	cueActivationRefusalLog   map[string]string
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

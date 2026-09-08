@@ -310,3 +310,54 @@ func TestServiceRefusalDoesNotClearPreviouslyPublishedProgram(t *testing.T) {
 		t.Fatalf("no %q audit entry recorded; entries: %+v", auditActionRefuse, audit.entries)
 	}
 }
+
+// recordingCatalogDeployer is a fake [CatalogDeployer]: it records every
+// nodeID it was asked to auto-deploy, without dispatching anything real.
+// This package owns no HTTP or MQTT dependency of its own to do that with
+// (see [CatalogDeployer]'s own doc comment), so this file's own coverage
+// is limited to "was the trigger reached for the right node," not the
+// dispatch or hold logic itself (internal/coordinator/api's own
+// cuecatalogautodeploy_test.go covers that).
+type recordingCatalogDeployer struct {
+	calls []string
+}
+
+func (r *recordingCatalogDeployer) AutoDeployCueCatalog(_ context.Context, _ time.Time, nodeID string) {
+	r.calls = append(r.calls, nodeID)
+}
+
+// TestServiceReconcileOnceTriggersAutoDeployOnMissingAcknowledgement is
+// Part 2's own wiring proof: reconcileOnce's own periodic pass reuses
+// EXACTLY the condition [fallbackcompile.Compile] already detects
+// (fallbackcompile.OutcomeMissingCatalogAcknowledgement) as the trigger for
+// autoDeployStaleCatalogs, rather than a second detector on its own
+// schedule: a healthy tick that publishes cleanly never calls the
+// deployer at all, and breaking a node's own acknowledgement (mirroring
+// TestServiceRefusalDoesNotClearPreviouslyPublishedProgram's identical
+// setup) triggers exactly one call for that node.
+func TestServiceReconcileOnceTriggersAutoDeployOnMissingAcknowledgement(t *testing.T) {
+	st, now := newPublishableFixture(t)
+	svc := NewService(st, fakeSigner{}, nil, nil, time.Hour)
+	svc.now = func() time.Time { return now }
+	deployer := &recordingCatalogDeployer{}
+	svc.SetCatalogDeployer(deployer)
+
+	svc.reconcileOnce(context.Background())
+	if len(deployer.calls) != 0 {
+		t.Fatalf("auto-deploy calls after a clean publish = %v, want none", deployer.calls)
+	}
+
+	// Break the node's acknowledgement so the next compile refuses with
+	// OutcomeMissingCatalogAcknowledgement.
+	if err := st.PutNodeCueCatalogAck(context.Background(), store.NodeCueCatalogAckRecord{
+		NodeID: "render-01", Revision: "stale", ShowID: "halloween", Generation: 1, AcknowledgedAt: now,
+	}); err != nil {
+		t.Fatalf("break ack: %v", err)
+	}
+
+	svc.reconcileOnce(context.Background())
+
+	if len(deployer.calls) != 1 || deployer.calls[0] != "render-01" {
+		t.Fatalf("auto-deploy calls after a missing-acknowledgement refusal = %v, want exactly one call for render-01", deployer.calls)
+	}
+}
