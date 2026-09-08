@@ -259,6 +259,29 @@ func nightBackgroundAudioStepsForNode(history []nightBackgroundAudioHistoryRow, 
 	return out
 }
 
+// nightBackgroundAudioDispatchedNodeIDs returns every node id this
+// controller has ever committed a background-audio step for, read from
+// history alone - the coordinator's own record of what it actually
+// dispatched. Every stop path in this file (nightStopBackgroundAudioIfRunning,
+// nightClearBackgroundAudioAtEndSession, nightRetryEndSessionClear) derives
+// its node list from this, never from ba.OutputNodeIDs(): a referenced
+// media.playlist can be tombstoned, or edited to fewer targets, while a
+// night is running, and the stop path must still reach every node it
+// actually put audio on, not only the ones the playlist still names.
+// Deduplicated, in history's own first-appearance order.
+func nightBackgroundAudioDispatchedNodeIDs(history []nightBackgroundAudioHistoryRow) []string {
+	seen := make(map[string]bool, len(history))
+	out := make([]string, 0, len(history))
+	for _, row := range nightBackgroundAudioSteps(history) {
+		if seen[row.NodeID] {
+			continue
+		}
+		seen[row.NodeID] = true
+		out = append(out, row.NodeID)
+	}
+	return out
+}
+
 // nightBackgroundAudioLatestFadeDownDispatchedAt returns nodeID's own most
 // recent fadedown step's DispatchedAt from already-read history, or the
 // zero time.Time when no fadedown has ever been dispatched for this node.
@@ -1044,17 +1067,28 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 	if err != nil || payload.Resting.BackgroundAudio == nil {
 		return
 	}
-	resolved, owner, ok := h.nightResolveBackgroundAudio(ctx, rec, payload.Resting.BackgroundAudio)
-	if !ok {
-		h.logWarn("night loop: background audio: referenced media.playlist is missing or tombstoned; not stopping", "sessionId", rec.ID, "mediaPlaylist", payload.Resting.BackgroundAudio.MediaPlaylist)
-		return
-	}
 	history, err := h.nightBackgroundAudioHistory(ctx, rec)
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to read history for stop", "sessionId", rec.ID, "error", err)
 		return
 	}
-	for _, nodeID := range resolved.OutputNodeIDs() {
+	nodeIDs := nightBackgroundAudioDispatchedNodeIDs(history)
+	if len(nodeIDs) == 0 {
+		return
+	}
+	resolved, owner, ok := h.nightResolveBackgroundAudio(ctx, rec, payload.Resting.BackgroundAudio)
+	if !ok {
+		// No playlist left to read Resume/FadeOutMs/items from: fall back to
+		// the zero-value shape, which nightBackgroundSuspendKind resolves to
+		// an immediate stop (never a pause promising a resume this session
+		// can no longer describe) and skips any fade this controller no
+		// longer knows the duration of. owner stays zero-value too; it is
+		// only read again if a stuck in-flight apply needs resending, which
+		// a missing playlist cannot correctly do regardless.
+		h.logWarn("night loop: background audio: referenced media.playlist is missing or tombstoned; stopping from dispatch history instead", "sessionId", rec.ID, "mediaPlaylist", payload.Resting.BackgroundAudio.MediaPlaylist)
+		resolved, owner = &config.NightSessionBackgroundAudio{}, nightBackgroundAudioOwner{}
+	}
+	for _, nodeID := range nodeIDs {
 		h.nightStopBackgroundAudioIfRunningForNode(ctx, now, rec, payload.Show, nodeID, resolved, owner, history)
 	}
 }
@@ -1167,19 +1201,29 @@ func (h *handlers) nightClearBackgroundAudioAtEndSession(ctx context.Context, no
 	if ba == nil {
 		return
 	}
-	resolved, _, ok := h.nightResolveBackgroundAudio(ctx, rec, ba)
-	if !ok {
-		h.logWarn("night loop: end-session: referenced media.playlist is missing or tombstoned; background audio session was not cleared", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
-		return
-	}
 	sessionID := nightBackgroundAudioSessionID(rec)
 	history, herr := h.nightBackgroundAudioHistory(ctx, rec)
 	if herr != nil {
-		h.logWarn("night loop: end-session: failed to read background-audio history; clearing without a fade-dispatch anchor", "sessionId", rec.ID, "error", herr)
+		h.logWarn("night loop: end-session: failed to read background-audio history; background audio session was not cleared", "sessionId", rec.ID, "error", herr)
+		return
 	}
-	for _, nodeID := range resolved.OutputNodeIDs() {
+	nodeIDs := nightBackgroundAudioDispatchedNodeIDs(history)
+	if len(nodeIDs) == 0 {
+		return
+	}
+	// fadeOutMs is best-effort: a tombstoned or edited-away media.playlist
+	// leaves no fade config to honor, so the clear below proceeds without
+	// waiting on a ramp this controller can no longer describe, rather than
+	// leaving the bed running because its own owning playlist is gone.
+	var fadeOutMs *int
+	if resolved, _, ok := h.nightResolveBackgroundAudio(ctx, rec, ba); ok {
+		fadeOutMs = resolved.FadeOutMs
+	} else {
+		h.logWarn("night loop: end-session: referenced media.playlist is missing or tombstoned; clearing from dispatch history instead", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
+	}
+	for _, nodeID := range nodeIDs {
 		fadeDispatchedAt := nightBackgroundAudioLatestFadeDownDispatchedAt(history, nodeID)
-		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, fadeDispatchedAt, nodeID, sessionID, resolved.FadeOutMs)
+		h.nightClearBackgroundAudioAtEndSessionForNode(ctx, now, fadeDispatchedAt, nodeID, sessionID, fadeOutMs)
 	}
 }
 
@@ -1336,31 +1380,33 @@ func (h *handlers) nightRetryEndSessionClear(ctx context.Context, now time.Time,
 	if ba == nil {
 		return
 	}
-	resolved, _, ok := h.nightResolveBackgroundAudio(ctx, rec, ba)
-	if !ok {
-		h.logWarn("night loop: end-session clear retry: referenced media.playlist is missing or tombstoned", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	history, herr := h.nightBackgroundAudioHistory(ctx, rec)
+	if herr != nil {
+		h.logWarn("night loop: end-session clear retry: failed to read background-audio history", "sessionId", rec.ID, "error", herr)
 		return
 	}
-	nodeIDs := resolved.OutputNodeIDs()
+	nodeIDs := nightBackgroundAudioDispatchedNodeIDs(history)
 	if len(nodeIDs) == 0 {
 		return
+	}
+	var fadeOutMs *int
+	if resolved, _, ok := h.nightResolveBackgroundAudio(ctx, rec, ba); ok {
+		fadeOutMs = resolved.FadeOutMs
+	} else {
+		h.logWarn("night loop: end-session clear retry: referenced media.playlist is missing or tombstoned; retrying from dispatch history instead", "sessionId", rec.ID, "mediaPlaylist", ba.MediaPlaylist)
 	}
 	// KNOWN GAP, flagged for an owner decision: this retry safety net
 	// tracks its confirmation via ONE anchor slot on the record
 	// (ContentAnchorJSON), which can only represent one node's own
-	// retry state. A bed configured onto more than one node only gets
-	// this crash-recovery retry for its first target node
+	// retry state. A bed dispatched onto more than one node only gets
+	// this crash-recovery retry for its first dispatched node
 	// (nodeIDs[0]); nightClearBackgroundAudioAtEndSession's own
 	// synchronous warn-and-proceed attempt above still reaches every
 	// node once, so only a node whose SYNCHRONOUS attempt also failed
 	// is left unrecovered by this tick-based safety net.
-	sessionID := nightBackgroundAudioSessionID(rec)
-	history, herr := h.nightBackgroundAudioHistory(ctx, rec)
-	if herr != nil {
-		h.logWarn("night loop: end-session clear retry: failed to read background-audio history; retrying without a fade-dispatch anchor", "sessionId", rec.ID, "error", herr)
-	}
 	fadeDispatchedAt := nightBackgroundAudioLatestFadeDownDispatchedAt(history, nodeIDs[0])
-	if !h.nightEndSessionClearMayProceed(now, fadeDispatchedAt, nodeIDs[0], sessionID, resolved.FadeOutMs) {
+	if !h.nightEndSessionClearMayProceed(now, fadeDispatchedAt, nodeIDs[0], sessionID, fadeOutMs) {
 		return // fade still ramping and within bound; retried again next tick.
 	}
 	h.nightDispatchEndSessionClearRetry(ctx, now, rec, nodeIDs[0], sessionID, anchor)

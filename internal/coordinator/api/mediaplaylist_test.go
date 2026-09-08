@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -285,6 +286,55 @@ func TestDeleteMediaPlaylistTombstonesAndHonoursIfMatch(t *testing.T) {
 	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/media.playlist/porch", map[string]string{"Authorization": "Bearer " + token})
 	if getResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET after delete: status = %d, want 404; body: %s", getResp.StatusCode, getBody)
+	}
+}
+
+// TestDeleteMediaPlaylistRefusedWhileRunningNightSessionReferencesIt proves
+// half 1's guard (refuseMediaPlaylistIfReferencedByRunningNightSession,
+// mediaplaylist.go): the delete is refused with 409, naming the running
+// session, while the current night session's pinned resting.backgroundAudio
+// still names this playlist; the identical delete then succeeds once that
+// session reaches stopped (the "deleting between nights stays allowed"
+// rule).
+func TestDeleteMediaPlaylistRefusedWhileRunningNightSessionReferencesIt(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(mediaPlaylistTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	putBackgroundAudioAsset(t, st, "halloween-2026", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween-2026", "bg-2", "node-a", "asset-2")
+	mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween-2026", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	del := func() (*http.Response, []byte) {
+		req := newJSONRequest(t, http.MethodDelete, "/api/v1/config/media.playlist/planetary-bed", `{"confirm":true}`,
+			map[string]string{"Authorization": "Bearer " + token})
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	resp, body := del()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("delete while a running night session references it: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	problem := decodeMap(t, body)
+	if problem["type"] != ProblemTypeConfigObjectCurrentlyActive {
+		t.Errorf("problem.type = %v, want %v (the existing 'refused because something is running' type, reused rather than a new one)", problem["type"], ProblemTypeConfigObjectCurrentlyActive)
+	}
+	if !containsAll(string(body), rec.ConfigObjectID) {
+		t.Fatalf("refusal body does not name the running session %q; body: %s", rec.ConfigObjectID, body)
+	}
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	resp, body = del()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete once the night has ended: status = %d, want 204; body: %s", resp.StatusCode, body)
 	}
 }
 
