@@ -1499,3 +1499,48 @@ func TestUnknownMemberLogDedupes(t *testing.T) {
 		t.Fatal("the set recurring after a quiet period must log again")
 	}
 }
+
+// TestFPPObservationRefusedBodyLogsNoIgnoredFieldsWarning is a defect this
+// change originally shipped and a bench run caught: the warning says the
+// members "were ignored", which is only true of an observation that was
+// accepted. A body refused for a duplicate member name had nothing
+// ignored, it had everything refused, and warning about the wrong problem
+// sends an operator after the wrong thing.
+func TestFPPObservationRefusedBodyLogsNoIgnoredFieldsWarning(t *testing.T) {
+	var logged bytes.Buffer
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{
+		Clock:  fixedClock(testNow),
+		Logger: slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	// Refused at canonicalization for the duplicate "sequence", and it also
+	// carries an unknown member.
+	duplicate := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"sequence":9,"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`
+	if resp, m := mustPostObservation(t, api, duplicate, token); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("duplicate member post: status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	// Refused at step 7 for the missing identity fields, same shape.
+	missing := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":2,` +
+		`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`
+	if resp, m := mustPostObservation(t, api, missing, token); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing identity post: status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+
+	if strings.Contains(logged.String(), "does not know") {
+		t.Fatalf("a refused observation logged an ignored-fields warning:\n%s", logged.String())
+	}
+
+	// The same unknown member on an accepted observation still warns, or
+	// this test would pass just as well with the warning deleted.
+	accepted := fppObservationBodyWithExtraMembers(t, "instance-1", 3, map[string]any{"somethingElse": true})
+	if resp, m := mustPostObservation(t, api, accepted, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("accepted post: status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if !strings.Contains(logged.String(), "does not know") {
+		t.Fatalf("an accepted observation carrying an unknown member logged no warning:\n%s", logged.String())
+	}
+}

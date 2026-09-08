@@ -161,7 +161,6 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		return
 	}
 	ignoredFields := unknownFPPObservationMembers(raw)
-	h.logNewUnknownFPPObservationMembers(req.InstanceUUID, ignoredFields)
 	// bodyHash is the canonical form's hash, reused below both for the
 	// stored record and for step 9's replay comparison; contract §1.3:
 	// replay detection is over the canonical form of what was sent, not
@@ -489,6 +488,13 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		IgnoredFields:       ignoredFields,
 		ServerTime:          formatTime(now),
 	})
+	// Logged here, on the way out of a 200, and not at the decode above:
+	// the warning says the members "were ignored", which is only true of an
+	// observation that was actually accepted. A body refused for a
+	// duplicate member name or for a missing identity field had nothing
+	// ignored, it had everything refused, and saying otherwise would be an
+	// operator reading a warning about the wrong problem.
+	h.logNewUnknownFPPObservationMembers(rec.InstanceUUID, ignoredFields)
 }
 
 // handleListFPPPlaylistEntryObservations serves
