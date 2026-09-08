@@ -89,6 +89,7 @@ export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
       heartbeat: makeEvidence({ signal: 'node.heartbeat' }),
     },
     declaration: makeNodeDeclaration(),
+    showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     render: [],
     audio: [],
     fppConnect: [],
