@@ -30,7 +30,7 @@ vi.mock('../api', async () => {
 })
 
 const { ShowsWorkspace, ShowsTabPlaceholder } = await import('./ShowsWorkspace')
-const { ShowsMediaPlaylists } = await import('./ShowsMediaPlaylists')
+const { ShowsPlaylists } = await import('./ShowsPlaylists')
 
 function summary(overrides: Partial<{ id: string; label: string; show: string; currentRevision: number; updatedAt: string }> = {}) {
   return { id: 'mp1', label: 'Resting bed', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z', ...overrides }
@@ -83,14 +83,14 @@ function withEmptyLists(kind: string) {
   return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [] })
 }
 
-function renderWorkspace(model: Partial<Model> = {}, path = '/shows/winter-ridge-2026/media-playlists') {
+function renderWorkspace(model: Partial<Model> = {}, path = '/shows/winter-ridge-2026/playlists') {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), ...model }}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/shows/:id" element={<ShowsWorkspace />}>
-            <Route path="media-playlists" element={<ShowsMediaPlaylists />} />
-            <Route path="playlists" element={<ShowsTabPlaceholder tab="Playlists" />} />
+            <Route path="playlists" element={<ShowsPlaylists />} />
+            <Route path="cues" element={<ShowsTabPlaceholder tab="Cues" />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -103,32 +103,28 @@ async function openRow(label: string) {
   fireEvent.click(row)
 }
 
-describe('Shows · Media Playlists tab', () => {
+/** The type gate: Media playlist reveals the media form the way the runner gate reveals its own. */
+function pickMediaPlaylistType() {
+  fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Media playlist' }))
+}
+
+describe('Shows · Playlists tab, media rows', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
   })
 
-  it('states the show.playlist / media.playlist distinction verbatim', async () => {
-    stubs.getShow = showHead
-    stubs.listConfigObjects = (kind: string) => withEmptyLists(kind)
-    stubs.listAssets = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [] })
-    renderWorkspace({ session: signedIn(['config:write']) })
-    await waitFor(() => expect(screen.getByText('This show has no media playlist configured.')).toBeInTheDocument())
-    expect(screen.getByText('is a list of cues a runner steps through.', { exact: false })).toBeInTheDocument()
-    expect(screen.getByText('is a list of things the audio engine plays as a bed.', { exact: false })).toBeInTheDocument()
-  })
-
   describe('list rendering', () => {
-    it('renders the empty state when the show has no media playlist', async () => {
+    it('renders the empty state when the show has no playlist of either kind', async () => {
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) => withEmptyLists(kind)
       stubs.listAssets = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [] })
       renderWorkspace({ session: signedIn(['config:write']) })
-      await waitFor(() => expect(screen.getByText('This show has no media playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
     })
 
-    it('renders a media playlist row with its item count', async () => {
+    it('renders a media playlist row with its Type, Runner and repeat/item-count sub-line', async () => {
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) => (kind === 'media.playlist' ? Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [summary()] }) : withEmptyLists(kind))
       stubs.listAssets = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [audioAsset()] })
@@ -136,7 +132,9 @@ describe('Shows · Media Playlists tab', () => {
       renderWorkspace({ session: signedIn(['config:write']) })
       await waitFor(() => expect(screen.getByRole('row', { name: 'Edit Resting bed' })).toBeInTheDocument())
       const row = screen.getByRole('row', { name: 'Edit Resting bed' })
-      expect(within(row).getByText('1')).toBeInTheDocument()
+      expect(within(row).getByText('Media playlist')).toBeInTheDocument()
+      expect(within(row).getByText('Not applicable')).toBeInTheDocument()
+      expect(within(row).getByText('Repeat playlist · 1 item')).toBeInTheDocument()
     })
   })
 
@@ -173,14 +171,14 @@ describe('Shows · Media Playlists tab', () => {
       expect(payload.items).toEqual([{ kind: 'asset', show: 'winter-ridge-2026', sequence: 'winter-loop', target: 'node-1' }])
     })
 
-    it('creating a new media playlist sends label, show, and the first item to putMediaPlaylist', async () => {
+    it('creating a new media playlist, after picking the type, sends label, show, and the first item to putMediaPlaylist', async () => {
       stubs.getShow = showHead
       stubs.listConfigObjects = (kind: string) => withEmptyLists(kind)
       stubs.listAssets = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets: [audioAsset()] })
       renderWorkspace({ session: signedIn(['config:write']) })
-      await waitFor(() => expect(screen.getByText('This show has no media playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
 
-      fireEvent.click(screen.getByRole('button', { name: 'New media playlist' }))
+      pickMediaPlaylistType()
       fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Chase bed' } })
       fireEvent.change(screen.getByRole('combobox', { name: /Audio asset for item 1/ }), { target: { value: 'asset-1' } })
       fireEvent.change(screen.getByLabelText('Maximum gain (dB)'), { target: { value: '-6' } })
@@ -225,7 +223,7 @@ describe('Shows · Media Playlists tab', () => {
       fireEvent.click(deleteButton)
 
       await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('mp1'))
-      await waitFor(() => expect(screen.getByText('This show has no media playlist configured.')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
     })
   })
 

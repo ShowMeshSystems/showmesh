@@ -1,71 +1,33 @@
 /**
- * Shows / Media Playlists tab: the media.playlist configuration kind
- * (mediaplaylist.go), a sibling of show.playlist in the same workspace.
- * Structured after ShowsPlaylists.tsx: a list Section on the
- * page body, a Drawer-hosted editor for the selected row or a new draft.
+ * The media.playlist configuration kind (mediaplaylist.go), a sibling of
+ * show.playlist composed into the same Playlists tab (ShowsPlaylists.tsx),
+ * which owns the combined list read and the Type gate at creation.
+ * BedFields, MediaPlaylistEditor and MediaPlaylistDraft are this module's
+ * exports; there is no screen wrapper here.
  *
  * The item editor here is the same audio-asset picker the night session's
  * background-audio item editor uses (audioAssetPicker.tsx), relocated
  * rather than reinvented.
  */
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
 import {
   deleteMediaPlaylist,
   getMediaPlaylist,
   getMediaPlaylistRevisions,
-  listAssets,
-  listConfigObjects,
   putMediaPlaylist,
-  type Asset,
   type ConfigMediaPlaylist,
   type ConfigMediaPlaylistItem,
   type MediaPlaylistConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Field, Input, Panes, RevisionHistory, RuledStrip, Section, SelectableRow, Segmented, Select, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
-import { audioAssetOptions, slugify, type AudioAssetOption } from './showsModel'
+import { slugify, type AudioAssetOption } from './showsModel'
 import { AudioAssetPicker } from './audioAssetPicker'
 
 type Playlist = MediaPlaylistConfigResponse
-
-type ListState =
-  | { kind: 'loading' }
-  | { kind: 'loaded'; playlists: Playlist[]; assets: Asset[] }
-  | { kind: 'failed'; reason: string }
-
-function useMediaPlaylists(showId: string): { state: ListState; reload: () => void; updatePlaylist: (response: Playlist) => void; removePlaylist: (id: string) => void } {
-  const [attempt, setAttempt] = useState(0)
-  const [state, setState] = useState<ListState>({ kind: 'loading' })
-
-  useEffect(() => {
-    let cancelled = false
-    setState({ kind: 'loading' })
-    Promise.all([listConfigObjects('media.playlist', showId), listAssets({ show: showId })])
-      .then(async ([summaries, assetsResponse]) => {
-        const playlists = await Promise.all(summaries.objects.map((s) => getMediaPlaylist(s.id)))
-        if (!cancelled) setState({ kind: 'loaded', playlists, assets: assetsResponse.assets })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [showId, attempt])
-
-  const updatePlaylist = (response: Playlist) => {
-    setState((prev) => (prev.kind === 'loaded' ? { ...prev, playlists: prev.playlists.map((p) => (p.id === response.id ? response : p)) } : prev))
-  }
-  const removePlaylist = (id: string) => {
-    setState((prev) => (prev.kind === 'loaded' ? { ...prev, playlists: prev.playlists.filter((p) => p.id !== id) } : prev))
-  }
-
-  return { state, reload: () => setAttempt((n) => n + 1), updatePlaylist, removePlaylist }
-}
 
 const REPEAT_OPTIONS = [
   { value: 'none', label: 'None' },
@@ -147,7 +109,7 @@ function buildMediaPlaylistPayload(show: string, draft: BedDraft): { ok: true; v
   }
 }
 
-function BedFields({
+export function BedFields({
   draft,
   onChange,
   assets,
@@ -240,7 +202,7 @@ function BedFields({
   )
 }
 
-function MediaPlaylistEditor({
+export function MediaPlaylistEditor({
   playlist,
   assets,
   model,
@@ -371,7 +333,7 @@ function MediaPlaylistEditor({
   )
 }
 
-function MediaPlaylistDraft({
+export function MediaPlaylistDraft({
   showId,
   assets,
   model,
@@ -472,145 +434,5 @@ function MediaPlaylistDraft({
         </Button>
       </ButtonRow>
     </Section>
-  )
-}
-
-export function ShowsMediaPlaylists() {
-  const { id: showId = '' } = useParams<{ id: string }>()
-  const model = useModelContext()
-  const { state, reload, updatePlaylist, removePlaylist } = useMediaPlaylists(showId)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [drafting, setDrafting] = useState(false)
-
-  const playlists = state.kind === 'loaded' ? state.playlists : []
-  const assets = state.kind === 'loaded' ? audioAssetOptions(state.assets) : []
-  const selected = playlists.find((p) => p.id === selectedId) ?? null
-  const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
-
-  if (state.kind === 'loading') {
-    return (
-      <Section id="mp-list" title="Media playlists in this show">
-        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for this show's media playlists." />
-      </Section>
-    )
-  }
-
-  if (state.kind === 'failed') {
-    return (
-      <Section id="mp-list" title="Media playlists in this show">
-        <RuledStrip
-          absence="failed"
-          label="Read failed"
-          fact={state.reason}
-          detail={
-            <button type="button" className="sm-linkbutton" onClick={reload}>
-              Try again
-            </button>
-          }
-        />
-      </Section>
-    )
-  }
-
-  const closeInspector = () => {
-    setDrafting(false)
-    setSelectedId(null)
-  }
-
-  return (
-    <Panes inspectorOpen={drafting || selected !== null} onInspectorClose={closeInspector} inspectorLabelledBy="mp-editor" inspectorWidth="wide">
-      <div>
-        <p className="sm-small sm-muted sm-stack-3">
-          <span className="sm-data">show.playlist</span> is a list of cues a runner steps through.{' '}
-          <span className="sm-data">media.playlist</span> is a list of things the audio engine plays as a bed.
-        </p>
-        <Section
-          id="mp-list"
-          title="Media playlists in this show"
-          aside={
-            <Button
-              onClick={() => {
-                setDrafting(true)
-                setSelectedId(null)
-              }}
-              disabled={drafting || !createGate.allowed}
-              title={!createGate.allowed ? createGate.reason : undefined}
-            >
-              New media playlist
-            </Button>
-          }
-        >
-          {playlists.length === 0 ? (
-            <RuledStrip absence="empty" label="None" fact="This show has no media playlist configured." />
-          ) : (
-            <TableWrap label="Media playlists, scrollable">
-              <Table minWidth={420}>
-                <thead>
-                  <tr>
-                    <th scope="col">Bed</th>
-                    <th scope="col">Items</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {playlists.map((playlist) => (
-                    <SelectableRow
-                      key={playlist.id}
-                      selected={selected?.id === playlist.id}
-                      onActivate={() => {
-                        setSelectedId(playlist.id)
-                        setDrafting(false)
-                      }}
-                      ariaLabel={`Edit ${playlist.payload.label}`}
-                    >
-                      <td>
-                        <strong>{playlist.payload.label}</strong>
-                        {selected?.id === playlist.id && <span className="sm-viewing">Editing</span>}
-                        <br />
-                        <span className="sm-small sm-muted">
-                          {playlist.payload.repeat === 'none' ? 'No repeat' : `Repeat ${playlist.payload.repeat}`}
-                        </span>
-                      </td>
-                      <td className="sm-data">{playlist.payload.items.length}</td>
-                    </SelectableRow>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
-          )}
-        </Section>
-      </div>
-
-      <aside>
-        {drafting && (
-          <MediaPlaylistDraft
-            showId={showId}
-            assets={assets}
-            model={model}
-            onCreated={(response) => {
-              setSelectedId(response.id)
-              setDrafting(false)
-              reload()
-            }}
-            onDiscard={() => setDrafting(false)}
-            onOpenExisting={(id) => {
-              setSelectedId(id)
-              setDrafting(false)
-            }}
-          />
-        )}
-        {!drafting && selected !== null && (
-          <MediaPlaylistEditor
-            playlist={selected}
-            assets={assets}
-            model={model}
-            onSaved={updatePlaylist}
-            onDeleted={(id) => {
-              removePlaylist(id)
-              closeInspector()
-            }}
-          />
-        )}
-      </aside>
-    </Panes>
   )
 }

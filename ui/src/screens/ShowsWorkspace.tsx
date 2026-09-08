@@ -49,7 +49,7 @@ function useTabCounts(id: string): ShowContentsCounts | null {
   return counts
 }
 
-/** Media Playlists is not part of ShowContents (showsData.ts's six-kind fan-out); its own count is one small list read, matching that fan-out's own per-kind shape. */
+/** media.playlist is not part of ShowContents (showsData.ts's six-kind fan-out); this one small list read folds into the Playlists tab's own count, matching that fan-out's own per-kind shape. */
 function useMediaPlaylistCount(id: string): number | null {
   const [count, setCount] = useState<number | null>(null)
   useEffect(() => {
@@ -113,7 +113,6 @@ function useCheckReadiness(showId: string) {
 
 const TABS: readonly { path: string; label: string; built: boolean }[] = [
   { path: 'playlists', label: 'Playlists', built: true },
-  { path: 'media-playlists', label: 'Media playlists', built: true },
   { path: 'cues', label: 'Cues', built: true },
   { path: 'assets', label: 'Assets', built: true },
   { path: 'presentation', label: 'Presentation', built: true },
@@ -122,11 +121,9 @@ const TABS: readonly { path: string; label: string; built: boolean }[] = [
 ]
 
 function tabCount(tab: string, counts: ShowContentsCounts | null, mediaPlaylists: number | null): number | null {
-  if (tab === 'media-playlists') return mediaPlaylists
+  if (tab === 'playlists') return counts === null || mediaPlaylists === null ? null : counts.playlists + mediaPlaylists
   if (counts === null) return null
   switch (tab) {
-    case 'playlists':
-      return counts.playlists
     case 'cues':
       return counts.cues
     case 'presentation':
