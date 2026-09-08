@@ -1826,6 +1826,23 @@ func DecodeLWTPayload(env Envelope) (LWTPayload, error) {
 	return p, nil
 }
 
+// preserveExactRevision replaces p.Params["revision"] with the exact
+// json.Number decoded from raw, if present and numeric.
+func preserveExactRevision(p *CmdPayload, raw json.RawMessage) {
+	if _, present := p.Params["revision"]; !present {
+		return
+	}
+	var shell struct {
+		Params struct {
+			Revision json.Number `json:"revision"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &shell); err != nil {
+		return
+	}
+	p.Params["revision"] = shell.Params.Revision
+}
+
 // DecodeCmdPayload decodes env.Payload as a [CmdPayload]. It returns an
 // [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeCmdV1], an
 // error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
@@ -1842,6 +1859,10 @@ func DecodeCmdPayload(env Envelope) (CmdPayload, error) {
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
+	// p.Params["revision"] comes out a json.Number here, unlike every
+	// other number in p.Params (float64): nanosecond-scale revisions
+	// exceed float64's exact integer range.
+	preserveExactRevision(&p, env.Payload)
 	if err := p.Validate(); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}

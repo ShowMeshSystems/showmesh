@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -50,12 +52,27 @@ func parseAudioSessionCommon(action string, params map[string]any) (pkgaudio.Ses
 	if !ok {
 		return "", "", 0, fmt.Errorf("%s: params.revision is required", action)
 	}
-	revF, ok := rawRev.(float64)
-	if !ok || revF < 0 {
+	// A wire revision decodes as json.Number (mqttproto.DecodeCmdPayload);
+	// ParseUint rejects a negative, fractional, or out-of-range literal.
+	// float64 stays valid for a caller building params without the wire.
+	var rev uint64
+	switch v := rawRev.(type) {
+	case json.Number:
+		parsed, err := strconv.ParseUint(v.String(), 10, 64)
+		if err != nil {
+			return "", "", 0, fmt.Errorf("%s: params.revision must be a non-negative whole number, got %v", action, rawRev)
+		}
+		rev = parsed
+	case float64:
+		if v < 0 {
+			return "", "", 0, fmt.Errorf("%s: params.revision must be a non-negative number, got %v", action, rawRev)
+		}
+		rev = uint64(v)
+	default:
 		return "", "", 0, fmt.Errorf("%s: params.revision must be a non-negative number, got %v", action, rawRev)
 	}
 
-	return pkgaudio.SessionID(sessionID), pkgaudio.InvocationID(invocation), pkgaudio.Revision(revF), nil
+	return pkgaudio.SessionID(sessionID), pkgaudio.InvocationID(invocation), pkgaudio.Revision(rev), nil
 }
 
 // audioSessionOperations builds the nine allowlist entries against mgr.
