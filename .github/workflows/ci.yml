@@ -178,7 +178,11 @@ jobs:
         run: go mod download
 
       - name: Vet
+        id: vet
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: go vet ./...
 
       - name: Test the audio engine (race detector)
@@ -281,9 +285,9 @@ jobs:
 
       - name: Require every independently-reported suite to have passed
         if: always()
-        # The five steps above each carry continue-on-error, so a failure
-        # in an early one (the audio engine test, concretely) no longer
-        # skips the ones after it -- this is the actual defect this job is
+        # The six steps above each carry continue-on-error, so a failure
+        # in an early one (Vet, or the audio engine test) no longer skips
+        # the ones after it -- this is the actual defect this job is
         # fixing: an engine failure previously hid the rest of the Go
         # packages, including a coordinator end-to-end test that had never
         # once executed. continue-on-error also forces each of those
@@ -296,19 +300,26 @@ jobs:
         # than success or skipped -- failure, cancelled, or an empty
         # string if a step never ran for some other reason -- fails this
         # step, so an unexecuted suite cannot silently read as a passing
-        # one.
+        # one. Every step's name is printed next to its outcome, on both
+        # success and failure, so the log alone tells an unexecuted suite
+        # apart from one that actually ran and passed.
         run: |
           failed=false
-          for outcome in \
-            "${{ steps.test_engine.outcome }}" \
-            "${{ steps.test_rest.outcome }}" \
-            "${{ steps.build_cgo.outcome }}" \
-            "${{ steps.build_cgofree.outcome }}" \
-            "${{ steps.check_fmt.outcome }}"; do
+          for pair in \
+            "Vet:${{ steps.vet.outcome }}" \
+            "Test the audio engine (race detector):${{ steps.test_engine.outcome }}" \
+            "Test (race detector):${{ steps.test_rest.outcome }}" \
+            "Build with cgo (ADR-042 real agent backend):${{ steps.build_cgo.outcome }}" \
+            "Build CGo-free (ADR-012):${{ steps.build_cgofree.outcome }}" \
+            "Check formatting:${{ steps.check_fmt.outcome }}"; do
+            name="${pair%%:*}"
+            outcome="${pair#*:}"
             case "$outcome" in
-              success|skipped) ;;
+              success|skipped)
+                echo "PASS  $name: $outcome"
+                ;;
               *)
-                echo "a watched step reported outcome '$outcome', not success or skipped" >&2
+                echo "FAIL  $name: $outcome" >&2
                 failed=true
                 ;;
             esac
