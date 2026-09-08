@@ -1068,14 +1068,24 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		snap.HasItem, snap.ItemID, snap.ItemIndex = true, item.ItemID, s.currentIndex
 	}
 	if s.desired.Gain != nil || s.muted || len(s.duckedByAll) > 0 {
-		// Reported as the EFFECTIVE gain, not the raw configured value:
+		// Seeded with the computed INTENDED gain, effectiveGainLocked's
+		// composed configured/mute/duck/ceiling value, for a session
+		// with no loaded handle to observe yet, or whose position is
+		// mid-discontinuity this tick (the same s.handleLoaded &&
+		// s.timingKnown gate Position uses below). Once this snapshot's
+		// own fresh Observe below succeeds, that call's obs.Gain
+		// overwrites this with the engine's actual output, because the
+		// two are NOT the same value while a fade or a ceiling clamp is
+		// in flight: effectiveGainLocked is what the engine was last
+		// told to head toward, obs.Gain is where it actually is right
+		// now. Reported under audio_session.gain.effective either way:
 		// this is the wire-observable "what is this session actually
 		// outputting right now" (pkg/mqttproto, the coordinator's
-		// nodeaudio collector), which a mute or a duck must still be
-		// able to answer honestly, and each is itself enough evidence to
-		// report a gain even before any audio.gain.set has ever landed:
-		// effectiveGainLocked's own default (unity, reduced by whichever
-		// suppression is active) is well defined regardless.
+		// nodeaudio collector); each suppression reason above is itself
+		// enough evidence to report a gain even before any
+		// audio.gain.set has ever landed: effectiveGainLocked's own
+		// default (unity, reduced by whichever suppression is active) is
+		// well defined regardless.
 		snap.HasGain, snap.Gain = true, s.effectiveGainLocked()
 	}
 	if s.desired.Ceiling != nil {
@@ -1115,6 +1125,15 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 			snap.PositionKnown = true
 			snap.Position = obs.Position
 			snap.ObservedAt = obs.ObservedAt
+			if snap.HasGain {
+				// The engine's own evidence of what it is actually
+				// outputting right now, replacing the intended value
+				// snap.Gain was seeded with above: this is what lets a
+				// fade in flight report an intermediate value instead of
+				// stepping straight to its target the moment it is
+				// dispatched.
+				snap.Gain = obs.Gain
+			}
 		}
 	}
 
