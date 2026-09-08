@@ -587,35 +587,114 @@ jobs:
       # mismatch instead of silently rewriting the committed lockfile,
       # and installs exactly what's locked rather than whatever satisfies
       # the version ranges today.
+      #
+      # Not part of the aggregate below: if install fails, Lint, Typecheck,
+      # Unit tests and Build cannot produce a meaningful result either, so
+      # this is a precondition like checkout and setup-node above, not a
+      # sixth thing to report on.
       - name: Install
         if: needs.changed-files.outputs.docs_only != 'true'
         run: cd ui && npm ci
 
       - name: Lint
+        id: lint
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm run lint
 
       - name: Typecheck
+        id: typecheck
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm run typecheck
 
       - name: Unit tests
+        id: unit_tests
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm test
 
       - name: Build
+        id: build
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm run build
 
       # Regenerates src/api/generated/schema.d.ts from api/openapi.yaml and
-      # fails the job on any diff against what's committed — see the
+      # fails the job on any diff against what's committed, see the
       # Makefile's ui-gen-check target, which this step also uses locally.
       # This is what keeps ADR-015's "generated from or verified against
       # the Go types" true on every push rather than only at the moment
       # someone remembered to regenerate by hand.
       - name: Generated API types are up to date
+        id: gen_check
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: make ui-gen-check
+
+      - name: "Suite results (this log names which steps ran and which failed)"
+        if: always()
+        # The five steps above each carry continue-on-error, so a failure in
+        # an early one (Lint, say) no longer skips the ones after it, and in
+        # particular no longer skips Generated API types are up to date,
+        # which has caught committed drift between api/openapi.yaml and
+        # ui/src/api/generated/schema.d.ts before. continue-on-error also
+        # forces each of those steps' own `conclusion` to report success no
+        # matter what happened, so this reads `outcome` instead, which still
+        # carries the real pass/fail. `skipped` is accepted because every
+        # one of those steps carries the same docs_only guard the rest of
+        # this job does: on a documentation-only pull request they
+        # legitimately do not run, and that must not turn this job red.
+        # Anything other than success or skipped fails this step, so an
+        # unexecuted step cannot silently read as a passing one.
+        #
+        # Every step's name is printed next to its outcome, both to
+        # stdout/stderr and to GITHUB_STEP_SUMMARY, because the step list
+        # itself now shows a green tick on a failed step (the `conclusion`
+        # problem above): this step's own summary and log are where the
+        # real result actually lives.
+        run: |
+          failed=false
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          for pair in \
+            "Lint:${{ steps.lint.outcome }}" \
+            "Typecheck:${{ steps.typecheck.outcome }}" \
+            "Unit tests:${{ steps.unit_tests.outcome }}" \
+            "Build:${{ steps.build.outcome }}" \
+            "Generated API types are up to date:${{ steps.gen_check.outcome }}"; do
+            name="${pair%%:*}"
+            outcome="${pair#*:}"
+            case "$outcome" in
+              success)
+                line="PASS  $name: $outcome"
+                echo "$line"
+                ;;
+              skipped)
+                line="SKIP  $name: $outcome"
+                echo "$line"
+                ;;
+              *)
+                line="FAIL  $name: $outcome"
+                echo "$line" >&2
+                failed=true
+                ;;
+            esac
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" = true ]; then
+            exit 1
+          fi
 
   vuln:
     runs-on: ubuntu-latest
