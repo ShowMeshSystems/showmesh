@@ -5161,6 +5161,8 @@ export interface components {
             observedAtMillis: number;
             /** @description Gap evidence, 0 when none. */
             coalescedSincePreviousAcknowledged: number;
+            /** @description FPP's own mainPlaylist pass counter for the running playlist, 0 on the first pass and incrementing once per completed pass (FPP-PLUGIN-COORDINATOR-CONTRACTS.md 1.8). Absent when the plugin's callback did not supply one, which is how a plugin predating the field behaves; absent and 0 are different, so a first pass never compares equal to no report. Corroborating evidence, never identity: it is not an input to either hash, so an entry key is unchanged by it. */
+            playlistLoop?: number;
             /** @enum {string} */
             unavailable?: "missing_instance_uuid" | "missing_playlist_name" | "missing_definition" | "unsupported_definition_shape" | "negative_position" | "truncated_identity_field";
         };
@@ -5203,6 +5205,8 @@ export interface components {
             /** Format: date-time */
             observedAt: string;
             coalescedSincePreviousAcknowledged: number;
+            /** @description As submitted, when the plugin supplied one. Absent otherwise. */
+            playlistLoop?: number;
             /** Format: date-time */
             receivedAt: string;
         };

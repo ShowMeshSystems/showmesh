@@ -39,16 +39,31 @@ type FPPPlaylistEntryObservationRecord struct {
 	CoalescedSincePreviousAcknowledged int64
 	ReceivedAt                         time.Time
 
+	// PlaylistLoop is FPP's own mainPlaylist pass counter for the running
+	// playlist, as the plugin reported it (contract §1.2, §1.8), or nil
+	// when the plugin sent none. Nil and 0 are different: 0 is a real first
+	// pass, nil is a plugin that predates the field. schemaV32's column.
+	PlaylistLoop *int64
+
 	// EntryOccurrenceSequence is entry-START identity (schemaV18's own doc
 	// comment): stable across repeat ticks inside one entry occurrence,
 	// and strictly newer on every genuine re-entry, including a playlist
 	// looping back to an entry whose EntryKey is otherwise identical to
-	// its first visit. Computed at ingestion
-	// (fppobservations.go's handlePostFPPPlaylistEntryObservation), never
-	// read off the wire — the plugin never sends it.
-	// [cueactivate.activationID] hashes it precisely so two ticks inside
-	// one occurrence dedup to one dispatch while a loop's second lap
-	// dispatches again.
+	// its first visit.
+	//
+	// That property is provided by a different mechanism on each FPP major,
+	// and naming them is the point: FPP 9 fires the playlist "start" action
+	// and the action alone is sufficient there, while FPP 10 never fires it
+	// at all, so on FPP 10 the property rests entirely on PlaylistLoop
+	// changing. Before PlaylistLoop existed this comment claimed the
+	// property unconditionally, which was true when written and became
+	// false when FPP 10 shipped, with nothing connecting the two.
+	//
+	// Computed at ingestion (fppobservations.go's
+	// handlePostFPPPlaylistEntryObservation), never read off the wire: the
+	// plugin never sends it. [cueactivate.activationID] hashes it precisely
+	// so two ticks inside one occurrence dedup to one dispatch while a
+	// loop's second lap dispatches again.
 	EntryOccurrenceSequence int64
 
 	// EvidenceBrokenAt is schemaV29's own marker (see that migration's doc
@@ -85,7 +100,7 @@ const fppPlaylistEntryObservationColumns = `
 	playlist_name, playlist_hash, section, position, entry_key,
 	sequence_filename, media_filename, action, unavailable,
 	observed_at_millis, coalesced_since_previous_acknowledged, received_at,
-	entry_occurrence_sequence, evidence_broken_at_millis
+	entry_occurrence_sequence, evidence_broken_at_millis, playlist_loop
 `
 
 func scanFPPPlaylistEntryObservation(row interface{ Scan(dest ...any) error }) (FPPPlaylistEntryObservationRecord, error) {
@@ -94,13 +109,14 @@ func scanFPPPlaylistEntryObservation(row interface{ Scan(dest ...any) error }) (
 		observedAtMillis       int64
 		receivedAt             string
 		evidenceBrokenAtMillis sql.NullInt64
+		playlistLoop           sql.NullInt64
 	)
 	if err := row.Scan(
 		&rec.InstanceUUID, &rec.SchemaVersion, &rec.Sequence, &rec.BodyHash, &rec.ObservationJSON,
 		&rec.PlaylistName, &rec.PlaylistHash, &rec.Section, &rec.Position, &rec.EntryKey,
 		&rec.SequenceFilename, &rec.MediaFilename, &rec.Action, &rec.Unavailable,
 		&observedAtMillis, &rec.CoalescedSincePreviousAcknowledged, &receivedAt,
-		&rec.EntryOccurrenceSequence, &evidenceBrokenAtMillis,
+		&rec.EntryOccurrenceSequence, &evidenceBrokenAtMillis, &playlistLoop,
 	); err != nil {
 		return FPPPlaylistEntryObservationRecord{}, err
 	}
@@ -112,6 +128,10 @@ func scanFPPPlaylistEntryObservation(row interface{ Scan(dest ...any) error }) (
 	if evidenceBrokenAtMillis.Valid {
 		t := time.UnixMilli(evidenceBrokenAtMillis.Int64).UTC()
 		rec.EvidenceBrokenAt = &t
+	}
+	if playlistLoop.Valid {
+		v := playlistLoop.Int64
+		rec.PlaylistLoop = &v
 	}
 	return rec, nil
 }
@@ -195,7 +215,7 @@ func putFPPPlaylistEntryObservation(ctx context.Context, q querier, rec FPPPlayl
 
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO fpp_playlist_entry_observations (`+fppPlaylistEntryObservationColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
 		ON CONFLICT(instance_uuid) DO UPDATE SET
 			schema_version    = excluded.schema_version,
 			sequence          = excluded.sequence,
@@ -214,13 +234,16 @@ func putFPPPlaylistEntryObservation(ctx context.Context, q querier, rec FPPPlayl
 			coalesced_since_previous_acknowledged = excluded.coalesced_since_previous_acknowledged,
 			received_at       = excluded.received_at,
 			entry_occurrence_sequence = excluded.entry_occurrence_sequence,
-			evidence_broken_at_millis = NULL
+			evidence_broken_at_millis = NULL,
+			playlist_loop     = excluded.playlist_loop
 	`,
 		rec.InstanceUUID, rec.SchemaVersion, rec.Sequence, rec.BodyHash, rec.ObservationJSON,
 		rec.PlaylistName, rec.PlaylistHash, rec.Section, rec.Position, rec.EntryKey,
 		rec.SequenceFilename, rec.MediaFilename, rec.Action, rec.Unavailable,
 		rec.ObservedAt.UnixMilli(), rec.CoalescedSincePreviousAcknowledged, timeToDB(rec.ReceivedAt),
-		rec.EntryOccurrenceSequence,
+		// A nil *int64 binds as SQL NULL, which is what "the plugin sent no
+		// pass counter" has to store: a 0 here would be a first pass.
+		rec.EntryOccurrenceSequence, rec.PlaylistLoop,
 	)
 	if err != nil {
 		return fmt.Errorf("store: put fpp playlist entry observation %q: %w", rec.InstanceUUID, err)

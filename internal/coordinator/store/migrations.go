@@ -113,6 +113,13 @@ var migrations = []migration{
 	// migration_v31.go), so a plain string ORDER BY on any of this
 	// package's timestamp columns sorts in true chronological order.
 	{version: 31, fn: migrateV31FixedWidthTimestamps},
+	// v32: adds fpp_playlist_entry_observations.playlist_loop, FPP's own
+	// mainPlaylist pass counter as the plugin reported it, NULL when it
+	// reported none (migrateV32AddFPPPlaylistEntryObservationPlaylistLoop
+	// Column's own doc comment, migration_v32.go). Ingestion compares it to
+	// see a playlist loop back into an entry it already visited, which is
+	// the only signal that does so on FPP 10.
+	{version: 32, fn: migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

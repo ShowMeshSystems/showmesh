@@ -1155,3 +1155,160 @@ func TestFPPObservationListReturnsLatestPerInstance(t *testing.T) {
 		t.Fatalf("observations = %d, want 1; body: %s", len(obs), body)
 	}
 }
+
+// fppObservationBodyWithLoop is [fppObservationBodyWithAction] plus an
+// explicit playlistLoop, and with a nil loop it emits no member at all
+// rather than a zero: contract §1.8 makes absent and 0 different values, so
+// a test that cannot express "absent" cannot test the rule.
+func fppObservationBodyWithLoop(t *testing.T, instanceUUID string, sequence int64, playlistName, section string, position int, action string, loop *int) string {
+	t.Helper()
+	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{
+		InstanceUUID: instanceUUID, PlaylistName: playlistName, PlaylistHash: playlistHash64, Section: section, Position: position,
+	})
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	m := map[string]any{
+		"schemaVersion":                      1,
+		"instanceUuid":                       instanceUUID,
+		"playlistName":                       playlistName,
+		"playlistHash":                       playlistHash64,
+		"section":                            section,
+		"position":                           position,
+		"entryKey":                           entryKey,
+		"action":                             action,
+		"sequence":                           sequence,
+		"observedAtMillis":                   testNow.UnixMilli(),
+		"coalescedSincePreviousAcknowledged": 0,
+	}
+	if loop != nil {
+		m["playlistLoop"] = *loop
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal observation body: %v", err)
+	}
+	return string(raw)
+}
+
+// TestFPPObservationLoopReentryWithoutStartAdvancesOccurrence is the FPP 10
+// case this field exists for. FPP 10 never sends action "start"
+// (Playlist::PlayImpl flips status before Start reads it), so the whole
+// sequence below is "playing" ticks, and the entry key is identical
+// throughout because a loop's second visit to one entry derives the same
+// key. Only playlistLoop changes. Without it the loop's second lap would
+// carry the first lap's occurrence forward and the Cue would never re-fire.
+func TestFPPObservationLoopReentryWithoutStartAdvancesOccurrence(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	loop0, loop1 := 0, 1
+
+	first := fppObservationBodyWithLoop(t, "instance-1", 1, "showmesh-test", "main", 0, "playing", &loop0)
+	if resp, _ := mustPostObservation(t, api, first, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first pass post: status = %d, want 200", resp.StatusCode)
+	}
+	rec1, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after first pass: %v", err)
+	}
+	if rec1.PlaylistLoop == nil || *rec1.PlaylistLoop != 0 {
+		t.Fatalf("PlaylistLoop after a reported pass 0 = %v, want a stored 0 (not absent)", rec1.PlaylistLoop)
+	}
+
+	// Another tick on the SAME pass: the occurrence must not advance, or
+	// every ordinary tick dispatches again.
+	same := fppObservationBodyWithLoop(t, "instance-1", 2, "showmesh-test", "main", 0, "playing", &loop0)
+	if resp, _ := mustPostObservation(t, api, same, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("same-pass tick post: status = %d, want 200", resp.StatusCode)
+	}
+	rec2, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after same-pass tick: %v", err)
+	}
+	if rec2.EntryOccurrenceSequence != rec1.EntryOccurrenceSequence {
+		t.Fatalf("occurrence advanced on a same-entry same-pass tick: %d -> %d", rec1.EntryOccurrenceSequence, rec2.EntryOccurrenceSequence)
+	}
+
+	// The playlist loops. Same entry, same key, no "start", pass counter 1.
+	looped := fppObservationBodyWithLoop(t, "instance-1", 3, "showmesh-test", "main", 0, "playing", &loop1)
+	if resp, _ := mustPostObservation(t, api, looped, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("loop post: status = %d, want 200", resp.StatusCode)
+	}
+	rec3, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after loop: %v", err)
+	}
+	if rec3.EntryKey != rec1.EntryKey {
+		t.Fatalf("test setup error: the loop's EntryKey (%s) differs from the first pass's (%s); this test proves nothing unless they match",
+			rec3.EntryKey, rec1.EntryKey)
+	}
+	if rec3.EntryOccurrenceSequence == rec2.EntryOccurrenceSequence {
+		t.Fatalf("occurrence did not advance on a loop re-entry with no start and an identical entry key: stayed at %d",
+			rec3.EntryOccurrenceSequence)
+	}
+	if rec3.EntryOccurrenceSequence != 3 {
+		t.Fatalf("occurrence after the loop = %d, want 3 (the loop tick's own wire sequence)", rec3.EntryOccurrenceSequence)
+	}
+}
+
+// TestFPPObservationAbsentPlaylistLoopBehavesAsBeforeTheField is the
+// compatibility guarantee: a plugin that never sends the field must produce
+// exactly the behavior it did before the field existed. If this reddens, a
+// coordinator upgrade changes what every already-installed plugin does.
+func TestFPPObservationAbsentPlaylistLoopBehavesAsBeforeTheField(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	first := fppObservationBodyWithLoop(t, "instance-1", 1, "showmesh-test", "main", 0, "playing", nil)
+	if resp, _ := mustPostObservation(t, api, first, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first post: status = %d, want 200", resp.StatusCode)
+	}
+	rec1, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after first: %v", err)
+	}
+	if rec1.PlaylistLoop != nil {
+		t.Fatalf("PlaylistLoop = %v for a body that carried none, want nil; a stored 0 here would compare equal to a real first pass", *rec1.PlaylistLoop)
+	}
+
+	second := fppObservationBodyWithLoop(t, "instance-1", 2, "showmesh-test", "main", 0, "playing", nil)
+	if resp, _ := mustPostObservation(t, api, second, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second post: status = %d, want 200", resp.StatusCode)
+	}
+	rec2, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after second: %v", err)
+	}
+	if rec2.EntryOccurrenceSequence != rec1.EntryOccurrenceSequence {
+		t.Fatalf("occurrence advanced between two absent-loop ticks: %d -> %d; absent must compare equal to absent",
+			rec1.EntryOccurrenceSequence, rec2.EntryOccurrenceSequence)
+	}
+}
+
+func TestPlaylistLoopChanged(t *testing.T) {
+	i := func(v int64) *int64 { return &v }
+	for _, tc := range []struct {
+		name             string
+		incoming, stored *int64
+		want             bool
+	}{
+		{"both absent is not a change, or every old plugin re-dispatches every tick", nil, nil, false},
+		{"same value is not a change", i(2), i(2), false},
+		{"a higher pass is a change", i(1), i(0), true},
+		{"a lower pass is a change too: the playlist restarted", i(0), i(3), true},
+		{"a plugin that starts reporting has told us something", i(0), nil, true},
+		{"and so has one that stops", nil, i(0), true},
+		{"zero against absent is a change: 0 is a real first pass", i(0), nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := playlistLoopChanged(tc.incoming, tc.stored); got != tc.want {
+				t.Fatalf("playlistLoopChanged = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

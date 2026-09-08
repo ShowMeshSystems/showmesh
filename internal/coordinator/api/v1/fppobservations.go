@@ -26,7 +26,12 @@ type FPPPlaylistEntryObservationRequest struct {
 	Sequence                           int64  `json:"sequence"`
 	ObservedAtMillis                   int64  `json:"observedAtMillis"`
 	CoalescedSincePreviousAcknowledged int64  `json:"coalescedSincePreviousAcknowledged"`
-	Unavailable                        string `json:"unavailable,omitempty"`
+	// PlaylistLoop is FPP's own mainPlaylist pass counter (§1.2, §1.8).
+	// *int for the same reason Position is, stated above: pass 0 is a real
+	// first pass, and a plugin that reports nothing must not compare equal
+	// to one reporting its first lap.
+	PlaylistLoop *int   `json:"playlistLoop,omitempty"`
+	Unavailable  string `json:"unavailable,omitempty"`
 }
 
 // FPPPlaylistEntryObservationResponse is POST's 200 response, contract
@@ -92,7 +97,11 @@ type FPPPlaylistEntryObservation struct {
 	Unavailable                        string `json:"unavailable,omitempty"`
 	ObservedAt                         string `json:"observedAt"`
 	CoalescedSincePreviousAcknowledged int64  `json:"coalescedSincePreviousAcknowledged"`
-	ReceivedAt                         string `json:"receivedAt"`
+	// PlaylistLoop as submitted, absent when the plugin sent none. Rendered
+	// here because this type is the full stored record, and a stored field
+	// this view omitted would make that claim false.
+	PlaylistLoop *int   `json:"playlistLoop,omitempty"`
+	ReceivedAt   string `json:"receivedAt"`
 
 	// EndpointID is the configured fpp.endpoints id whose most
 	// recently observed instance uuid matches InstanceUUID, resolved
