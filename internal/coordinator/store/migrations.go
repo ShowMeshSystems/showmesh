@@ -107,6 +107,12 @@ var migrations = []migration{
 	// adds config_objects.deleted_at, a nullable tombstone marker
 	// (migrateV30AddConfigObjectDeletedAtColumn's own doc comment).
 	{version: 30, fn: migrateV30AddConfigObjectDeletedAtColumn},
+	// v31: rewrites every stored timestamp from schemaV1's original
+	// trimmed time.RFC3339Nano text to timeLayout's fixed nine-digit-
+	// fraction format (migrateV31FixedWidthTimestamps's own doc comment,
+	// migration_v31.go), so a plain string ORDER BY on any of this
+	// package's timestamp columns sorts in true chronological order.
+	{version: 31, fn: migrateV31FixedWidthTimestamps},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
