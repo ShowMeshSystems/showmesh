@@ -7514,8 +7514,8 @@ paths:
                 $ref: "#/components/schemas/FPPPlaylistEntryObservationResponse"
         "400":
           description: >-
-            Malformed body, unknown field, trailing content, or a
-            duplicate member name (`invalid-parameter`), missing
+            Malformed body, trailing content, or a duplicate member name
+            (`invalid-parameter`), missing
             `instanceUuid` (`invalid-parameter`), an invalid
             `action`/`unavailable`/hash/`position` (`invalid-parameter`),
             an identity field missing when `unavailable` is absent, or
@@ -14964,6 +14964,18 @@ components:
             `unknown-entry`, `evidence-mismatch`, or `cross-show`; the same
             text `FPPPlaylistEntryReconciliationResponse.operatorInstruction`
             carries otherwise.
+        ignoredFields:
+          type: array
+          items:
+            type: string
+          description: >-
+            The sorted names of top-level members of the submitted body
+            this coordinator does not know, absent when there were none
+            and capped at 8. They did not stop the observation being
+            accepted: an unknown member is ignored, because refusing it
+            would make a plugin newer than its coordinator lose every
+            observation. Present so a misspelled member is visible to
+            whoever sent it rather than silently dropped.
         serverTime:
           type: string
           format: date-time

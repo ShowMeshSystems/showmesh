@@ -351,10 +351,18 @@ In order:
 2. Check `fpp:observe`; refuse `403` naming the scope.
 3. Bound the body at 16384 bytes; refuse `413` on overflow.
 4. Decode, and canonicalize the raw body. Refuse `400` on malformed JSON,
-   unknown fields, trailing content after the object, or a duplicate member
-   name. A duplicate member name matters here and not merely as pedantry: a
-   permissive decoder keeps the last `sequence` while a reader of the same
-   bytes sees the first.
+   trailing content after the object, or a duplicate member name. A duplicate
+   member name matters here and not merely as pedantry: a permissive decoder
+   keeps the last `sequence` while a reader of the same bytes sees the first.
+   A member the coordinator does not know is **ignored**, not refused. Its
+   name is returned in the response's `ignoredFields` array, sorted, capped at
+   eight, and absent when there were none. Refusing an unknown member made
+   upgrade order fatal rather than merely wrong: a plugin sending a field its
+   coordinator predates had every observation rejected, so the coordinator saw
+   no entries and fired no Cues, and the symptom looked like a broken plugin.
+   Reporting the names keeps what strict decoding bought, which is that a
+   misspelled member is visible rather than silently dropped. **A plugin must
+   not treat `ignoredFields` as a failure**: the observation was accepted.
 5. Refuse `400` when `schemaVersion` is not `1`.
 6. Refuse `400` when `instanceUuid` is absent or empty.
 7. Refuse `400` when `action` is outside the fixed vocabulary, when
@@ -402,7 +410,7 @@ non-active show must never activate anything.
 | No credential | 401 | `unauthorized` |
 | Missing `fpp:observe` | 403 | `forbidden` |
 | Body over 16384 bytes | 413 | `payload-too-large` |
-| Malformed body, unknown field | 400 | `invalid-parameter` |
+| Malformed body, trailing content, duplicate member | 400 | `invalid-parameter` |
 | Unsupported `schemaVersion` | 400 | `unsupported-observation-schema-version` |
 | Missing `instanceUuid` | 400 | `invalid-parameter` |
 | Invalid enum, hash, or position | 400 | `invalid-parameter` |

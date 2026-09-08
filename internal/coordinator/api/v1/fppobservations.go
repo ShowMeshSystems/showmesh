@@ -74,6 +74,15 @@ type FPPPlaylistEntryObservationResponse struct {
 	// outcomes fppreconcile.Outcome.IsMismatch reports true for.
 	OperatorInstruction string `json:"operatorInstruction,omitempty"`
 
+	// IgnoredFields names the top-level members of the submitted body
+	// this coordinator does not know, sorted, absent when there were
+	// none. They did not stop the observation being accepted: an unknown
+	// member is ignored, because refusing it would make a plugin newer
+	// than its coordinator lose every observation. Present so a
+	// misspelled member is visible to whoever sent it instead of
+	// silently dropped, which is what strict decoding used to buy.
+	IgnoredFields []string `json:"ignoredFields,omitempty"`
+
 	ServerTime string `json:"serverTime"`
 }
 
