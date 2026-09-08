@@ -330,7 +330,7 @@ jobs:
           sha256sum -c "showmesh-node-agent_${version}_SHA256SUMS"
 
       - name: Create the GitHub pre-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.resolve.outputs.version }}
           name: v${{ needs.resolve.outputs.version }}
