@@ -283,7 +283,7 @@ jobs:
             exit 1
           fi
 
-      - name: Require every independently-reported suite to have passed
+      - name: "Suite results (this log names which suites ran and which failed)"
         if: always()
         # The six steps above each carry continue-on-error, so a failure
         # in an early one (Vet, or the audio engine test) no longer skips
@@ -292,19 +292,27 @@ jobs:
         # packages, including a coordinator end-to-end test that had never
         # once executed. continue-on-error also forces each of those
         # steps' own `conclusion` to report success no matter what
-        # happened, so this reads `outcome` instead, which still carries
-        # the real pass/fail. `skipped` is accepted because every one of
-        # those steps carries the same docs_only guard the rest of this
-        # job does: on a documentation-only pull request they legitimately
-        # do not run, and that must not turn this job red. Anything other
-        # than success or skipped -- failure, cancelled, or an empty
-        # string if a step never ran for some other reason -- fails this
-        # step, so an unexecuted suite cannot silently read as a passing
-        # one. Every step's name is printed next to its outcome, on both
-        # success and failure, so the log alone tells an unexecuted suite
-        # apart from one that actually ran and passed.
+        # happened -- GitHub's own step list and job-view API show that
+        # forced `conclusion`, not the real result -- so this reads
+        # `outcome` instead, which still carries the real pass/fail.
+        # `skipped` is accepted because every one of those steps carries
+        # the same docs_only guard the rest of this job does: on a
+        # documentation-only pull request they legitimately do not run,
+        # and that must not turn this job red. Anything other than
+        # success or skipped -- failure, cancelled, or an empty string if
+        # a step never ran for some other reason -- fails this step, so
+        # an unexecuted suite cannot silently read as a passing one.
+        #
+        # Every step's name is printed next to its outcome, on both
+        # success and failure, both to stdout/stderr and to
+        # GITHUB_STEP_SUMMARY, because the step list itself now shows a
+        # green tick on a failed suite (the `conclusion` problem above):
+        # this step's own summary and log are where the real result
+        # actually lives, so both need the full list, not just the job's
+        # pass/fail verdict.
         run: |
           failed=false
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
           for pair in \
             "Vet:${{ steps.vet.outcome }}" \
             "Test the audio engine (race detector):${{ steps.test_engine.outcome }}" \
@@ -316,14 +324,18 @@ jobs:
             outcome="${pair#*:}"
             case "$outcome" in
               success|skipped)
-                echo "PASS  $name: $outcome"
+                line="PASS  $name: $outcome"
+                echo "$line"
                 ;;
               *)
-                echo "FAIL  $name: $outcome" >&2
+                line="FAIL  $name: $outcome"
+                echo "$line" >&2
                 failed=true
                 ;;
             esac
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
           done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
           if [ "$failed" = true ]; then
             exit 1
           fi
