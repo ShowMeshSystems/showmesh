@@ -184,6 +184,7 @@ func cmdFPPMQTTSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	fs.BoolVar(&clearHosts, "clear-hosts", false, "configure zero hosts (--host alone only adds/replaces entries)")
 	fs.StringVar(&password, "password", "", "the broker password")
 	fs.BoolVar(&clearPassword, "clear-password", false, "remove the stored broker password")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fpp-mqtt set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new fpp.mqtt configuration revision, changing only the fields")
@@ -191,6 +192,8 @@ func cmdFPPMQTTSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 		_, _ = fmt.Fprintln(stderr, "the command line keeps its currently stored value (ADR-039 decision 5) —")
 		_, _ = fmt.Fprintln(stderr, "in particular, omitting --password leaves a previously stored password")
 		_, _ = fmt.Fprintln(stderr, "untouched, since \"fpp-mqtt get\" never returns it to re-submit.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -252,8 +255,21 @@ func cmdFPPMQTTSet(args []string, stdout, stderr io.Writer, clock func() time.Ti
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/fpp.mqtt"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r fppMQTTConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "fpp-mqtt set", err)
+	}
+
 	var resp fppMQTTConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/fpp.mqtt", body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "fpp-mqtt set", err)
 	}
 

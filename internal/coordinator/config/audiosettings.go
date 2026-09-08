@@ -64,6 +64,14 @@ const (
 	minDuckTargetGainDb = audio.SilenceFloorDb
 )
 
+// Bounds on duckFadeDurationMs and duckRestoreFadeDurationMs share
+// defaultFadeDurationMs's own typo-guard range: neither is a fade a
+// node can ever run outside it either.
+const (
+	minDuckFadeDurationMs = minFadeDurationMs
+	maxDuckFadeDurationMs = maxFadeDurationMs
+)
+
 // audioSettingsRenamedGainFields maps every pre-dB field name to its
 // replacement. A payload still carrying an old name is refused by name
 // rather than reinterpreted: the numbers meant a linear multiplier and
@@ -109,6 +117,21 @@ type AudioSettingsPayload struct {
 	// unconditionally.
 	DuckTargetGainDb float64 `json:"duckTargetGainDb"`
 
+	// DuckFadeDurationMs is how long a session takes to fade DOWN to
+	// DuckTargetGainDb once a higher-priority session starts ducking it.
+	// Shorter than DuckRestoreFadeDurationMs by design (the broadcast
+	// "fast attack, slow release" shape): an announcement is already
+	// talking over the bed by the time the duck starts, so the drop
+	// should be quick, not lingering.
+	DuckFadeDurationMs int `json:"duckFadeDurationMs"`
+
+	// DuckRestoreFadeDurationMs is how long a session takes to fade back
+	// UP once the last session ducking it stops. Longer than
+	// DuckFadeDurationMs: nothing is talking over the bed anymore, so an
+	// abrupt return to full level reads as jarring in a way the initial
+	// duck-down does not.
+	DuckRestoreFadeDurationMs int `json:"duckRestoreFadeDurationMs"`
+
 	// LTCFrameRate is the closed vocabulary Resolume's timecode input
 	// supports ([audio.LTCFrameRate]): 24, 25, 29.97, or 30. This ships
 	// non-drop-frame at every rate — RES-001 §9 leaves Resolume's
@@ -135,6 +158,8 @@ var AudioSettingsDefaultPayload = AudioSettingsPayload{
 	DefaultFadeDurationMs:      1000,
 	DefaultMaxBackgroundGainDb: -4.44,
 	DuckTargetGainDb:           -12.04,
+	DuckFadeDurationMs:         200,
+	DuckRestoreFadeDurationMs:  800,
 	LTCFrameRate:               string(audio.LTCFrameRate30),
 	LTCDefaultStartOffset:      "00:00:00:00",
 }
@@ -142,7 +167,8 @@ var AudioSettingsDefaultPayload = AudioSettingsPayload{
 var audioSettingsTopLevelKeys = map[string]bool{
 	"driftIgnoreThresholdMs": true, "defaultFadeCurve": true,
 	"defaultFadeDurationMs": true, "defaultMaxBackgroundGainDb": true,
-	"duckTargetGainDb": true, "ltcFrameRate": true, "ltcDefaultStartOffset": true,
+	"duckTargetGainDb": true, "duckFadeDurationMs": true, "duckRestoreFadeDurationMs": true,
+	"ltcFrameRate": true, "ltcDefaultStartOffset": true,
 }
 
 // EncodeAudioSettingsPayload marshals p into config_revisions.payload_json's
@@ -249,6 +275,28 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		}
 	}
 
+	duckFadeMs, verr := decodeRequiredInt(top, "duckFadeDurationMs", "duckFadeDurationMs")
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	if duckFadeMs < minDuckFadeDurationMs || duckFadeMs > maxDuckFadeDurationMs {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "duckFadeDurationMs",
+			Detail: fmt.Sprintf("duckFadeDurationMs must be between %d and %d", minDuckFadeDurationMs, maxDuckFadeDurationMs),
+		}
+	}
+
+	duckRestoreFadeMs, verr := decodeRequiredInt(top, "duckRestoreFadeDurationMs", "duckRestoreFadeDurationMs")
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	if duckRestoreFadeMs < minDuckFadeDurationMs || duckRestoreFadeMs > maxDuckFadeDurationMs {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "duckRestoreFadeDurationMs",
+			Detail: fmt.Sprintf("duckRestoreFadeDurationMs must be between %d and %d", minDuckFadeDurationMs, maxDuckFadeDurationMs),
+		}
+	}
+
 	ltcFrameRate, verr := decodeRequiredString(top, "ltcFrameRate", "ltcFrameRate")
 	if verr != nil {
 		return AudioSettingsPayload{}, verr
@@ -277,6 +325,8 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		DefaultFadeDurationMs:      fadeDurationMs,
 		DefaultMaxBackgroundGainDb: maxGainDb,
 		DuckTargetGainDb:           duckGainDb,
+		DuckFadeDurationMs:         duckFadeMs,
+		DuckRestoreFadeDurationMs:  duckRestoreFadeMs,
 		LTCFrameRate:               ltcFrameRate,
 		LTCDefaultStartOffset:      ltcOffset,
 	}, nil

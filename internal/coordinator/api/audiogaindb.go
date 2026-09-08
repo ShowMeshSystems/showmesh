@@ -21,7 +21,7 @@ import (
 //     parameter, because an operator is on the other end of it;
 //   - an authored show.action reaches a node through
 //     nightDispatchCueAudio, which calls
-//     convertAuthoredAudioGainParams. That one converts a decibel
+//     ConvertAuthoredAudioGainParams. That one converts a decibel
 //     parameter when it is present and otherwise leaves params alone,
 //     because the night background-audio controller builds its own
 //     targets from resting.backgroundAudio.maxGainDb and has ALREADY
@@ -81,12 +81,12 @@ func convertAudioGainParamsToLinear(action string, params map[string]any) *v1.Pr
 	return nil
 }
 
-// convertAuthoredAudioGainParams converts an authored show.action gain
+// ConvertAuthoredAudioGainParams converts an authored show.action gain
 // target's decibel parameter to the linear one the node expects, in
 // place, and does nothing at all when no decibel parameter is present.
 // See this file's doc comment for why "absent is fine" is correct here
 // and would be wrong on the HTTP path.
-func convertAuthoredAudioGainParams(action string, params map[string]any) {
+func ConvertAuthoredAudioGainParams(action string, params map[string]any) {
 	fields, ok := audioGainDbFields[action]
 	if !ok {
 		return
@@ -106,3 +106,44 @@ func convertAuthoredAudioGainParams(action string, params map[string]any) {
 // audioGainDbMax is [pkgaudio.MaxOperatorGainDb], the bound every
 // operator-facing gain shares.
 const audioGainDbMax = pkgaudio.MaxOperatorGainDb
+
+// audioApplyCeilingDbKey and audioApplyCeilingLinearKey name
+// audio.session.apply's own decibel/linear ceiling pair. Unlike gainDb/
+// targetGainDb, the field is OPTIONAL: an apply that omits it changes no
+// ceiling, matching every other apply field's own "omitted means
+// unchanged" contract.
+const (
+	audioApplyCeilingDbKey     = "ceilingDb"
+	audioApplyCeilingLinearKey = "ceiling"
+)
+
+// convertAudioApplyCeilingParamToLinear is convertAudioGainParamsToLinear's
+// sibling for audio.session.apply's own optional ceiling field: absent
+// means "this apply carries no ceiling change" and is left alone, present
+// is validated and converted the same way gainDb and targetGainDb are.
+func convertAudioApplyCeilingParamToLinear(params map[string]any) *v1.Problem {
+	if _, present := params[audioApplyCeilingLinearKey]; present {
+		p := invalidParameterProblem(fmt.Sprintf(
+			"params.%s was a linear amplitude multiplier and no longer exists; send params.%s instead, in decibels",
+			audioApplyCeilingLinearKey, audioApplyCeilingDbKey))
+		return &p
+	}
+	raw, present := params[audioApplyCeilingDbKey]
+	if !present {
+		return nil
+	}
+	db, ok := raw.(float64)
+	if !ok {
+		p := invalidParameterProblem(fmt.Sprintf("params.%s must be a JSON number in decibels, got %T", audioApplyCeilingDbKey, raw))
+		return &p
+	}
+	if db > audioGainDbMax {
+		p := invalidParameterProblem(fmt.Sprintf(
+			"params.%s is in decibels and must not exceed %v dB: a larger value is a typo, not a level",
+			audioApplyCeilingDbKey, audioGainDbMax))
+		return &p
+	}
+	delete(params, audioApplyCeilingDbKey)
+	params[audioApplyCeilingLinearKey] = float64(pkgaudio.CeilingFromDb(db))
+	return nil
+}

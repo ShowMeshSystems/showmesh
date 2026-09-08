@@ -63,12 +63,14 @@ var ErrAssetExists = errors.New("store: asset identity already exists")
 
 // AssetIdentityExistsError is returned by [Store.CreateAsset]/
 // [Tx.CreateAsset], carrying the pre-existing row, when (ShowID,
-// SequenceID, TargetKind, TargetID, ContentHash) already has a row — the
-// schemaV8 assets_identity unique index's key. Re-uploading identical
-// bytes for an identity already registered is the idempotent case spec
-// §3.3 requires ("200 with the existing asset, no new row, no new blob"):
-// the caller reads Existing off this error rather than issuing a second
-// lookup, mirroring [DuplicateMacroRunError]'s exact shape in
+// SequenceID, TargetKind, TargetID, MediaType, ContentHash) already has a
+// row: the schemaV28-widened assets_identity unique index's key (ADR-028
+// decision 1's amendment adds MediaType; schemaV8's original key was
+// ShowID/SequenceID/TargetKind/TargetID/ContentHash alone). Re-uploading
+// identical bytes for an identity already registered is the idempotent
+// case spec §3.3 requires ("200 with the existing asset, no new row, no
+// new blob"): the caller reads Existing off this error rather than issuing
+// a second lookup, mirroring [DuplicateMacroRunError]'s exact shape in
 // macro_runs.go.
 type AssetIdentityExistsError struct {
 	Existing AssetRecord
@@ -112,10 +114,10 @@ func scanAsset(row interface{ Scan(dest ...any) error }) (AssetRecord, error) {
 	return rec, nil
 }
 
-func getAssetByIdentity(ctx context.Context, q querier, showID, sequenceID, targetKind, targetID, contentHash string) (AssetRecord, error) {
+func getAssetByIdentity(ctx context.Context, q querier, showID, sequenceID, targetKind, targetID, mediaType, contentHash string) (AssetRecord, error) {
 	row := q.QueryRowContext(ctx, `SELECT`+assetColumns+`FROM assets
-		WHERE show_id = ? AND sequence_id = ? AND target_kind = ? AND target_id = ? AND content_hash = ?`,
-		showID, sequenceID, targetKind, targetID, contentHash)
+		WHERE show_id = ? AND sequence_id = ? AND target_kind = ? AND target_id = ? AND media_type = ? AND content_hash = ?`,
+		showID, sequenceID, targetKind, targetID, mediaType, contentHash)
 	rec, err := scanAsset(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AssetRecord{}, ErrAssetNotFound
@@ -154,7 +156,7 @@ func createAsset(ctx context.Context, q querier, rec AssetRecord, now time.Time)
 	}
 
 	// 1. Identity lookup — see this function's doc comment.
-	existing, err := getAssetByIdentity(ctx, q, rec.ShowID, rec.SequenceID, rec.TargetKind, rec.TargetID, rec.ContentHash)
+	existing, err := getAssetByIdentity(ctx, q, rec.ShowID, rec.SequenceID, rec.TargetKind, rec.TargetID, rec.MediaType, rec.ContentHash)
 	switch {
 	case err == nil && existing.SupersededAt == nil:
 		return AssetRecord{}, false, &AssetIdentityExistsError{Existing: existing}
@@ -164,10 +166,14 @@ func createAsset(ctx context.Context, q querier, rec AssetRecord, now time.Time)
 		return AssetRecord{}, false, fmt.Errorf("store: create asset %q: check identity: %w", rec.ID, err)
 	}
 
-	// 2. Supersede whatever is current for this (show, sequence, target), if
-	// anything — before the insert, so the schemaV8 assets_current partial
-	// unique index never sees two current rows even transiently.
-	if err := supersedeCurrentAsset(ctx, q, rec.ShowID, rec.SequenceID, rec.TargetKind, rec.TargetID, now); err != nil {
+	// 2. Supersede whatever is current for this (show, sequence, target,
+	// media type), if anything, before the insert, so the schemaV28
+	// assets_current partial unique index never sees two current rows for
+	// the same media type even transiently. Scoped to rec.MediaType (ADR-028
+	// decision 1's amendment): an FSEQ and an audio asset are both allowed
+	// current for one sequence at once, so registering one must never
+	// supersede the other.
+	if err := supersedeCurrentAsset(ctx, q, rec.ShowID, rec.SequenceID, rec.TargetKind, rec.TargetID, rec.MediaType, now); err != nil {
 		return AssetRecord{}, false, fmt.Errorf("store: create asset %q: supersede prior current asset: %w", rec.ID, err)
 	}
 
@@ -201,21 +207,24 @@ func createAsset(ctx context.Context, q querier, rec AssetRecord, now time.Time)
 }
 
 // supersedeCurrentAsset marks whatever row currently holds (showID,
-// sequenceID, targetKind, targetID), if any, as superseded at now. A no-op,
-// not an error, when nothing is current for the tuple.
-func supersedeCurrentAsset(ctx context.Context, q querier, showID, sequenceID, targetKind, targetID string, now time.Time) error {
+// sequenceID, targetKind, targetID, mediaType), if any, as superseded at
+// now. A no-op, not an error, when nothing is current for the tuple.
+// Scoped to mediaType (ADR-028 decision 1's amendment) so registering an
+// FSEQ never supersedes a current audio asset for the same sequence, or the
+// reverse.
+func supersedeCurrentAsset(ctx context.Context, q querier, showID, sequenceID, targetKind, targetID, mediaType string, now time.Time) error {
 	_, err := q.ExecContext(ctx, `
 		UPDATE assets SET superseded_at = ?
-		WHERE show_id = ? AND sequence_id = ? AND target_kind = ? AND target_id = ? AND superseded_at IS NULL
-	`, timeToDB(now), showID, sequenceID, targetKind, targetID)
+		WHERE show_id = ? AND sequence_id = ? AND target_kind = ? AND target_id = ? AND media_type = ? AND superseded_at IS NULL
+	`, timeToDB(now), showID, sequenceID, targetKind, targetID, mediaType)
 	return err
 }
 
 // rollbackAsset (ADR-028 decision 10) un-supersedes existing and supersedes
-// whatever is current now, in one transaction the caller guarantees.
-// existing is never itself current.
+// whatever is current now for existing's own media type, in one transaction
+// the caller guarantees. existing is never itself current.
 func rollbackAsset(ctx context.Context, q querier, existing AssetRecord, now time.Time) (AssetRecord, bool, error) {
-	if err := supersedeCurrentAsset(ctx, q, existing.ShowID, existing.SequenceID, existing.TargetKind, existing.TargetID, now); err != nil {
+	if err := supersedeCurrentAsset(ctx, q, existing.ShowID, existing.SequenceID, existing.TargetKind, existing.TargetID, existing.MediaType, now); err != nil {
 		return AssetRecord{}, false, fmt.Errorf("store: rollback asset %q: supersede current asset: %w", existing.ID, err)
 	}
 	if _, err := q.ExecContext(ctx, `UPDATE assets SET superseded_at = NULL WHERE id = ?`, existing.ID); err != nil {
@@ -225,10 +234,10 @@ func rollbackAsset(ctx context.Context, q querier, existing AssetRecord, now tim
 	return existing, true, nil
 }
 
-func getCurrentAssetForTuple(ctx context.Context, q querier, showID, sequenceID, targetKind, targetID string) (AssetRecord, error) {
+func getCurrentAssetForTuple(ctx context.Context, q querier, showID, sequenceID, targetKind, targetID, mediaType string) (AssetRecord, error) {
 	row := q.QueryRowContext(ctx, `SELECT`+assetColumns+`FROM assets
-		WHERE show_id = ? AND sequence_id = ? AND target_kind = ? AND target_id = ? AND superseded_at IS NULL`,
-		showID, sequenceID, targetKind, targetID)
+		WHERE show_id = ? AND sequence_id = ? AND target_kind = ? AND target_id = ? AND media_type = ? AND superseded_at IS NULL`,
+		showID, sequenceID, targetKind, targetID, mediaType)
 	rec, err := scanAsset(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AssetRecord{}, ErrAssetNotFound
@@ -240,18 +249,22 @@ func getCurrentAssetForTuple(ctx context.Context, q querier, showID, sequenceID,
 }
 
 // GetCurrentAssetForTuple returns the current (superseded_at IS NULL) asset
-// for one (showID, sequenceID, targetKind, targetID), or [ErrAssetNotFound]
-// when nothing is current yet. Callers needing the row a write is about to
-// displace — e.g. a rollback audit entry — must read this INSIDE the same
-// transaction as the write, before it runs.
-func (s *Store) GetCurrentAssetForTuple(ctx context.Context, showID, sequenceID, targetKind, targetID string) (AssetRecord, error) {
+// for one (showID, sequenceID, targetKind, targetID, mediaType), or
+// [ErrAssetNotFound] when nothing is current yet. mediaType is required
+// (ADR-028 decision 1's amendment): since schemaV28, more than one media
+// type may be current for the same (show, sequence, target) at once, so a
+// query with no media_type filter could return either one, unpredictably.
+// Callers needing the row a write is about to displace (e.g. a rollback
+// audit entry) must read this INSIDE the same transaction as the write,
+// before it runs.
+func (s *Store) GetCurrentAssetForTuple(ctx context.Context, showID, sequenceID, targetKind, targetID, mediaType string) (AssetRecord, error) {
 	guardNotInTx(ctx, "Store.GetCurrentAssetForTuple")
-	return getCurrentAssetForTuple(ctx, s.db, showID, sequenceID, targetKind, targetID)
+	return getCurrentAssetForTuple(ctx, s.db, showID, sequenceID, targetKind, targetID, mediaType)
 }
 
 // GetCurrentAssetForTuple is [Store.GetCurrentAssetForTuple]'s [Tx] form.
-func (t *Tx) GetCurrentAssetForTuple(ctx context.Context, showID, sequenceID, targetKind, targetID string) (AssetRecord, error) {
-	return getCurrentAssetForTuple(ctx, t.tx, showID, sequenceID, targetKind, targetID)
+func (t *Tx) GetCurrentAssetForTuple(ctx context.Context, showID, sequenceID, targetKind, targetID, mediaType string) (AssetRecord, error) {
+	return getCurrentAssetForTuple(ctx, t.tx, showID, sequenceID, targetKind, targetID, mediaType)
 }
 
 // CreateAsset registers a new asset, superseding any existing current

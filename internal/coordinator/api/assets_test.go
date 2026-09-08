@@ -439,6 +439,7 @@ func TestPostAssetUploadValidation(t *testing.T) {
 type v1ProblemForTest struct {
 	Type   string `json:"type"`
 	Status int    `json:"status"`
+	Detail string `json:"detail"`
 }
 
 // showTargetedAssetIsAccepted proves the "show" branch of targetKind is a
@@ -594,6 +595,62 @@ func TestPostAssetUploadTooLarge(t *testing.T) {
 	_ = json.Unmarshal(body, &p)
 	if p.Type != ProblemTypeResolumeCompositionTooLarge {
 		t.Errorf("problem type = %q, want the shared payload-too-large type %q", p.Type, ProblemTypeResolumeCompositionTooLarge)
+	}
+	// The load-bearing assertion for this test's own name: the detail must
+	// name THIS route's configured bound (4, deliberately distinctive from
+	// maxResolumeCompositionUploadBytes' 16 MiB so a hardcoded 16777216
+	// cannot pass this by coincidence), never the Resolume composition
+	// route's own fixed bound, and must call the uploaded thing an asset,
+	// not a Resolume composition file.
+	wantDetail := "the uploaded file exceeds this coordinator's 4 byte upload limit for an uploaded asset; nothing was stored."
+	if p.Detail != wantDetail {
+		t.Errorf("detail = %q, want %q", p.Detail, wantDetail)
+	}
+}
+
+// TestAssetUploadOverConfiguredMaxUploadBytesNamesConfiguredBound is
+// TestPostAssetUploadTooLarge's sibling for the OTHER too-large call site
+// in assets.go: assetstore.ErrTooLarge, returned by AssetBackend.Put
+// itself rather than by http.MaxBytesReader. Both call sites went through
+// the identical unparameterized helper before this change; this proves
+// the second one was fixed too, not only the first.
+type fakeTooLargeBackend struct{}
+
+func (fakeTooLargeBackend) Put(context.Context, io.Reader, int64) (assetstore.Blob, error) {
+	return assetstore.Blob{}, assetstore.ErrTooLarge
+}
+func (fakeTooLargeBackend) Open(context.Context, string) (io.ReadSeekCloser, int64, error) {
+	return nil, 0, assetstore.ErrNotFound
+}
+func (fakeTooLargeBackend) Stat(context.Context, string) (int64, error) {
+	return 0, assetstore.ErrNotFound
+}
+
+func TestAssetUploadOverConfiguredMaxUploadBytesNamesConfiguredBound(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	// Distinctive and far from both maxResolumeCompositionUploadBytes
+	// (16777216) and TestPostAssetUploadTooLarge's own 4, so this test
+	// cannot pass by reusing either.
+	const configuredBound = 777_216
+	deps.AssetSettings = &fakeAssetSettingsSource{maxUploadBytes: configuredBound}
+	deps.AssetBackend = fakeTooLargeBackend{}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", []byte("x"), auth)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", resp.StatusCode, body)
+	}
+	var p v1ProblemForTest
+	_ = json.Unmarshal(body, &p)
+	wantDetail := fmt.Sprintf("the uploaded file exceeds this coordinator's %d byte upload limit for an uploaded asset; nothing was stored.", configuredBound)
+	if p.Detail != wantDetail {
+		t.Errorf("detail = %q, want %q", p.Detail, wantDetail)
 	}
 }
 
@@ -1038,7 +1095,8 @@ func TestGetAssetContentSurvivesServerWriteTimeout(t *testing.T) {
 // countingNudger records how many times an out-of-band sync was requested.
 type countingNudger struct{ n int }
 
-func (c *countingNudger) Nudge() { c.n++ }
+func (c *countingNudger) Nudge()             { c.n++ }
+func (c *countingNudger) RequestNode(string) { c.n++ }
 
 // The nudge call sites are the whole point of AssetSyncNudger existing: the
 // method shipped once with a no-op default and no caller at all, so an
@@ -1284,6 +1342,104 @@ func TestPostAssetUploadAuditTimestampReflectsWriteNotUploadStart(t *testing.T) 
 	}
 	if !found {
 		t.Fatalf("no asset.upload audit entry found among %+v", audit)
+	}
+}
+
+// TestPostAssetUploadRollbackAuditNamesTheCorrectMediaTypeWhenBothAreCurrent
+// proves GetCurrentAssetForTuple's mediaType scoping (assets.go's upload
+// handler, ADR-028 decision 1's amendment): with an fseq asset AND an
+// audio asset both current for the same (show, sequence, target), an fseq
+// rollback's audit entry must name the DISPLACED FSEQ as fromAssetId, never
+// the coexisting audio asset. A query with no media_type filter could
+// return either current row, unpredictably, once more than one media type
+// can be current for one tuple at once.
+func TestPostAssetUploadRollbackAuditNamesTheCorrectMediaTypeWhenBothAreCurrent(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	fseqBytesA := []byte("fseq version A")
+	fseqBytesB := []byte("fseq version B, different bytes")
+	audioBytes := []byte("audio bed bytes, same sequence and target")
+
+	respA1, bodyA1 := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", fseqBytesA, auth)
+	if respA1.StatusCode != http.StatusOK {
+		t.Fatalf("upload fseq A: status = %d, body: %s", respA1.StatusCode, bodyA1)
+	}
+	var firstA v1AssetResponseForTest
+	_ = json.Unmarshal(bodyA1, &firstA)
+
+	respB, bodyB := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", fseqBytesB, auth)
+	if respB.StatusCode != http.StatusOK {
+		t.Fatalf("upload fseq B: status = %d, body: %s", respB.StatusCode, bodyB)
+	}
+	var fseqB v1AssetResponseForTest
+	_ = json.Unmarshal(bodyB, &fseqB)
+
+	audioFields := validAssetFields()
+	audioFields["mediaType"] = "audio"
+	respAudio, bodyAudio := doAssetUpload(t, api.Handler, audioFields, "a.wav", audioBytes, auth)
+	if respAudio.StatusCode != http.StatusOK {
+		t.Fatalf("upload audio: status = %d, body: %s", respAudio.StatusCode, bodyAudio)
+	}
+	var audioAsset v1AssetResponseForTest
+	_ = json.Unmarshal(bodyAudio, &audioAsset)
+
+	// Re-upload fseq A: an fseq rollback while the audio asset is ALSO
+	// current for the identical (show, sequence, target).
+	respRollback, bodyRollback := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", fseqBytesA, auth)
+	if respRollback.StatusCode != http.StatusOK {
+		t.Fatalf("rollback upload: status = %d, body: %s", respRollback.StatusCode, bodyRollback)
+	}
+	var rollbackResp struct {
+		Asset      v1AssetForTest `json:"asset"`
+		RolledBack bool           `json:"rolledBack"`
+	}
+	if err := json.Unmarshal(bodyRollback, &rollbackResp); err != nil {
+		t.Fatalf("decode rollback response: %v\nbody: %s", err, bodyRollback)
+	}
+	if !rollbackResp.RolledBack {
+		t.Fatalf("rolledBack = false, want true")
+	}
+
+	audit, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	foundRollback := false
+	for _, e := range audit {
+		if e.Action != "asset.rollback" || e.Target != rollbackResp.Asset.ID {
+			continue
+		}
+		foundRollback = true
+		var params struct {
+			FromAssetID string `json:"fromAssetId"`
+			ToAssetID   string `json:"toAssetId"`
+		}
+		if err := json.Unmarshal([]byte(e.ParamsJSON), &params); err != nil {
+			t.Fatalf("decode rollback audit params: %v\nparams: %s", err, e.ParamsJSON)
+		}
+		if params.FromAssetID != fseqB.Asset.ID {
+			t.Errorf("audit fromAssetId = %q, want the displaced fseq asset %q (never the coexisting audio asset %q)",
+				params.FromAssetID, fseqB.Asset.ID, audioAsset.Asset.ID)
+		}
+	}
+	if !foundRollback {
+		t.Fatalf("no asset.rollback audit entry found for %s among %+v", rollbackResp.Asset.ID, audit)
+	}
+
+	// The audio asset itself must be untouched by the fseq rollback.
+	audioNow, err := st.GetAsset(context.Background(), audioAsset.Asset.ID)
+	if err != nil {
+		t.Fatalf("get audio asset: %v", err)
+	}
+	if audioNow.SupersededAt != nil {
+		t.Fatalf("audio asset SupersededAt = %v, want nil: an fseq rollback must never touch the coexisting audio asset", audioNow.SupersededAt)
 	}
 }
 

@@ -344,3 +344,42 @@ func TestProbeItemsUnknownWithNoFaultsRollsUpToUnknown(t *testing.T) {
 		t.Fatalf("report.State = %v, want %v", report.State, MediaUnknown)
 	}
 }
+
+// TestProbeAssetID3WrappedMP3IsReady proves a tag wrapper does not read as
+// an unsupported format: GStreamer's typefind names the OUTERMOST
+// container, so every ID3v2-tagged MP3 identifies as "application/x-id3"
+// while decoding to raw audio exactly as an untagged one does.
+func TestProbeAssetID3WrappedMP3IsReady(t *testing.T) {
+	dir := t.TempDir()
+	ref := writeFixture(t, dir, "a.mp3", []byte("ID3\x03\x00...mpeg frames"))
+	dec := &fakeDecoder{result: DecodeResult{
+		Available: true, TypeIdentified: true, MIMEType: "application/x-id3",
+		Decoded: true, Codec: "Mpg123AudioDec", Channels: 2, SampleRate: 44100,
+	}}
+
+	got := ProbeAsset(context.Background(), dir, ref, dec)
+
+	if got.State != MediaReady {
+		t.Fatalf("ProbeAsset = %+v, want State=ready", got)
+	}
+	if got.Channels != 2 || got.SampleRate != 44100 {
+		t.Errorf("got %+v, want the decoded channel count and sample rate preserved", got)
+	}
+}
+
+// TestProbeAssetNonAudioThatDecodesNothingStaysUnsupported pins the other
+// side of the same branch: a non-audio type whose bounded decode produced
+// no audio is still unsupported_format, never undecodable.
+func TestProbeAssetNonAudioThatDecodesNothingStaysUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	ref := writeFixture(t, dir, "a.mp3", []byte("\xff\xd8\xff\xe0 jpeg bytes"))
+	dec := &fakeDecoder{result: DecodeResult{
+		Available: true, TypeIdentified: true, MIMEType: "image/jpeg", Decoded: false,
+	}}
+
+	got := ProbeAsset(context.Background(), dir, ref, dec)
+
+	if got.State != MediaFaulted || got.Fault != MediaFaultUnsupportedFormat {
+		t.Fatalf("ProbeAsset = %+v, want State=fault Fault=unsupported_format", got)
+	}
+}

@@ -1,6 +1,6 @@
 # Audio Engine Specification
 
-[Documentation index](../README.md) · [Architecture specification](ARCHITECTURE.md) · [Observability specification](OBSERVABILITY.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md)
+[Documentation index](../README.md) · [Architecture specification](ARCHITECTURE.md) · [Observability specification](OBSERVABILITY.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md) · [ADR-045](../decisions/ADR-045-multi-node-audio-and-roles.md)
 
 Status: Architecture baseline. The real GStreamer engine is merged and is what the agent constructs; production LTC generation is built on an unmerged branch; assembled-path verification against real hardware remains open
 Audience: Maintainers, audio-node contributors, show operators
@@ -56,6 +56,14 @@ The engine must represent these transitions even when a particular output cannot
 Every state-changing request carries a stable invocation identity, target session, desired revision, deadline, and confirmation contract through the command envelope in ARCHITECTURE §8.1. Repeating the same invocation is idempotent. A later revision supersedes an earlier desired state; delayed commands must not rewind a newer session. Confirmation states what was observed (`started`, `position`, `gain`, `fade-complete`, `stopped`, or `completed`) or says the operation is structurally unconfirmable. Receipt alone is not confirmation.
 
 ## 4. Timing and synchronization
+
+### 4.0 An installation may declare more than one audio node, with roles
+
+An installation is not limited to one audio node. [ADR-045](../decisions/ADR-045-multi-node-audio-and-roles.md) lets an `audio.node` object declare a `role` — `program` (program audio only), `program+ltc` (program audio and this installation's sole LTC emitter), or `zone` (an independent local speaker zone, never program or LTC). Any number of `program` and `zone` nodes may coexist; exactly one node may hold `program+ltc` at a time, because §5 below still holds: program audio and LTC share one clock domain, which means one LTC emitter for the whole installation, however many nodes exist alongside it.
+
+A `show.cue`'s audio, LTC, and announcement outputs each name an optional target node, mirroring the render output's existing `show.surface.node` field. An output with no named target resolves to the installation's single `program+ltc` node — the only node a one-node installation has ever had, and the behavior every such installation keeps unchanged under ADR-045.
+
+Nothing below in this section, or in §11's failure-recovery model, changes because a second node exists. Each node still plays its own local media against its own local clock (§4.1), still measures rather than chases drift (§4.2), and still fails independently (§11). What ADR-045 adds is *placement* — which node a given Cue's output runs on — not a second timing model. Cross-node sample sync — whether two nodes are expected to align with EACH OTHER rather than each independently with the show timeline — is explicitly out of scope for ADR-045 and is [SM-309](../build/BUILD-LOG.md)'s question.
 
 ### 4.1 Nodes play local media, not a sample stream
 
@@ -237,7 +245,9 @@ Other outputs continue, the session remains active, ShowMesh reports degraded au
 
 ### 11.3 Node failure
 
-If the active audio node fails, ShowMesh detects the loss, identifies eligible standby nodes, verifies required media and output capabilities and physical routing and health, and a replacement node may assume audio authority, starting at the current authoritative show position.
+If an audio node fails, ShowMesh detects the loss, identifies eligible standby nodes CAPABLE OF THE SAME ROLE (ADR-045 §4.0) as the failed node — another `program+ltc` candidate for the installation's sole LTC emitter, another node that can carry `program`, or another node serving the same `zone` — verifies required media and output capabilities and physical routing and health, and a replacement node may assume that role's audio authority, starting at the current authoritative show position. A `zone` node's failure never fails over onto the `program+ltc` node's own role, and the reverse: role identity is part of what "eligible" means here, not merely capability and health.
+
+In a multi-node installation, the failure of one node's role (a `zone` node going silent, say) is independent of every other node's own health: ShowMesh reports the failed role degraded and continues every other node's own sessions unaffected, exactly as §11.2 already requires for independent output failure within one node.
 
 Recovery prioritizes safe and deterministic behavior over seamless sample-accurate continuity. Audio will be interrupted; the goal is that it resumes correctly and audibly once, not that the seam is inaudible.
 

@@ -120,6 +120,12 @@ type node struct {
 	// no SURFACE entry is present, regardless of node.multisync.*.
 	Render []observationEntry `json:"render"`
 
+	// Audio is required (api/openapi.yaml's Node schema): whatever
+	// node.audio.* observations this coordinator currently holds for this
+	// node, one [observationEntry] per signal. Never null: an empty slice
+	// means this node has never published an audio discovery report.
+	Audio []observationEntry `json:"audio"`
+
 	// Clock is Track I seam I1's addition, additive per contract §6.2:
 	// whatever node.clock.ptp.* observations this coordinator currently
 	// holds for this node, one [observationEntry] per signal. Never null
@@ -127,6 +133,17 @@ type node struct {
 	// node has never published a clock status report (no node.clock
 	// configuration, or a node still starting up).
 	Clock []observationEntry `json:"clock"`
+
+	// FPPConnect is an addition, additive per contract §6.2: whatever
+	// node.fppconnect.channel_range.* observations this coordinator
+	// currently holds for this node's most recently resolved
+	// fppconnect.configure push, one [observationEntry] per signal. Never
+	// null — an empty slice means this node has never had a
+	// fppconnect.configure push resolved for it. Resource is this node
+	// itself, the node.multisync.* precedent (one push carries one
+	// channel-range string per node). "fppconnect status" (cmd_fppconnect.go)
+	// prints these.
+	FPPConnect []observationEntry `json:"fppConnect"`
 }
 
 // observationEntry mirrors internal/coordinator/api/v1.ObservationEntry:
@@ -219,6 +236,15 @@ type nodeDeclarationResponse struct {
 // deleteNodeDeclarationRequest is the required body of
 // DELETE /api/v1/nodes/{nodeId}/declaration.
 type deleteNodeDeclarationRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
+// configObjectDeleteRequest is the required body of DELETE on a per-object
+// configuration kind's path (audio.node, show, show.surface, show.action,
+// show.macro, show.cue, show.playlist, night.session). Same shape as
+// deleteNodeDeclarationRequest immediately above, kept as its own type
+// since it backs a distinct wire operation.
+type configObjectDeleteRequest struct {
 	Confirm bool `json:"confirm"`
 }
 
@@ -369,13 +395,52 @@ type snapshotFPP struct {
 }
 
 // snapshot is the body of GET /api/v1/snapshot.
+//
+// AudioConfigPush is *audioConfigPushState, not a bare value: a
+// coordinator that predates this field (before PR #189) omits it
+// entirely, and encoding/json leaves a missing field's pointer nil rather
+// than inventing a zero-value struct — the same "absent is a pointer"
+// rule this file's own doc comment states above. A bare struct here would
+// decode a pre-#189 coordinator's response as state="", which is not a
+// member of the state enum and prints/re-marshals as if the coordinator
+// had actually reported something.
 type snapshot struct {
-	ServerTime     time.Time          `json:"serverTime"`
-	LatestEventSeq uint64             `json:"latestEventSeq"`
-	Nodes          []node             `json:"nodes"`
-	FPP            snapshotFPP        `json:"fpp"`
-	Collectors     []collectorState   `json:"collectors"`
-	Resolume       []resolumeInstance `json:"resolume"`
+	ServerTime      time.Time             `json:"serverTime"`
+	LatestEventSeq  uint64                `json:"latestEventSeq"`
+	Nodes           []node                `json:"nodes"`
+	FPP             snapshotFPP           `json:"fpp"`
+	Collectors      []collectorState      `json:"collectors"`
+	MacroRuns       []macroRunSummary     `json:"macroRuns"`
+	Resolume        []resolumeInstance    `json:"resolume"`
+	AuditStore      *auditStoreStatus     `json:"auditStore"`
+	AudioConfigPush *audioConfigPushState `json:"audioConfigPush"`
+}
+
+// auditStoreStatus is snapshot.auditStore: whether this coordinator can
+// currently write to its audit store, computed fresh on every request via a
+// real probe write (always rolled back, never committed), not cached from
+// past traffic.
+//
+// *auditStoreStatus, not a bare value: this field is required by the
+// current contract, but a coordinator that predates it omits "auditStore"
+// from the response entirely rather than sending a zero-value object,
+// following AudioConfigPushState's own doc comment above -- a bare struct
+// here would decode that absence as state="", which is not a member of the
+// state enum and prints/re-marshals as if the coordinator had actually
+// reported something.
+type auditStoreStatus struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
+}
+
+// audioConfigPushState is snapshot.audioConfigPush: whether the
+// coordinator can decode its stored, engine-wide audio.settings revision
+// right now. Narrow by design — see the coordinator's own
+// v1.AudioConfigPushStatus doc comment: it says nothing about any one
+// node's own audio.node binding or reachability.
+type audioConfigPushState struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
 }
 
 // resolumeInstanceComposition is ResolumeInstance.composition: which show

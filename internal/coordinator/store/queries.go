@@ -13,7 +13,20 @@ import (
 // timeLayout is the on-disk representation for every timestamp column;
 // see schemaV1's doc comment for why this package owns the format itself
 // rather than relying on the driver's time.Time conversion.
-const timeLayout = time.RFC3339Nano
+//
+// Fixed at nine fraction digits, never trimmed, unlike time.RFC3339Nano
+// (schemaV1's original choice): a plain string ORDER BY on the column
+// must sort in true chronological order, and RFC3339Nano's trimmed
+// fraction breaks that the moment two rows land in the same second with
+// fractions that trim to different lengths: ".122" (from .122000000)
+// sorts AFTER ".122183" under a byte-wise compare, because "Z" is 0x5A,
+// which sorts after every digit, so the shorter, EARLIER value compares
+// greater than the longer, LATER one. A fixed width removes the
+// dependence on length entirely: every stored value compares byte-for-
+// byte in the same order as the time it represents.
+// migrateV31FixedWidthTimestamps (migration_v31.go) rewrites every row
+// written under the old trimmed format to this one.
+const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 func timeToDB(t time.Time) string {
 	return t.UTC().Format(timeLayout)

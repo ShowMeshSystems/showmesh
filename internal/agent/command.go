@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -13,6 +14,40 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
+
+// doNotCacheError marks its wrapped error as one whose failure result must
+// NOT be retained in the idempotency cache: [HandleMessage] releases the
+// idempotency key's claim instead of completing it (see [idempotencyCache.
+// release]), so a LATER redelivery of the same key re-executes from
+// scratch rather than replaying this exact failure forever. Reserved for a
+// failure that is genuinely transient and whose cause can clear on its own
+// (a local disk write failure, for instance); the coordinator's own
+// idempotency key for a config push is deterministic in the resolved
+// state (internal/coordinator/fppconnectpush), so without this a single
+// transient failure would otherwise strand the agent on that failure
+// until the pushed state changes, the cache evicts, or the agent
+// restarts. Error() and Unwrap() both defer to the wrapped error, so
+// wrapping never changes what a caller sees in the wire Reason string or
+// in an errors.Is/errors.As chain looking past this marker; only
+// markDoNotCacheFailure's own caller, and errors.As(err, &target) with a
+// *doNotCacheError target, ever need to know it is there. Every
+// OperationFunc that does not use markDoNotCacheFailure is unaffected:
+// its failures are cached exactly as before.
+type doNotCacheError struct {
+	err error
+}
+
+func (e *doNotCacheError) Error() string { return e.err.Error() }
+func (e *doNotCacheError) Unwrap() error { return e.err }
+
+// markDoNotCacheFailure wraps err (nil-safe: nil in, nil out) so
+// [HandleMessage] treats it as [doNotCacheError] describes.
+func markDoNotCacheFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &doNotCacheError{err: err}
+}
 
 // commandPublishTimeout bounds a single result (or agent-echo observation)
 // publish attempt, matching heartbeat.go's heartbeatPublishTimeout pattern:
@@ -169,34 +204,42 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 }
 
 // newOperationRegistry returns this agent's entire command allowlist:
-// "agent.echo", "asset.fetch", "audio.device.probe" (Track C seam C1a),
-// "audio.media.probe" (Track C seam C2), Track B's four render.*
-// operations (seam B2a's apply/clear/restart, seam B4's transport.probe),
-// "cuecatalog.deploy" (Track H seam H3: the coordinator pushing a resolved
-// Cue catalog onto this node — see cuecatalogops.go), and "cue.activate"
-// (Track H seam H4: a runner-neutral Cue activation, authorized against
-// the held catalog and applied to rendering, audio, and LTC — see
-// cueactivationops.go), and "node.clock.configure" (Track I seam I1: the
-// coordinator pushing this node's node.clock binding — see
+// "agent.echo", "asset.fetch", "asset.remove" (delete one verified held
+// asset, the counterpart asset.fetch never had), "asset.inventory.request"
+// (no params: republish this node's asset inventory immediately, see
+// assetInventoryRequestOperation), "audio.device.probe"
+// (Track C seam C1a), "audio.media.probe" (Track C seam C2), Track B's four
+// render.* operations (seam B2a's apply/clear/restart, seam B4's
+// transport.probe), "cuecatalog.deploy" (Track H seam H3: the coordinator
+// pushing a resolved Cue catalog onto this node, see cuecatalogops.go),
+// "cue.activate" (Track H seam H4: a runner-neutral Cue activation,
+// authorized against the held catalog and applied to rendering, audio, and
+// LTC, see cueactivationops.go), and "node.clock.configure" (Track I seam
+// I1: the coordinator pushing this node's node.clock binding — see
 // clockconfigops.go). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
-// this map itself IS the enforcement mechanism — [CommandHandler.
+// this map itself IS the enforcement mechanism: [CommandHandler.
 // HandleMessage] refuses any Action that is not a key here, never executes
 // it, and never silently ignores it. assetDir and assetAPIToken configure
-// "asset.fetch" (see assets.go); render configures the four render.*
-// operations (see renderops.go); nodeID and catalogStore configure
-// "cuecatalog.deploy"; clockBind configures "node.clock.configure". Adding
-// a further allowlisted operation later means adding a further entry to
-// this map, not building a second enforcement path.
-func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding) map[string]OperationFunc {
+// "asset.fetch" (see assets.go); assetDir alone configures "asset.remove";
+// render configures the four render.* operations (see renderops.go);
+// nodeID and catalogStore configure "cuecatalog.deploy"; clockBind
+// configures "node.clock.configure". Adding a further allowlisted
+// operation later means adding a further entry to this map, not building a
+// second enforcement path.
+func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding, fppConnect *fppConnectState, logger *slog.Logger) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
+	remove := assetRemoveOperation{dir: assetDir}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
+	inventoryRequest := assetInventoryRequestOperation{}
 	ops := map[string]OperationFunc{
-		"agent.echo":         state.apply,
-		"asset.fetch":        fetch.run,
-		"audio.device.probe": probeAudioDevice,
-		"audio.media.probe":  mediaProbe.run,
+		"agent.echo":              state.apply,
+		"asset.fetch":             fetch.run,
+		"asset.remove":            remove.run,
+		"asset.inventory.request": inventoryRequest.run,
+		"audio.device.probe":      probeAudioDevice,
+		"audio.media.probe":       mediaProbe.run,
 	}
 	if render != nil {
 		ops["render.surface.apply"] = render.applySurface
@@ -227,6 +270,12 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		ops[action] = op
 	}
 	for action, op := range clockConfigureOperations(clockBind) {
+		ops[action] = op
+	}
+	for action, op := range audioNodeSilenceOperations(audioMgr) {
+		ops[action] = op
+	}
+	for action, op := range fppConnectOperations(fppConnect, assetDir, logger) {
 		ops[action] = op
 	}
 	return ops
@@ -294,17 +343,21 @@ func newIdempotencyCache(capacity int) *idempotencyCache {
 }
 
 // claimOrAwait is this cache's one entry point for the idempotency
-// decision. It returns (result, true) when key was already resolved —
+// decision. It returns (result, true) when key was already resolved,
 // either found in the completed cache immediately, or found in-flight and
-// waited for — meaning the caller must NOT execute and should republish
+// waited for, meaning the caller must NOT execute and should republish
 // result verbatim. It returns (zero value, false) when THIS call is the
 // one that must execute: it atomically claims key as in-flight, under the
 // same lock as the "is it already known" check, so no concurrent caller
 // can also receive false for the same key. A caller that receives false
-// MUST call [idempotencyCache.complete] for key exactly once afterward, on
-// every code path (including a refusal or a failure) — that call is what
-// releases any concurrent waiters and is the only way this key's in-flight
-// claim is ever cleared.
+// MUST call exactly one of [idempotencyCache.complete] or
+// [idempotencyCache.release] for key afterward, on every code path
+// (including a refusal or a failure): complete for an ordinary outcome,
+// or release when the operation marked its error with
+// [markDoNotCacheFailure]. Either call is what releases any concurrent
+// waiters and is the only way this key's in-flight claim is ever cleared;
+// calling neither leaves every concurrent waiter, and any later delivery
+// of the same key, blocked forever.
 func (c *idempotencyCache) claimOrAwait(key string) (mqttproto.ResultPayload, bool) {
 	c.mu.Lock()
 	if el, ok := c.entries[key]; ok {
@@ -361,6 +414,29 @@ func (c *idempotencyCache) complete(key string, result mqttproto.ResultPayload) 
 	}
 }
 
+// release closes out key's in-flight claim WITHOUT retaining result in the
+// completed cache: unlike [idempotencyCache.complete], key is never added
+// to entries/order, so a LATER redelivery of the same key finds neither an
+// in-flight claim nor a cached entry and re-executes from scratch. A
+// caller currently blocked in claimOrAwait's in-flight wait for this key
+// still receives result exactly once (a genuinely concurrent redelivery
+// must not be left hanging or silently dropped), so this is a strict
+// narrowing of complete's retention, not a change to its release
+// semantics. Called instead of complete only for a failure an operation
+// marked with [markDoNotCacheFailure]; every other completion path uses
+// complete, which retains its result permanently (until FIFO eviction).
+func (c *idempotencyCache) release(key string, result mqttproto.ResultPayload) {
+	c.mu.Lock()
+	inf := c.inFlight[key]
+	delete(c.inFlight, key)
+	c.mu.Unlock()
+
+	if inf != nil {
+		inf.result = result
+		close(inf.done)
+	}
+}
+
 // CommandHandler receives, allowlist-checks, dispatches, and reports the
 // outcome of commands sent to one node's cmd topic — this seam's entire
 // receive -> allowlist -> execute -> evidence -> report path. See
@@ -399,10 +475,10 @@ type CommandHandler struct {
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding, fppConnect *fppConnectState, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
 		nodeID:            nodeID,
-		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore, clockBind),
+		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore, clockBind, fppConnect, logger),
 		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
 		now:               now,
 		logger:            logger,
@@ -442,8 +518,10 @@ func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger
 //     its original, since HandleMessage runs in its own goroutine per
 //     inbound PUBLISH — see mqtt.go) execute exactly once rather than
 //     merely "usually once." Otherwise, this call now exclusively owns
-//     the key and MUST call h.cache.complete on every remaining path
-//     below, including a refusal or a failure.
+//     the key and MUST call exactly one of h.cache.complete or
+//     h.cache.release on every remaining path below, including a
+//     refusal or a failure; release applies only when the operation
+//     marked its error with markDoNotCacheFailure.
 //  8. Deadline already elapsed at receipt: refused, completed (so a
 //     concurrent or later redelivery does not re-evaluate against a
 //     possibly different now()).
@@ -525,7 +603,9 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 	// call. resolved == true means someone else (a prior delivery, or a
 	// concurrent one this call waited on) already owns this key's outcome;
 	// resolved == false means THIS call now exclusively owns it and must
-	// call h.cache.complete on every remaining path below.
+	// call exactly one of h.cache.complete or h.cache.release on every
+	// remaining path below; release applies only when the operation
+	// marked its error with markDoNotCacheFailure.
 	resolved, found := h.cache.claimOrAwait(cmd.IdempotencyKey)
 	if found {
 		h.logger.Info("redelivered command matched an already-resolved idempotency key; republishing that result without re-executing",
@@ -570,7 +650,12 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 				CollectedAt: h.now(),
 			}
 		}
-		h.cache.complete(cmd.IdempotencyKey, result)
+		var doNotCache *doNotCacheError
+		if errors.As(err, &doNotCache) {
+			h.cache.release(cmd.IdempotencyKey, result)
+		} else {
+			h.cache.complete(cmd.IdempotencyKey, result)
+		}
 		h.publishResult(ctx, publisher, result)
 		return
 	}
@@ -618,15 +703,16 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 			h.publishAgentEcho(ctx, publisher, v, opResult.ExecutedAt)
 		}
 	}
-	if cmd.Action == "asset.fetch" && h.assetFetchTrigger != nil {
+	if (cmd.Action == "asset.fetch" || cmd.Action == "asset.remove" || cmd.Action == "asset.inventory.request") && h.assetFetchTrigger != nil {
 		select {
 		case h.assetFetchTrigger <- struct{}{}:
 		default:
 			// A publish is already pending (or nothing is listening yet);
 			// see mqtt.go's identical heartbeatConnected send for why a
 			// dropped duplicate trigger here is correct, not lossy in any
-			// way that matters — the inventory publisher only needs to know
-			// "a fetch completed since I last checked," not how many.
+			// way that matters: the inventory publisher only needs to know
+			// "a fetch or remove completed since I last checked," not how
+			// many.
 		}
 	}
 	if isRenderAction(cmd.Action) && h.renderTrigger != nil {

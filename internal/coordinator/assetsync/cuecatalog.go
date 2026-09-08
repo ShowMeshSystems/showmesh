@@ -105,6 +105,11 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 	// audio.node's mere existence.
 	nodeHasLTC := nodeHasAudioNode && audioNode.LTCRoute != ""
 
+	targets, err := loadAudioTargets(ctx, st, nodeID)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
+	}
+
 	claimCtx := config.ShowCueClaimContext{
 		RenderSurfaceIDs: surfaceIDs,
 	}
@@ -124,7 +129,7 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		if err != nil {
 			return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
 		}
-		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue)
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
 		if verr != nil {
 			return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: decode stored show.cue %q: %s", obj.ID, verr.Detail)
 		}
@@ -152,10 +157,10 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		entries = append(entries, cuecatalog.Entry{
 			CueID:       obj.ID,
 			CueRevision: obj.CurrentRevision,
-			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, assetsBySequence),
+			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets, assetsBySequence),
 		})
 
-		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC)
+		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets)
 		conflict, err := detectClaimConflicts(claimants, claimant{cueID: obj.ID, playlists: referencingPlaylists[obj.ID]}, scoped, claimCtx)
 		if err != nil {
 			return Catalog{}, err
@@ -201,6 +206,25 @@ type Catalog struct {
 	Conflicts  []CatalogConflict
 }
 
+// HasAnyOutput reports whether c resolves at least one non-empty output
+// (render, audio, LTC, or announcement) for any Cue: whether the
+// node c was resolved for actually participates in the active show at
+// all. [internal/coordinator/fppreconcile]'s own node-catalog readiness
+// condition and [internal/coordinator/cueactivate/decide.go]'s unexported
+// hasAnyOutput both answer this identical question independently (the
+// latter is unexported and that package is out of bounds to import here);
+// this method exists so callers that only need the resolved [Catalog]
+// itself, never cueactivate's own participation set, have one place to
+// ask it from Catalog directly.
+func (c Catalog) HasAnyOutput() bool {
+	for _, e := range c.Entries {
+		if e.Outputs.Render != nil || e.Outputs.Audio != nil || e.Outputs.LTC != nil || e.Outputs.Announcement != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // CatalogConflict is one H0.5 exclusive-claim collision [ResolveCueCatalog]
 // found between two Cues neither authoring-time validation nor
 // [sameSinglePlaylist]'s exemption ruled out. CueA/CueB are sorted
@@ -221,18 +245,18 @@ func (c CatalogConflict) Detail() string {
 
 // resolveCueOutputs projects payload's declared outputs onto
 // [cuecatalog.Outputs], restricted per this file's own doc comment.
-func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool, assetsBySequence map[string][]ExpectedAsset) cuecatalog.Outputs {
+func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool, targets audioTargets, assetsBySequence map[string][]ExpectedAsset) cuecatalog.Outputs {
 	var out cuecatalog.Outputs
 
 	if payload.Outputs.Render != nil && nodeHasSurface {
-		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Render.Sequence)
+		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Render.Sequence, "fseq")
 		out.Render = &cuecatalog.RenderOutput{
 			Sequence:    payload.Outputs.Render.Sequence,
 			Filename:    filename,
 			AssetHashes: hashes,
 		}
 	}
-	if payload.Outputs.Audio != nil && nodeHasAudioNode {
+	if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Audio.Target) {
 		// assetsBySequence is keyed by AssetRecord.SequenceID, and
 		// payload.Outputs.Audio.Asset IS that same identity, not
 		// AssetRecord.ID: every asset, audio or render, is uploaded
@@ -242,7 +266,7 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 		// same identity space a render Cue output's Sequence does —
 		// only ShowCueAudioOutput's own field is called "asset" rather
 		// than "sequence".
-		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Audio.Asset)
+		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Audio.Asset, "audio")
 		out.Audio = &cuecatalog.AudioOutput{
 			Asset:             payload.Outputs.Audio.Asset,
 			Filename:          filename,
@@ -250,10 +274,10 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 			AssetHashes:       hashes,
 		}
 	}
-	if payload.Outputs.LTC != nil && nodeHasLTC {
+	if payload.Outputs.LTC != nil && nodeHasLTC && targets.Owns(payload.Outputs.LTC.Target) {
 		out.LTC = &cuecatalog.LTCOutput{StartOffsetMillis: payload.Outputs.LTC.StartOffsetMillis}
 	}
-	if payload.Outputs.Announcement != nil && nodeHasAudioNode {
+	if payload.Outputs.Announcement != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Announcement.Target) {
 		out.Announcement = &cuecatalog.AnnouncementOutput{
 			Policy:     payload.Outputs.Announcement.Policy,
 			DuckGainDb: payload.Outputs.Announcement.DuckGainDb,
@@ -302,6 +326,12 @@ func loadAudioNodePayload(ctx context.Context, st *store.Store, nodeID string) (
 // catalog resolution outright instead of correctly producing no render
 // claim for a node the render output was never meant to concern.
 //
+// targets narrows the same three outputs a second time, by ADR-045's
+// optional target node: an output naming a target concerns only that node,
+// and one naming none concerns only the installation's sole program+ltc
+// node. Capability and target are both required, so a program node named
+// as the target of an LTC output still receives nothing.
+//
 // nodeHasLTC is deliberately separate from nodeHasAudioNode rather than
 // derived from it. A program-only audio.node exists and carries
 // a ProgramRoute but no LTCRoute, so "has an audio.node" no longer
@@ -310,16 +340,18 @@ func loadAudioNodePayload(ctx context.Context, st *store.Store, nodeID string) (
 // predicate would leave Outputs.LTC standing against an empty LTC
 // context, which DeriveShowCueClaims refuses — failing resolution for
 // EVERY cue on that node, not just the one declaring LTC.
-func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool) config.ShowCuePayload {
+func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool, targets audioTargets) config.ShowCuePayload {
 	scoped := payload
 	if !nodeHasSurface {
 		scoped.Outputs.Render = nil
 	}
-	if !nodeHasAudioNode {
+	if scoped.Outputs.Audio != nil && (!nodeHasAudioNode || !targets.Owns(scoped.Outputs.Audio.Target)) {
 		scoped.Outputs.Audio = nil
+	}
+	if scoped.Outputs.Announcement != nil && (!nodeHasAudioNode || !targets.Owns(scoped.Outputs.Announcement.Target)) {
 		scoped.Outputs.Announcement = nil
 	}
-	if !nodeHasLTC {
+	if scoped.Outputs.LTC != nil && (!nodeHasLTC || !targets.Owns(scoped.Outputs.LTC.Target)) {
 		scoped.Outputs.LTC = nil
 	}
 	return scoped
@@ -473,29 +505,44 @@ func cueReferencingPlaylistIDs(ctx context.Context, st *store.Store, showID stri
 	return out, nil
 }
 
-// resolveAssetFor returns the sorted, de-duplicated content hashes of
-// every asset assetsBySequence holds for sequenceID (never nil, so two
-// callers resolving an output with no matching asset yet — nothing
-// uploaded — agree on an empty array rather than one producing null and
-// the other []: [cuecatalog.RevisionInput]'s own determinism requirement),
-// plus the ONE runtime filename a node must actually open: the filename
-// paired with hashes[0] (the alphabetically-first content hash), the same
-// hash [firstAssetHash] in internal/agent/cueactivationrender.go picks
-// when it later verifies that file. Pairing filename and hash from the
-// SAME underlying [ExpectedAsset] row is what a node's own "open by
-// filename, then verify the opened file's hash" convention
-// (renderApplyParamsPayload's own established shape) requires — a
-// filename resolved independently of which hash it is meant to
-// corroborate would let the two silently drift apart. The ordinary case
-// is exactly one asset per sequence per node; a sequence with more than
-// one current asset (a node-targeted upload alongside a show-wide one)
-// still resolves deterministically, picking whichever asset's hash sorts
-// first.
-func resolveAssetFor(assetsBySequence map[string][]ExpectedAsset, sequenceID string) (filename string, hashes []string) {
+// resolveAssetFor returns the sorted, de-duplicated content hashes of every
+// CURRENT ASSET OF THE STATED mediaType assetsBySequence holds for
+// sequenceID (never nil, so two callers resolving an output with no
+// matching asset yet, whether nothing was uploaded or nothing of that
+// media type was, agree on an empty array rather than one producing null
+// and the other []:
+// [cuecatalog.RevisionInput]'s own determinism requirement), plus the ONE
+// runtime filename a node must actually open: the filename paired with
+// hashes[0] (the alphabetically-first content hash), the same hash
+// [firstAssetHash] in internal/agent/cueactivationrender.go picks when it
+// later verifies that file. Pairing filename and hash from the SAME
+// underlying [ExpectedAsset] row is what a node's own "open by filename,
+// then verify the opened file's hash" convention (renderApplyParamsPayload's
+// own established shape) requires: a filename resolved independently of
+// which hash it is meant to corroborate would let the two silently drift
+// apart. The ordinary case is exactly one asset per sequence per node; a
+// sequence with more than one current asset of the stated media type (a
+// node-targeted upload alongside a show-wide one) still resolves
+// deterministically, picking whichever asset's hash sorts first.
+//
+// mediaType is a caller-stated filter, never read off stored data: ADR-028
+// decision 1's amendment makes media type part of an asset's identity, so
+// an FSEQ and an audio asset may both be current for one sequence at once,
+// and this function's whole reason for existing after that change is to
+// pick the one the caller actually meant: resolveCueOutputs states "fseq"
+// for a render output and "audio" for an audio output. A caller that has no
+// media type of its own to state (a future media-playlist item whose type
+// implies audio) supplies the constant it already knows rather than one
+// stored in caller-authored data, keeping this the resolver's own contract
+// rather than something an operator must name explicitly.
+func resolveAssetFor(assetsBySequence map[string][]ExpectedAsset, sequenceID, mediaType string) (filename string, hashes []string) {
 	assets := assetsBySequence[sequenceID]
 	filenameByHash := make(map[string]string, len(assets))
 	hashes = make([]string, 0, len(assets))
 	for _, a := range assets {
+		if a.MediaType != mediaType {
+			continue
+		}
 		if _, seen := filenameByHash[a.ContentHash]; seen {
 			continue
 		}

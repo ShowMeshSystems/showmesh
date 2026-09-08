@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // GET /api/v1/actions/{id}/binding and GET /api/v1/actions/bindings
@@ -15,6 +17,19 @@ import (
 // state. A read: dispatches nothing, requires no credential. The result is
 // three-valued: "ok", "broken", or "unknown" — never "ok" for a check that
 // did not run, never "broken" for one that could not.
+//
+// handleListActionBindings' result also carries a second, narrower
+// relation: one entry per show.macro step whose own action reference no
+// longer resolves to a live show.action (a tombstoned action a macro
+// step still names). That is a different question from an action's own
+// binding to ITS target, reusing the same [v1.ActionBinding] shape
+// (ok/broken/unknown, ActionID/Show/Reason) because the answer is the
+// same kind of fact, not because the two
+// relations are the same thing; see [handlers.macroStepActionBindings]'s
+// own doc comment for the exact rule. handleGetActionBinding (the
+// single-id form) is NOT extended: a dangling id there already 404s,
+// which is the correct, separate answer for "this id names nothing" and
+// is not this file's concern to change.
 
 func (h *handlers) handleGetActionBinding(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
@@ -68,7 +83,88 @@ func (h *handlers) handleListActionBindings(w http.ResponseWriter, r *http.Reque
 		bindings = append(bindings, h.checkActionBindingTarget(r.Context(), obj.ID, payload, fetchFPPEndpoints))
 	}
 
+	macroBindings, err := h.macroStepActionBindings(r.Context(), showFilter)
+	if err != nil {
+		h.writeInternalError(w, now, "check show.macro step action bindings", err)
+		return
+	}
+	bindings = append(bindings, macroBindings...)
+
 	jsonWrite(w, v1.ActionBindingsResponse{ServerTime: formatTime(now), Bindings: bindings})
+}
+
+// macroStepActionBindings is GET /api/v1/actions/bindings' macro edge:
+// for every show.macro, for every step, one [v1.ActionBinding] entry when
+// step.Action does not resolve to a live show.action via
+// [ConfigStore.GetConfigObject], the SAME tombstone-filtering existence
+// check [nodeHasAudioNodeObject] already uses for the audio-node edge,
+// applied one reference hop over. A step whose action DOES resolve emits
+// NOTHING: this must never report a healthy macro's steps as a list of
+// "ok" bindings, both because that is not the question this function
+// answers (it never re-resolves the action's own target) and because a
+// check that always emits something can never be told apart from one that
+// reports everything broken.
+//
+// Multiplicity is deliberately per (macro, step), never deduplicated by
+// action id: two steps (in the same or different macros) naming the same
+// missing action id each produce their own entry, because each has its
+// own macro id and step id to report and a reader must be able to tell
+// which macro and step an entry came from: Reason always names both.
+//
+// showFilter narrows by the MACRO's own Show, matching the action loop
+// above it exactly (a macro belongs to one show, same as an action does).
+//
+// A macro whose stored payload cannot be decoded reports ONE
+// [v1.ActionBindingStateUnknown] entry naming the macro itself (ActionID
+// carries the macro's own object id here, not an action id, since there
+// is no step to read an action id from) rather than being silently skipped:
+// "this macro's steps could not be checked" must never look the same as
+// "this macro's steps are all fine". A [ConfigStore.GetConfigObject]
+// failure other than "not found" while resolving one step is reported the
+// same way, scoped to that one step.
+func (h *handlers) macroStepActionBindings(ctx context.Context, showFilter string) ([]v1.ActionBinding, error) {
+	objs, err := h.deps.Config.ListConfigObjects(ctx, config.ShowMacroConfigKind)
+	if err != nil {
+		return nil, fmt.Errorf("list show.macro config objects for binding check: %w", err)
+	}
+
+	var out []v1.ActionBinding
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowMacroConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return nil, fmt.Errorf("get active show.macro config revision %q for binding check: %w", obj.ID, err)
+		}
+		var payload config.ShowMacroPayload
+		if decodeErr := jsonUnmarshalStrict(rev.PayloadJSON, &payload); decodeErr != nil {
+			out = append(out, v1.ActionBinding{
+				ActionID: obj.ID, State: v1.ActionBindingStateUnknown,
+				Reason: fmt.Sprintf("show.macro %q could not be decoded to check its steps' action references: %v", obj.ID, decodeErr),
+			})
+			continue
+		}
+		if showFilter != "" && payload.Show != showFilter {
+			continue
+		}
+		for _, step := range payload.Steps {
+			_, err := h.deps.Config.GetConfigObject(ctx, config.ShowActionConfigKind, step.Action)
+			switch {
+			case errors.Is(err, store.ErrConfigObjectNotFound):
+				out = append(out, v1.ActionBinding{
+					ActionID: step.Action, Show: payload.Show, State: v1.ActionBindingStateBroken,
+					Reason: fmt.Sprintf("show.macro %q step %q names action %q which does not exist", obj.ID, step.ID, step.Action),
+				})
+			case err != nil:
+				out = append(out, v1.ActionBinding{
+					ActionID: step.Action, Show: payload.Show, State: v1.ActionBindingStateUnknown,
+					Reason: fmt.Sprintf("show.macro %q step %q: this coordinator could not check whether action %q exists: %v", obj.ID, step.ID, step.Action, err),
+				})
+			}
+		}
+	}
+	return out, nil
 }
 
 // checkActionBindingByID is the GET-one path. problem is non-nil only for
@@ -130,13 +226,45 @@ func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payl
 		binding.State, binding.Reason = checkMQTTActionBinding(payload.Target, h.deps.IntegrationBrokers)
 	case config.ShowActionIntegrationResolume:
 		binding.State, binding.Reason = h.checkResolumeActionBinding(payload.Target)
+	case config.ShowActionIntegrationAudio:
+		binding.State, binding.Reason = h.checkAudioActionBinding(ctx, payload.Target)
 	default:
-		// Unreachable given write-time validation of target.integration's
-		// closed enum; answered rather than silently reported "ok".
+		// Reached whenever payload.Target.Integration is a value this
+		// switch does not name: NOT unreachable — see dispatchActionTarget's
+		// (actioninvoke.go) identical default branch, corrected the same
+		// way, for the full explanation of why write-time validation does
+		// not make this switch itself exhaustive.
 		binding.State = v1.ActionBindingStateUnknown
 		binding.Reason = fmt.Sprintf("this action names an unrecognized integration %q", payload.Target.Integration)
 	}
 	return binding
+}
+
+// checkAudioActionBinding checks that audioNodeId still names a declared
+// audio.node config object and that audioAction is still a supported
+// operation, mirroring checkFPPActionBinding's identical two-part shape
+// one section up (a configured target and a still-registered operation).
+// It deliberately does NOT check audioSessionId against a live
+// audio.session object: decodeAudioTarget's own doc comment
+// (internal/coordinator/config/showaction.go) states why — a session id is
+// minted by the caller (the night-session driver or an operator), never
+// looked up, so a session that does not exist yet is not a broken binding,
+// exactly as an unresolvable one is not checked at write time either.
+func (h *handlers) checkAudioActionBinding(ctx context.Context, target config.ShowActionTarget) (state, reason string) {
+	for _, nodeID := range target.AudioNodeIDs {
+		hasNode, err := nodeHasAudioNodeObject(ctx, h.deps.Config, nodeID)
+		if err != nil {
+			return v1.ActionBindingStateUnknown, fmt.Sprintf("this coordinator could not check whether audio node %q is still declared: %v", nodeID, err)
+		}
+		if !hasNode {
+			return v1.ActionBindingStateBroken, fmt.Sprintf("audio node %q is not a declared audio.node", nodeID)
+		}
+	}
+	if !config.IsSupportedAudioAction(target.AudioAction) {
+		return v1.ActionBindingStateBroken, fmt.Sprintf("audioAction %q is no longer a supported audio operation (supported: %s)",
+			target.AudioAction, strings.Join(config.ShowActionAudioActions(), ", "))
+	}
+	return v1.ActionBindingStateOK, fmt.Sprintf("audio node(s) %v are declared and operation %q is still supported", []string(target.AudioNodeIDs), target.AudioAction)
 }
 
 // checkFPPActionBinding is a configuration check only — no network call.

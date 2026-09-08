@@ -59,6 +59,20 @@ func (h *handlers) nodeDeclared(ctx context.Context) func(nodeID string) bool {
 	}
 }
 
+// audioNodeExists reports whether id names an "audio.node" config object
+// with an active revision — the audioNodeExists callback
+// DecodeShowCuePayload takes (ADR-045). Mirrors showExists exactly, one
+// kind over.
+func (h *handlers) audioNodeExists(ctx context.Context) func(id string) bool {
+	return func(id string) bool {
+		obj, err := h.deps.Config.GetConfigObject(ctx, config.AudioNodeConfigKind, id)
+		if err != nil {
+			return false
+		}
+		return obj.CurrentRevision > 0
+	}
+}
+
 // --- kind "show" ---
 
 // listShowSummaries lists every "show" config object with an active
@@ -137,6 +151,11 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -160,12 +179,23 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowConfigKind, id, payloadJSON, precondition,
 		map[string]any{"name": payload.Name})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show config revision", writeErr)
 		return
 	}
+
+	// ADR-044 decision 5: a show's display name feeds every node's pushed
+	// showNames list and, for whichever node currently has this show
+	// active, its activeShow field too: push every known node rather
+	// than tracking which ones actually reference this show id.
+	h.pushFPPConnectToAllNodes(r.Context(), now)
 
 	jsonWrite(w, mapShowConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,
@@ -174,6 +204,54 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 
 func (h *handlers) handleGetShowRevisions(w http.ResponseWriter, r *http.Request) {
 	h.handleGetShowConfigRevisions(w, r, config.ShowConfigKind)
+}
+
+// refuseShowIfActive is handleDeleteShow's own refuseIfActive
+// (showconfig.go's deleteConfigObjectRevision): show.active is the one
+// live "what is running now" pointer a show participates in, so deleting
+// the show it currently names is refused rather than left dangling. Every
+// OTHER reference to a show id (show.surface, show.action, show.macro,
+// show.cue, show.playlist, night.session, all namespaced under a show)
+// is an ordinary configuration reference, not a live selector, and is not
+// checked here: deleting a show does not cascade to them, and each of
+// those kinds already resolves its own "show" field through showExists
+// (GetConfigObject, tombstone-filtered) wherever that matters.
+func (h *handlers) refuseShowIfActive(showID string) func(ctx context.Context, tx *store.Tx) error {
+	return func(ctx context.Context, tx *store.Tx) error {
+		obj, err := tx.GetConfigObject(ctx, config.ShowActiveConfigKind, config.ShowActiveObjectID)
+		if errors.Is(err, store.ErrConfigObjectNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if obj.CurrentRevision == 0 {
+			return nil
+		}
+		rev, err := tx.GetConfigRevision(ctx, config.ShowActiveConfigKind, config.ShowActiveObjectID, obj.CurrentRevision)
+		if err != nil {
+			return err
+		}
+		var payload config.ShowActivePayload
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		if payload.Show != showID {
+			return nil
+		}
+		return &errConfigObjectCurrentlyActive{kind: config.ShowConfigKind, id: showID, activeKind: config.ShowActiveConfigKind}
+	}
+}
+
+// handleDeleteShow serves DELETE /api/v1/config/show/{id}: a tombstone,
+// not a hard delete, and not a cascade. show.surface, show.action,
+// show.macro, show.cue, show.playlist, and night.session objects
+// namespaced under this show are left in place, now naming a tombstoned
+// show id; each already resolves "show" through showExists wherever a
+// write depends on it, so the gap is visible there, never a crash.
+func (h *handlers) handleDeleteShow(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	h.handleDeleteShowConfigObject(w, r, config.ShowConfigKind, h.refuseShowIfActive(id))
 }
 
 func mapShowConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, p config.ShowPayload) v1.ShowConfigResponse {
@@ -269,6 +347,46 @@ func (h *handlers) handleGetShowSurface(w http.ResponseWriter, r *http.Request) 
 	jsonWrite(w, mapShowSurfaceConfigResponse(now, rev, obj, payload))
 }
 
+// previousShowSurfaceNode reads id's currently active show.surface
+// revision's "node" field, ahead of a PUT that may change it: the
+// ADR-044 decision 5 push needs both the node a surface is moving TO and
+// the node it is moving FROM, and the write itself (writeShowConfigRevision)
+// returns only the newly activated revision. ok is false for a first-time
+// PUT (no active revision yet), matching refuseShowChange's identical
+// "nothing stored yet" case one function over.
+func (h *handlers) previousShowSurfaceNode(ctx context.Context, id string) (node string, ok bool) {
+	obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowSurfaceConfigKind, id)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+		// The expected, silent case: a first-time PUT of this surface id
+		// has nothing to look up yet.
+		return "", false
+	case err != nil:
+		// A real store failure, not "nothing stored yet": the caller's
+		// own vacated-node push is silently skipped if this returns false
+		// indistinguishably from the expected case above, so a transient
+		// read failure here must be visible rather than read as "this
+		// surface has never moved."
+		h.logWarn("failed to read show.surface's previous node before a write; a node this surface may be moving away from will not be pushed", "surface_id", id, "error", err)
+		return "", false
+	case obj.CurrentRevision == 0:
+		return "", false
+	}
+	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowSurfaceConfigKind, id, obj.CurrentRevision)
+	if err != nil {
+		h.logWarn("failed to read show.surface's previous revision before a write; a node this surface may be moving away from will not be pushed", "surface_id", id, "error", err)
+		return "", false
+	}
+	var head struct {
+		Node string `json:"node"`
+	}
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+		h.logWarn("failed to decode show.surface's previous revision before a write; a node this surface may be moving away from will not be pushed", "surface_id", id, "error", err)
+		return "", false
+	}
+	return head.Node, true
+}
+
 func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ac := authFromContext(r.Context())
@@ -277,6 +395,13 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
+	previousNode, hadPreviousNode := h.previousShowSurfaceNode(r.Context(), id)
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -294,17 +419,38 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if problem, err := h.refuseShowChange(r.Context(), config.ShowSurfaceConfigKind, id, payload.Show); err != nil {
+		h.writeInternalError(w, now, "check stored show.surface show before write", err)
+		return
+	} else if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
 	payloadJSON, err := config.EncodeShowSurfacePayload(payload)
 	if err != nil {
 		h.writeInternalError(w, now, "encode show.surface config payload", err)
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowSurfaceConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowSurfaceConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "node": payload.Node})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.surface config revision", writeErr)
 		return
+	}
+
+	// ADR-044 decision 5: push the surface's own node, and, if this write
+	// moved the surface from a different node, that previous node too:
+	// its own channel ranges just lost this surface's contribution.
+	h.pushFPPConnectToNode(r.Context(), payload.Node)
+	if hadPreviousNode && previousNode != payload.Node {
+		h.pushFPPConnectToNode(r.Context(), previousNode)
 	}
 
 	jsonWrite(w, mapShowSurfaceConfigResponse(now, activated, store.ConfigObjectRecord{
@@ -314,6 +460,15 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 
 func (h *handlers) handleGetShowSurfaceRevisions(w http.ResponseWriter, r *http.Request) {
 	h.handleGetShowConfigRevisions(w, r, config.ShowSurfaceConfigKind)
+}
+
+// handleDeleteShowSurface serves DELETE /api/v1/config/show.surface/{id}:
+// a tombstone. Nothing in this codebase's reference graph names a
+// show.surface id from another configuration object (its own references
+// run outward, to a show and a declared node, never inward), so there is
+// no dangling reference to consider and no live selector to protect.
+func (h *handlers) handleDeleteShowSurface(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowSurfaceConfigKind, nil)
 }
 
 func mapConfigShowSurfaceOutput(o config.ShowSurfaceOutput) v1.ConfigShowSurfaceOutput {
@@ -384,6 +539,12 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 	ac := authFromContext(r.Context())
 	id := config.ShowActiveObjectID
 
+	precondition, problem := parseRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
 		h.writeInternalError(w, now, "read show.active request body", err)
@@ -406,9 +567,14 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowActiveConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowActiveConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.active config revision", writeErr)
 		return
 	}
@@ -417,6 +583,10 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 	// waits out a whole sync interval before anything starts fetching the
 	// new show's assets.
 	h.deps.AssetSyncNudger.Nudge()
+
+	// ADR-044 decision 5: the active show is part of every node's pushed
+	// fppconnect.configure state.
+	h.pushFPPConnectToAllNodes(r.Context(), now)
 
 	jsonWrite(w, mapShowActiveConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowActiveConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,

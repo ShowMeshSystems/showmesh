@@ -19,6 +19,8 @@ for arg in "$@"; do
   esac
 done
 
+ENV_FILE=/etc/showmesh/agent.env
+
 FAILURES=0
 fail() {
   echo "MISSING: $1" >&2
@@ -32,6 +34,20 @@ info() {
 
 ok() {
   echo "OK: $1"
+}
+
+# warn reports something worth an operator's attention that is NOT a
+# reason to refuse install or restart: unlike fail(), it never increments
+# FAILURES. The FPP Connect registration credential check below is exactly
+# this: a node with no SHOWMESH_AGENT_API_TOKEN still serves reads,
+# renders assigned content, and plays audio correctly, so this preflight
+# must not turn a missing upload credential into a stopped agent (the
+# system's own "degrades safely" property) — it only has to make the gap
+# visible, here, every time preflight.sh runs, rather than leave it for an
+# operator to discover from a failed xLights upload with nothing surfaced
+# on the node itself.
+warn() {
+  echo "WARNING: $1" >&2
 }
 
 # --- Platform floor: Debian 13 (trixie) or newer ---
@@ -163,6 +179,32 @@ if command -v gst-inspect-1.0 >/dev/null 2>&1; then
   fi
 else
   fail "gst-inspect-1.0 (needed to check GStreamer elements)" "apt-get install -y gstreamer1.0-tools"
+fi
+
+# --- FPP Connect registration credential ---
+# The FPP Connect HTTP compatibility listener (internal/agent, ADR-044
+# decision 5) binds unconditionally on every node, regardless of the
+# coordinator's read policy: any node can be an xLights upload target.
+# Registering an uploaded sequence is a WRITE (POST /api/v1/assets, gated
+# by asset:write), a completely different gate from the coordinator's own
+# read policy (ADR-024). A node with no SHOWMESH_AGENT_API_TOKEN accepts,
+# assembles, and hashes every upload it receives, binds it to the show,
+# and then fails to register it, permanently, with nothing visible on the
+# node except a field inside assets/fppconnect-uploads/index.json - this
+# is the exact failure this check exists to surface before an upload is
+# ever attempted, not after. A missing credential is a warning, never a
+# preflight failure: a node with no credential still serves reads, renders
+# assigned content, and plays audio correctly, so refusing to install or
+# start over it would trade one real capability for a warning about a
+# different one it may not even need yet.
+if [ ! -e "$ENV_FILE" ]; then
+  info "FPP Connect registration credential: $ENV_FILE not installed yet (run install.sh first); nothing to check."
+elif ! grep -q '^SHOWMESH_NODE_ID=.\+' "$ENV_FILE" 2>/dev/null; then
+  info "FPP Connect registration credential: $ENV_FILE has no SHOWMESH_NODE_ID set yet; this node is not configured to start, so its credential is not checked yet."
+elif grep -q '^SHOWMESH_AGENT_API_TOKEN=.\+' "$ENV_FILE" 2>/dev/null; then
+  ok "FPP Connect registration credential: SHOWMESH_AGENT_API_TOKEN is set in $ENV_FILE"
+else
+  warn "FPP Connect registration credential: $ENV_FILE has no SHOWMESH_AGENT_API_TOKEN set. This node's FPP Connect HTTP listener accepts uploads unconditionally, but every uploaded sequence will fail to register, permanently, with no visible error at upload time. Provision a machine principal and an admin-role token from the coordinator (showmeshctl principal create ...; showmeshctl token issue <principalId>), set SHOWMESH_AGENT_API_TOKEN in $ENV_FILE, then: systemctl restart showmesh-agent"
 fi
 
 echo

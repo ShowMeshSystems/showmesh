@@ -351,6 +351,17 @@ type CmdPayload struct {
 	// that, matching pkg/command.Envelope.Deadline's doc comment exactly.
 	// A nil Deadline is a legitimate, valid state: [CmdPayload.Validate]
 	// deliberately performs no required-ness check on this field.
+	//
+	// Every non-test CmdPayload construction site's Deadline decision (see
+	// each site's own comment for the reasoning):
+	//
+	//   - api/audiodispatch.go: set (audioCommandDeadlineActions list).
+	//   - api/renderdispatch.go: set (renderCommandWireDeadline).
+	//   - api/cuecatalogdeploy.go: set (cueCatalogDeployWireDeadline).
+	//   - api/cueactivationdispatch.go: set (cueActivationWireDeadline).
+	//   - assetsync/sync.go: nil, recomputed fresh every tick.
+	//   - audioconfigpush/push.go: nil, revision-keyed and re-pushed.
+	//   - fppconnectpush/push.go: nil, content-hash-keyed and re-pushed.
 	Deadline *time.Time `json:"deadline"`
 }
 
@@ -606,6 +617,25 @@ const (
 // envelope cap."
 const maxRenderSurfaces = 8
 
+// maxRenderHeldFiles and maxRenderHeldEvents bound
+// [RenderPayload.FPPConnectHeld] and [RenderPayload.FPPConnectHeldEvents]
+// (review round 3 finding 2): an unbounded held-file list, or an unbounded
+// evidence log, could otherwise ride every render report past
+// [maxEnvelopeSize] once enough files or events accumulate. Conservative,
+// unmeasured guesses at "far more than a real show's node ever holds or
+// generates, far short of the envelope cap," the same reasoning
+// [maxRenderSurfaces] states for Surfaces one field up.
+//
+// maxRenderHeldEvents is deliberately above internal/agent/fppconnectheld.
+// go's own fppConnectMaxEvents (50): that constant already bounds how many
+// events the store itself ever holds, so this wire cap exists only as a
+// backstop against a caller that skips the publisher's own truncation, and
+// must never be smaller than what normal operation legitimately produces.
+const (
+	maxRenderHeldFiles  = 256
+	maxRenderHeldEvents = 64
+)
+
 // maxRenderStderrBytes bounds [RenderSurfaceReport.LastStderr] before
 // [RenderPayload.Validate] rejects the payload outright — the wire-boundary
 // backstop behind whatever cap internal/agent/pipeline already applies when
@@ -743,7 +773,8 @@ type RenderSurfaceReport struct {
 
 	// Drawing is what this surface's frame writer actually wrote to the
 	// pipeline's stdin on its most recent tick: [RenderDrawingContent],
-	// [RenderDrawingIdle], or [RenderDrawingFailure]. "" means no frame
+	// [RenderDrawingIdle], [RenderDrawingFailure], or [RenderDrawingStale].
+	// "" means no frame
 	// writer is currently active for this surface. This is the evidence
 	// this build contract names explicitly: PipelineState=="running" alone
 	// cannot tell an operator "rendering content" from "emitting black at
@@ -754,14 +785,19 @@ type RenderSurfaceReport struct {
 	// [RenderIdleOutputHold], or [RenderIdleOutputDiagnostic]) whenever
 	// Drawing is [RenderDrawingIdle]; "" otherwise, matching Reason's and
 	// TransportReason's identical required-whenever-the-flag-says-so rule.
-	// Never carries a value while Drawing is [RenderDrawingFailure]: a
-	// failure is not an idle mode, and reporting one there is what let a
-	// broken assignment read as a normal idle cycle.
+	// Never carries a value while Drawing is [RenderDrawingFailure] or
+	// [RenderDrawingStale]: neither a failure nor a stale mismatch is an
+	// idle mode, and reporting one there is the same hazard as reporting
+	// a broken assignment as a normal idle cycle, applied to a surface
+	// drawing the wrong sequence instead of no sequence.
 	IdleMode string `json:"idleMode"`
 
 	// FailureOutput is what a [RenderDrawingFailure] tick actually put on
 	// the wire, [RenderFailureOutputAlert] or [RenderFailureOutputBlack];
-	// "" whenever Drawing is anything else. Required whenever Drawing is
+	// "" whenever Drawing is anything else, [RenderDrawingStale] included —
+	// a stale mismatch is a different condition from the extraction
+	// failure this field describes (see [RenderDrawingStale]'s own doc
+	// comment). Required whenever Drawing is
 	// [RenderDrawingFailure], IdleMode's identical rule one field up,
 	// because the two failure outputs look nothing alike at the wall and
 	// an operator reading this report has to know which one is in front of
@@ -783,6 +819,23 @@ type RenderSurfaceReport struct {
 	// FSEQFilename before opening it (renderops.go's "validate before
 	// persist" ordering). "" exactly when FSEQFilename is "".
 	FSEQContentHash string `json:"fseqContentHash"`
+
+	// ContentIdentityReason states why this surface's six content-identity
+	// fields (FSEQFilename/FSEQContentHash/CueID/CatalogRevision/Show/
+	// Generation) are all empty even though this surface holds a persisted
+	// assignment: the apply path (renderops.go) always persists a
+	// non-empty fseqContentHash alongside a non-empty fseqFilename, so this
+	// only fires against a hand-edited or pre-content-identity-contract
+	// assignments.json. "" whenever this surface holds no assignment at
+	// all (a genuine absence, not a degradation) or a genuine identity was
+	// applied. internal/agent/renderreport.go's applyContentIdentity
+	// withholds the whole identity rather than publish an unverified
+	// filename with no hash to back it — see that function's doc comment.
+	// Not enforced as required by Validate, matching ContentObservedAt's
+	// identical additive-compatibility reasoning: this field is added
+	// after RenderSurfaceReport first shipped, and a hard requirement here
+	// would reject every fixture and payload built before it existed.
+	ContentIdentityReason string `json:"contentIdentityReason"`
 
 	// CueID is the Cue that authorized this surface's current assignment
 	// ([cueactivation.Activation.CueID], carried on
@@ -820,18 +873,29 @@ type RenderSurfaceReport struct {
 	Generation int64 `json:"generation"`
 }
 
-// RenderDrawingContent, RenderDrawingIdle, and RenderDrawingFailure are the
-// three values [RenderSurfaceReport.Drawing] can carry.
+// RenderDrawingContent, RenderDrawingIdle, RenderDrawingFailure, and
+// RenderDrawingStale are the four values [RenderSurfaceReport.Drawing] can
+// carry.
 //
 // RenderDrawingFailure is neither of the other two on purpose: the writer
 // could not extract the frame it was asked for, so what reached the wire is
 // a fallback nobody configured. Reporting that as "idle" with an idle mode
 // (which this payload did until an owner ruling) makes a broken assignment
 // read as an operator-chosen idle cycle in every report that renders it.
+//
+// RenderDrawingStale is a distinct fourth condition for the same
+// reason: the frame writer's timeline is reporting a filename this surface
+// never opened, so what it would otherwise draw is real content extracted
+// for the WRONG sequence, not a lack of content ([RenderDrawingIdle]) and
+// not a failure to extract anything at all ([RenderDrawingFailure]).
+// Reporting a stale mismatch as idle is the identical hazard
+// RenderDrawingFailure's own ruling already rejected, applied to a surface
+// stuck drawing the wrong sequence instead of no sequence.
 const (
 	RenderDrawingContent = "content"
 	RenderDrawingIdle    = "idle"
 	RenderDrawingFailure = "failure"
+	RenderDrawingStale   = "stale"
 )
 
 // RenderFailureOutputAlert and RenderFailureOutputBlack are the two values
@@ -920,6 +984,216 @@ type RenderPayload struct {
 	// healthy value) — not enforced as required by Validate, for the
 	// identical additive-compatibility reason MultiSyncReason is not.
 	MultiSyncObservedAt time.Time `json:"multiSyncObservedAt"`
+
+	// FPPConnectListening is true once this node's FPP Connect HTTP
+	// compatibility listener (ADR-044) has successfully bound and is
+	// serving, false otherwise. It stays true while the listener is bound
+	// but administratively disabled: the socket stays open (so the next
+	// enable takes effect with no restart) and only the routes' behavior
+	// changes, which FPPConnectReason states. Not enforced as required by
+	// Validate, matching MultiSyncReason's identical additive-compatibility
+	// reasoning: this field is added after SchemaNodeRenderV1 first shipped.
+	FPPConnectListening bool `json:"fppConnectListening"`
+
+	// FPPConnectReason is the bind error, the "not yet attempted" starting
+	// value, or the disabled-by-configuration explanation, whenever
+	// FPPConnectListening is false or the listener is bound but disabled.
+	// See MultiSyncReason's identical rule one field up.
+	FPPConnectReason string `json:"fppConnectReason"`
+
+	// FPPConnectObservedAt is the node's own clock at the moment the FPP
+	// Connect HTTP listener's status was last determined, mirroring
+	// MultiSyncObservedAt's identical evidence-time reasoning one field up.
+	FPPConnectObservedAt time.Time `json:"fppConnectObservedAt"`
+
+	// FPPConnectHeld is nil-safe like Surfaces: this package's own encoder
+	// emits "fppConnectHeld":[] for a nil slice, never null, matching
+	// Surfaces' identical rule. Every file FC2's chunked upload receiver
+	// (ADR-044) currently holds, bound or not, is here, up to
+	// [maxRenderHeldFiles]: FPPConnectHeldCount states the true total
+	// separately, so a publisher that must cut this list down (review
+	// round 3 finding 2: an unbounded list here could otherwise ride
+	// every render report past [maxEnvelopeSize] once enough files
+	// accumulate) never has to also hide how many exist. This is the
+	// only place an unbound held file is surfaced to an operator: ADR-044
+	// decision 8 requires an unresolvable upload be "reported as an
+	// unbound held file the operator can claim," and xLights never
+	// inspects the playlist POST's status, so this node report is the
+	// only evidence path available. Not enforced as required by Validate:
+	// this field is added after SchemaNodeRenderV1 first shipped, matching
+	// FPPConnectListening's identical additive-compatibility reasoning
+	// (a hard requirement here would reject every render report a node
+	// published before this field existed). The length cap IS enforced
+	// (see Validate): that check passes trivially for a nil or short
+	// slice, so it does not weaken the additive-compatibility promise
+	// above, only refuses a payload that is genuinely too large to be
+	// safe regardless of when the field was introduced.
+	FPPConnectHeld []RenderFPPConnectHeldFile `json:"fppConnectHeld"`
+
+	// FPPConnectHeldCount is the true total number of files this node
+	// currently holds, independent of FPPConnectHeld's own length: the two
+	// can differ once the publisher truncates the list to
+	// [maxRenderHeldFiles], and a consumer that only needs "how many files
+	// are held" should read this field rather than len(FPPConnectHeld).
+	FPPConnectHeldCount int `json:"fppConnectHeldCount"`
+
+	// FPPConnectHeldEvents is FC2's bounded evidence log (unknown and
+	// ambiguous playlist posts, and refused uploads: too large, over the
+	// asset-directory cap, disk full, an offset gap, an upload length that
+	// changed mid-upload, an unsafe upload name, or a disallowed
+	// directory), oldest first, up to [maxRenderHeldEvents]. ADR-044
+	// decision 4 requires exceeding a bound, or exhausting the disk, be
+	// "reported as evidence"; xLights never inspects any of these calls'
+	// status, so this is that evidence's only path to an operator. Same
+	// additive-compatibility, not-required-by-Validate treatment as
+	// FPPConnectHeld, and the same reasoning for why its length cap is
+	// enforced regardless.
+	FPPConnectHeldEvents []RenderFPPConnectHeldEvent `json:"fppConnectHeldEvents"`
+
+	// FPPConnectHeldEventsTotal is the true total number of events this
+	// node currently holds, independent of FPPConnectHeldEvents' own
+	// length, mirroring FPPConnectHeldCount's identical relationship to
+	// FPPConnectHeld one field up (review round 8 finding 2): the two can
+	// differ once a publisher trims the list, whether for
+	// [maxRenderHeldEvents]'s own count cap or for the envelope's overall
+	// size budget, and neither trim previously left any trace a consumer
+	// could read; len(FPPConnectHeldEvents) alone could not distinguish
+	// "this node has exactly this many events" from "this node has more,
+	// and some were cut to fit." A consumer that only needs "how many
+	// events exist" reads this field rather than
+	// len(FPPConnectHeldEvents).
+	FPPConnectHeldEventsTotal int `json:"fppConnectHeldEventsTotal"`
+}
+
+// RenderFPPConnectHeldFile is one file FC2's chunked upload receiver
+// (internal/agent/fppconnectheld.go) currently holds, inside
+// [RenderPayload.FPPConnectHeld]. Field-for-field the same evidence that
+// package's own fppConnectHeldRecord carries, independently reproduced
+// for this wire boundary per this codebase's standing convention.
+type RenderFPPConnectHeldFile struct {
+	// Dir is the accepted upload directory ("sequences", "music", or
+	// "videos") this file was received into.
+	Dir string `json:"dir"`
+
+	// Name is the file name with its extension, exactly as xLights sent
+	// it in Upload-Name (RES-003 section 10.6's join key). Never a
+	// resolved or sanitized variant.
+	Name string `json:"name"`
+
+	SizeBytes int64 `json:"sizeBytes"`
+
+	// ContentHash is "sha256:<hex>", matching ADR-028 decision 1's
+	// identity scheme and AssetInventoryEntry.ContentHash's identical
+	// shape.
+	ContentHash string `json:"contentHash"`
+
+	// ReceivedAt is when this node finished assembling and hashing this
+	// file, on the node's own clock.
+	ReceivedAt time.Time `json:"receivedAt"`
+
+	// Bound is false for a held-but-unbound file (ADR-044 decision 8):
+	// kept, registered nowhere, and visible here rather than guessed at
+	// or silently dropped.
+	Bound bool `json:"bound"`
+
+	// Show is the ShowMesh show this file is bound to, empty when Bound
+	// is false.
+	Show string `json:"show,omitempty"`
+
+	// ShowID is Show's resolved config object id (FC3, ADR-028 decision
+	// 8), the value FC3's registrar sends as POST /api/v1/assets' `show`
+	// field. Empty when Bound is false.
+	ShowID string `json:"showId,omitempty"`
+
+	// LogicalSequence is the file name stem, slugified to the assets
+	// API's own sequence-id rule (FC3), set only when Bound is true.
+	LogicalSequence string `json:"logicalSequence,omitempty"`
+
+	// UnboundReason names which of ADR-039 decision 5's distinct
+	// unresolved states produced Bound==false: never pushed an active
+	// show, pushed an explicit "no active show," or an active show
+	// pushed with an empty name. Empty whenever Bound is true.
+	UnboundReason string `json:"unboundReason,omitempty"`
+
+	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
+	// bound file not yet attempted, "skipped" for a music/videos file
+	// (this lane registers FSEQ content only), "pending" while a
+	// retryable attempt is scheduled, "registered" once the coordinator
+	// has accepted it, or "failed" for a non-retryable refusal or a
+	// content-hash mismatch against the coordinator's response. Always ""
+	// when Bound is false: an unresolved binding is reported as unbound,
+	// never as pending registration.
+	RegistrationState string `json:"registrationState,omitempty"`
+
+	// RegistrationAssetID is the coordinator-assigned asset id, set only
+	// when RegistrationState is "registered".
+	RegistrationAssetID string `json:"registrationAssetId,omitempty"`
+
+	// RegistrationRolledBack mirrors the coordinator's own rolledBack
+	// flag (ADR-028 decision 10) from the registration that produced
+	// RegistrationAssetID.
+	RegistrationRolledBack bool `json:"registrationRolledBack,omitempty"`
+
+	// RegistrationReason is evidence for the current RegistrationState:
+	// why registration is skipped, the retry reason while pending, or the
+	// failure detail. Empty when RegistrationState is "" or "registered".
+	RegistrationReason string `json:"registrationReason,omitempty"`
+
+	// RegistrationProblemType is the coordinator's RFC 9457 problem
+	// `type` for a non-retryable refusal, set only when RegistrationState
+	// is "failed" and the failure came from the coordinator's own
+	// response (empty for a locally-detected failure, e.g. a
+	// content-hash mismatch).
+	RegistrationProblemType string `json:"registrationProblemType,omitempty"`
+
+	// RegistrationNextRetryAt is when the retry loop will next attempt
+	// registration, set only when RegistrationState is "pending".
+	RegistrationNextRetryAt time.Time `json:"registrationNextRetryAt,omitempty"`
+}
+
+// RenderFPPConnectHeldEvent is one entry in FC2's bounded evidence log,
+// inside [RenderPayload.FPPConnectHeldEvents]. Kind is an open vocabulary
+// (this schema's standing "clients ignore what they don't know"
+// convention, ADR-020), currently one of: "unknown" and "ambiguous" (a
+// POST /api/playlist/{name} whose name matched no show, or matched more
+// than one), "show-id-not-pushed" (the name matched exactly one show by
+// display name, but that show's config object id has not been pushed
+// yet), and "too-large", "dir-full", "disk-full", "gap",
+// "length-mismatch", "bad-name", and "bad-dir" (a refused upload chunk,
+// ADR-044 decision 4).
+type RenderFPPConnectHeldEvent struct {
+	Kind string `json:"kind"`
+
+	// Name is the playlist name for a "unknown"/"ambiguous" event, or the
+	// attempted Upload-Name for a refused-upload event.
+	Name string `json:"name"`
+
+	// Dir is the attempted upload directory, set only for a refused-
+	// upload event.
+	Dir string `json:"dir,omitempty"`
+
+	// Reason is the human-readable refusal text, set only for a refused-
+	// upload event.
+	Reason string `json:"reason,omitempty"`
+
+	// Entries is the set of file names (sequenceName/mediaName) the
+	// posted playlist body named, set only for "unknown"/"ambiguous", and
+	// capped independently of this whole event log's own length (review
+	// round 3 finding 2: a single POST /api/playlist/{name} body, up to 1
+	// MiB with no per-entry count limit, could otherwise name tens of
+	// thousands of distinct values and carry every one of them onto every
+	// render report forever). EntriesTruncated states how many were cut.
+	Entries []string `json:"entries,omitempty"`
+
+	// EntriesTruncated is how many additional names the posted body
+	// carried beyond what Entries kept, 0 when nothing was cut.
+	EntriesTruncated int `json:"entriesTruncated,omitempty"`
+
+	// MatchCount is how many times Name occurred in the node's show name
+	// list, set only for "ambiguous".
+	MatchCount int `json:"matchCount,omitempty"`
+
+	At time.Time `json:"at"`
 }
 
 // Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
@@ -960,9 +1234,9 @@ func (p RenderPayload) Validate() error {
 			return fmt.Errorf("%w: surfaces[%d].lastStderr is %d bytes, max %d (must be truncated before publish, with %q appended)",
 				ErrPayloadTooLarge, i, len(s.LastStderr), maxRenderStderrBytes, RenderStderrTruncatedSuffix)
 		}
-		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle && s.Drawing != RenderDrawingFailure {
-			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, %q, or empty",
-				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle, RenderDrawingFailure)
+		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle && s.Drawing != RenderDrawingFailure && s.Drawing != RenderDrawingStale {
+			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, %q, %q, or empty",
+				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle, RenderDrawingFailure, RenderDrawingStale)
 		}
 		if s.Drawing == RenderDrawingIdle && s.IdleMode == "" {
 			return fmt.Errorf("%w: surfaces[%d].idleMode (required whenever drawing is %q)",
@@ -971,6 +1245,10 @@ func (p RenderPayload) Validate() error {
 		if s.Drawing == RenderDrawingFailure && s.FailureOutput == "" {
 			return fmt.Errorf("%w: surfaces[%d].failureOutput (required whenever drawing is %q)",
 				ErrPayloadMissingField, i, RenderDrawingFailure)
+		}
+		if s.Drawing == RenderDrawingStale && (s.IdleMode != "" || s.FailureOutput != "") {
+			return fmt.Errorf("%w: surfaces[%d].idleMode and failureOutput must both be empty when drawing is %q",
+				ErrPayloadInvalidDrawing, i, RenderDrawingStale)
 		}
 		if s.FailureOutput != "" && s.FailureOutput != RenderFailureOutputAlert && s.FailureOutput != RenderFailureOutputBlack {
 			return fmt.Errorf("%w: surfaces[%d].failureOutput %q must be %q, %q, or empty",
@@ -984,6 +1262,18 @@ func (p RenderPayload) Validate() error {
 			return fmt.Errorf("%w: surfaces[%d].show and generation must be both empty/zero or both set",
 				ErrPayloadMissingField, i)
 		}
+	}
+	// These two length caps are enforced even though neither field is
+	// required (see FPPConnectHeld's own doc comment): a nil or short
+	// slice always passes trivially, so this never rejects a payload
+	// built before either field existed, only one that is genuinely too
+	// large to be safe regardless of when the field was introduced
+	// (review round 3 finding 2).
+	if len(p.FPPConnectHeld) > maxRenderHeldFiles {
+		return fmt.Errorf("%w: %d fppConnectHeld entries, max %d", ErrPayloadTooLarge, len(p.FPPConnectHeld), maxRenderHeldFiles)
+	}
+	if len(p.FPPConnectHeldEvents) > maxRenderHeldEvents {
+		return fmt.Errorf("%w: %d fppConnectHeldEvents entries, max %d", ErrPayloadTooLarge, len(p.FPPConnectHeldEvents), maxRenderHeldEvents)
 	}
 	return nil
 }
@@ -1080,6 +1370,42 @@ type AudioSessionReport struct {
 	// fault classes; FaultReason is required whenever Fault != "none".
 	Fault       string `json:"fault"`
 	FaultReason string `json:"faultReason"`
+
+	// LTCClaimState is this session's own standing relationship to this
+	// node's one LTC run: "held", "refused", or "none"
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.ltc.claim.state).
+	// LTCClaimReason is required whenever LTCClaimState is "refused" —
+	// the same one-signal-names-the-other-refusal rule Fault/FaultReason
+	// follow above, distinct from them: a session can hold no fault at
+	// all while its own claim on this node's LTC run was refused by a
+	// session that still holds it.
+	LTCClaimState  string `json:"ltcClaimState"`
+	LTCClaimReason string `json:"ltcClaimReason"`
+
+	// RestorePending is true whenever this session currently has a
+	// restore queued on this node, whether or not the automatic retry
+	// driver has made an attempt on its behalf yet. This is the
+	// authoritative signal for whether a restore is queued at all:
+	// RestoreAttempts starting at 0 is genuinely ambiguous between
+	// "nothing queued" and "queued, no attempt yet", and only this field
+	// resolves that ambiguity.
+	RestorePending bool `json:"restorePending"`
+
+	// RestoreAttempts, RestoreNextAttemptMs, and RestoreLastReason are
+	// this node's own automatic restore-retry driver's status for this
+	// session (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.restore.attempts/.next_attempt_ms/.last_reason),
+	// meaningful only when RestorePending is true: how many automatic
+	// attempts it has made since this session's restore was last
+	// deferred or re-queued, a countdown in milliseconds to the next
+	// backed-off attempt (0 both before the driver's first attempt and
+	// once its bounded schedule is exhausted), and why the most recent
+	// attempt did not build an engine. RestoreLastReason is required
+	// whenever RestoreAttempts is nonzero. All three are the zero value
+	// whenever RestorePending is false.
+	RestoreAttempts      int64  `json:"restoreAttempts"`
+	RestoreNextAttemptMs int64  `json:"restoreNextAttemptMs"`
+	RestoreLastReason    string `json:"restoreLastReason"`
 
 	// ObservedAt is the engine's own evidence time for PositionMs, nil
 	// when PositionKnown is false. Never the coordinator's or this
@@ -1270,6 +1596,39 @@ type AudioPayload struct {
 	// reporting it dropped or skipped a buffer to keep pace with the
 	// clock. Meaningful only when EngineGlitchCountsKnown is true.
 	EngineQosDropCount uint64 `json:"engineQosDropCount"`
+
+	// EngineRestoreState, EngineRestoreAttempts, EngineRestoreNextAttemptMs,
+	// and EngineRestoreLastReason are internal/agent's own automatic
+	// restore-retry driver's status for this NODE as a whole
+	// (docs/build/IDENTIFIER-REGISTER.md node.audio.engine.restore.state/
+	// .attempts/.next_attempt_ms/.last_reason) -- the node-level
+	// counterpart to AudioSessionReport's identical Restore* fields,
+	// which only ever cover a session with a queued restore: a delivered
+	// audio.node binding with no persisted session has none, and this is
+	// its only remaining wire evidence.
+	//
+	// EngineRestoreState is one of "idle" (no automatic attempt has ever
+	// been made), "scheduled" (the last attempt did not fully resolve
+	// and another one will run), or "exhausted" (the bounded schedule's
+	// last delay has been used with no further automatic attempt
+	// coming). All four fields are OPTIONAL: an agent built before this
+	// existed omits them, and an empty/absent EngineRestoreState reads
+	// as "idle" -- see Validate. A countdown or a boolean alone cannot
+	// express "scheduled" vs "exhausted"; that is the whole reason this
+	// is a three-value string instead.
+	//
+	// EngineRestoreAttempts and EngineRestoreNextAttemptMs mean exactly
+	// what AudioSessionReport.RestoreAttempts/RestoreNextAttemptMs mean,
+	// one level up: how many automatic attempts since this node's status
+	// was last cleared, and a countdown in milliseconds to the next
+	// backed-off attempt (0 both before the first attempt and once the
+	// schedule is exhausted -- EngineRestoreState is what disambiguates
+	// those two, not this field). EngineRestoreLastReason is required
+	// whenever EngineRestoreAttempts is nonzero.
+	EngineRestoreState         string `json:"engineRestoreState"`
+	EngineRestoreAttempts      int64  `json:"engineRestoreAttempts"`
+	EngineRestoreNextAttemptMs int64  `json:"engineRestoreNextAttemptMs"`
+	EngineRestoreLastReason    string `json:"engineRestoreLastReason"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device
@@ -1295,6 +1654,12 @@ func (p AudioPayload) Validate() error {
 		}
 		if sess.Fault != "" && sess.Fault != "none" && sess.FaultReason == "" {
 			return fmt.Errorf("%w: sessions[%d].faultReason (required whenever fault is not \"none\")", ErrPayloadMissingField, i)
+		}
+		if sess.LTCClaimState == "refused" && sess.LTCClaimReason == "" {
+			return fmt.Errorf("%w: sessions[%d].ltcClaimReason (required whenever ltcClaimState is \"refused\")", ErrPayloadMissingField, i)
+		}
+		if sess.RestoreAttempts > 0 && sess.RestoreLastReason == "" {
+			return fmt.Errorf("%w: sessions[%d].restoreLastReason (required whenever restoreAttempts is nonzero)", ErrPayloadMissingField, i)
 		}
 	}
 	if p.ObservedAt == nil {
@@ -1342,6 +1707,16 @@ func (p AudioPayload) Validate() error {
 	} else if p.EngineGlitchCountsSince != nil || p.EngineStreamWarningCount != 0 || p.EngineResourceWarningCount != 0 ||
 		p.EngineOtherWarningCount != 0 || p.EngineQosDropCount != 0 {
 		return fmt.Errorf("%w: engine glitch counts/since must be zero/nil when engineGlitchCountsKnown is false", ErrPayloadInconsistentField)
+	}
+	switch p.EngineRestoreState {
+	case "", "idle", "scheduled", "exhausted":
+		// "" is an older agent's omitted field, read as "idle" -- see
+		// EngineRestoreState's own doc comment. Never required.
+	default:
+		return fmt.Errorf("%w: %q", ErrPayloadInvalidEngineRestoreState, p.EngineRestoreState)
+	}
+	if p.EngineRestoreAttempts > 0 && p.EngineRestoreLastReason == "" {
+		return fmt.Errorf("%w: engineRestoreLastReason (required whenever engineRestoreAttempts is nonzero)", ErrPayloadMissingField)
 	}
 	return nil
 }
@@ -1450,6 +1825,12 @@ func (p ClockPayload) Validate() error {
 // closed-vocabulary role for [ResultPayload].
 var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognized value")
 
+// ErrPayloadInvalidEngineRestoreState is wrapped by [AudioPayload.Validate]
+// when EngineRestoreState is set to something other than "", "idle",
+// "scheduled", or "exhausted" -- the closed vocabulary
+// node.audio.engine.restore.state carries (docs/build/IDENTIFIER-REGISTER.md).
+var ErrPayloadInvalidEngineRestoreState = errors.New("mqttproto: engineRestoreState is not a recognized value")
+
 // ErrPayloadInconsistentField is wrapped by [AudioPayload.Validate] when a
 // field that means "not collected" (e.g. engineGlitchCountsKnown false)
 // is paired with a nonzero/non-nil value the collected-evidence fields
@@ -1548,6 +1929,23 @@ func DecodeLWTPayload(env Envelope) (LWTPayload, error) {
 	return p, nil
 }
 
+// preserveExactRevision replaces p.Params["revision"] with the exact
+// json.Number decoded from raw, if present and numeric.
+func preserveExactRevision(p *CmdPayload, raw json.RawMessage) {
+	if _, present := p.Params["revision"]; !present {
+		return
+	}
+	var shell struct {
+		Params struct {
+			Revision json.Number `json:"revision"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &shell); err != nil {
+		return
+	}
+	p.Params["revision"] = shell.Params.Revision
+}
+
 // DecodeCmdPayload decodes env.Payload as a [CmdPayload]. It returns an
 // [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeCmdV1], an
 // error wrapping [ErrPayloadEmpty] if env.Payload is empty or null, and an
@@ -1564,6 +1962,10 @@ func DecodeCmdPayload(env Envelope) (CmdPayload, error) {
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
+	// p.Params["revision"] comes out a json.Number here, unlike every
+	// other number in p.Params (float64): nanosecond-scale revisions
+	// exceed float64's exact integer range.
+	preserveExactRevision(&p, env.Payload)
 	if err := p.Validate(); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}

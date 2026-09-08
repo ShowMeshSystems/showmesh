@@ -75,6 +75,12 @@ type fppPlaylistEntryReconciliationResponse struct {
 
 	DefinitionAvailable bool `json:"definitionAvailable"`
 
+	// OperatorInstruction is absent unless Outcome is a mismatched outcome
+	// (stale-import, unknown-entry, evidence-mismatch, cross-show); see
+	// v1.FPPPlaylistEntryReconciliationResponse.OperatorInstruction's own
+	// doc comment. A notice only, printed as-is.
+	OperatorInstruction string `json:"operatorInstruction"`
+
 	ServerTime time.Time `json:"serverTime"`
 }
 
@@ -207,6 +213,9 @@ func cmdFPPPlaylistEntryReconciliation(args []string, stdout, stderr io.Writer, 
 	_, _ = fmt.Fprintf(stdout, "Instance:  %s\n", resp.InstanceUUID)
 	_, _ = fmt.Fprintf(stdout, "Outcome:   %s\n", resp.Outcome)
 	_, _ = fmt.Fprintf(stdout, "Reason:    %s\n", resp.Reason)
+	if resp.OperatorInstruction != "" {
+		_, _ = fmt.Fprintf(stdout, "Instruction: %s\n", resp.OperatorInstruction)
+	}
 	if resp.PlaylistID != "" {
 		_, _ = fmt.Fprintf(stdout, "Playlist:  %s (revision %d)\n", resp.PlaylistID, resp.PlaylistRevision)
 	}

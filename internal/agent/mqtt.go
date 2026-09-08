@@ -231,6 +231,16 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 		return nil, err
 	}
 
+	// Neither CleanStartOnInitialConnection nor SessionExpiryInterval is
+	// set below, so this session's expiry interval is absent, which paho.
+	// golang v0.23.0 treats as zero under MQTT 5: the session ends when the
+	// connection drops, and a disconnected node's QoS 1 commands are never
+	// queued for redelivery. Every CmdPayload.Deadline value in this
+	// codebase assumes exactly that: staleness can only be a command
+	// sitting behind other work on an already-connected agent, never an
+	// offline node reconnecting to a backlog. Setting SessionExpiryInterval
+	// so a session survives a broker outage reopens that unbounded backlog
+	// path for every command type at once.
 	clientCfg := autopaho.ClientConfig{
 		ServerUrls:       []*url.URL{serverURL},
 		KeepAlive:        keepAliveSeconds,

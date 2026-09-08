@@ -27,6 +27,15 @@ import (
 // telemetry. OutcomeState uses pkg/observation's state vocabulary,
 // matching audit_log.outcome_state (schemaV5): an unresolved command
 // carries a state and a reason, never a null that renders as blank.
+//
+// CallerIntent (schemaV26, renamed from RequestedRevision) is not always
+// a revision: it holds one of several unrelated
+// shapes depending on which family dispatched the command (a plain
+// show.action revision, a macro run's pinned reference, a render or
+// cue-catalog request's caller-identity JSON, or nothing at all). See
+// [FormatCallerIntent] and [ParseCallerIntent] for the discriminator that
+// tells them apart, and [CallerIntentKind]'s doc comment for why an
+// untagged value must never be guessed at rather than treated as unknown.
 type CommandRecord struct {
 	ID                  string
 	IdempotencyKey      string
@@ -36,7 +45,7 @@ type CommandRecord struct {
 	ParamsJSON          string
 	IssuerPrincipalID   string
 	IssuerPrincipalName string
-	RequestedRevision   string
+	CallerIntent        string
 	ConfirmationMethod  string
 	DeadlineAt          *time.Time
 	CreatedAt           time.Time
@@ -100,7 +109,7 @@ func (e *DuplicateCommandError) Unwrap() error { return ErrCommandIdempotencyKey
 
 const commandColumns = `
 	id, idempotency_key, action, target_kind, target_id, params_json,
-	issuer_principal_id, issuer_principal_name, requested_revision, confirmation_method,
+	issuer_principal_id, issuer_principal_name, caller_intent, confirmation_method,
 	deadline_at, created_at, dispatched_at, resolved_at, state, result_json,
 	outcome_state, outcome_reason
 `
@@ -113,7 +122,7 @@ func scanCommand(row interface{ Scan(dest ...any) error }) (CommandRecord, error
 	)
 	if err := row.Scan(
 		&rec.ID, &rec.IdempotencyKey, &rec.Action, &rec.TargetKind, &rec.TargetID, &rec.ParamsJSON,
-		&rec.IssuerPrincipalID, &rec.IssuerPrincipalName, &rec.RequestedRevision, &rec.ConfirmationMethod,
+		&rec.IssuerPrincipalID, &rec.IssuerPrincipalName, &rec.CallerIntent, &rec.ConfirmationMethod,
 		&deadlineAt, &createdAt, &dispatchedAt, &resolvedAt, &rec.State, &rec.ResultJSON,
 		&rec.OutcomeState, &rec.OutcomeReason,
 	); err != nil {
@@ -147,7 +156,7 @@ func getCommandByIdempotencyKey(ctx context.Context, q querier, key string) (Com
 	return rec, nil
 }
 
-func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, now time.Time) (CommandRecord, error) {
+func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, now time.Time, hooks commitHook) (CommandRecord, error) {
 	rec.CreatedAt = now
 	if rec.State == "" {
 		return CommandRecord{}, fmt.Errorf("store: insert command %q: State is empty", rec.ID)
@@ -162,13 +171,13 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO commands (
 			id, idempotency_key, action, target_kind, target_id, params_json,
-			issuer_principal_id, issuer_principal_name, requested_revision, confirmation_method,
+			issuer_principal_id, issuer_principal_name, caller_intent, confirmation_method,
 			deadline_at, created_at, dispatched_at, resolved_at, state, result_json,
 			outcome_state, outcome_reason
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
 	`,
 		rec.ID, rec.IdempotencyKey, rec.Action, rec.TargetKind, rec.TargetID, rec.ParamsJSON,
-		rec.IssuerPrincipalID, rec.IssuerPrincipalName, rec.RequestedRevision, rec.ConfirmationMethod,
+		rec.IssuerPrincipalID, rec.IssuerPrincipalName, rec.CallerIntent, rec.ConfirmationMethod,
 		timePtrToDB(rec.DeadlineAt), timeToDB(rec.CreatedAt), rec.State, rec.ResultJSON,
 		rec.OutcomeState, rec.OutcomeReason,
 	)
@@ -185,8 +194,12 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 
 	// Same two independent triggers as [appendAuditEntry] (audit.go): insert
 	// volume and elapsed wall-clock time since the last prune pass. See
-	// retention.go's pruneEveryNCommands/pruneCheckInterval doc comments.
-	byCount := s.commandInsertCount.Add(1)%pruneEveryNCommands == 0
+	// retention.go's pruneEveryNCommands/pruneCheckInterval doc comments,
+	// and [commitHook]'s doc comment for why the mutation itself is queued
+	// through hooks (immediate via [Store.InsertCommand]'s own q = s.db,
+	// deferred to commit via [Tx.InsertCommand]'s caller-owned transaction)
+	// rather than applied here directly.
+	byCount := (s.commandInsertCount.Load()+1)%pruneEveryNCommands == 0
 	byAge := false
 	if !byCount {
 		last := s.lastCommandPruneAtNanos.Load()
@@ -196,8 +209,10 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 		if err := s.pruneCommands(ctx, q); err != nil {
 			return CommandRecord{}, fmt.Errorf("store: insert command %q: %w", rec.ID, err)
 		}
-		s.lastCommandPruneAtNanos.Store(s.now().UnixNano())
+		prunedAt := s.now()
+		hooks.after(func() { s.lastCommandPruneAtNanos.Store(prunedAt.UnixNano()) })
 	}
+	hooks.after(func() { s.commandInsertCount.Add(1) })
 
 	// The INSERT above hardcodes dispatched_at/resolved_at to NULL — see
 	// [Store.InsertCommand]'s doc comment — but rec, at this point, is
@@ -229,7 +244,7 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 // audit entry rather than dispatching the command a second time.
 func (s *Store) InsertCommand(ctx context.Context, rec CommandRecord) (CommandRecord, error) {
 	guardNotInTx(ctx, "Store.InsertCommand")
-	return insertCommand(ctx, s.db, s, rec, s.now())
+	return insertCommand(ctx, s.db, s, rec, s.now(), immediateHook{})
 }
 
 // InsertCommand is [Store.InsertCommand]'s [Tx] form — needed because
@@ -238,7 +253,7 @@ func (s *Store) InsertCommand(ctx context.Context, rec CommandRecord) (CommandRe
 // transaction as the insert, exactly as the same-transaction rule requires
 // for a coordinator-local change.
 func (t *Tx) InsertCommand(ctx context.Context, rec CommandRecord) (CommandRecord, error) {
-	return insertCommand(ctx, t.tx, t.s, rec, t.s.now())
+	return insertCommand(ctx, t.tx, t.s, rec, t.s.now(), t)
 }
 
 func getCommand(ctx context.Context, q querier, id string) (CommandRecord, error) {

@@ -157,6 +157,50 @@ func TestListMacroRunsValidatesState(t *testing.T) {
 	}
 }
 
+// TestListMacroRunsPassesShowFilter proves GET /macro-runs?show= actually
+// reaches [MacroRunFilter] instead of being silently dropped: this route
+// used to build MacroRunFilter from macroId/state/limit only, never
+// reading `show`, even though the response it returns carries a `show`
+// field per run.
+func TestListMacroRunsPassesShowFilter(t *testing.T) {
+	svc, _, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, svc, operator.ID)
+	macros := &fakeMacroRunner{listResult: []store.MacroRunRecord{
+		{ID: "run-1", MacroObjectID: "begin-set", Show: "halloween-2026", State: "finished", CreatedAt: testNow},
+	}}
+	api := New(macroRunTestDeps(svc, macros, newFakeCommandStore()), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/macro-runs?show=halloween-2026&macroId=begin-set&state=finished&limit=5",
+		map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	want := MacroRunFilter{MacroObjectID: "begin-set", Show: "halloween-2026", State: "finished", Limit: 5}
+	if macros.gotFilter != want {
+		t.Errorf("executor received filter %+v, want %+v", macros.gotFilter, want)
+	}
+}
+
+// TestListMacroRunsShowAbsentIsNoFilter proves an absent `show` leaves
+// [MacroRunFilter.Show] empty, matching how macroId/state already behave
+// when omitted — no narrowing, same as before this filter existed.
+func TestListMacroRunsShowAbsentIsNoFilter(t *testing.T) {
+	svc, _, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, svc, operator.ID)
+	macros := &fakeMacroRunner{}
+	api := New(macroRunTestDeps(svc, macros, newFakeCommandStore()), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/macro-runs", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if macros.gotFilter.Show != "" {
+		t.Errorf("gotFilter.Show = %q, want empty when ?show= is absent", macros.gotFilter.Show)
+	}
+}
+
 // TestGetMacroRunNotFound.
 func TestGetMacroRunNotFound(t *testing.T) {
 	svc, _, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))

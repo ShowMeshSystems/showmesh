@@ -86,11 +86,27 @@ type handlers struct {
 	// in one process.
 	discoveryRunInFlight atomic.Bool
 
+	// fppUnknownMembers dedupes the warning fppobservations.go writes when
+	// a plugin sends a member this coordinator does not know, so a
+	// misspelled field posted on every tick is one log line rather than a
+	// flood. In-memory and per-*handlers for the same reason
+	// discoveryRunInFlight above is (ADR-012, one coordinator process);
+	// losing it across a restart just means the next observation logs once
+	// more.
+	fppUnknownMembers unknownMemberLog
+
 	// nightCueHooks is Track F seam F4's own crash-injection seam for
 	// RESTING-MODE.md §7.1.1's commit/dispatch boundary — see
 	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
+
+	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
+	// intent gate state. See [emergencyStopArmStore]'s own doc comment
+	// for why this is in-memory, unpersisted, and a single-process
+	// assumption (ADR-012, the same one discoveryRunInFlight above
+	// already relies on).
+	emergencyStopArms *emergencyStopArmStore
 
 	// cueActivationFailToBlackWG owns every dispatchAssetMissingFailToBlack
 	// goroutine cueActivationTickOne has launched but not yet finished (see
@@ -104,6 +120,18 @@ type handlers struct {
 	// (e.g. a dispatched command appearing in a fake publisher) that can
 	// still be running well after that side effect is observed.
 	cueActivationFailToBlackWG sync.WaitGroup
+
+	// cueActivationRefusalLog dedupes cueActivationTickOne's own "node did
+	// not confirm this activation" log line (cueactivationloop.go): keyed
+	// by instanceUuid+"|"+nodeId, it holds the last NodeOutcome already
+	// logged for that node, so an identical, still-unresolved refusal logs
+	// once rather than every tick. The durable record
+	// (writeCueActivationOutcomeAudit) is unaffected, only this repeated
+	// log line backs off. Cleared whenever that node's own activation is
+	// later confirmed, so a genuinely new episode (even one that happens
+	// to produce the identical NodeOutcome string) logs again.
+	cueActivationRefusalLogMu sync.Mutex
+	cueActivationRefusalLog   map[string]string
 }
 
 func (h *handlers) now() time.Time { return h.clock() }
@@ -147,7 +175,7 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID)))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
 	}
 	jsonWrite(w, v1.NodesResponse{ServerTime: formatTime(now), Nodes: nodes})
 }
@@ -181,7 +209,7 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
 			render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID))})
+			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID))})
 			return
 		}
 	}
@@ -324,10 +352,10 @@ func parseObservationFilter(query url.Values) (ObservationFilter, *v1.Problem) {
 	if raw := query.Get("resourceKind"); raw != "" {
 		kind := observation.ResourceKind(raw)
 		switch kind {
-		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface, observation.ResourceAudioSession:
+		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface, observation.ResourceAudioSession, observation.ResourceFallbackProgram:
 			filter.ResourceKind = &kind
 		default:
-			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", \"audio_session\", got " + strconv.Quote(raw))
+			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", \"audio_session\", \"fallback_program\", got " + strconv.Quote(raw))
 			return ObservationFilter{}, &p
 		}
 	}
@@ -465,7 +493,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID)))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)
@@ -522,6 +550,23 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, now))
 	}
 
+	// Coordinator-wide, computed fresh from the same decode a real push
+	// performs — see audioConfigPushStatus's own doc comment. A
+	// config-store failure here degrades this one field (state=unknown)
+	// rather than failing the whole snapshot, matching
+	// resolumeCompositionDegradeOnError's own precedent two calls above.
+	pushState, pushReason := audioConfigPushStatusDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
+
+	// Computed fresh via a real probe write to audit_log (always rolled
+	// back), never cached: see [identity.Service.AuditWriteStatus]'s own
+	// doc comment for why a stale, traffic-fed latch alone was not
+	// answerable enough for this standing signal.
+	auditState, auditReasonStr := h.deps.Identity.AuditWriteStatus(ctx)
+	var auditReason *string
+	if auditReasonStr != "" {
+		auditReason = &auditReasonStr
+	}
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -530,6 +575,12 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		Collectors:     collectors,
 		MacroRuns:      runs,
 		Resolume:       resolumeInstances,
+		AuditStore: v1.AuditStoreStatus{
+			State: auditState, Reason: auditReason,
+		},
+		AudioConfigPush: v1.AudioConfigPushStatus{
+			State: string(pushState), Reason: pushReason,
+		},
 	})
 }
 

@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
@@ -45,6 +46,69 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
+
+// ShowPin freezes the authorization identity ADR-033 show mode requires:
+// once a Show/Generation is pinned, every node's Cue catalog is resolved
+// AT MOST ONCE for the life of the pin, and [Decide] and [Authorize] both
+// mint and check every activation against that one frozen resolution --
+// never a fresh one -- regardless of any show.cue edit saved while the
+// show plays. A nil *ShowPin means "resolve live", the original per-tick
+// behavior this package has always had, which is what still applies in
+// ADR-033 program mode.
+//
+// The caller (internal/coordinator/api's CueActivationLoop) owns deciding
+// WHEN a pin starts and ends: it holds one *ShowPin for as long as show
+// mode and the active Show/Generation are unchanged, and drops it the
+// moment either changes, so the next Decide/Authorize call starts a fresh
+// pin from whatever is live then. This package only freezes what it is
+// handed; it has no opinion on show mode or on how long a pin should live.
+type ShowPin struct {
+	// Active is this pin's own frozen Show/Generation -- captured once, at
+	// construction, never re-read from the store for the life of the pin.
+	Active assetsync.ActiveShow
+
+	mu       sync.Mutex
+	catalogs map[string]assetsync.Catalog
+}
+
+// NewShowPin starts a pin for active. Catalogs are captured lazily, one
+// node at a time, on that node's own first call through [pinnedCatalog]:
+// there is no advance list of every node a show will ever touch, and a
+// node's first touch under this pin IS "at show start" for that node's own
+// catalog, exactly like every other node's.
+func NewShowPin(active assetsync.ActiveShow) *ShowPin {
+	return &ShowPin{Active: active, catalogs: make(map[string]assetsync.Catalog)}
+}
+
+// pinnedCatalog returns nodeID's catalog under pin, resolving it via
+// resolve and caching it on the first call for nodeID, then returning that
+// SAME cached value on every later call for nodeID -- even one made after
+// resolve would now return something different, which is exactly the
+// mid-show show.cue edit this type exists to freeze out. Concurrent first
+// touches for the same nodeID both resolve, but only the first to acquire
+// pin.mu after resolving is kept, so every caller of this pin still agrees
+// on one catalog per node.
+func pinnedCatalog(ctx context.Context, pin *ShowPin, nodeID string, resolve func(context.Context) (assetsync.Catalog, error)) (assetsync.Catalog, error) {
+	pin.mu.Lock()
+	if c, ok := pin.catalogs[nodeID]; ok {
+		pin.mu.Unlock()
+		return c, nil
+	}
+	pin.mu.Unlock()
+
+	c, err := resolve(ctx)
+	if err != nil {
+		return assetsync.Catalog{}, err
+	}
+
+	pin.mu.Lock()
+	defer pin.mu.Unlock()
+	if existing, ok := pin.catalogs[nodeID]; ok {
+		return existing, nil
+	}
+	pin.catalogs[nodeID] = c
+	return c, nil
+}
 
 // State is the closed vocabulary a [Decision] reaches. It is deliberately
 // smaller than [fppreconcile.Outcome]: H0.2's own text collapses every
@@ -82,6 +146,19 @@ const (
 	// identity for this observation, so there is nothing to resolve,
 	// mismatch, or hold.
 	StateIdentityUnavailable State = "identity-unavailable"
+
+	// StateEvidenceBroken is reached whenever obs.EvidenceBrokenAt is set
+	// (schemaV29, owner ruling 2026-09-02): a sequence-regression refusal
+	// was recorded for this instance since its stored observation was last
+	// accepted. This check runs BEFORE every other routing in [Decide],
+	// deliberately outranking whatever [fppreconcile.Reconcile] computed
+	// from the SAME now-possibly-stale row: no outcome that row can report
+	// is safe to trust once its own continuity is known to be broken.
+	// Decision.EvidenceBroken carries the effect — never Decision.
+	// Activations or Decision.ClearNodes, both of which mean something
+	// different (start, or clear-everything-on-this-node) that this state
+	// must not be confused with.
+	StateEvidenceBroken State = "evidence-broken"
 )
 
 // Decision is [Decide]'s result: the state it reached, human-readable
@@ -111,6 +188,19 @@ type Decision struct {
 	// command paths rather than a cue.activate: blacking is not itself an
 	// activation of any Cue.
 	ClearNodes []string
+
+	// EvidenceBroken is nodeID -> the [cueactivation.Activation] this
+	// coordinator most recently resolved for this node from the NOW-broken
+	// evidence, populated only for StateEvidenceBroken and only when that
+	// evidence's last resolution (before it broke) was
+	// [fppreconcile.OutcomeResolved] — empty otherwise, meaning there is
+	// nothing coherent to undo. A caller must use this to STOP each node's
+	// own currently-held Cue outputs (its own CueID's declared outputs,
+	// per-cue scoped — never the whole node), the same
+	// dispatchCueScopedBlackAndSilence-shaped effect the asset-missing
+	// fail-to-black path already uses; it must never be dispatched as a
+	// cue.activate the way Decision.Activations is.
+	EvidenceBroken map[string]cueactivation.Activation
 }
 
 // Decide resolves result (fppreconcile's own answer for obs) into a
@@ -123,7 +213,15 @@ type Decision struct {
 // threaded explicitly rather than read off obs a second time so a future
 // non-FPP caller of the same decision shape is not forced through an
 // FPP-shaped observation.
-func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (Decision, error) {
+func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
+	// Checked first, unconditionally, before any routing on result.Outcome:
+	// StateEvidenceBroken's own doc comment for why a broken marker
+	// outranks whatever Reconcile computed from this same, now-possibly-
+	// stale row.
+	if obs.EvidenceBrokenAt != nil {
+		return decideEvidenceBroken(ctx, st, result, obs, runnerInstance, pin)
+	}
+
 	switch result.Outcome {
 	case fppreconcile.OutcomeIdentityUnavailable:
 		return Decision{State: StateIdentityUnavailable, Reason: result.Reason}, nil
@@ -155,10 +253,10 @@ func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, ob
 	}
 
 	if result.Outcome != fppreconcile.OutcomeResolved {
-		return decideMismatch(ctx, st, active, binding, result, obs, runnerInstance)
+		return decideMismatch(ctx, st, active, binding, result, obs, runnerInstance, pin)
 	}
 
-	return decideResolved(ctx, st, active, result, obs, runnerInstance)
+	return decideResolved(ctx, st, active, result, obs, runnerInstance, pin)
 }
 
 // activeShowBinding is the ACTIVE show's own fpp-runner show.playlist bound
@@ -238,7 +336,7 @@ func activeShowFPPBinding(ctx context.Context, st *store.Store, active assetsync
 // decideMismatch applies H0.2's policy for every non-resolved,
 // active-show-bound outcome. The state is StateMismatched under every one
 // of the three policies — only the effect differs.
-func decideMismatch(ctx context.Context, st *store.Store, active assetsync.ActiveShow, binding activeShowBinding, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (Decision, error) {
+func decideMismatch(ctx context.Context, st *store.Store, active assetsync.ActiveShow, binding activeShowBinding, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
 	d := Decision{State: StateMismatched, Reason: result.Reason, MismatchPolicy: binding.mismatchPolicy}
 	switch binding.mismatchPolicy {
 	case config.ShowPlaylistMismatchPolicyHold:
@@ -264,7 +362,7 @@ func decideMismatch(ctx context.Context, st *store.Store, active assetsync.Activ
 			d.Reason = result.Reason + "; mismatchPolicy is safeCue but the bound Playlist carries no safeCueRef, so nothing is activated"
 			return d, nil
 		}
-		activations, err := resolveActivationsForCue(ctx, st, active, binding.playlistID, binding.playlistRevision, "", binding.safeCueRef, obs, runnerInstance)
+		activations, err := resolveActivationsForCue(ctx, st, active, binding.playlistID, binding.playlistRevision, "", binding.safeCueRef, obs, runnerInstance, pin)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -276,12 +374,47 @@ func decideMismatch(ctx context.Context, st *store.Store, active assetsync.Activ
 	}
 }
 
+// decideEvidenceBroken is [Decide]'s path once obs.EvidenceBrokenAt is set
+// (StateEvidenceBroken's own doc comment). If result's last resolution
+// (before the marker was set) was [fppreconcile.OutcomeResolved], resolve
+// exactly what [decideResolved] would have resolved from that SAME frozen
+// identity — the Cue this coordinator actually activated before things
+// broke — so a caller can undo precisely that, never something guessed.
+// Any other result.Outcome means nothing was cleanly activated from this
+// instance's evidence to begin with (H0.2 already governed it, or there was
+// nothing to govern), so there is nothing coherent to undo and
+// Decision.EvidenceBroken is left nil.
+func decideEvidenceBroken(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
+	reason := fmt.Sprintf("%s; a sequence-regression refusal was recorded for this instance at %s, so this evidence can no longer be trusted",
+		result.Reason, obs.EvidenceBrokenAt.UTC().Format(time.RFC3339))
+	if result.Outcome != fppreconcile.OutcomeResolved {
+		return Decision{State: StateEvidenceBroken, Reason: reason}, nil
+	}
+
+	// A live resolution, not pin.Active: this call is not minting a new
+	// Activation to authorize and dispatch, only identifying what to stop,
+	// and the active show may legitimately have changed since the broken
+	// evidence was last resolved — resolveActivationsForCue's own
+	// catalogEntry lookup already returns "not participating" harmlessly
+	// for a Cue that no longer exists in a new active show's catalog, so no
+	// extra guard is needed here for that case.
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return Decision{}, fmt.Errorf("cueactivate: evidence-broken: resolve active show: %w", err)
+	}
+	activations, err := resolveActivationsForCue(ctx, st, active, result.PlaylistID, result.PlaylistRevision, result.EntryID, result.CueID, obs, runnerInstance, pin)
+	if err != nil {
+		return Decision{}, err
+	}
+	return Decision{State: StateEvidenceBroken, Reason: reason, EvidenceBroken: activations}, nil
+}
+
 // decideResolved is [Decide]'s path for [fppreconcile.OutcomeResolved]:
 // build one [cueactivation.Activation] per participating node from
 // result's pinned identities. It does not itself authorize anything — see
 // [Authorize].
-func decideResolved(ctx context.Context, st *store.Store, active assetsync.ActiveShow, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (Decision, error) {
-	activations, err := resolveActivationsForCue(ctx, st, active, result.PlaylistID, result.PlaylistRevision, result.EntryID, result.CueID, obs, runnerInstance)
+func decideResolved(ctx context.Context, st *store.Store, active assetsync.ActiveShow, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
+	activations, err := resolveActivationsForCue(ctx, st, active, result.PlaylistID, result.PlaylistRevision, result.EntryID, result.CueID, obs, runnerInstance, pin)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -297,10 +430,28 @@ func decideResolved(ctx context.Context, st *store.Store, active assetsync.Activ
 // it, per [assetsync.ResolveCueCatalog]'s own node-scoping rule. It pins
 // Show/Generation/CatalogRevision from active and each node's own
 // freshly-resolved catalog; it performs no authorization check of its own.
-func resolveActivationsForCue(ctx context.Context, st *store.Store, active assetsync.ActiveShow, playlistID string, playlistRevision int64, entryID, cueID string, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string) (map[string]cueactivation.Activation, error) {
+func resolveActivationsForCue(ctx context.Context, st *store.Store, active assetsync.ActiveShow, playlistID string, playlistRevision int64, entryID, cueID string, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (map[string]cueactivation.Activation, error) {
+	// pin.Active, not the live active passed in, is this call's authority
+	// on Show/Generation once a pin exists (ADR-033 show mode): the caller
+	// (Decide) still resolves active live to detect a show change and
+	// route H0.2 policy, but the identity actually minted into every
+	// Activation below must come from the SAME frozen source Authorize
+	// will independently re-check against, or the two would drift exactly
+	// the way a live re-resolve on one side already did in the incident
+	// this type exists to close.
+	if pin != nil {
+		active = pin.Active
+	}
 	if !active.Configured {
 		return map[string]cueactivation.Activation{}, nil
 	}
+	// liveCueRevision is used only when pin == nil (ADR-033 program mode,
+	// and every call before this type existed): fetched independently of
+	// any node's own catalog resolution, exactly as before pinning was
+	// added, so unpinned behavior is unchanged byte for byte. A pinned
+	// call instead takes each node's own CueRevision from that node's own
+	// frozen catalog entry, below -- never this live read, which is
+	// precisely the store hit a mid-show show.cue edit changes.
 	cueObj, err := st.GetConfigObject(ctx, config.ShowCueConfigKind, cueID)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigObjectNotFound) {
@@ -308,7 +459,7 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 		}
 		return nil, fmt.Errorf("get show.cue %q: %w", cueID, err)
 	}
-	cueRevision := cueObj.CurrentRevision
+	liveCueRevision := cueObj.CurrentRevision
 
 	nodes, err := st.ListNodes(ctx)
 	if err != nil {
@@ -317,13 +468,26 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 
 	activations := make(map[string]cueactivation.Activation, len(nodes))
 	for _, n := range nodes {
-		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		var catalog assetsync.Catalog
+		var err error
+		if pin != nil {
+			catalog, err = pinnedCatalog(ctx, pin, n.NodeID, func(ctx context.Context) (assetsync.Catalog, error) {
+				return assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+			})
+		} else {
+			catalog, err = assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
 		entry, participates := catalogEntry(catalog, cueID)
 		if !participates || !hasAnyOutput(entry) {
 			continue
+		}
+
+		cueRevision := liveCueRevision
+		if pin != nil {
+			cueRevision = entry.CueRevision
 		}
 
 		tuple := cueauth.AuthorizationTuple{
@@ -346,6 +510,38 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 		}
 	}
 	return activations, nil
+}
+
+// ResolveDirectCueActivations builds one [cueactivation.Activation] per
+// node participating in cueID for a directly-fired activation: Live
+// Control's operator "Fire" control, which has no FPP playlist
+// entry behind it at all - [cueactivation.Activation]'s own doc comment
+// already names this case ("EntryID is empty for a directly activated
+// announcement"). It resolves the active show and every node's Cue
+// catalog LIVE, always, exactly as ADR-033 program mode already does
+// (pin == nil below): a hand-fired announcement is an explicit,
+// immediate operator action, not an automatic evidence-driven activation,
+// so there is no mid-show edit for a frozen pin to insulate it from - the
+// operator firing right now is asking to authorize against the Cue
+// exactly as currently defined.
+//
+// occurrenceNonce must be unique per call, never reused across two
+// distinct operator clicks: it is this call's own substitute for
+// [store.FPPPlaylistEntryObservationRecord.EntryOccurrenceSequence],
+// which activationID hashes into every Activation's own ActivationID, so
+// two distinct manual fires of the identical Cue must never hash to the
+// same ActivationID and be mistaken for a replay of one another. The
+// caller owns generating it.
+func ResolveDirectCueActivations(ctx context.Context, st *store.Store, now time.Time, cueID, runnerInstance string, occurrenceNonce int64) (map[string]cueactivation.Activation, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return nil, fmt.Errorf("cueactivate: resolve active show: %w", err)
+	}
+	if !active.Configured {
+		return map[string]cueactivation.Activation{}, nil
+	}
+	obs := store.FPPPlaylistEntryObservationRecord{ObservedAt: now, EntryOccurrenceSequence: occurrenceNonce}
+	return resolveActivationsForCue(ctx, st, active, "", 0, "", cueID, obs, runnerInstance, nil)
 }
 
 // Authorize is TRACK-H-H3-SPEC.md section 6's coordinator-side refusal
@@ -376,15 +572,45 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 // (outputs.Render nil) must never clear a render surface, and a
 // render-only refusal must never stop the background or announcement
 // audio session, neither of which this Cue's own outputs touch.
-func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
-	active, err := assetsync.ResolveActiveShow(ctx, st)
-	if err != nil {
-		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
+//
+// pin, when non-nil (ADR-033 show mode), is the SAME *ShowPin the caller's
+// own Decide call for this tick already used: Authorize still resolves and
+// checks independently of anything Decide computed (this function's own
+// doc comment above), but "independently" means "against the identical
+// frozen source", never "against a second, freshly re-resolved catalog
+// that has since drifted from the one the caller minted act against" --
+// which is exactly the stale-catalog refusal this type exists to close.
+// pin == nil (ADR-033 program mode) resolves live, unchanged from before
+// pinning existed.
+//
+// reconnectedAt is [broker.BrokerState.ConnectedSince]: the last time this
+// coordinator's own broker connection came up, or the zero time if it has
+// never connected. [cueAssetsPresent] uses it to give a node one
+// inventoryInterval to publish a fresh report after THIS coordinator comes
+// back from an outage, before counting the outage itself against the
+// node's own staleness window: a broker outage the node rode out cleanly
+// must not read as a node-side asset fault.
+func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, reconnectedAt time.Time, nodeID string, act cueactivation.Activation, pin *ShowPin) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
+	var active assetsync.ActiveShow
+	if pin != nil {
+		active = pin.Active
+	} else {
+		active, err = assetsync.ResolveActiveShow(ctx, st)
+		if err != nil {
+			return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
+		}
 	}
 	if !active.Configured {
 		return cueauth.OutcomeCrossShow, "", cuecatalog.Outputs{}, false, nil
 	}
-	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
+	var catalog assetsync.Catalog
+	if pin != nil {
+		catalog, err = pinnedCatalog(ctx, pin, nodeID, func(ctx context.Context) (assetsync.Catalog, error) {
+			return assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
+		})
+	} else {
+		catalog, err = assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
+	}
 	if err != nil {
 		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve cue catalog for node %q: %w", nodeID, err)
 	}
@@ -409,7 +635,7 @@ func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInt
 			return false
 		}
 		var present bool
-		present, assetReason, assetErr = cueAssetsPresent(ctx, st, now, inventoryInterval, nodeID, entry)
+		present, assetReason, assetErr = cueAssetsPresent(ctx, st, now, inventoryInterval, reconnectedAt, nodeID, entry)
 		return present
 	})
 	if assetErr != nil {
@@ -467,19 +693,44 @@ func knownCueRevisions(catalog assetsync.Catalog) map[string]int64 {
 // a reason to execute" posture the other direction: an UNKNOWN state must
 // never read as present either.
 //
-// A declared output whose AssetHashes is empty (nothing has been uploaded
-// for that sequence at all — [cuecatalog.RenderOutput.Filename]'s own doc
-// comment) is NOT treated as missing here, matching [assetsync.
-// ComputeNodeManifest]'s existing Missing computation, which only ever
-// names an asset a [store.AssetRecord] actually exists for: an unauthored
-// sequence is a separate, out-of-scope authoring gap, not evidence this
-// node failed to sync something that exists.
+// A declared output whose Filename is empty — [cuecatalog.RenderOutput.
+// Filename]'s own doc comment: no asset has ever been uploaded for that
+// sequence at all, so [assetsync.ExpectedAssetsForNode] resolved zero
+// AssetHashes and [resolveAssetFor] left Filename blank — is treated as
+// MISSING here, the same as any other absent asset. This coordinator used
+// to special-case it as present, on the theory that an unauthored sequence
+// is an out-of-scope authoring gap rather than a sync failure; that theory
+// is what let this coordinator authorize an activation its own node then
+// refused (internal/agent's own [assetPresent] has always treated an empty
+// filename as absent, never present) — the exact disagreement this
+// coordinator's readiness answer must never produce.
+// [assetsync.ComputeNodeManifest]'s own Missing/Gaps split is unaffected:
+// this function answers a narrower question (can THIS Cue activate on THIS
+// node right now), not that one.
 //
-// reason names entry's Cue, the sequence, and the missing content hash and
-// filename — TRACK-H-H3-SPEC.md section 6's "a refusal is a state with
-// evidence, never a silent no-op" applied to WHICH asset is missing, never
-// left for an operator to guess at. Empty when present is true.
-func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, entry cuecatalog.Entry) (present bool, reason string, err error) {
+// reason names entry's Cue, the sequence, and either the missing content
+// hash and filename or — for a never-uploaded sequence — that no asset was
+// ever uploaded for it at all: TRACK-H-H3-SPEC.md section 6's "a refusal is
+// a state with evidence, never a silent no-op" applied to WHICH asset is
+// missing and WHY, never left for an operator to guess at. Empty when
+// present is true.
+//
+// reconnectedAt (Authorize's own doc comment) extends the staleness
+// deadline to reconnectedAt.Add(inventoryInterval) whenever that is later
+// than the ordinary report.ReportedAt.Add(StalenessWindow(inventoryInterval))
+// deadline AND reconnectedAt is after report.ReportedAt -- i.e. only when
+// this coordinator's own most recent reconnection happened after the last
+// report it received, so the node has not yet had a chance to publish a
+// fresh one on the new connection: the outage, not the node, is what made
+// the report look stale. A reconnectedAt at or before
+// report.ReportedAt means the report already postdates the reconnect (an
+// ordinary continuously-connected staleness, or one this coordinator has
+// never been connected long enough to see) and never extends the deadline
+// -- this is also what keeps the zero time.Time{} ("never connected") from
+// ever granting an allowance, since it is never after a real ReportedAt.
+// The extension only ever pushes the deadline later, never earlier, so it
+// can only turn a refusal into an authorization, never the reverse.
+func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, reconnectedAt time.Time, nodeID string, entry cuecatalog.Entry) (present bool, reason string, err error) {
 	report, err := st.GetNodeAssetReport(ctx, nodeID)
 	switch {
 	case err == nil:
@@ -488,7 +739,13 @@ func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inven
 	default:
 		return false, "", fmt.Errorf("get node asset report: %w", err)
 	}
-	if now.After(report.ReportedAt.Add(assetsync.StalenessWindow(inventoryInterval))) {
+	deadline := report.ReportedAt.Add(assetsync.StalenessWindow(inventoryInterval))
+	if reconnectedAt.After(report.ReportedAt) {
+		if reconnectDeadline := reconnectedAt.Add(inventoryInterval); reconnectDeadline.After(deadline) {
+			deadline = reconnectDeadline
+		}
+	}
+	if now.After(deadline) {
 		return false, fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
 			entry.CueID, nodeID, report.ReportedAt.Format(time.RFC3339)), nil
 	}
@@ -506,12 +763,20 @@ func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inven
 	}
 
 	if entry.Outputs.Render != nil {
+		if entry.Outputs.Render.Filename == "" {
+			return false, fmt.Sprintf("cue %q: render sequence %q has never had an asset uploaded, so it resolves to no runtime filename on node %q",
+				entry.CueID, entry.Outputs.Render.Sequence, nodeID), nil
+		}
 		if ok, missing := firstMissingHash(held, entry.Outputs.Render.AssetHashes); !ok {
 			return false, fmt.Sprintf("cue %q: render sequence %q asset %s (file %q) is not present on node %q",
 				entry.CueID, entry.Outputs.Render.Sequence, missing, entry.Outputs.Render.Filename, nodeID), nil
 		}
 	}
 	if entry.Outputs.Audio != nil {
+		if entry.Outputs.Audio.Filename == "" {
+			return false, fmt.Sprintf("cue %q: audio sequence %q has never had an asset uploaded, so it resolves to no runtime filename on node %q",
+				entry.CueID, entry.Outputs.Audio.Asset, nodeID), nil
+		}
 		if ok, missing := firstMissingHash(held, entry.Outputs.Audio.AssetHashes); !ok {
 			return false, fmt.Sprintf("cue %q: audio sequence %q asset %s (file %q) is not present on node %q",
 				entry.CueID, entry.Outputs.Audio.Asset, missing, entry.Outputs.Audio.Filename, nodeID), nil
@@ -520,12 +785,12 @@ func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inven
 	return true, "", nil
 }
 
-// firstMissingHash reports whether every one of hashes is in held —
-// [cuecatalog.RenderOutput.AssetHashes]'s own doc comment: empty means
-// nothing was ever uploaded for this sequence, which [cueAssetsPresent]'s
-// own doc comment states is never a reason to refuse — and, when not,
-// returns the first hash held lacks, for [cueAssetsPresent]'s own reason
-// text.
+// firstMissingHash reports whether every one of hashes is in held, and,
+// when not, returns the first hash held lacks, for [cueAssetsPresent]'s own
+// reason text. Only ever called once [cueAssetsPresent] has already
+// confirmed the output's Filename is non-empty, so an empty hashes slice
+// here means an asset row exists with no recorded content hash, not a
+// never-uploaded sequence — that case is refused earlier, by Filename.
 func firstMissingHash(held map[string]bool, hashes []string) (ok bool, missing string) {
 	for _, h := range hashes {
 		if !held[h] {

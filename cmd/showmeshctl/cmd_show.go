@@ -84,6 +84,8 @@ func cmdShow(args []string, stdout, stderr io.Writer, clock func() time.Time) in
 		return cmdShowActivate(rest, stdout, stderr, clock)
 	case "mode":
 		return cmdShowMode(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdShowDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl show: unknown subcommand %q\n\n", sub)
 		printShowUsage(stderr)
@@ -116,6 +118,14 @@ Subcommands:
                    installation is being programmed or is running a show,
                    and it is readable with observation:read so an operator
                    can always see which mode they are in
+  delete --confirm <id>
+                   tombstone this show (write); revision history stays
+                   readable via "revisions". Refused with a conflict while
+                   this id is the currently active show ("show active");
+                   change the active show first. Never cascades: any
+                   show.surface/show.action/show.macro/show.cue/
+                   show.playlist/night.session still naming this show id
+                   is left in place
 
 Run "showmeshctl show <subcommand> --help" for flags specific to one
 subcommand.
@@ -211,6 +221,7 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	var name, notes string
 	fs.StringVar(&name, "name", "", "the show's name (required)")
 	fs.StringVar(&notes, "notes", "", "the show's notes")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show set [flags] <show-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show revision (PUT /api/v1/config/show/{id}). Requires")
@@ -218,7 +229,9 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, never a read-modify-write: --name and --notes")
 		_, _ = fmt.Fprintln(stderr, "are sent on every call regardless of whether either flag is given, and an")
 		_, _ = fmt.Fprintln(stderr, "omitted --notes becomes empty on the coordinator, never \"left as it was\".")
-		_, _ = fmt.Fprintln(stderr, "This command never reads the current value first.")
+		_, _ = fmt.Fprintln(stderr, "This command never reads the current value first (except for If-Match, below).")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "show changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -245,9 +258,22 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	apiPath := "/api/v1/config/show/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r showConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "show set", err)
+	}
+
 	body := configShow{Name: name, Notes: notes}
 	var resp showConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show/"+url.PathEscape(id), body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "show set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -350,12 +376,15 @@ func cmdShowActive(args []string, stdout, stderr io.Writer, clock func() time.Ti
 
 func cmdShowActivate(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl show activate", stderr)
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show activate [flags] <show-id>")
 		_, _ = fmt.Fprintln(stderr, "\nMake <show-id> the active show (PUT /api/v1/config/show.active).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only. Audited and revisioned like any")
 		_, _ = fmt.Fprintln(stderr, "other configuration write, so a history of which show was active when")
 		_, _ = fmt.Fprintln(stderr, "is preserved.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "active show pointer changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -378,9 +407,22 @@ func cmdShowActivate(args []string, stdout, stderr io.Writer, clock func() time.
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const showActiveAPIPath = "/api/v1/config/show.active"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r showActiveConfigResponse
+		if err := c.getJSON(ctx, showActiveAPIPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "show activate", err)
+	}
+
 	body := configShowActive{Show: id}
 	var resp showActiveConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.active", body, &resp); err != nil {
+	if err := c.putJSON(ctx, showActiveAPIPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "show activate", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -408,6 +450,60 @@ func printShowDetail(w io.Writer, resp showConfigResponse) {
 	} else {
 		_, _ = fmt.Fprintf(w, "Created by: (no principal recorded)\n")
 	}
+}
+
+// cmdShowDelete mirrors cmdUndeclare's own shape (cmd_discovery.go) and
+// cmdSurfaceDelete's (cmd_surface.go) one kind over: --confirm is required
+// and checked locally before any request is sent. A tombstone, not a hard
+// delete: revision history stays readable through "show revisions"
+// afterward. The coordinator refuses with a conflict while this id is the
+// currently active show; this command does not special-case that, since
+// reportError already maps a 409 to exitConflict generically.
+func cmdShowDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl show delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this show")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show delete --confirm <show-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a show object (DELETE /api/v1/config/show/{id}). This is a")
+		_, _ = fmt.Fprintln(stderr, "tombstone, not a hard delete: the object's revision history still reads")
+		_, _ = fmt.Fprintln(stderr, "through \"show revisions\" afterward. Refused if this show is currently")
+		_, _ = fmt.Fprintln(stderr, "active (\"show active\"); change the active show first. Requires")
+		_, _ = fmt.Fprintln(stderr, "config:write and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "show delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl show delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "show delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/show/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "show delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "show %s deleted\n", id)
+	return exitOK
 }
 
 func printShowActiveDetail(w io.Writer, resp showActiveConfigResponse) {

@@ -16,13 +16,13 @@ func withTopLevelFragment(base, fragment string) string {
 func decodeWithSiteControlFragment(t *testing.T, fragment string) (NightSessionPayload, *ValidationError) {
 	t.Helper()
 	raw := withTopLevelFragment(validNightSessionJSON, `"siteControl":`+fragment)
-	return DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	return DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent)
 }
 
 func decodeWithInterlocksFragment(t *testing.T, fragment string) (NightSessionPayload, *ValidationError) {
 	t.Helper()
 	raw := withTopLevelFragment(validNightSessionJSON, `"interlocks":`+fragment)
-	return DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	return DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent)
 }
 
 // --- siteControl: not-configured / empty ---
@@ -266,7 +266,7 @@ func TestPrerequisiteEvidenceRejectsRequireConfirmation(t *testing.T) {
 func TestSiteControlActionCrossShowRejected(t *testing.T) {
 	raw := withTopLevelFragment(validNightSessionJSON, `"siteControl":{"presentationPowerOn":{"action":"site-on","powerDomain":"presentation","domainProvenance":"operator-declared"}}`)
 	christmasResolver := func(string) (string, bool) { return "christmas-2026", true }
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, christmasResolver, alwaysTrueInterlockSignalResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, christmasResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeCrossShowReference {
 		t.Fatalf("expected cross-show-reference on siteControl's own action, got %+v", verr)
 	}
@@ -274,7 +274,7 @@ func TestSiteControlActionCrossShowRejected(t *testing.T) {
 
 func TestSiteControlActionUnknownRejected(t *testing.T) {
 	raw := withTopLevelFragment(validNightSessionJSON, `"siteControl":{"presentationPowerOn":{"action":"site-on","powerDomain":"presentation","domainProvenance":"operator-declared"}}`)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysFalseActionResolver, alwaysTrueInterlockSignalResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysFalseActionResolver, alwaysTrueInterlockSignalResolver, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference {
 		t.Fatalf("expected field-unknown-reference on an unresolvable siteControl action, got %+v", verr)
 	}
@@ -391,7 +391,7 @@ func TestInterlockSignalNonMQTTRejected(t *testing.T) {
 	nonMQTT := func(string) (NightInterlockSignalInfo, bool) {
 		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationFPP, MQTTExpectKind: ""}, true
 	}
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, nonMQTT)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, nonMQTT, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeInterlockSignalNotConfirmable {
 		t.Fatalf("expected interlock-signal-not-confirmable for a non-mqtt signal, got %+v", verr)
 	}
@@ -402,7 +402,7 @@ func TestInterlockSignalExpectNoneRejected(t *testing.T) {
 	fireAndForget := func(string) (NightInterlockSignalInfo, bool) {
 		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindNone}, true
 	}
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, fireAndForget)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, fireAndForget, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeInterlockSignalNotConfirmable {
 		t.Fatalf("expected interlock-signal-not-confirmable for expect.kind \"none\", got %+v", verr)
 	}
@@ -413,7 +413,7 @@ func TestInterlockSignalCrossShowRejected(t *testing.T) {
 	christmas := func(string) (NightInterlockSignalInfo, bool) {
 		return NightInterlockSignalInfo{Show: "christmas-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindBoolean}, true
 	}
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, christmas)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, christmas, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeCrossShowReference {
 		t.Fatalf("expected cross-show-reference for an interlock signal in a different show, got %+v", verr)
 	}
@@ -422,7 +422,7 @@ func TestInterlockSignalCrossShowRejected(t *testing.T) {
 func TestInterlockSignalUnresolvableRejected(t *testing.T) {
 	raw := withTopLevelFragment(validNightSessionJSON, `"interlocks":[{"name":"x","phase":"start-night","posture":"observe","signal":"s","failureText":"f"}]`)
 	none := func(string) (NightInterlockSignalInfo, bool) { return NightInterlockSignalInfo{}, false }
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, none)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, none, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference {
 		t.Fatalf("expected field-unknown-reference for an unresolvable signal, got %+v", verr)
 	}
@@ -492,7 +492,7 @@ func TestInterlockBlockSignalTextKindRejected(t *testing.T) {
 	textKind := func(string) (NightInterlockSignalInfo, bool) {
 		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindText}, true
 	}
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, textKind)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, textKind, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeInterlockSignalNoFalseAnswer {
 		t.Fatalf("expected interlock-signal-no-false-answer for a block rule on kind text, got %+v", verr)
 	}
@@ -507,7 +507,7 @@ func TestInterlockBlockSignalNumberWithNoValueRejected(t *testing.T) {
 	numberNoValue := func(string) (NightInterlockSignalInfo, bool) {
 		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindNumber, MQTTExpectValuePresent: false}, true
 	}
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, numberNoValue)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, numberNoValue, alwaysTrueMediaPlaylistCurrent)
 	if verr == nil || verr.Code != ValidationCodeInterlockSignalNoFalseAnswer {
 		t.Fatalf("expected interlock-signal-no-false-answer for a block rule on kind number with no value, got %+v", verr)
 	}
@@ -520,7 +520,7 @@ func TestInterlockBlockSignalNumberWithValueAccepted(t *testing.T) {
 	numberWithValue := func(string) (NightInterlockSignalInfo, bool) {
 		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindNumber, MQTTExpectValuePresent: true}, true
 	}
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, numberWithValue)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, numberWithValue, alwaysTrueMediaPlaylistCurrent)
 	if verr != nil {
 		t.Fatalf("unexpected error for a block rule on kind number with a value: %+v", verr)
 	}
@@ -535,7 +535,7 @@ func TestInterlockObserveSignalTextKindAccepted(t *testing.T) {
 	textKind := func(string) (NightInterlockSignalInfo, bool) {
 		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindText}, true
 	}
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, textKind)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, textKind, alwaysTrueMediaPlaylistCurrent)
 	if verr != nil {
 		t.Fatalf("unexpected error for an observe rule on kind text: %+v", verr)
 	}

@@ -2,6 +2,7 @@ package macro
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -201,6 +202,49 @@ func TestOnFailureContinueDoesNotAbort(t *testing.T) {
 	}
 	if dispatch.callCount() != 2 {
 		t.Fatalf("dispatch called %d times, want 2", dispatch.callCount())
+	}
+}
+
+// TestOnFailureAbortDoesAbort is TestOnUnconfirmedAbortDoesAbort's own
+// companion one policy over: with onFailure:"abort" on the step, a failed
+// dispatch DOES abort the run.
+//
+// Completed is asserted only as a secondary fact, never as the
+// discriminator: it is set to false in the failed-step branch before the
+// abort check even runs, so it is false whether or not the run actually
+// aborted, and a test keyed on it alone would pass against the very
+// mutation this test exists to catch. Whether step 2 was ever dispatched,
+// and what it was recorded as, is what actually tells "aborted" apart
+// from "continued after the same failure".
+func TestOnFailureAbortDoesAbort(t *testing.T) {
+	st, svc, _ := newTestStoreAndIdentity(t, time.Now)
+	dispatch := &fakeDispatcher{dispatchFn: func(ctx context.Context, in api.FPPCommandInput) (api.FPPCommandOutcome, *v1.Problem, error) {
+		p := invalidParameterProblem("refused for test")
+		return api.FPPCommandOutcome{}, &p, nil
+	}}
+	e, _ := newTestExecutor(t, st, svc, dispatch, &fakeBrokers{})
+
+	putAction(t, st, "a1", fppAction("fpp-main", "startPlaylist", "none", map[string]any{"playlist": "Main"}))
+	putAction(t, st, "a2", fppAction("fpp-main", "setVolume", "none", map[string]any{"volume": int64(50)}))
+
+	step1 := testStep("s1", "a1")
+	step1.OnFailure = config.ShowMacroOnFailureAbort
+	putMacro(t, st, "m1", testMacroPayload(step1, testStep("s2", "a2")))
+
+	run := submitAndWait(t, e, api.MacroSubmitRequest{MacroObjectID: "m1", IdempotencyKey: "k1", Trigger: "api", Issuer: testIssuer()})
+
+	if run.Run.Completed == nil || *run.Run.Completed {
+		got := "nil"
+		if run.Run.Completed != nil {
+			got = fmt.Sprintf("%t", *run.Run.Completed)
+		}
+		t.Fatalf("Completed = %s, want false (onFailure:abort must abort)", got)
+	}
+	if dispatch.callCount() != 1 {
+		t.Fatalf("dispatch called %d times, want 1 (step 2 must never be dispatched once step 1's failure aborts the run)", dispatch.callCount())
+	}
+	if run.Steps[1].Outcome != outcomeSkipped {
+		t.Fatalf("step 2 outcome = %q, want %q (an aborted run must record step 2 as skipped, not as a real dispatch result)", run.Steps[1].Outcome, outcomeSkipped)
 	}
 }
 

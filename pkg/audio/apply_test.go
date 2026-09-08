@@ -1,6 +1,9 @@
 package audio
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // startingState carries a playlist (never both a playlist and media at
 // once — see [SessionDesiredState.Validate]).
@@ -13,6 +16,7 @@ func startingState() SessionDesiredState {
 	playlist := validPlaylist()
 	role := SourceRoleBackground
 	bookmark := Bookmark{PlaylistRevision: playlist.OwnerRevision, ItemID: "item-1"}
+	expiry := time.Unix(1_700_000_000, 0)
 	return SessionDesiredState{
 		SourceRole: &role,
 		Playlist:   &playlist,
@@ -22,6 +26,7 @@ func startingState() SessionDesiredState {
 		MixPolicy:  &mix,
 		Outputs:    &outputs,
 		Bookmark:   &bookmark,
+		Expiry:     &expiry,
 	}
 }
 
@@ -65,6 +70,9 @@ func TestApplyRequestOmittedFieldLeavesUnchanged(t *testing.T) {
 	if after.Bookmark != before.Bookmark {
 		t.Error("omitted Bookmark: pointer changed, want unchanged")
 	}
+	if after.Expiry != before.Expiry {
+		t.Error("omitted Expiry: pointer changed, want unchanged")
+	}
 }
 
 func TestApplyRequestNullFieldClears(t *testing.T) {
@@ -78,6 +86,7 @@ func TestApplyRequestNullFieldClears(t *testing.T) {
 		MixPolicy:  NullField[MixPolicy](),
 		Outputs:    NullField[[]string](),
 		Bookmark:   NullField[Bookmark](),
+		Expiry:     NullField[time.Time](),
 	}
 	after, _ := mustMerge(t, req, before)
 
@@ -104,6 +113,37 @@ func TestApplyRequestNullFieldClears(t *testing.T) {
 	}
 	if after.Bookmark != nil {
 		t.Error("null Bookmark: got non-nil, want cleared")
+	}
+	if after.Expiry != nil {
+		t.Error("null Expiry: got non-nil, want cleared")
+	}
+}
+
+func TestApplyRequestSetExpiryReplacesAbsoluteValue(t *testing.T) {
+	before := startingState()
+	newExpiry := time.Unix(1_800_000_000, 0)
+	after, _ := mustMerge(t, ApplyRequest{Expiry: SetField(newExpiry)}, before)
+
+	if after.Expiry == before.Expiry {
+		t.Fatal("set Expiry: pointer unchanged, want replaced")
+	}
+	if !after.Expiry.Equal(newExpiry) {
+		t.Errorf("set Expiry: got %v, want %v", *after.Expiry, newExpiry)
+	}
+	if after.Gain != before.Gain {
+		t.Error("set Expiry must not affect Gain")
+	}
+}
+
+// TestApplyRequestExpiryAbsentNeverExpires documents the legacy-record
+// guarantee restore-time retirement depends on: a state with no Expiry
+// ever set decodes and merges with Expiry nil, never a zero time.Time
+// that a restore check could mistake for "already expired".
+func TestApplyRequestExpiryAbsentNeverExpires(t *testing.T) {
+	var legacy SessionDesiredState
+	after, _ := mustMerge(t, ApplyRequest{}, legacy)
+	if after.Expiry != nil {
+		t.Fatalf("legacy state with no Expiry ever set: got %v, want nil", after.Expiry)
 	}
 }
 

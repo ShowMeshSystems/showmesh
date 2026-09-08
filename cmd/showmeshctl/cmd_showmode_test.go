@@ -49,6 +49,44 @@ func TestCmdShowModeBareReadsCurrentMode(t *testing.T) {
 	}
 }
 
+// A show.cue edit saved mid-show is staged, invisible to every node until
+// the show restarts: an operator working through showmeshctl alone must
+// be able to see that, not just a UI viewer, per
+// this repository's API-first / CLI-parity rule. This is a regression
+// test for the coordinator/CLI response-parity gate's own finding: the
+// wire field existed before this test was written, but showmeshctl's
+// struct had no matching field, so the CLI silently dropped it.
+func TestCmdShowModeGetPrintsAStagedCueActivationPin(t *testing.T) {
+	const pinnedResponse = `{"serverTime":"2026-08-23T21:00:00Z","kind":"show.mode","revision":4,
+		"payload":{"mode":"show"},"updatedAt":"2026-08-23T21:00:00Z",
+		"createdByPrincipalId":"p-1","createdByPrincipalName":"admin-1","source":"api",
+		"resolumeWebSocketEffect":"show mode: the Resolume WebSocket wake-up channel is held CLOSED.",
+		"cueActivationPin":{"pinned":true,"show":"show-1","generation":2,
+		"pinnedAt":"2026-08-23T20:30:00Z","effect":"show mode: this coordinator is holding the cue authorization identity it captured for the show and generation named above."}}`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, pinnedResponse)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdShow([]string{"mode", "--server", ts.URL}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-23T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "STAGED") {
+		t.Errorf("stdout = %q, want it to say STAGED for a held cue-activation pin", out)
+	}
+	if !strings.Contains(out, "show-1") || !strings.Contains(out, "generation 2") {
+		t.Errorf("stdout = %q, want it to name the pinned show (show-1) and generation (2)", out)
+	}
+	if !strings.Contains(out, "will NOT reach any node") {
+		t.Errorf("stdout = %q, want it to state the concrete operator-facing consequence, not just the word staged", out)
+	}
+}
+
 // Nothing ever written is reported as the built-in default, never as an
 // error and never as an empty value.
 func TestCmdShowModeGetReportsTheBuiltInDefault(t *testing.T) {

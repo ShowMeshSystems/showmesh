@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // fakeMQTTBrokerRegistry is a minimal [MQTTBrokerRegistry] fake: publish
@@ -321,6 +324,99 @@ func TestInvokeActionIdempotencyKeyReusedByADifferentCommandFamilyIs409(t *testi
 	}
 }
 
+// TestInvokeActionAudioConfirmed proves the audio branch dispatches
+// through [handlers.executeAudioSessionDispatch] — the same in-process
+// core POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/... uses —
+// rather than falling into dispatchActionTarget's default "unrecognized
+// integration" branch, which is what happened before this integration had
+// a case of its own.
+func TestInvokeActionAudioConfirmed(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Commands = st
+	pub := &fakeAudioPublisher{result: mqttproto.ResultPayload{
+		Outcome:  mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "started", "reason": "playback began"}},
+	}}
+	deps.AudioPublisher = pub
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "start-announcement", validShowActionAudioBody)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("start-announcement", "audio-key-1", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if result["outcome"] != "confirmed" {
+		t.Errorf("outcome = %v, want confirmed; body: %s", result["outcome"], body)
+	}
+	if pub.count() != 1 {
+		t.Errorf("audio publish calls = %d, want exactly 1", pub.count())
+	}
+	if pub.lastAction != "audio.session.start" {
+		t.Errorf("dispatched action = %q, want audio.session.start", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != "announcement" {
+		t.Errorf("dispatched params[sessionId] = %v, want announcement", pub.lastParams["sessionId"])
+	}
+}
+
+// TestInvokeActionAudioDispatchesOnlyTheFirstOfMultipleTargetNodes pins the
+// ad hoc action-invocation path's own documented contract: every consumer
+// of an audio-integration show.action OTHER than a night-session
+// announcement or the night-mode resting bed reads only the FIRST
+// configured audioNodeId (api/openapi.yaml's ConfigShowActionTarget.
+// audioNodeId doc comment). Names three distinct node ids, none of them
+// alphabetically or positionally special beyond "first", so a test that
+// happened to read the last or a sorted element would not accidentally
+// pass. dispatchActionTarget (actioninvoke.go) is what resolves target.
+// AudioNodeIDs down to the one dispatched node; asserting the exact
+// dispatched node id, not merely that a dispatch happened, is what a
+// silent last-element or all-elements substitution would fail.
+func TestInvokeActionAudioDispatchesOnlyTheFirstOfMultipleTargetNodes(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Commands = st
+	pub := &fakeAudioPublisher{result: mqttproto.ResultPayload{
+		Outcome:  mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "started", "reason": "playback began"}},
+	}}
+	deps.AudioPublisher = pub
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, api, token, "start-multi-target", `{
+		"show": "halloween-2026",
+		"label": "Start on a multi-node target",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": ["porch-node", "yard-node", "attic-node"],
+			"audioSessionId": "announcement",
+			"audioAction": "audio.session.start"
+		}
+	}`)
+
+	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("start-multi-target", "audio-key-multi", token))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("audio publish calls = %d, want exactly 1 (only the first node dispatched)", pub.count())
+	}
+	if len(pub.dispatched) != 1 {
+		t.Fatalf("dispatched = %+v, want exactly 1 recorded command", pub.dispatched)
+	}
+	if got := pub.dispatched[0].NodeID; got != "porch-node" {
+		t.Fatalf("dispatched nodeId = %q, want %q (the first configured target node)", got, "porch-node")
+	}
+}
+
 // TestInvokeActionMQTTConfirmedAndUnconfirmable proves the mqtt branch
 // dispatches through [DispatchMQTTAction] over [Dependencies.MQTTBrokers]:
 // a "none" expect kind reports unconfirmable, never success dressed up as
@@ -475,6 +571,10 @@ func TestInvokeActionAuditUnavailableExemptSafetyClassStillDispatches(t *testing
 	if degraded, _ := result["attributionDegraded"].(bool); !degraded {
 		t.Errorf("attributionDegraded = %v, want true", result["attributionDegraded"])
 	}
+	if reason, _ := result["dispatchAttributionReason"].(string); reason != degradedAttributionReasonSafetyClassExemption {
+		t.Errorf("dispatchAttributionReason = %q, want %q (the durable record and the API response must say WHY "+
+			"this ran unaudited, and this action's own stop safetyClass is the real reason)", reason, degradedAttributionReasonSafetyClassExemption)
+	}
 }
 
 // Isolates the pre-dispatch half of the exemption proved above, using
@@ -515,32 +615,54 @@ func TestInvokeActionAuditUnavailableExemptSafetyClassDegradesOnDispatchAlone(t 
 	}
 }
 
-// TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch proves
-// the fail-closed default: an FPP action whose safetyClass is "none" is
-// refused before anything reaches FPP when the audit store is
-// unwritable.
-func TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch(t *testing.T) {
-	fppSrv := newFailIfHitFPPCommandServer(t)
+// TestInvokeActionAuditUnavailableNonExemptRunsWithDegradedAttribution
+// proves ADR-024 decision 11's amendment (owner ruling, 2026-08-26): an
+// FPP action whose safetyClass is "none" still dispatches to
+// FPP, with degraded attribution, when the audit store is unwritable,
+// never refused for that reason alone. Observations are set to idle
+// (rather than TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch's
+// former setObs(nil)) so startPlaylist's own ifBusy=refuse guard clears
+// and this proves the action's OWN normal outcome (confirmed dispatch),
+// not merely that the pre-dispatch guard's own unrelated 409-shaped
+// "refused" outcome still fires.
+func TestInvokeActionAuditUnavailableNonExemptRunsWithDegradedAttribution(t *testing.T) {
+	fppSrv, fppFake := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
-	setup.obs.setObs(nil)
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
 
 	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, setup.svc, admin.ID)
 	deps := setup.deps()
 	deps.Config = setup.st
-	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 20 * 1e6, // 20ms: this test does not care about confirmation, only dispatch.
+	})
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutAction(t, api, token, "start-now", validShowActionFPPStartOnBenchBody)
 
 	installFailAuditTrigger(t, setup.storeDir)
 
 	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("start-now", "start-key-1", token))
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ADR-024 decision 11 amended 2026-08-26: audit unavailability never blocks "+
+			"an action); body: %s", resp.StatusCode, body)
 	}
-	if !strings.Contains(strings.ToLower(string(body)), "audit") {
-		t.Errorf("problem detail = %s, want it to name the audit store", body)
+	if fppFake.hitCount() != 1 {
+		t.Errorf("fpp hits = %d, want exactly 1 (the action must actually dispatch)", fppFake.hitCount())
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if outcome, _ := result["outcome"].(string); outcome == "refused" {
+		t.Errorf("outcome = %q, want a normal dispatch outcome, not a refusal", outcome)
+	}
+	if degraded, _ := result["attributionDegraded"].(bool); !degraded {
+		t.Errorf("attributionDegraded = %v, want true", result["attributionDegraded"])
+	}
+	if reason, _ := result["dispatchAttributionReason"].(string); reason != degradedAttributionReasonAuditNeverBlocks {
+		t.Errorf("dispatchAttributionReason = %q, want %q (this action's own safetyClass is \"none\": it must "+
+			"never claim it ran unaudited because of the blackout/stop/power-off safety class)", reason, degradedAttributionReasonAuditNeverBlocks)
 	}
 }
 
@@ -551,6 +673,18 @@ const validShowActionResolumeBlackoutBody = `{
 	"target": {
 		"integration": "resolume",
 		"action": "blackout"
+	}
+}`
+
+const validShowActionAudioBody = `{
+	"show": "halloween-2026",
+	"label": "Start the announcement",
+	"safetyClass": "none",
+	"target": {
+		"integration": "audio",
+		"audioNodeId": "node-a",
+		"audioSessionId": "announcement",
+		"audioAction": "audio.session.start"
 	}
 }`
 
@@ -621,5 +755,97 @@ func TestActionInvokeHTTPWriteDeadlineExceedsMQTTMaxDeadline(t *testing.T) {
 			"an mqtt action whose expect.deadlineSeconds is set to the maximum could have its own write deadline "+
 			"expire first, aborting a healthy, still-working conversation.",
 			actionInvokeHTTPWriteDeadline, broker.MaxResponseDeadline, margin)
+	}
+}
+
+// resolveActionInvokeReplayTestRecord builds a store.CommandRecord shaped
+// the way resolveActionInvokeReplay's own callers already guarantee
+// (matching TargetKind/TargetID, a tagged revision CallerIntent), with
+// the given state and stored outcome reason. Driving
+// h.resolveActionInvokeReplay directly with a hand-built record, rather
+// than through a full HTTP dispatch, exercises the substitution logic at
+// unit level without needing a client to actually race a replay against
+// an in-flight dispatch.
+func resolveActionInvokeReplayTestRecord(state, outcomeReason string) store.CommandRecord {
+	resultJSON, _ := json.Marshal(actionInvokeResultPayload{Label: "Blackout everything", Outcome: outcomeWordConfirmed})
+	return store.CommandRecord{
+		ID: "cmd-1", IdempotencyKey: "replay-key", Action: "show.action.invoke",
+		TargetKind: actionInvokeTargetKind, TargetID: "blackout-now",
+		CallerIntent: store.FormatCallerIntent(store.CallerIntentRevision, "1"),
+		State:        state, OutcomeReason: outcomeReason, ResultJSON: string(resultJSON),
+	}
+}
+
+// TestActionInvokeReplayResolvedWithEmptyStoredReasonReportsResolvedText
+// proves the defect this package closed: a resolved invocation whose
+// stored reason is empty must report a reason that agrees with the
+// resolved state
+// reported beside it, never actionInvokePendingOutcomeReason's claim that
+// the invocation has not resolved. Both the state and the reason are
+// asserted, and the reason is asserted as the exact string: an assertion
+// on non-emptiness alone would pass for text that still contradicted the
+// state, which is the whole defect this closes.
+func TestActionInvokeReplayResolvedWithEmptyStoredReasonReportsResolvedText(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	deps := showConfigTestDeps(svc, st).withDefaults()
+	h := &handlers{deps: deps, clock: fixedClock(testNow)}
+	ac := authContext{ok: true, result: identity.Authenticated{Principal: admin, Form: identity.FormToken}}
+
+	existing := resolveActionInvokeReplayTestRecord(actionInvokeStateResolved, "")
+	result, problem := h.resolveActionInvokeReplay(context.Background(), testNow, ac, existing, "blackout-now")
+	if problem != nil {
+		t.Fatalf("problem = %+v, want nil", problem)
+	}
+	if result.State != actionInvokeStateResolved || result.OutcomeReason != actionInvokeResolvedNoStoredReason {
+		t.Errorf("state = %q, outcomeReason = %q; want state %q, outcomeReason %q",
+			result.State, result.OutcomeReason, actionInvokeStateResolved, actionInvokeResolvedNoStoredReason)
+	}
+}
+
+// TestActionInvokeReplayPendingWithEmptyStoredReasonReportsPendingText
+// proves the genuinely pending case is unchanged: an invocation that has
+// not resolved yet still gets actionInvokePendingOutcomeReason's text,
+// paired with the pending state, exactly as before this fix.
+func TestActionInvokeReplayPendingWithEmptyStoredReasonReportsPendingText(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	deps := showConfigTestDeps(svc, st).withDefaults()
+	h := &handlers{deps: deps, clock: fixedClock(testNow)}
+	ac := authContext{ok: true, result: identity.Authenticated{Principal: admin, Form: identity.FormToken}}
+
+	existing := resolveActionInvokeReplayTestRecord("pending", "")
+	result, problem := h.resolveActionInvokeReplay(context.Background(), testNow, ac, existing, "blackout-now")
+	if problem != nil {
+		t.Fatalf("problem = %+v, want nil", problem)
+	}
+	if result.State != actionInvokeStatePending || result.OutcomeReason != actionInvokePendingOutcomeReason {
+		t.Errorf("state = %q, outcomeReason = %q; want state %q, outcomeReason %q",
+			result.State, result.OutcomeReason, actionInvokeStatePending, actionInvokePendingOutcomeReason)
+	}
+}
+
+// TestActionInvokeReplayResolvedWithStoredReasonPassesThroughUnchanged
+// proves the fix does not rewrite a reason that was actually recorded: a
+// resolved invocation whose stored reason is non-empty must come back
+// byte for byte, since an over-eager fix that substitutes for a real
+// reason as well as an empty one is a worse defect than the one being
+// closed here.
+func TestActionInvokeReplayResolvedWithStoredReasonPassesThroughUnchanged(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	deps := showConfigTestDeps(svc, st).withDefaults()
+	h := &handlers{deps: deps, clock: fixedClock(testNow)}
+	ac := authContext{ok: true, result: identity.Authenticated{Principal: admin, Form: identity.FormToken}}
+
+	const storedReason = "every layer went dark"
+	existing := resolveActionInvokeReplayTestRecord(actionInvokeStateResolved, storedReason)
+	result, problem := h.resolveActionInvokeReplay(context.Background(), testNow, ac, existing, "blackout-now")
+	if problem != nil {
+		t.Fatalf("problem = %+v, want nil", problem)
+	}
+	if result.State != actionInvokeStateResolved || result.OutcomeReason != storedReason {
+		t.Errorf("state = %q, outcomeReason = %q; want state %q, outcomeReason %q",
+			result.State, result.OutcomeReason, actionInvokeStateResolved, storedReason)
 	}
 }

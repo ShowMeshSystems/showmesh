@@ -118,19 +118,17 @@ func TestPollUsesNodeReportedObservedAt(t *testing.T) {
 	}
 }
 
-// TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes proves finding 4:
-// a discovery-backed signal (device.state, which the agent truly never
-// re-checks after boot) stamps its ObservedAt from
-// AudioPayload.DiscoveredAt, the one-shot startup probe time, while a
-// live-tick-backed signal (engine.state, the LTC generator state, and a
-// session signal one file over) stamps from AudioPayload.ObservedAt,
-// refreshed every tick. Before DiscoveredAt existed both groups shared
-// one field, so a live signal could never report fresher than whatever
-// the agent's discovery probe read at startup — every tick after the
-// first 45 seconds of the process's life reported stale regardless of
-// how current the underlying data actually was. This defect had crept
-// back in for engine.state/engine.reason specifically: see
-// TestPollEngineStateStaysFreshWhileNodeKeepsReporting.
+// TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes proves finding 1's
+// fix: device.state, a signal the agent's hardware probe truly never
+// re-checks after boot, must still stamp its ObservedAt from
+// AudioPayload.ObservedAt (this report tick's own evidence time), never
+// from AudioPayload.DiscoveredAt (the one-shot startup probe time). The
+// agent republishes its cached discovery on every tick as a current
+// assertion, so the tick itself is what tells the coordinator the node is
+// still alive and asserting that hardware; stamping with DiscoveredAt
+// instead pins the signal to the startup probe forever and a dark node
+// that stopped reporting a week ago would read current, exactly the
+// permanent-stale-turned-permanent-current defect this issue reported.
 func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	st := NewStore()
 	discoveredAt := time.Unix(1000, 0).UTC() // the one-shot startup probe
@@ -145,8 +143,11 @@ func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	obs, _ := c.Poll(context.Background())
 
 	device := findObs(t, obs, SignalDeviceState)
-	if device.ObservedAt == nil || !device.ObservedAt.Equal(discoveredAt) {
-		t.Errorf("device.state ObservedAt = %v, want the discovery probe time %v", device.ObservedAt, discoveredAt)
+	if device.ObservedAt == nil || !device.ObservedAt.Equal(observedAt) {
+		t.Errorf("device.state ObservedAt = %v, want the report tick time %v", device.ObservedAt, observedAt)
+	}
+	if device.ObservedAt.Equal(discoveredAt) {
+		t.Error("device.state ObservedAt equals the startup probe time; the agent republishes this evidence every tick, so it must never share DiscoveredAt's evidence")
 	}
 	engine := findObs(t, obs, SignalEngineState)
 	if engine.ObservedAt == nil || !engine.ObservedAt.Equal(observedAt) {
@@ -181,19 +182,58 @@ func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	}
 }
 
+// TestPollDiscoveryCachedSignalsAllUseObservedAtNotDiscoveredAt is the
+// certification-round follow-up to
+// TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes, which only
+// checked device.state: samplePayload sets DiscoveredAt and ObservedAt to
+// the same value, so every other signal this fix moved was blind to which
+// field it was actually stamped from, and reverting the move on any one
+// of them signal-by-signal passed every test in this package. This test
+// sets the two times apart and checks every signal the fix touched, one
+// table entry per signal, so a mutation on any of them is caught here by
+// name.
+func TestPollDiscoveryCachedSignalsAllUseObservedAtNotDiscoveredAt(t *testing.T) {
+	st := NewStore()
+	discoveredAt := time.Unix(1000, 0).UTC() // the one-shot startup probe
+	observedAt := time.Unix(9000, 0).UTC()   // a much later report tick
+	payload := samplePayload()
+	payload.DiscoveredAt = &discoveredAt
+	payload.ObservedAt = &observedAt
+	payload.LTCGeneratorState = "running"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalDeviceState,
+		SignalDeviceReason,
+		SignalOutputsCount,
+		SignalProgramState,
+		SignalOutputsEnumerated,
+		SignalOutputsTruncated,
+		SignalLTCState,
+	} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt == nil || !o.ObservedAt.Equal(observedAt) {
+			t.Errorf("%s ObservedAt = %v, want the report tick time %v", sig, o.ObservedAt, observedAt)
+		}
+		if o.ObservedAt != nil && o.ObservedAt.Equal(discoveredAt) {
+			t.Errorf("%s ObservedAt equals the startup probe time %v; the agent republishes this evidence every tick, so it must never share DiscoveredAt's evidence", sig, discoveredAt)
+		}
+	}
+}
+
 // TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
-// half of ADR-011: a payload with a zero DiscoveredAt (never sent by a
-// well-formed report, but not something this collector should crash on)
-// stays nil for a discovery-backed signal (device.state), never
-// defaulted to the receipt time. engine.state is no longer discovery-
-// backed any more: it stamps from ObservedAt, which mqttproto.
-// AudioPayload.Validate requires non-nil, so it has no equivalent
-// unknown-age case in a well-formed payload.
+// half of ADR-011: a payload with a zero ObservedAt (never sent by a
+// well-formed report, since mqttproto.AudioPayload.Validate requires it
+// non-nil, but not something this collector should crash on) stays nil
+// for device.state, never defaulted to the receipt time.
 func TestPollNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	payload := samplePayload()
-	payload.DiscoveredAt = nil
+	payload.ObservedAt = nil
 	st.Put("audio-01", payload, receivedAt)
 
 	c := New(st)
@@ -315,11 +355,14 @@ func TestPollEngineStateStaysFreshWhileNodeKeepsReporting(t *testing.T) {
 }
 
 // TestPollLTCUnavailableWithUsableProgramReportsBothIndependently proves
-// an engine with a usable program bus but no LTC-capable route reports the
-// two states independently, never collapsed into one.
+// an engine with a usable program bus but no LTC channel bound (generator
+// state "unsupported") reports the two states independently, never
+// collapsed into one.
 func TestPollLTCUnavailableWithUsableProgramReportsBothIndependently(t *testing.T) {
 	st := NewStore()
-	st.Put("audio-01", samplePayload(), time.Now())
+	payload := samplePayload()
+	payload.LTCGeneratorState = "unsupported"
+	st.Put("audio-01", payload, time.Now())
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
@@ -402,6 +445,111 @@ func TestPollLTCGeneratorDeadReportsStateAndReasonIndependentlyOfEngineState(t *
 	tc := findObs(t, obs, SignalLTCTimecode)
 	if tc.Absence != observation.StateNotCollected {
 		t.Errorf("timecode with generator not running = %+v, want not_collected", tc)
+	}
+}
+
+// TestPollDeviceStateGoesStaleWhenTheNodeGenuinelyStopsReporting proves the
+// guard on finding 1's fix: [Store] keeps only a node's most recent report
+// and nothing evicts it, so device.state must still age to stale once the
+// node stops reporting, exactly like engine.state
+// (TestPollEngineStateGoesStaleWhenTheNodeGenuinelyStopsReporting). A node
+// that has been off for a week must not read its cached hardware discovery
+// as usable, current, forever.
+func TestPollDeviceStateGoesStaleWhenTheNodeGenuinelyStopsReporting(t *testing.T) {
+	st := NewStore()
+	lastTick := time.Now().Add(-1 * time.Hour)
+	payload := samplePayload()
+	payload.ObservedAt = &lastTick
+	st.Put("audio-01", payload, lastTick)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+	device := findObs(t, obs, SignalDeviceState)
+
+	now := time.Now()
+	if got := device.StateAt(now); got != observation.StateStale {
+		t.Errorf("device.state StateAt(now) = %v, want stale: a node that stopped reporting an hour ago must not read current", got)
+	}
+}
+
+// TestPollSessionStateGoesStaleWhenTheNodeGenuinelyStopsReporting is
+// buildValue's two hardware siblings above, carried down to the session
+// path: [Store] keeps only a node's most recent report and nothing
+// evicts it, so a session signal must age to stale once the node stops
+// reporting, exactly like engine.state and device.state. sess.CollectedAt
+// is left nil, so this exercises the same single-clock ObservedAt path
+// the hardware tests use, not the session's own CollectedAt fallback
+// (TestStaleSessionSignalsUseTheSessionsOwnCollectedAt covers that
+// separately). SignalSessionStale is deliberately excluded: it always
+// stamps the tick's own current time regardless of value, so it cannot
+// prove anything about the window this test protects; SignalSessionState
+// is asserted instead, with sess.Stale left false so the wire flag plays
+// no part in the result.
+//
+// Both a recent and an hour-old report are asserted, not only the stale
+// one: a test that only checks "ages to stale" would keep passing even
+// if session signals could never read current at all, which would be a
+// guard that protects nothing in the other direction.
+func TestPollSessionStateGoesStaleWhenTheNodeGenuinelyStopsReporting(t *testing.T) {
+	cases := []struct {
+		name string
+		age  time.Duration
+		want observation.State
+	}{
+		{name: "recent report", age: time.Second, want: observation.StateCurrent},
+		{name: "hour-old report", age: time.Hour, want: observation.StateStale},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := NewStore()
+			lastTick := time.Now().Add(-tc.age)
+			payload := samplePayloadWithSession(mqttproto.AudioSessionReport{
+				SessionID: "sess-1", State: "playing", Fault: "none", Stale: false,
+			})
+			payload.ObservedAt = &lastTick
+			st.Put("audio-01", payload, lastTick)
+
+			c := New(st)
+			obs, _ := c.Poll(context.Background())
+			state := findSessionObs(t, obs, SignalSessionState)
+
+			now := time.Now()
+			if got := state.StateAt(now); got != tc.want {
+				t.Errorf("age=%s: audio_session.state StateAt(now) = %v, want %v", tc.age, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLTCStateMapping proves the full generator-state-to-ltc-state mapping
+// finding 2's fix relies on: running and stopped (both proof an LTC
+// channel is bound and drivable) read usable, unsupported and failed read
+// unavailable. Table-driven so a mutation to any one branch is caught at
+// the specific state/value pair that exposed it.
+func TestLTCStateMapping(t *testing.T) {
+	cases := []struct {
+		generatorState string
+		want           string
+	}{
+		{"running", StateUsable},
+		{"stopped", StateUsable},
+		{"unsupported", StateUnavailable},
+		{"failed", StateUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.generatorState, func(t *testing.T) {
+			st := NewStore()
+			payload := samplePayload()
+			payload.LTCGeneratorState = tc.generatorState
+			st.Put("audio-01", payload, time.Now())
+
+			c := New(st)
+			obs, _ := c.Poll(context.Background())
+			ltc := findObs(t, obs, SignalLTCState)
+			if ltc.Value != tc.want {
+				t.Errorf("generator state %q -> ltc.state = %v, want %q", tc.generatorState, ltc.Value, tc.want)
+			}
+		})
 	}
 }
 
@@ -598,6 +746,108 @@ func TestPollEngineGlitchCountsUnknownReportsNotCollected(t *testing.T) {
 	}
 }
 
+// TestPollEngineRestoreScheduledReportsAttemptsAndCountdown proves the
+// scheduled case: state, attempts, and the countdown all reach their own
+// signals with the payload's own values, while last_reason is collected
+// too because attempts is nonzero.
+func TestPollEngineRestoreScheduledReportsAttemptsAndCountdown(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.EngineRestoreState = "scheduled"
+	payload.EngineRestoreAttempts = 3
+	payload.EngineRestoreNextAttemptMs = 40_000
+	payload.EngineRestoreLastReason = "engine build refused: no advertised probe evidence for hw:1,0"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalEngineRestoreState)
+	if state.Value != "scheduled" {
+		t.Errorf("engine restore state = %v, want %q", state.Value, "scheduled")
+	}
+	attempts := findObs(t, obs, SignalEngineRestoreAttempts)
+	if v, ok := attempts.Value.(int64); !ok || v != 3 {
+		t.Errorf("engine restore attempts = %v, want int64(3)", attempts.Value)
+	}
+	next := findObs(t, obs, SignalEngineRestoreNextAttemptMs)
+	if v, ok := next.Value.(int64); !ok || v != 40_000 {
+		t.Errorf("engine restore next_attempt_ms = %v, want int64(40000)", next.Value)
+	}
+	reason := findObs(t, obs, SignalEngineRestoreLastReason)
+	if reason.Value != payload.EngineRestoreLastReason {
+		t.Errorf("engine restore last_reason = %v, want %q", reason.Value, payload.EngineRestoreLastReason)
+	}
+}
+
+// TestPollEngineRestoreExhaustedIsDistinguishableFromScheduled proves
+// the property this whole issue is about at the observation surface:
+// state reads "exhausted", distinct from "scheduled", and
+// next_attempt_ms reports not_collected with a reason rather than a
+// fabricated 0 that would look identical to "never started".
+func TestPollEngineRestoreExhaustedIsDistinguishableFromScheduled(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.EngineRestoreState = "exhausted"
+	payload.EngineRestoreAttempts = 8
+	payload.EngineRestoreNextAttemptMs = 0
+	payload.EngineRestoreLastReason = "engine build refused: no advertised probe evidence for hw:1,0"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalEngineRestoreState)
+	if state.Value != "exhausted" {
+		t.Errorf("engine restore state = %v, want %q (distinguishable from %q)", state.Value, "exhausted", "scheduled")
+	}
+	attempts := findObs(t, obs, SignalEngineRestoreAttempts)
+	if v, ok := attempts.Value.(int64); !ok || v != 8 {
+		t.Errorf("engine restore attempts = %v, want int64(8)", attempts.Value)
+	}
+	next := findObs(t, obs, SignalEngineRestoreNextAttemptMs)
+	if next.Absence != observation.StateNotCollected {
+		t.Errorf("engine restore next_attempt_ms absence = %q, want %q: exhausted must not report a fabricated countdown", next.Absence, observation.StateNotCollected)
+	}
+	reason := findObs(t, obs, SignalEngineRestoreLastReason)
+	if reason.Value != payload.EngineRestoreLastReason {
+		t.Errorf("engine restore last_reason = %v, want the final attempt's own reason preserved", reason.Value)
+	}
+}
+
+// TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty proves a
+// node that has never had an engine problem (samplePayload's own
+// EngineRestoreState left at its Go zero value, matching an older
+// agent's omitted field) reads "idle" -- never "exhausted" and never an
+// empty string -- with attempts/next_attempt_ms/last_reason all
+// not_collected rather than a fabricated zero.
+func TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	if payload.EngineRestoreState != "" {
+		t.Fatalf("samplePayload() EngineRestoreState = %q, want \"\" (this test proves the OMITTED/never-happened case)", payload.EngineRestoreState)
+	}
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalEngineRestoreState)
+	if state.Value != "idle" {
+		t.Errorf("engine restore state = %v, want %q (never \"exhausted\", never empty)", state.Value, "idle")
+	}
+	attempts := findObs(t, obs, SignalEngineRestoreAttempts)
+	if v, ok := attempts.Value.(int64); !ok || v != 0 {
+		t.Errorf("engine restore attempts = %v, want int64(0)", attempts.Value)
+	}
+	for _, sig := range []observation.SignalID{SignalEngineRestoreNextAttemptMs, SignalEngineRestoreLastReason} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s absence on an idle node = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+	}
+}
+
 func TestPollUnknownNodeProducesNoObservations(t *testing.T) {
 	st := NewStore()
 	c := New(st)
@@ -658,8 +908,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 21 {
-		t.Errorf("AllSignalIDs has %d entries, want 21", len(AllSignalIDs))
+	if len(AllSignalIDs) != 25 {
+		t.Errorf("AllSignalIDs has %d entries, want 25", len(AllSignalIDs))
 	}
 }
 
@@ -669,7 +919,7 @@ func TestSessionSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(SessionSignalIDs) != 21 {
-		t.Errorf("SessionSignalIDs has %d entries, want 21", len(SessionSignalIDs))
+	if len(SessionSignalIDs) != 26 {
+		t.Errorf("SessionSignalIDs has %d entries, want 26", len(SessionSignalIDs))
 	}
 }

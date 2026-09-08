@@ -1,0 +1,64 @@
+/*
+ * Seven type roles. The custom property carries the font shorthand;
+ * letter-spacing and text-transform are not part of that shorthand, so
+ * each role also gets a class that bundles them. Use the class.
+ */
+
+.sm-display {
+  font: var(--t-display);
+  letter-spacing: -0.02em;
+}
+
+.sm-heading {
+  font: var(--t-heading);
+  letter-spacing: -0.015em;
+}
+
+.sm-subhead {
+  font: var(--t-subhead);
+}
+
+.sm-body {
+  font: var(--t-body);
+}
+
+.sm-small {
+  font: var(--t-small);
+}
+
+/* Mono is an accent, never the body face. A --t-meta or --t-data string
+   reads as a literal API fact and needs a file behind it. */
+.sm-meta {
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sm-data {
+  font: var(--t-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-muted {
+  color: var(--text-muted);
+}
+
+/* Carries every 11px uppercase label in the system. Do not lower it:
+   outdoor night legibility is a product constraint. */
+.sm-faint {
+  color: var(--text-faint);
+}
+
+.sm-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* A literal identifier keeps its own case, even inside an uppercase eyebrow. */
+.sm-eyebrow .sm-data,
+.sm-status .sm-data {
+  text-transform: none;
+  letter-spacing: 0;
+}

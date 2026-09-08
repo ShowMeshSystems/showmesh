@@ -119,6 +119,21 @@ func (h *handlers) nightInterlockSignalResolver(ctx context.Context) config.Inte
 	}
 }
 
+// nightSessionMediaPlaylistCurrent is [config.MediaPlaylistCurrent]:
+// resting.backgroundAudio's reference-form check, mirroring h.showExists
+// (showobjects.go) one kind over - a tombstoned media.playlist has
+// CurrentRevision == 0, same as every other tombstone check in this
+// package.
+func (h *handlers) nightSessionMediaPlaylistCurrent(ctx context.Context) config.MediaPlaylistCurrent {
+	return func(id string) bool {
+		obj, err := h.deps.Config.GetConfigObject(ctx, config.MediaPlaylistConfigKind, id)
+		if err != nil {
+			return false
+		}
+		return obj.CurrentRevision > 0
+	}
+}
+
 // nightSessionExists is [config.NightSessionExists] — the
 // night.session.active singleton's own reference check, mirroring
 // h.showExists (showobjects.go) one kind over.
@@ -176,6 +191,11 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -194,7 +214,8 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 	}
 
 	payload, verr := config.DecodeNightSessionPayload(string(raw), endpoints,
-		h.nightSessionAssetCurrent(r.Context()), h.nightSessionActionResolver(r.Context()), h.nightInterlockSignalResolver(r.Context()))
+		h.nightSessionAssetCurrent(r.Context()), h.nightSessionActionResolver(r.Context()), h.nightInterlockSignalResolver(r.Context()),
+		h.nightSessionMediaPlaylistCurrent(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -206,9 +227,14 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "label": payload.Label})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write night.session config revision", writeErr)
 		return
 	}
@@ -220,6 +246,50 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 
 func (h *handlers) handleGetNightSessionRevisions(w http.ResponseWriter, r *http.Request) {
 	h.handleGetShowConfigRevisions(w, r, config.NightSessionConfigKind)
+}
+
+// refuseNightSessionIfActive is handleDeleteNightSession's own
+// refuseIfActive (showconfig.go's deleteConfigObjectRevision):
+// night.session.active is the one live "what is running now" pointer a
+// night.session participates in, so deleting the session it currently
+// names is refused rather than left dangling under a running night.
+func (h *handlers) refuseNightSessionIfActive(sessionID string) func(ctx context.Context, tx *store.Tx) error {
+	return func(ctx context.Context, tx *store.Tx) error {
+		obj, err := tx.GetConfigObject(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID)
+		if errors.Is(err, store.ErrConfigObjectNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if obj.CurrentRevision == 0 {
+			return nil
+		}
+		rev, err := tx.GetConfigRevision(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID, obj.CurrentRevision)
+		if err != nil {
+			return err
+		}
+		var payload config.NightSessionActivePayload
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+			return err
+		}
+		if payload.Session != sessionID {
+			return nil
+		}
+		return &errConfigObjectCurrentlyActive{kind: config.NightSessionConfigKind, id: sessionID, activeKind: config.NightSessionActiveConfigKind}
+	}
+}
+
+// handleDeleteNightSession serves DELETE /api/v1/config/night.session/{id}:
+// a tombstone, not a hard delete. Its own action bindings (background
+// audio, resting cue, siteControl/interlocks) name show.action ids, not
+// the other direction, so deleting a session does not orphan anything
+// downstream; a night.session naming a since-deleted show.action already
+// reports that through the existing night readiness surface
+// (nightcue_readiness.go/nightaudioreadiness.go), unchanged by this seam.
+func (h *handlers) handleDeleteNightSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	h.handleDeleteShowConfigObject(w, r, config.NightSessionConfigKind, h.refuseNightSessionIfActive(id))
 }
 
 // handleGetNightSessionRevision serves GET
@@ -295,7 +365,61 @@ func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 		EnterShow:                 v1.ConfigNightSessionEnterShow{Cues: mapConfigNightSessionCues(p.EnterShow.Cues), BlackoutHoldMs: p.EnterShow.BlackoutHoldMs},
 		EnterResting:              v1.ConfigNightSessionEnterResting{Cues: mapConfigNightSessionCues(p.EnterResting.Cues), BlackoutAfterShowMs: p.EnterResting.BlackoutAfterShowMs},
 		AnnouncementDefaultPolicy: p.AnnouncementDefaultPolicy,
+		SiteControl:               mapConfigNightSessionSiteControl(p.SiteControl),
+		Interlocks:                mapConfigNightSessionInterlocks(p.Interlocks),
 	}
+}
+
+func mapConfigNightSessionPowerBinding(b config.NightPowerBinding) v1.ConfigNightSessionPowerBinding {
+	return v1.ConfigNightSessionPowerBinding{Action: b.Action, PowerDomain: b.PowerDomain, DomainProvenance: b.DomainProvenance}
+}
+
+func mapConfigNightSessionPrerequisites(prereqs []config.NightPrerequisite) []v1.ConfigNightSessionPrerequisite {
+	if prereqs == nil {
+		return nil
+	}
+	out := make([]v1.ConfigNightSessionPrerequisite, 0, len(prereqs))
+	for _, p := range prereqs {
+		out = append(out, v1.ConfigNightSessionPrerequisite{
+			Kind: p.Kind, Action: p.Action, RequireConfirmation: p.RequireConfirmation, DelayMs: p.DelayMs,
+		})
+	}
+	return out
+}
+
+func mapConfigNightSessionSiteControl(sc *config.NightSiteControl) *v1.ConfigNightSessionSiteControl {
+	if sc == nil {
+		return nil
+	}
+	out := &v1.ConfigNightSessionSiteControl{RequestThermalProfile: sc.RequestThermalProfile}
+	if sc.PresentationPowerOn != nil {
+		binding := mapConfigNightSessionPowerBinding(*sc.PresentationPowerOn)
+		out.PresentationPowerOn = &binding
+	}
+	if sc.PresentationPowerOff != nil {
+		off := sc.PresentationPowerOff
+		out.PresentationPowerOff = &v1.ConfigNightSessionPresentationPowerOff{
+			Action: off.Action, PowerDomain: off.PowerDomain, DomainProvenance: off.DomainProvenance,
+			RemovalPolicy: off.RemovalPolicy, ImmediateSafeAttestation: off.ImmediateSafeAttestation,
+			Prerequisites: mapConfigNightSessionPrerequisites(off.Prerequisites),
+		}
+	}
+	return out
+}
+
+func mapConfigNightSessionInterlocks(rules []config.NightInterlockRule) []v1.ConfigNightSessionInterlock {
+	if rules == nil {
+		return nil
+	}
+	out := make([]v1.ConfigNightSessionInterlock, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, v1.ConfigNightSessionInterlock{
+			Name: r.Name, Phase: r.Phase, Posture: r.Posture, Signal: r.Signal,
+			FreshnessSeconds: r.FreshnessSeconds, FailureText: r.FailureText,
+			OnUnavailable: r.OnUnavailable, OverridePolicy: r.OverridePolicy,
+		})
+	}
+	return out
 }
 
 func mapConfigNightSessionAssetRef(a config.NightSessionAssetRef) v1.ConfigNightSessionAssetRef {
@@ -315,9 +439,11 @@ func mapConfigNightSessionResting(r config.NightSessionResting) v1.ConfigNightSe
 			})
 		}
 		out.BackgroundAudio = &v1.ConfigNightSessionBackgroundAudio{
-			Items: items, Repeat: r.BackgroundAudio.Repeat, Resume: r.BackgroundAudio.Resume,
+			MediaPlaylist: r.BackgroundAudio.MediaPlaylist,
+			Items:         items, Repeat: r.BackgroundAudio.Repeat, Resume: r.BackgroundAudio.Resume,
 			ItemTransition: r.BackgroundAudio.ItemTransition, CrossfadeMs: r.BackgroundAudio.CrossfadeMs,
 			MaxGainDb: r.BackgroundAudio.MaxGainDb,
+			FadeOutMs: r.BackgroundAudio.FadeOutMs, FadeInMs: r.BackgroundAudio.FadeInMs,
 		}
 	}
 	return out
@@ -361,6 +487,12 @@ func (h *handlers) handlePutNightSessionActive(w http.ResponseWriter, r *http.Re
 	ac := authFromContext(r.Context())
 	id := config.NightSessionActiveObjectID
 
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
+
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
 		h.writeInternalError(w, now, "read night.session.active request body", err)
@@ -383,9 +515,14 @@ func (h *handlers) handlePutNightSessionActive(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionActiveConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NightSessionActiveConfigKind, id, payloadJSON, precondition,
 		map[string]any{"session": payload.Session})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write night.session.active config revision", writeErr)
 		return
 	}

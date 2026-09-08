@@ -142,12 +142,17 @@ func (e *Executor) dispatchStep(ctx context.Context, run store.MacroRunRecord, s
 		return e.dispatchMQTTStep(ctx, run, step, action, issuer)
 	case config.ShowActionIntegrationResolume:
 		return e.dispatchResolumeStep(ctx, run, step, action, issuer)
+	case config.ShowActionIntegrationAudio:
+		return e.dispatchAudioStep(ctx, run, step, action, issuer)
 	default:
-		// Unreachable given write-time validation
-		// (config.DecodeShowActionPayload rejects any integration other
-		// than "fpp"/"mqtt"), but answered rather than left to silently
-		// resolve nothing if a pre-Step-9 or hand-edited row ever
-		// disagrees.
+		// Reached whenever action.Payload.Target.Integration is a value
+		// this switch does not name: NOT unreachable. Write-time
+		// validation (config.DecodeShowActionPayload) only closes the
+		// enum against the same list this switch itself must be kept in
+		// sync with by hand — "fpp", "mqtt", "resolume", and "audio"
+		// today — so this branch is what actually answers a stored row
+		// hand-edited to carry a fifth value, or a future integration
+		// added to the decoder's enum without a matching case added here.
 		return stepResult{
 			outcome:       outcomeFailed,
 			outcomeState:  "unknown_integration",

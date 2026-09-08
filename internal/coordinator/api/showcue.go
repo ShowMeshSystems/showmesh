@@ -151,6 +151,11 @@ func (h *handlers) handlePutShowCue(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -162,7 +167,7 @@ func (h *handlers) handlePutShowCue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowCuePayload(string(raw), h.showExists(r.Context()))
+	payload, verr := config.DecodeShowCuePayload(string(raw), h.showExists(r.Context()), h.audioNodeExists(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -182,9 +187,14 @@ func (h *handlers) handlePutShowCue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowCueConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowCueConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "name": payload.Name})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.cue config revision", writeErr)
 		return
 	}
@@ -198,20 +208,34 @@ func (h *handlers) handleGetShowCueRevisions(w http.ResponseWriter, r *http.Requ
 	h.handleGetShowConfigRevisions(w, r, config.ShowCueConfigKind)
 }
 
+// handleDeleteShowCue serves DELETE /api/v1/config/show.cue/{id}: a
+// tombstone. A show.playlist entry naming this cue afterward is not
+// refused here and is not cascaded: show.playlist resolves its own
+// entries' cue references through GetConfigObject at the point it is
+// actually used, so the gap surfaces there. This codebase has no
+// pre-flight readiness check for show.playlist entries the way ADR-029
+// gives show.action's own targets and night.session's action bindings; a
+// dangling reference here fails at dispatch time, not before, same as any
+// other reference this package resolves.
+func (h *handlers) handleDeleteShowCue(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowCueConfigKind, nil)
+}
+
 func mapConfigShowCueOutputs(o config.ShowCueOutputs) v1.ConfigShowCueOutputs {
 	out := v1.ConfigShowCueOutputs{}
 	if o.Render != nil {
 		out.Render = &v1.ConfigShowCueRenderOutput{Sequence: o.Render.Sequence}
 	}
 	if o.Audio != nil {
-		out.Audio = &v1.ConfigShowCueAudioOutput{Asset: o.Audio.Asset, StartOffsetMillis: o.Audio.StartOffsetMillis}
+		out.Audio = &v1.ConfigShowCueAudioOutput{Asset: o.Audio.Asset, StartOffsetMillis: o.Audio.StartOffsetMillis, Target: o.Audio.Target}
 	}
 	if o.LTC != nil {
-		out.LTC = &v1.ConfigShowCueLTCOutput{StartOffsetMillis: o.LTC.StartOffsetMillis}
+		out.LTC = &v1.ConfigShowCueLTCOutput{StartOffsetMillis: o.LTC.StartOffsetMillis, Target: o.LTC.Target}
 	}
 	if o.Announcement != nil {
 		out.Announcement = &v1.ConfigShowCueAnnouncementOutput{
 			Policy: o.Announcement.Policy, DuckGainDb: o.Announcement.DuckGainDb, FadeMillis: o.Announcement.FadeMillis,
+			Target: o.Announcement.Target,
 		}
 	}
 	return out

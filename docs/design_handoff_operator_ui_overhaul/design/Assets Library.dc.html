@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+[data-panes] { display: grid; grid-template-columns: minmax(0,1fr) minmax(320px,420px); align-items: start; min-width: 0; }
+[data-panes] > aside { position: sticky; top: 0; padding: 20px 28px 0 0; }
+@media (max-width: 1100px) {
+  [data-panes] { grid-template-columns: minmax(0,1fr); }
+  [data-panes] > aside { position: static; padding: 20px 28px 0 28px; }
+}
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">&#9662;</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 &middot; next in 1:06</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:0 0 80px">
+
+      <div style="padding:20px 28px 0">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap">
+          <div style="min-width:0">
+            <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Assets</h1>
+            <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:78ch">Every show's assets in one list — the only place a file that outlived its show is still visible. Identity is <span style="font:var(--t-data);color:var(--text)">show</span> + <span style="font:var(--t-data);color:var(--text)">sequence</span> + <span style="font:var(--t-data);color:var(--text)">target kind</span> + <span style="font:var(--t-data);color:var(--text)">target</span>; node-by-node sync state is <a href="#">Monitor &rsaquo; Manifest</a>'s facet, not this page.</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Delivery settings</button>
+            <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Upload</button>
+          </div>
+        </div>
+      </div>
+
+      <div data-panes>
+
+        <section style="min-width:0;padding:20px 24px 0 28px">
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(126px,1fr));border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+            <div style="padding:12px 14px 12px 0;border-right:1px solid var(--border)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Current assets</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">148</p>
+              <p style="margin:3px 0 0;font:var(--t-small);color:var(--text-faint)">across 6 shows</p>
+            </div>
+            <div style="padding:12px 14px;border-right:1px solid var(--border)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Superseded kept</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">214</p>
+              <p style="margin:3px 0 0;font:var(--t-small);color:var(--text-faint)">never pruned</p>
+            </div>
+            <div style="padding:12px 14px;border-right:1px solid var(--border)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">On coordinator</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">61.4 GB</p>
+              <p style="margin:3px 0 0;font:var(--t-small);color:var(--text-faint)">19.8 GB is superseded</p>
+            </div>
+            <div style="padding:12px 14px;border-right:1px solid var(--border)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--warn-fg)">No show claims</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--warn-fg)">7</p>
+              <p style="margin:3px 0 0;font:var(--t-small);color:var(--text-faint)">2.9 GB</p>
+            </div>
+            <div style="padding:12px 0 12px 14px">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Inventory sweep</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">4m</p>
+              <p style="margin:3px 0 0;font:var(--t-small);color:var(--text-faint)">every 300s</p>
+            </div>
+          </div>
+
+          <p style="margin:12px 0 0;padding:11px 13px;border-left:3px solid var(--accent-border);background:var(--raised);font:var(--t-small);color:var(--text-muted)">These counts are the coordinator's own records — what has been <strong style="color:var(--text)">registered</strong>, not what any node holds. A row here says the bytes exist and which identity owns them; whether a node has them is a separate observation.</p>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:22px">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;min-width:0;max-width:190px">
+                <input type="text" value="" placeholder="Filter assets…" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small)">
+              </label>
+              <label style="display:flex;align-items:center;min-width:0;max-width:186px">
+                <select style="height:30px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small)">
+                  <option>All shows</option>
+                  <option>winter-ridge-2026</option>
+                  <option>winter-ridge-2025</option>
+                  <option>halloween-2025</option>
+                  <option>demo-loop</option>
+                </select>
+              </label>
+              <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px">
+                <span style="padding:5px 10px;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600">All</span>
+                <span style="padding:5px 10px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">FSEQ</span>
+                <span style="padding:5px 10px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">Audio</span>
+                <span style="padding:5px 10px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">Media</span>
+              </div>
+            </div>
+            <span style="font:var(--t-small);color:var(--text-faint)">Sorted by show, then sequence</span>
+          </div>
+
+          <p style="margin:14px 0 0;font:var(--t-small);color:var(--text-muted);max-width:76ch">Grouped by <strong style="color:var(--text)">show and logical sequence</strong>. The show is a property of the group, not of the row — every variant under one group heading already belongs to that show, and repeating it in a column just pushes the target off the edge.</p>
+
+          <div style="margin-top:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+            <table style="width:100%;min-width:560px;border-collapse:collapse;font:var(--t-body)">
+              <thead>
+                <tr>
+                  <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Target</th>
+                  <th style="width:104px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Hash</th>
+                  <th style="width:118px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Versions</th>
+                  <th style="width:94px;padding:8px 14px 8px 10px;text-align:right;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+
+                <tr>
+                  <td colspan="4" style="padding:10px 14px;border-bottom:1px solid var(--border);background:var(--sunken)">
+                    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+                      <span style="font:var(--t-data);font-size:11px;letter-spacing:0.04em;color:var(--text-faint)">winter-ridge-2026 /</span>
+                      <span style="font:var(--t-subhead)">Carol of the Bells</span>
+                      <span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">FSEQ</span>
+                      <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">carol-of-the-bells.fseq · 3 targets share this filename</span>
+                    </div>
+                  </td>
+                </tr>
+                <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                  <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">media-front</a></td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">9c41…2f</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">4 · latest 26 Aug</td>
+                  <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">41.2 MB</td>
+                </tr>
+                <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                  <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">media-side</a></td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">4b77…a1</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">2 · latest 24 Aug</td>
+                  <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">28.7 MB</td>
+                </tr>
+                <tr style="background:var(--accent-bg)">
+                  <td style="padding:10px 10px 10px 12px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);border-left:2px solid var(--accent)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">media-garage</a><span style="display:inline-block;margin-left:8px;font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--accent)">Viewing</span></td>
+                  <td style="padding:10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);font:var(--t-data);font-size:11px;color:var(--text-muted)">e2d0…88</td>
+                  <td style="padding:10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);font:var(--t-small);color:var(--text-muted)">6 · latest 26 Aug</td>
+                  <td style="padding:10px 14px 10px 10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">19.4 MB</td>
+                </tr>
+
+                <tr>
+                  <td colspan="4" style="padding:10px 14px;border-bottom:1px solid var(--border);background:var(--sunken)">
+                    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+                      <span style="font:var(--t-data);font-size:11px;letter-spacing:0.04em;color:var(--text-faint)">winter-ridge-2026 /</span>
+                      <span style="font:var(--t-subhead)">Carol of the Bells</span>
+                      <span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">Audio</span>
+                      <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">carol-of-the-bells.wav · show-wide</span>
+                    </div>
+                  </td>
+                </tr>
+                <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                  <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-body);color:var(--text-muted)">Show-wide</span></td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">71aa…c3</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">1 · latest 11 Aug</td>
+                  <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">31.8 MB</td>
+                </tr>
+
+                <tr>
+                  <td colspan="4" style="padding:10px 14px;border-bottom:1px solid var(--border);background:var(--sunken)">
+                    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+                      <span style="font:var(--t-data);font-size:11px;letter-spacing:0.04em;color:var(--text-faint)">winter-ridge-2025 /</span>
+                      <span style="font:var(--t-subhead)">Carol of the Bells</span>
+                      <span style="padding:1px 5px;border:1px solid var(--border-strong);border-radius:2px;font:var(--t-meta);font-size:10px;color:var(--text-muted)">FSEQ</span>
+                      <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">carol-of-the-bells.fseq · 2 targets share this filename</span>
+                    </div>
+                  </td>
+                </tr>
+                <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                  <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">media-front</a></td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">1f08…b6</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">3 · latest Dec 2025</td>
+                  <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">38.9 MB</td>
+                </tr>
+                <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                  <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font:var(--t-body);font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">media-side</a></td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">7cc2…40</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">1 · latest Dec 2025</td>
+                  <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">26.4 MB</td>
+                </tr>
+
+              </tbody>
+            </table>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:9px 14px;border-top:1px solid var(--border);background:var(--raised)">
+              <span style="font:var(--t-small);color:var(--text-muted)">Showing 3 of 41 groups · 148 current assets</span>
+              <a href="#" style="font:var(--t-small);white-space:nowrap">Show all</a>
+            </div>
+          </div>
+
+          <section aria-labelledby="al-unclaimed" style="margin-top:26px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <h3 id="al-unclaimed" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">No show claims these <span style="color:var(--warn-fg)">· 7 assets · 2.9 GB</span></h3>
+              <span style="font:var(--t-small);color:var(--text-faint)">Only visible here</span>
+            </div>
+            <p style="margin:8px 0 12px;font:var(--t-small);color:var(--text-muted);max-width:76ch">Their <span style="font:var(--t-data);color:var(--text)">show</span> is an id no show object currently uses — a show deleted or renamed after the bytes were registered. The assets are intact and still downloadable; nothing syncs them anywhere, because sync only ever walks the active show.</p>
+
+            <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+              <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--border)">
+                <div style="min-width:0">
+                  <p style="margin:0;font:var(--t-body)"><span style="font:var(--t-data);color:var(--text)">halloween-2025</span> <span style="color:var(--text-faint)">/</span> 4 sequences, 5 assets</p>
+                  <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Last upload 31 Oct 2025 · 2.1 GB · the show object was deleted 14 Nov 2025</p>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button type="button" style="height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">List them</button>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--border)">
+                <div style="min-width:0">
+                  <p style="margin:0;font:var(--t-body)"><span style="font:var(--t-data);color:var(--text)">winter-ridge-26</span> <span style="color:var(--text-faint)">/</span> 2 sequences, 2 assets</p>
+                  <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Last upload 9 Aug · 0.8 GB · likely a typo for <span style="font:var(--t-data);color:var(--text)">winter-ridge-2026</span> — re-upload under the right id, this one stays</p>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button type="button" style="height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">List them</button>
+                </div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border-left:3px solid var(--border-strong);background:var(--raised)">
+                <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><strong style="color:var(--text)">There is no delete, here or anywhere.</strong> The coordinator registers assets and supersedes them; it never removes bytes, and no route exists to ask it to. Reclaiming this space is a host-side job against the asset directory, which is set by environment and not editable from this UI.</p>
+              </div>
+            </div>
+          </section>
+
+        </section>
+
+        <aside style="min-width:0">
+
+          <sc-if value="{{ isVariant }}" hint-placeholder-val="{{ true }}">
+          <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Asset variant</p>
+              <h2 style="margin:5px 0 0;font:var(--t-heading);letter-spacing:-0.015em">Carol of the Bells</h2>
+              <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">in <span style="font:var(--t-data);color:var(--text)">winter-ridge-2026</span>, for <span style="font:var(--t-data);color:var(--text)">media-garage</span></p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <h3 style="margin:0 0 10px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Identity</h3>
+              <dl style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 14px;margin:0">
+                <dt style="font:var(--t-small);color:var(--text-muted)">Show</dt>
+                <dd style="margin:0;font:var(--t-data);overflow-wrap:anywhere">winter-ridge-2026</dd>
+                <dt style="font:var(--t-small);color:var(--text-muted)">Sequence</dt>
+                <dd style="margin:0;font:var(--t-data);overflow-wrap:anywhere">carol-of-the-bells</dd>
+                <dt style="font:var(--t-small);color:var(--text-muted)">Target</dt>
+                <dd style="margin:0;font:var(--t-data);overflow-wrap:anywhere">media-garage</dd>
+                <dt style="font:var(--t-small);color:var(--text-muted)">Hash</dt>
+                <dd style="margin:0;font:var(--t-data);overflow-wrap:anywhere">e2d0f31c…88</dd>
+              </dl>
+              <p style="margin:12px 0 0;padding:10px 12px;border-left:3px solid var(--accent-border);background:var(--raised);font:var(--t-small);color:var(--text-muted)">Identity is those four facts. The runtime filename <span style="font:var(--t-data);color:var(--text)">carol-of-the-bells.fseq</span> is not one of them — two other targets in this show, and one in last year's, carry it too.</p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <h3 style="margin:0 0 4px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Six versions</h3>
+              <p style="margin:0 0 12px;font:var(--t-small);color:var(--text-muted)">A version can become current more than once, so this reads as events — not a one-way list.</p>
+
+              <div style="display:grid;grid-template-columns:118px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-top:1px solid var(--border)">
+                <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--accent)">Current</span>
+                <div>
+                  <p style="margin:0;font:var(--t-data)">e2d0…88</p>
+                  <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Uploaded 26 Aug 14:02 by erbartos</p>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:118px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-top:1px solid var(--border)">
+                <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">Superseded</span>
+                <div>
+                  <p style="margin:0;font:var(--t-data)">a09f…41</p>
+                  <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Uploaded 24 Aug 09:18 from FPP Connect</p>
+                  <button type="button" style="height:28px;margin-top:8px;padding:0 10px;border:1px solid var(--border-strong);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Make current</button>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:118px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+                <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">Superseded</span>
+                <div>
+                  <p style="margin:0;font:var(--t-data)">c0b7…19</p>
+                  <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Uploaded 11 Aug 20:41 by erbartos · manual upload</p>
+                </div>
+              </div>
+              <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-faint)">3 older versions not shown. <a href="#">Show all six</a></p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <h3 style="margin:0 0 8px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">What refers to it</h3>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Nothing refers to an asset by id. Cues and playlists name the <span style="font:var(--t-data);color:var(--text)">sequence</span>, and the coordinator resolves whichever version is current at the moment it looks — so replacing bytes here changes what tonight plays, with nothing to re-point.</p>
+              <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted)">In this show, <span style="font:var(--t-data);color:var(--text)">carol-of-the-bells</span> is named by <a href="#">2 cues</a> and <a href="#">1 playlist</a>.</p>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+              <a href="#" style="font:var(--t-small)">Download</a>
+              <button type="button" style="height:32px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Replace bytes</button>
+            </div>
+
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ isUpload }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1px solid var(--accent-border);border-radius:5px;background:var(--surface);overflow:hidden">
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+              <h2 style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)">Upload asset</h2>
+              <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">From the library, so the show is a choice, not an inheritance. Manual upload is a permanent path, not a stopgap.</p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <div style="display:grid;place-items:center;gap:6px;padding:22px 16px;border:1px dashed var(--border-strong);border-radius:5px;background:repeating-linear-gradient(135deg, transparent 0 7px, var(--hatch) 7px 14px)">
+                <p style="margin:0;font:var(--t-body);font-weight:500">Drop a file, or browse</p>
+                <p style="margin:0;font:var(--t-data);font-size:11px;color:var(--text-faint)">FSEQ · WAV · MP3 · MP4 · PNG · up to 2 GB</p>
+              </div>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);display:grid;gap:14px">
+              <label style="display:grid;gap:5px">
+                <span style="display:flex;align-items:center;gap:7px"><span style="font:var(--t-body);font-weight:500">Show</span><span style="padding:1px 5px;border:1px solid var(--bad-border);border-radius:2px;background:var(--bad-bg);font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--bad-fg)">Required</span></span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--bad-border);border-radius:5px;background:var(--surface);color:var(--text-muted);font:var(--t-body)">
+                  <option>Choose a show…</option>
+                  <option>Winter Ridge 2026</option>
+                  <option>Winter Ridge 2025</option>
+                  <option>Demo loop</option>
+                </select>
+                <span style="font:var(--t-small);color:var(--bad-fg)">Identity needs a show and there is no default — the show selector in the header picks what plays tonight, which is a different question from where these bytes belong.</span>
+              </label>
+
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Logical sequence</span>
+                <input type="text" value="" placeholder="e.g. rooftop-finale" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                <span style="font:var(--t-small);color:var(--text-faint)">Suggestions appear once a show is chosen; a new name is allowed and creates a new group.</span>
+              </label>
+
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Media type</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                  <option>FSEQ</option>
+                  <option>Audio</option>
+                  <option>Media</option>
+                </select>
+              </label>
+
+              <div style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Target kind</span>
+                <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px;width:fit-content">
+                  <span style="padding:6px 12px;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600">Show-wide</span>
+                  <span style="padding:6px 12px;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)">One node</span>
+                </div>
+                <span style="font:var(--t-small);color:var(--text-faint)">Show-wide needs no target. Choosing one node adds a target field with no default — picking wrong sends a node another node's content.</span>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+              <span style="font:var(--t-small);color:var(--text-muted)">Then syncs on the next sweep</span>
+              <div style="display:flex;gap:8px">
+                <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Cancel</button>
+                <button type="button" disabled="{{ true }}" title="Choose a file and a show." style="height:32px;padding:0 14px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);color:var(--text-faint);font:var(--t-body);font-weight:600;cursor:not-allowed">Upload</button>
+              </div>
+            </div>
+
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ isStorage }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Storage</p>
+              <h2 style="margin:5px 0 0;font:var(--t-heading);letter-spacing:-0.015em">61.4 GB registered</h2>
+              <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">On the coordinator's asset directory. Node disks are their own question.</p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:baseline">
+                <span style="font:var(--t-small);color:var(--text-muted)">winter-ridge-2026</span>
+                <span style="font:var(--t-data);font-variant-numeric:tabular-nums">24.1 GB</span>
+                <span style="font:var(--t-small);color:var(--text-muted)">winter-ridge-2025</span>
+                <span style="font:var(--t-data);font-variant-numeric:tabular-nums">18.6 GB</span>
+                <span style="font:var(--t-small);color:var(--text-muted)">demo-loop</span>
+                <span style="font:var(--t-data);font-variant-numeric:tabular-nums">9.4 GB</span>
+                <span style="font:var(--t-small);color:var(--text-muted)">3 other shows</span>
+                <span style="font:var(--t-data);font-variant-numeric:tabular-nums">6.4 GB</span>
+                <span style="font:var(--t-small);color:var(--warn-fg)">No show claims</span>
+                <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--warn-fg)">2.9 GB</span>
+              </div>
+              <p style="margin:12px 0 0;padding:10px 12px;border-left:3px solid var(--border-strong);background:var(--raised);font:var(--t-small);color:var(--text-muted)">19.8 GB of the total is superseded versions. They are kept deliberately — a rollback is an upload of bytes already held, and pruning would make some rollbacks impossible.</p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <h3 style="margin:0 0 10px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Delivery settings</h3>
+              <dl style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 14px;margin:0">
+                <dt style="font:var(--t-small);color:var(--text-muted)">Content base URL</dt>
+                <dd style="margin:0;font:var(--t-data);overflow-wrap:anywhere">http://coordinator.local:8080</dd>
+                <dt style="font:var(--t-small);color:var(--text-muted)">Max upload</dt>
+                <dd style="margin:0;font:var(--t-data)">2.0 GB</dd>
+                <dt style="font:var(--t-small);color:var(--text-muted)">Sync every</dt>
+                <dd style="margin:0;font:var(--t-data)">60s</dd>
+                <dt style="font:var(--t-small);color:var(--text-muted)">Inventory every</dt>
+                <dd style="margin:0;font:var(--t-data)">300s</dd>
+                <dt style="font:var(--t-small);color:var(--text-muted)">Asset directory</dt>
+                <dd style="margin:0;font:var(--t-data);color:var(--text-muted);overflow-wrap:anywhere">/var/lib/showmesh/assets <span style="font:var(--t-small);color:var(--text-faint)">· environment only</span></dd>
+              </dl>
+              <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-muted)">Revision 4, saved by erbartos 12 Aug. Edited in <a href="#">Settings &rsaquo; Content delivery</a>, not here — this pane reads it so the numbers above have a cause.</p>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+              <span style="font:var(--t-small);color:var(--text-faint)">Read from assets.settings rev 4</span>
+              <a href="#" style="font:var(--t-small);white-space:nowrap">Open settings</a>
+            </div>
+
+          </div>
+          </sc-if>
+
+        </aside>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;pane&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;variant&quot;, &quot;upload&quot;, &quot;storage&quot;], &quot;default&quot;: &quot;variant&quot;, &quot;tsType&quot;: &quot;'variant' | 'upload' | 'storage'&quot;, &quot;section&quot;: &quot;Side panel&quot; },
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot;, &quot;section&quot;: &quot;Theme&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const pane = this.props.pane ?? 'variant';
+    return {
+      theme: this.props.theme ?? 'dark',
+      isVariant: pane === 'variant',
+      isUpload: pane === 'upload',
+      isStorage: pane === 'storage',
+    };
+  }
+}
+
+</script>
+</body>
+</html>

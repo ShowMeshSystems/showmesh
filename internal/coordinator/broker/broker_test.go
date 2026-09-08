@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -11,6 +12,8 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
+
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // testLogger returns a *slog.Logger that discards everything, so tests
@@ -631,5 +634,159 @@ func TestPublishReceivedHandlerToleratesNilHandler(t *testing.T) {
 	}
 	if !handled {
 		t.Errorf("handled = false, want true even with a nil handler")
+	}
+}
+
+// --- onConnectionUp / dispatchReconnectInventoryRequests ---
+
+// decodeCmdPayload unmarshals one recorded *paho.Publish as this package's
+// own [mqttproto.Envelope]/[mqttproto.CmdPayload] wire shape.
+func decodeCmdPayload(t *testing.T, p *paho.Publish) mqttproto.CmdPayload {
+	t.Helper()
+	var env mqttproto.Envelope
+	if err := json.Unmarshal(p.Payload, &env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	var cmd mqttproto.CmdPayload
+	if err := json.Unmarshal(env.Payload, &cmd); err != nil {
+		t.Fatalf("decode cmd payload: %v", err)
+	}
+	return cmd
+}
+
+// waitForPublishCount polls cm until it has recorded at least n publishes,
+// or fails the test after a short bound: dispatchReconnectInventoryRequests
+// runs on its own goroutine (its own doc comment explains why), so its
+// effect is not visible synchronously after the call that triggers it.
+func waitForPublishCount(t *testing.T, cm *fakeMQTTClient, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cm.publishCount() >= n {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("publishCount = %d after waiting, want >= %d", cm.publishCount(), n)
+}
+
+// TestOnConnectionUpDispatchesInventoryRequestToEveryListedNode is the fix
+// itself: on a successful connection, onConnectionUp asks every node
+// nodeLister lists for a fresh asset inventory, with no params and the
+// exact minted action name.
+func TestOnConnectionUpDispatchesInventoryRequestToEveryListedNode(t *testing.T) {
+	cm := &fakeMQTTClient{}
+	bm := &BrokerManager{
+		now: time.Now, cm: cm,
+		nodeLister: func(context.Context) ([]string, error) {
+			return []string{"node-1", "node-2"}, nil
+		},
+	}
+	bm.onConnectionUp(context.Background(), testLogger())
+	waitForPublishCount(t, cm, 2)
+
+	seen := map[string]bool{}
+	for _, p := range cm.publishes {
+		cmd := decodeCmdPayload(t, p)
+		if cmd.Action != "asset.inventory.request" {
+			t.Errorf("Action = %q, want %q", cmd.Action, "asset.inventory.request")
+		}
+		if len(cmd.Params) != 0 {
+			t.Errorf("Params = %+v, want none", cmd.Params)
+		}
+		if cmd.ConfirmationMethod == "" {
+			t.Error("ConfirmationMethod is empty, want a well-formed CmdPayload")
+		}
+		seen[cmd.Target.ID] = true
+	}
+	if !seen["node-1"] || !seen["node-2"] {
+		t.Fatalf("dispatched nodes = %v, want both node-1 and node-2", seen)
+	}
+}
+
+// TestDispatchReconnectInventoryRequestsNoOpWhenNodeListerNil proves an
+// unwired coordinator (nodeLister nil, e.g. an integration broker with no
+// nodes of its own) never attempts a publish.
+func TestDispatchReconnectInventoryRequestsNoOpWhenNodeListerNil(t *testing.T) {
+	cm := &fakeMQTTClient{}
+	bm := &BrokerManager{now: time.Now, cm: cm}
+	bm.dispatchReconnectInventoryRequests(context.Background(), testLogger())
+	time.Sleep(20 * time.Millisecond)
+	if got := cm.publishCount(); got != 0 {
+		t.Fatalf("publishCount = %d, want 0 with a nil nodeLister", got)
+	}
+}
+
+// TestDispatchReconnectInventoryRequestsIgnoresPerNodePublishFailures proves
+// the fire-and-forget contract dispatchReconnectInventoryRequests's own doc
+// comment commits to: one node's publish failing (the deployed agent may be
+// unreachable, or simply too old to be listening at all) never stops the
+// remaining nodes from being asked, and never touches BrokerState.
+func TestDispatchReconnectInventoryRequestsIgnoresPerNodePublishFailures(t *testing.T) {
+	cm := &fakeMQTTClient{
+		publishFunc: func(_ context.Context, p *paho.Publish) (*paho.PublishResponse, error) {
+			if p.Topic == "showmesh/nodes/node-1/cmd" {
+				return nil, errors.New("simulated publish failure")
+			}
+			return &paho.PublishResponse{}, nil
+		},
+	}
+	initAt := time.Unix(20000, 0).UTC()
+	bm := &BrokerManager{
+		now:   time.Now,
+		cm:    cm,
+		state: BrokerState{Connected: true, Since: initAt, ConnectedSince: initAt, ObservedAt: initAt},
+		nodeLister: func(context.Context) ([]string, error) {
+			return []string{"node-1", "node-2"}, nil
+		},
+	}
+	before := bm.State()
+
+	bm.dispatchReconnectInventoryRequests(context.Background(), testLogger())
+	waitForPublishCount(t, cm, 2)
+
+	after := bm.State()
+	if after != before {
+		t.Fatalf("BrokerState changed from a per-node publish failure: before %+v, after %+v; "+
+			"a node's refusal or unreachability must never read as evidence about the broker connection", before, after)
+	}
+
+	found := false
+	for _, p := range cm.publishes {
+		if p.Topic == "showmesh/nodes/node-2/cmd" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("node-2 was never dispatched to: one node's publish failure must not stop the rest")
+	}
+}
+
+// TestOnConnectionUpNeverRegistersAResponseWaiterForInventoryRequest proves
+// the property the coordinator's own activation decision actually depends
+// on: this dispatch never registers a response waiter (respTopics stays
+// empty), so whatever the node later publishes back on its result topic,
+// an outright refusal (an old, not-yet-rebuilt agent does not recognize
+// this action) or nothing at all, has nothing on this side listening for
+// it. Nothing this dispatch does can feed back into cueactivate.Authorize:
+// that decision is governed entirely by cueAssetsPresent's own
+// report-age/reconnect-time comparison, never by whether this command was
+// answered.
+func TestOnConnectionUpNeverRegistersAResponseWaiterForInventoryRequest(t *testing.T) {
+	cm := &fakeMQTTClient{}
+	bm := &BrokerManager{
+		now: time.Now, cm: cm,
+		nodeLister: func(context.Context) ([]string, error) {
+			return []string{"node-1"}, nil
+		},
+	}
+	bm.onConnectionUp(context.Background(), testLogger())
+	waitForPublishCount(t, cm, 1)
+
+	bm.respMu.Lock()
+	waiters := len(bm.respTopics)
+	bm.respMu.Unlock()
+	if waiters != 0 {
+		t.Fatalf("respTopics has %d entries, want 0: this dispatch must never await a response", waiters)
 	}
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -94,6 +95,38 @@ func setupNightInterlockFixture(t *testing.T, phase, onUnavailable string) (api 
 	return api, brokers, operatorToken, adminToken, obsLister
 }
 
+// setupNightInterlockFixtureAdvanceable is setupNightInterlockFixture with
+// a caller-chosen maxAge and a mutable clock exposed via advance, added for
+// this seam's own start-night stale-readiness re-run coverage: proving a
+// live re-run that itself fails is reported as THAT failure, not the
+// staleness message it replaced.
+func setupNightInterlockFixtureAdvanceable(t *testing.T, phase, onUnavailable string, maxAge time.Duration) (api *API, brokers *fakeMQTTBrokerRegistry, operatorToken, adminToken string, obs *fakeObservationLister, advance func(time.Duration)) {
+	t.Helper()
+	advanceFn, clock := mutableClock(testNow)
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken = mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	operatorToken = mustIssueToken(t, svc, operator.ID)
+
+	deps, obsLister := nightControlTestDeps(svc, st)
+	deps.FPP = nightWireFPPForReadiness(t)
+	deps.AssetBackend = nightTestAssetBackend(t)
+	brokers = &fakeMQTTBrokerRegistry{}
+	deps.MQTTBrokers = brokers
+
+	api = New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: maxAge})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
+	mustCreateNightSessionFSEQAsset(t, st, deps.AssetBackend, "halloween-2026", "resting-loop", "player-01")
+	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithCooldownInterlock(phase, onUnavailable))
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	return api, brokers, operatorToken, adminToken, obsLister, advanceFn
+}
+
 func runToPreshowForInterlockTest(t *testing.T, api *API, token string, obs *fakeObservationLister) string {
 	t.Helper()
 	setHealthyFPPReachable(obs, testNow)
@@ -125,6 +158,38 @@ func TestInterlockAllowsStartNightWhenConditionTrue(t *testing.T) {
 	got := mustNightCommand(t, api, opToken, "start-night")
 	if got.Command.Outcome != "applied" {
 		t.Fatalf("start-night outcome = %q, want applied when the interlock condition holds true", got.Command.Outcome)
+	}
+}
+
+// TestInterlockFreshReadinessRerunOnStaleStartNightReportsTheFreshFailure is
+// this seam's own required coverage: a stale readiness result plus a
+// FAILING fresh re-run must refuse start-night with THAT failure, never the
+// staleness text it replaced. The interlock rule declares phase
+// run-readiness (not start-night), so a withhold here can only have come
+// from the live run-readiness pass start-night triggers on finding its
+// stored result stale, never from start-night's own separate phase gate -
+// this proves specifically that a fresh run-readiness refusal surfaces as
+// itself. The condition passes before staleness (so preshow is reached at
+// all) and is flipped to false only after the clock has advanced past the
+// configured maximum age.
+func TestInterlockFreshReadinessRerunOnStaleStartNightReportsTheFreshFailure(t *testing.T) {
+	api, brokers, opToken, _, obs, advance := setupNightInterlockFixtureAdvanceable(t, "run-readiness", "block", time.Minute)
+	brokers.msg = broker.Message{Payload: []byte("true")}
+	runToPreshowForInterlockTest(t, api, opToken, obs)
+
+	advance(2 * time.Minute)
+	setHealthyFPPReachable(obs, testNow.Add(2*time.Minute))
+	brokers.msg = broker.Message{Payload: []byte("false")}
+
+	status, problem := nightCommandProblem(t, api, opToken, "start-night")
+	if status != http.StatusConflict {
+		t.Fatalf("start-night after a stale readiness result and a failing fresh re-run: status = %d, want 409; problem: %+v", status, problem)
+	}
+	if strings.Contains(problem.Detail, "past the configured maximum age") {
+		t.Fatalf("start-night reported the staleness message instead of the fresh re-run's own failure: %q", problem.Detail)
+	}
+	if !containsAll(problem.Detail, "cooldown") {
+		t.Fatalf("problem detail does not name the rule the FRESH re-run withheld: %+v", problem)
 	}
 }
 
@@ -375,6 +440,70 @@ func TestNightBoundInterlockDispatch_ExpiredBudgetDegradesEvidenceToUnavailable(
 	decision := h.nightEvaluateInterlockRuleLive(dispatchCtx, rule)
 	if decision.Health != nightHealthUnknown() {
 		t.Fatalf("live evaluation against an expired dispatch budget = %+v, want health=unknown (evidence-unavailable), even though the broker would have answered true", decision)
+	}
+}
+
+// TestNightCommandSurvivesServerWriteTimeout is this endpoint's own
+// version of TestCueCatalogDeploySurvivesServerWriteTimeout
+// (cuecatalogdeploy_test.go): a real *http.Server with a short
+// WriteTimeout, and prepare-site's own live interlock dispatch paced
+// slower than it but with NO reply ever arriving, proving
+// handleNightCommand's own SetWriteDeadline extension
+// (nightCommandHTTPWriteDeadline) is what lets the real withheld-gate
+// Problem body reach the client, not merely that the constant is large on
+// paper. Unlike the AwaitResponse-shaped routes this package's other
+// write-timeout tests cover, this route's own honest slow-dispatch answer
+// is a 409 naming the withholding interlock, never a 200 - proving that
+// answer is what asserts the extension actually worked here.
+func TestNightCommandSurvivesServerWriteTimeout(t *testing.T) {
+	// A REAL current time, deliberately NOT this file's own fixed testNow
+	// clock: SetWriteDeadline sets an ABSOLUTE deadline anchored to
+	// h.now(), so a fixed-in-the-past clock would make that deadline
+	// already elapsed before this test's real wall-clock write ever
+	// happens - see TestCueCatalogDeploySurvivesServerWriteTimeout's
+	// identical doc comment one file over.
+	now := time.Now()
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(now))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	deps, _ := nightControlTestDeps(svc, st)
+	backend := nightTestAssetBackend(t)
+	deps.AssetBackend = backend
+	brokers := &fakeMQTTBrokerRegistry{}
+	deps.MQTTBrokers = brokers
+
+	api := New(deps, Options{Clock: fixedClock(now), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
+	mustCreateNightSessionFSEQAsset(t, st, backend, "halloween-2026", "resting-loop", "player-01")
+	// phase "prepare-site", onUnavailable "block": prepare-site's own live
+	// interlock dispatch (nightPrepareSiteCommand, outside any transaction)
+	// is what this test paces past the server's short WriteTimeout.
+	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithCooldownInterlock("prepare-site", "block"))
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	// No reply ever arrives, paced past the server's own short
+	// WriteTimeout below, while staying comfortably inside this handler's
+	// own (much larger) real nightCommandHTTPWriteDeadline.
+	brokers.err = broker.ErrResponseDeadlineExceeded
+	brokers.delay = 300 * time.Millisecond
+
+	status, body := postThroughShortWriteTimeoutServer(t, api.Handler, "/api/v1/night/commands/prepare-site", "{}", auth)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (a withheld prepare-site interlock, evaluated slower than the server's own WriteTimeout, must still be reported honestly rather than severing the connection); body: %s", status, body)
+	}
+
+	var problem v1.Problem
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem: %v\nbody: %s", err, body)
+	}
+	if !strings.Contains(problem.Detail, "evidence source unavailable") {
+		t.Fatalf("problem.Detail = %q, want it to name the interlock's own real \"evidence source unavailable\" reason, not a generic transport error", problem.Detail)
 	}
 }
 

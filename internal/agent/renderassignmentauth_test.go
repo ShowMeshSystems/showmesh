@@ -109,9 +109,11 @@ func TestApplySurfacePersistsAuthorizationTuple(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	result, err := renderOps.applySurface(context.Background(), map[string]any{
-		"surfaceId": "surface-1", "show": "halloween-2026", "generation": float64(3), "catalogRevision": "rev-a",
-	}, clock.now)
+	params := minimalRenderApplyParams("surface-1")
+	params["show"] = "halloween-2026"
+	params["generation"] = float64(3)
+	params["catalogRevision"] = "rev-a"
+	result, err := renderOps.applySurface(context.Background(), params, clock.now)
 	if err != nil {
 		t.Fatalf("applySurface: %v", err)
 	}
@@ -146,7 +148,7 @@ func TestApplySurfaceWithNoAuthorizationTupleIsAcceptedForLegacyCallers(t *testi
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	if _, err := renderOps.applySurface(context.Background(), map[string]any{"surfaceId": "surface-1"}, clock.now); err != nil {
+	if _, err := renderOps.applySurface(context.Background(), minimalRenderApplyParams("surface-1"), clock.now); err != nil {
 		t.Fatalf("applySurface: %v", err)
 	}
 

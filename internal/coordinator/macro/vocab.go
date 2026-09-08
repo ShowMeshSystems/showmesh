@@ -94,6 +94,20 @@ const (
 	resolumeStateRestartInterrupted = "restart_interrupted"
 )
 
+// OutcomeState values this package itself produces for an audio step
+// (store.MacroRunStepRecord.OutcomeState). A successfully dispatched step's
+// own state is the raw [pkgaudio.Outcome] wire word (e.g. "started",
+// "completed", "refused") — the node's own vocabulary, carried through
+// unchanged rather than re-collapsed into the five-member outcome above, so
+// an operator reading a run's steps can tell a confirmed "started" from a
+// confirmed "completed". audioStateNotConfigured/audioStateInternalError
+// are this package's own local refusals, mirroring resolumeStateNotConfigured/
+// step_fpp.go's "internal_error" one section up.
+const (
+	audioStateNotConfigured = "not_configured"
+	audioStateInternalError = "internal_error"
+)
+
 // mqttResponseQoS is the QoS this package subscribes at when waiting for
 // an mqtt action's response. 1 (at-least-once) matches the QoS this
 // project already uses for command-shaped MQTT traffic elsewhere

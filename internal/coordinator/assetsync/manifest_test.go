@@ -79,9 +79,19 @@ func declareNode(t *testing.T, st *store.Store, nodeID string) {
 
 func createAsset(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, contentHash, filename string) store.AssetRecord {
 	t.Helper()
+	return createAssetWithMediaType(t, st, showID, sequenceID, targetKind, targetID, "fseq", contentHash, filename)
+}
+
+// createAssetWithMediaType is [createAsset] with a caller-stated media
+// type, for a fixture that must be resolvable through the "fseq"/"audio"
+// media-type filter [resolveAssetFor] applies since ADR-028 decision 1's
+// amendment. createAsset's own "fseq" default stands in for the ordinary
+// render-asset fixture the great majority of this package's tests need.
+func createAssetWithMediaType(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, mediaType, contentHash, filename string) store.AssetRecord {
+	t.Helper()
 	rec, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: contentHash + "-" + targetKind + "-" + targetID, ShowID: showID, SequenceID: sequenceID,
-		TargetKind: targetKind, TargetID: targetID, MediaType: "fseq", ContentHash: contentHash,
+		TargetKind: targetKind, TargetID: targetID, MediaType: mediaType, ContentHash: contentHash,
 		RuntimeFilename: filename, SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
 	})
 	if err != nil {
@@ -290,6 +300,61 @@ func TestExpectedAssetsForNodeNoGapWithoutSurface(t *testing.T) {
 	}
 }
 
+// TestExpectedAssetsForNodeGapsReachAudioSequenceThroughAudioBranch proves
+// [NodeCueSequenceIDs]'s audio branch (added alongside PR #209's target
+// resolution -- resolving a Cue's audio, LTC and announcement outputs to
+// their target node) is a real, exercised consumer of "which sequences
+// does this node's own Cues reference": a node holding a show.surface
+// (required to reach gap detection at all -- see
+// [TestExpectedAssetsForNodeNoGapWithoutSurface]) that ALSO holds an
+// audio.node, whose own audio-only Cue names a sequence with NO current
+// asset anywhere, reads that sequence as a Gap. Dropping or misordering
+// NodeCueSequenceIDs' audio branch removes this Gap silently, which is
+// exactly the failure this test exists to catch: this is the only place
+// NodeCueSequenceIDs' return value is ever consumed (ExpectedAssetsForNode's
+// own Gaps computation), and Gaps itself is read only by the asset-manifest
+// API route and showmeshctl assets output (internal/coordinator/api/
+// assetmanifest.go, cmd/showmeshctl/cmd_assets.go) -- readiness
+// (fppreconcile.assetsMissingReadiness) deliberately never reads Gaps at
+// all, so it is not and cannot be this branch's consumer.
+func TestExpectedAssetsForNodeGapsReachAudioSequenceThroughAudioBranch(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	declareNode(t, st, "hybrid-01")
+	putSurface(t, st, "hybrid-01-surface", "halloween-2026", "hybrid-01")
+	putAudioNode(t, st, "hybrid-01")
+
+	audioCuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: "halloween-2026", Name: "audio-only",
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "audio-seq-never-uploaded"}},
+	})
+	if err != nil {
+		t.Fatalf("encode audio cue: %v", err)
+	}
+	putConfig(t, st, config.ShowCueConfigKind, "cue-audio", audioCuePayload)
+
+	playlistPayload, err := config.EncodeShowPlaylistPayload(config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerShowmeshAudio,
+		Entries: []config.ShowPlaylistEntry{{ID: "e1", Cue: "cue-audio"}},
+	})
+	if err != nil {
+		t.Fatalf("encode playlist: %v", err)
+	}
+	putConfig(t, st, config.ShowPlaylistConfigKind, "playlist-1", playlistPayload)
+
+	// No asset is ever created for "audio-seq-never-uploaded" -- the Gap
+	// this test asserts on comes entirely from the audio branch adding it
+	// to hybrid-01's own referenced-sequence set, never from any asset row.
+
+	got, err := ExpectedAssetsForNode(context.Background(), st, "halloween-2026", "hybrid-01")
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode() error = %v, want nil", err)
+	}
+	if len(got.Gaps) != 1 || got.Gaps[0].SequenceID != "audio-seq-never-uploaded" {
+		t.Fatalf("ExpectedAssetsForNode(hybrid-01) Gaps = %+v, want one gap naming %q", got.Gaps, "audio-seq-never-uploaded")
+	}
+}
+
 func TestStalenessWindowIsThreeTimesInventoryInterval(t *testing.T) {
 	got := StalenessWindow(2 * time.Minute)
 	want := 6 * time.Minute
@@ -427,6 +492,148 @@ func TestComputeNodeManifestExtraReportedNeverError(t *testing.T) {
 	}
 	if len(m.Extra) != 1 || m.Extra[0].ContentHash != "sha256:unexpected" {
 		t.Fatalf("ComputeNodeManifest().Extra = %+v, want one entry naming the unexpected hash", m.Extra)
+	}
+}
+
+// --- D-016 item 2: AssetVerdict (held/superseded/absent) ---
+
+// TestComputeNodeManifestVerdictHeld proves the fact that does not exist
+// today: an expected asset the node's inventory actually holds gets an
+// AssetVerdictHeld verdict, not just silent omission from Missing.
+func TestComputeNodeManifestVerdictHeld(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{Assets: []ExpectedAsset{
+		{AssetID: "a1", ContentHash: "sha256:aaa", Filename: "Opening.fseq", SequenceID: "opening"},
+	}}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true}
+	inventory := []store.NodeAssetInventoryRecord{{ContentHash: "sha256:aaa", RuntimeFilename: "Opening.fseq"}}
+
+	m := ComputeNodeManifest("render-01", active, expected, report, true, inventory)
+	if len(m.Verdicts) != 1 || m.Verdicts[0].AssetID != "a1" || m.Verdicts[0].State != AssetVerdictHeld {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want one entry for a1 with State=held", m.Verdicts)
+	}
+}
+
+// TestComputeNodeManifestVerdictSuperseded proves a node holding OLDER
+// bytes for an identity it is missing the current bytes for reads
+// distinctly from a node holding nothing at all: expected.SupersededHashes
+// names sha256:old as a hash this asset's identity used to serve, and the
+// node's inventory holds exactly that hash instead of the current one.
+func TestComputeNodeManifestVerdictSuperseded(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{
+		Assets: []ExpectedAsset{
+			{AssetID: "a-new", ContentHash: "sha256:new", Filename: "Opening.fseq", SequenceID: "opening"},
+		},
+		SupersededHashes: map[string]map[string]bool{
+			"a-new": {"sha256:old": true},
+		},
+	}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true}
+	inventory := []store.NodeAssetInventoryRecord{{ContentHash: "sha256:old", RuntimeFilename: "Opening.fseq"}}
+
+	m := ComputeNodeManifest("render-01", active, expected, report, true, inventory)
+	if len(m.Verdicts) != 1 || m.Verdicts[0].AssetID != "a-new" || m.Verdicts[0].State != AssetVerdictSuperseded {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want one entry for a-new with State=superseded", m.Verdicts)
+	}
+	if len(m.Missing) != 1 || m.Missing[0].AssetID != "a-new" {
+		t.Errorf("ComputeNodeManifest().Missing = %+v, want a-new still named missing: a superseded verdict is not held", m.Missing)
+	}
+}
+
+// TestComputeNodeManifestVerdictAbsent proves a node holding NEITHER the
+// current bytes nor any hash the identity has ever superseded reads as
+// absent, never superseded.
+func TestComputeNodeManifestVerdictAbsent(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{
+		Assets: []ExpectedAsset{
+			{AssetID: "a-new", ContentHash: "sha256:new", Filename: "Opening.fseq", SequenceID: "opening"},
+		},
+		SupersededHashes: map[string]map[string]bool{
+			"a-new": {"sha256:old": true},
+		},
+	}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true}
+
+	m := ComputeNodeManifest("render-01", active, expected, report, true, nil)
+	if len(m.Verdicts) != 1 || m.Verdicts[0].AssetID != "a-new" || m.Verdicts[0].State != AssetVerdictAbsent {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want one entry for a-new with State=absent", m.Verdicts)
+	}
+}
+
+// TestComputeNodeManifestVerdictsNilNeverReported proves the never-reported
+// case names no verdict for evidence that does not exist.
+func TestComputeNodeManifestVerdictsNilNeverReported(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{Assets: []ExpectedAsset{{AssetID: "a1", ContentHash: "sha256:aaa"}}}
+
+	m := ComputeNodeManifest("render-01", active, expected, nil, false, nil)
+	if len(m.Verdicts) != 0 {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want none: no report has ever been received", m.Verdicts)
+	}
+}
+
+// TestComputeNodeManifestVerdictsNilOnStaleReport is the one most worth
+// getting right: a stale report is not evidence of what a node currently
+// holds, and that must be exactly as true of Verdicts as it already is of
+// Missing and Extra. The inventory here DOES hold the expected hash — a
+// naive implementation that forgot to gate Verdicts behind reportFresh
+// would render this asset "held" from stale evidence.
+func TestComputeNodeManifestVerdictsNilOnStaleReport(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{Assets: []ExpectedAsset{{AssetID: "a1", ContentHash: "sha256:aaa", SequenceID: "opening"}}}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now().Add(-time.Hour), Complete: true}
+	inventory := []store.NodeAssetInventoryRecord{{ContentHash: "sha256:aaa", RuntimeFilename: "Opening.fseq"}}
+
+	m := ComputeNodeManifest("render-01", active, expected, report, false, inventory)
+	if m.State != ManifestUnknown || m.UnknownCause != UnknownCauseStaleReport {
+		t.Fatalf("ComputeNodeManifest() = %+v, want State=unknown Cause=stale_report", m)
+	}
+	if len(m.Verdicts) != 0 {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want none: a stale report is not evidence of what a node currently holds", m.Verdicts)
+	}
+}
+
+// TestComputeNodeManifestVerdictsNilOnIncompleteReport proves the
+// report_incomplete case also names no verdict — a node's own report
+// saying it could not fully enumerate its asset directory is exactly as
+// unreliable a basis for a per-asset verdict as it is for Missing/Extra.
+func TestComputeNodeManifestVerdictsNilOnIncompleteReport(t *testing.T) {
+	active := ActiveShow{Configured: true, ShowID: "halloween-2026"}
+	expected := ExpectedSet{Assets: []ExpectedAsset{{AssetID: "a1", ContentHash: "sha256:aaa"}}}
+	report := &store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: false, Reason: "asset directory does not exist"}
+
+	m := ComputeNodeManifest("render-01", active, expected, report, true, nil)
+	if len(m.Verdicts) != 0 {
+		t.Fatalf("ComputeNodeManifest().Verdicts = %+v, want none: an incomplete report names no verdict", m.Verdicts)
+	}
+}
+
+// TestExpectedAssetsForNodeSupersededHashesKeyedByCurrentAssetID proves
+// [supersededHashesByAssetID]'s derivation end to end: uploading a second
+// asset for the identical (show, sequence, targetKind, target) identity
+// supersedes the first, and ExpectedAssetsForNode's result must key the
+// superseded content hash by the NEW (current) asset's own AssetID —
+// never by filename, never by the old asset's own id.
+func TestExpectedAssetsForNodeSupersededHashesKeyedByCurrentAssetID(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	declareNode(t, st, "render-01")
+
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:old", "Opening.fseq")
+	current := createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:new", "Opening.fseq")
+
+	got, err := ExpectedAssetsForNode(context.Background(), st, "halloween-2026", "render-01")
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode() error = %v", err)
+	}
+	if len(got.Assets) != 1 || got.Assets[0].AssetID != current.ID {
+		t.Fatalf("ExpectedAssetsForNode() Assets = %+v, want the current asset only", got.Assets)
+	}
+	hashes := got.SupersededHashes[current.ID]
+	if len(hashes) != 1 || !hashes["sha256:old"] {
+		t.Fatalf("ExpectedAssetsForNode() SupersededHashes[%q] = %+v, want {sha256:old}", current.ID, hashes)
 	}
 }
 

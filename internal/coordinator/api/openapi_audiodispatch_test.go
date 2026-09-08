@@ -17,19 +17,85 @@ import (
 // audiodispatch_test.go's own tests already do) — never a hand-built JSON
 // fixture standing in for a real response.
 
-// TestOpenAPIAudioSessionDispatchSchemasCompile proves
-// AudioSessionCommandRequest, AudioSessionCommandResponse, and
-// AudioSessionCommandResult are all well-formed and reachable from
-// api/openapi.yaml's components, independent of any one test happening
-// to produce a matching response.
+// TestOpenAPIAudioSessionDispatchSchemasCompile proves every one of the
+// thirteen audio session dispatch endpoints' own per-operation request
+// schemas, plus AudioSessionCommandResponse and AudioSessionCommandResult,
+// are all well-formed and reachable from api/openapi.yaml's components,
+// independent of any one test happening to produce a matching response.
 func TestOpenAPIAudioSessionDispatchSchemasCompile(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	for _, name := range []string{
-		"AudioSessionCommandRequest", "AudioSessionCommandResponse", "AudioSessionCommandResult",
+		"AudioSessionApplyRequest", "AudioSessionSeekRequest", "AudioGainSetRequest",
+		"AudioGainFadeRequest", "AudioSessionNoParamsRequest",
+		"AudioSessionApplyParams", "AudioSessionSeekParams", "AudioSessionGainParams",
+		"AudioSessionGainFadeParams",
+		"AudioSessionCommandResponse", "AudioSessionCommandResult",
 	} {
 		if _, err := c.Compile(openAPIDocumentURL + "#/components/schemas/" + name); err != nil {
 			t.Errorf("compiling schema %s: %v", name, err)
 		}
+	}
+}
+
+// TestOpenAPIAudioSessionRequestSchemasBindToTheirOwnOperation proves each
+// of the thirteen audio session dispatch endpoints' requestBody actually
+// points at the per-operation schema this file's own review turned it
+// into, never the old, shared AudioSessionCommandRequest whose params
+// was a union any operation could satisfy. This is what makes "the
+// operation binds its params" true of the DOCUMENT, not just asserted in
+// prose: a seek body validating against the gain endpoint's own schema
+// would fail this test, not merely look wrong on inspection.
+func TestOpenAPIAudioSessionRequestSchemasBindToTheirOwnOperation(t *testing.T) {
+	cases := []struct {
+		path   string
+		method string
+		schema string
+	}{
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/apply", "post", "AudioSessionApplyRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/prepare", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/start", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/pause", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/resume", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/seek", "post", "AudioSessionSeekRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/advance", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/stop", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/clear", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/gain", "post", "AudioGainSetRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade", "post", "AudioGainFadeRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/output/mute", "post", "AudioSessionNoParamsRequest"},
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute", "post", "AudioSessionNoParamsRequest"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := requestBodySchemaRef(t, tc.method, tc.path); got != tc.schema {
+				t.Errorf("requestBody schema = %q, want %q", got, tc.schema)
+			}
+		})
+	}
+}
+
+// TestOpenAPIAudioSessionNoParamsRequestAcceptsEmptyAndOmittedParams proves,
+// against the compiled schema rather than asserted in prose, that stop and
+// clear (and every other zero-param operation, all sharing
+// AudioSessionNoParamsRequest) accept BOTH an explicit empty params object
+// and an omitted one - the same case
+// dispatchAudioSessionCommand (audiodispatch.go) normalizes a nil params
+// body to before dispatch. Restructuring away from the old
+// AudioSessionCommandParams union (whose top-level oneOf let an empty
+// object match two of its own members at once) must not have left this
+// unrepresentable in its new home.
+func TestOpenAPIAudioSessionNoParamsRequestAcceptsEmptyAndOmittedParams(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	for _, path := range []string{
+		"/nodes/{nodeId}/audio/sessions/{sessionId}/stop",
+		"/nodes/{nodeId}/audio/sessions/{sessionId}/clear",
+	} {
+		schemaName := requestBodySchemaRef(t, "post", path)
+		if schemaName != "AudioSessionNoParamsRequest" {
+			t.Fatalf("%s: requestBody schema = %q, want AudioSessionNoParamsRequest", path, schemaName)
+		}
+		assertMatchesSchema(t, c, schemaName, []byte(`{"revision":1,"params":{}}`))
+		assertMatchesSchema(t, c, schemaName, []byte(`{"revision":1}`))
 	}
 }
 

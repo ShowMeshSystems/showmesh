@@ -491,7 +491,6 @@ func (b *branch) doTeardown(ctx context.Context) error {
 	b.teardownClaimed = true
 	b.mu.Unlock()
 
-	b.engine.unindexBranch(b)
 	// A blocked pad holds a streaming thread waiting inside the probe;
 	// the state change below must never race that wait, so the block is
 	// always released first, whether or not this branch was ever paused.
@@ -502,14 +501,25 @@ func (b *branch) doTeardown(ctx context.Context) error {
 	if !b.awaitNoElementRace(ctx, teardownTimeout) {
 		slog.Warn("gstengine: teardown deferred because an earlier abandoned state change may still be driving this branch's elements; leaving them in the pipeline rather than racing it", "branch", b.id)
 		b.engine.markTeardownDeferred()
+		b.silenceDeferredBranch()
 		return errTeardownDeferredForRace
 	}
 
 	if err := b.setElementsState(ctx, gst.StateNull); err != nil {
 		slog.Warn("gstengine: branch teardown did not reach NULL in time; leaving its elements in the pipeline rather than removing them concurrently with the abandoned state change", "branch", b.id, "error", err)
 		b.engine.markTeardownDeferred()
+		b.silenceDeferredBranch()
 		return err
 	}
+
+	// Unindexed only once teardown is actually going to remove the
+	// elements: a deferred attempt above leaves the branch findable by
+	// [Engine.branchForSource] on purpose, so a bus error its still-live,
+	// unremoved elements produce later attributes back to this branch
+	// (a harmless no-op via reportLoadError, nothing reads loadErrCh once
+	// Release has returned) instead of falling through to
+	// [Engine.markBroken] and poisoning every other branch's next Load.
+	b.engine.unindexBranch(b)
 
 	bin, ok := b.engine.pipeline.(gst.Bin)
 	if ok {

@@ -25,11 +25,13 @@
 //
 // # ObservedAt (ADR-011)
 //
-// A node's audio report carries two evidence timestamps, not one:
-// DiscoveredAt for the one-shot discovery probe (engine, device, outputs,
-// program, LTC availability) and ObservedAt for this tick's own live
-// evidence (LTC generator state, sessions). [buildValue] and
-// [buildSessionValue] stamp ObservedAt from whichever of the two actually
-// backs the signal being built — never the coordinator's own receipt
-// time, matching noderender.buildValue's identical rule.
+// Every node.audio.* signal this package builds stamps ObservedAt from
+// AudioPayload.ObservedAt, this report tick's own evidence time, never
+// from AudioPayload.DiscoveredAt (the agent's one-shot startup probe) and
+// never from the coordinator's own receipt time. [Store] keeps only a
+// node's most recent report and nothing evicts it, so a signal stamped
+// with anything but the current tick's own evidence time would read
+// current forever, even off a node that stopped reporting: the defect
+// this package's tests guard against for every signal, cached-discovery
+// ones (device, outputs, program, LTC) included.
 package nodeaudio

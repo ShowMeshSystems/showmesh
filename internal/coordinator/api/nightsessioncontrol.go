@@ -106,6 +106,16 @@ const nightDegradedGuidance = "night session is degraded (%s). " +
 // distinguishing that from a genuine store/internal error.
 var errNightCommandRefused = errors.New("api: night command refused")
 
+// nightShutdownOrdinary and nightShutdownForced are
+// [applyNightShutdownEffect]'s and [handlers.nightPowerDownPresentationApply]'s
+// own force argument, named at every call site rather than passed as a bare
+// true/false literal. See applyNightShutdownEffect's own doc comment for
+// why.
+const (
+	nightShutdownOrdinary = false // the normal path: defer a live/committed show, evaluate interlocks
+	nightShutdownForced   = true  // an operator's own explicit emergency command: never defer, never interlock
+)
+
 // nightShutdownIntentRank orders the two shutdown intents: power-down is
 // the stronger, terminal intent (invariant 1) and a later fade-out-night
 // must never downgrade it.
@@ -126,6 +136,19 @@ type nightCommandOutcome struct {
 	outcome string
 	persist string // "" | "create" | "update"
 
+	// readiness, when non-nil, is a night_readiness_results row decide
+	// wants created alongside persist. Review round 5, finding 1: decide
+	// used to call tx.CreateNightReadiness directly, invisibly to
+	// nightRunGated, so on an audit failure the fallback (which only
+	// knows about persist) redid the night_sessions write pointing at a
+	// readiness_id whose row had been rolled back with the failed
+	// transaction and never recreated - a false "applied" outcome with a
+	// dangling reference nothing errors on, worse than the refusal it
+	// replaced. nightRunGated now performs this write itself, in both the
+	// transactional path and the fallback path, so a decide function
+	// describes it as data here rather than issuing it directly.
+	readiness *store.NightReadinessRecord
+
 	// auditParams, when non-nil, is folded into this command's own audit
 	// entry (ADR-024's Params field). Track F seam F6's only user: an
 	// applied interlock override, which RESTING-MODE.md §10.1 requires the
@@ -145,7 +168,7 @@ func (h *handlers) handleGetNightLifecycle(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		rec = nightSyntheticInactiveSession(now)
 	}
-	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge)})
+	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge, true)})
 }
 
 func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Request) {
@@ -160,14 +183,48 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 		h.writeInternalError(w, now, "get night session", err)
 		return
 	}
-	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge)})
+	// current=false: this record may not be the currently active session
+	// (RESTING-MODE.md's own "look up any past session by id" surface),
+	// so pinnedMaxGainDb is never gated to a running state here - see
+	// [mapNightSessionState]'s own doc comment.
+	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge, false)})
 }
 
 const maxNightCommandRequestBodyBytes = 4 << 10
 
+// nightCommandHTTPWriteDeadlineMargin matches fppcommand_handler.go's own
+// 30s margin - the closest precedent for "one write deadline, not a series
+// of resets" over a single handler's own post-wait work (here, the
+// AuditedWrite transaction nightRunExempt/nightRunGated runs after the
+// live interlock dispatch below has already returned).
+const nightCommandHTTPWriteDeadlineMargin = 30 * time.Second
+
+// nightCommandHTTPWriteDeadline bounds handleNightCommand's own HTTP write
+// deadline, set before dispatch - mirroring emergencyStopHTTPWriteDeadline's
+// identical reasoning for the identical hazard: internal/coordinator/httpapi.
+// NewServer's shared http.Server.WriteTimeout would otherwise sever the
+// connection out from under a still-working live interlock dispatch.
+// prepare-site, fade-out-night, power-down-presentation, and run-readiness
+// each dispatch their own phase's live interlock evidence OUTSIDE any
+// transaction (their own doc comments), bounded by
+// nightBoundInterlockDispatch's nightInterlockAggregateDispatchBudget
+// (nightinterlock.go) - the actually configured source that dispatch
+// itself is bounded by, never a fresh constant re-derived here, so a
+// larger test-shrunk (or future-configured) budget carries through
+// automatically. start-preshow/start-night/end-session/request-final-show
+// never dispatch outside their own transaction (Invariant 7,
+// handleNightCommand's own doc comment), so this bound is this handler's
+// single worst case across every command it serves, not a per-command one.
+func nightCommandHTTPWriteDeadline() time.Duration {
+	return nightInterlockAggregateDispatchBudget + nightCommandHTTPWriteDeadlineMargin
+}
+
 // decodeNightCommandBody reads the optional {"idempotencyKey": string,
-// "interlockOverrides": [{"rule": string, "reason": string}]?} body. An
-// absent or empty body is valid: every field is optional.
+// "interlockOverrides": [{"rule": string, "reason": string}]?,
+// "skipEnterShowLead": bool?} body. An absent or empty body is valid:
+// every field is optional. skipEnterShowLead is honored only by
+// start-night, the same way idempotencyKey is honored only by
+// prepare-site; every other command ignores it.
 // interlockOverrides is Track F seam F6's own addition
 // (RESTING-MODE.md §10.1): naming a rule here is the caller's request to
 // override it, and is honored only where that rule itself declares
@@ -187,13 +244,14 @@ var nightCommandsConsultingNoInterlock = map[string]bool{
 	nightCommandEndSession:       true,
 }
 
-func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, problem *v1.Problem) {
+func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string, overrides []nightInterlockOverrideRequest, skipEnterShowLead bool, problem *v1.Problem) {
 	if r.ContentLength == 0 {
-		return "", nil, nil
+		return "", nil, false, nil
 	}
 	var body struct {
 		IdempotencyKey     string                          `json:"idempotencyKey"`
 		InterlockOverrides []nightInterlockOverrideRequest `json:"interlockOverrides"`
+		SkipEnterShowLead  bool                            `json:"skipEnterShowLead"`
 	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxNightCommandRequestBodyBytes+1))
 	// Strict decoding, found by review this seam's safety review round: a
@@ -202,20 +260,20 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 	// with no hint the override never arrived at all.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && err != io.EOF {
-		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?,\"interlockOverrides\":[{\"rule\":string,\"reason\":string}]?}, with no other keys")
-		return "", nil, &p
+		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?,\"interlockOverrides\":[{\"rule\":string,\"reason\":string}]?,\"skipEnterShowLead\":bool?}, with no other keys")
+		return "", nil, false, &p
 	}
 	for _, o := range body.InterlockOverrides {
 		if o.Rule == "" || o.Reason == "" {
 			p := invalidParameterProblem("every interlockOverrides entry requires a non-empty \"rule\" and \"reason\"")
-			return "", nil, &p
+			return "", nil, false, &p
 		}
 	}
 	if len(body.InterlockOverrides) > 0 && nightCommandsConsultingNoInterlock[cmd] {
 		p := invalidParameterProblem(fmt.Sprintf("%q declares no interlock phase and consults no gate; interlockOverrides must be omitted, not silently ignored", cmd))
-		return "", nil, &p
+		return "", nil, false, &p
 	}
-	return body.IdempotencyKey, body.InterlockOverrides, nil
+	return body.IdempotencyKey, body.InterlockOverrides, body.SkipEnterShowLead, nil
 }
 
 // handleNightCommand serves POST /api/v1/night/commands/{command}, behind
@@ -223,13 +281,14 @@ func decodeNightCommandBody(r *http.Request, cmd string) (idempotencyKey string,
 // anything beyond the transaction itself.
 func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(nightCommandHTTPWriteDeadline()))
 	ctx := r.Context()
 	cmd := r.PathValue("command")
 	if !validNightCommands[cmd] {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session", cmd)))
 		return
 	}
-	idempotencyKey, interlockOverrides, problem := decodeNightCommandBody(r, cmd)
+	idempotencyKey, interlockOverrides, skipEnterShowLead, problem := decodeNightCommandBody(r, cmd)
 	if problem != nil {
 		writeProblem(w, h.logger, now, *problem)
 		return
@@ -252,6 +311,14 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 			return h.nightEndSessionDecide(now, current), nil, nil
 		})
+		// end-session must leave no background audio playing, independent
+		// of the tick loop's own Degraded guard - see
+		// [handlers.nightClearBackgroundAudioAtEndSession]'s own doc
+		// comment. Only after the session record has durably reached
+		// stopped; never a reason to fail end-session itself.
+		if opErr == nil && problem == nil {
+			h.nightClearBackgroundAudioAtEndSession(ctx, now, out.result)
+		}
 	case cmd == nightCommandRunReadiness:
 		// Runs its own FPP/asset work, and its own phase="run-readiness"
 		// interlock evidence, outside any transaction; see
@@ -269,6 +336,12 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		// live, outside any transaction; see
 		// [handlers.nightFadeOutNightCommand]'s own doc comment.
 		out, problem, opErr = h.nightFadeOutNightCommand(ctx, now, issuer, &attributionDegraded, interlockOverrides, callerHasOverrideScope)
+	case cmd == nightCommandStartNight:
+		// May run a fresh run-readiness pass live, outside any transaction,
+		// before entering its own transaction; see
+		// [handlers.nightStartNightCommand]'s own doc comment for when and
+		// why.
+		out, problem, opErr = h.nightStartNightCommand(ctx, now, issuer, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
 	case cmd == nightCommandPowerDownPresentation:
 		// Its own phase="power-down-presentation" interlock evidence is
 		// dispatched live, outside any transaction; see
@@ -295,8 +368,16 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, *problem)
 		return
 	}
+	// nightRunGated (unlike nightRunExempt) has no *attributionDegraded
+	// pointer parameter to set directly, so its own degraded outcome
+	// arrives here on out.result.AttributionDegraded instead - fold it
+	// into the same local flag every response field below reads, rather
+	// than adding a second, parallel way to report the identical fact.
+	if out.result.AttributionDegraded {
+		attributionDegraded = true
+	}
 
-	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge)
+	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge, true)
 	state.AttributionDegraded = attributionDegraded
 
 	// 202: the command is accepted, never confirmed by anything downstream
@@ -325,14 +406,18 @@ func (h *handlers) nightDecideExemptCommand(ctx context.Context, tx *store.Tx, c
 
 // nightDecideGatedCommand applies invariant 4 (a degraded, non-terminal
 // session refuses every gated command) and then dispatches to
-// start-preshow and start-night, which both gate their own declared
-// phase against a STORED, trusted readiness result
-// ([handlers.nightGatePhaseTx]/[nightEvaluatePhaseInterlockGate]) since
-// both already run inside this transaction. run-readiness and
-// prepare-site are NOT here: both need live evidence dispatched outside
-// any transaction, so handleNightCommand routes them to
-// [handlers.nightRunReadinessCommand] and
-// [handlers.nightPrepareSiteCommand] directly instead.
+// start-preshow, which gates its own declared phase against a STORED,
+// trusted readiness result ([handlers.nightGatePhaseTx]/
+// [nightEvaluatePhaseInterlockGate]) since it already runs inside this
+// transaction. run-readiness and prepare-site are NOT here: both need
+// live evidence dispatched outside any transaction, so handleNightCommand
+// routes them to [handlers.nightRunReadinessCommand] and
+// [handlers.nightPrepareSiteCommand] directly instead. start-night is
+// also not here, for the identical reason as of this seam's own fix: it
+// may need a live run-readiness pass first, so handleNightCommand routes
+// it to [handlers.nightStartNightCommand] directly; that command still
+// reaches [handlers.nightStartNightTx] (this same STORED-gate shape)
+// inside its own transaction once any needed live pass has completed.
 func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
 		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
@@ -341,8 +426,6 @@ func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cm
 	switch cmd {
 	case nightCommandStartPreshow:
 		return h.nightStartPreshow(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
-	case nightCommandStartNight:
-		return h.nightStartNightTx(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
 	}
 	return nightCommandOutcome{}, nil, fmt.Errorf("api: no gated decide function for %q", cmd)
 }
@@ -373,6 +456,17 @@ func (h *handlers) nightRunExempt(ctx context.Context, now time.Time, cmd string
 		}
 		if problem != nil {
 			return nil
+		}
+		if out.readiness != nil {
+			// No exempt decide function sets this today. nightRunExempt has
+			// no ADR-024 decision 11 audit-failure fallback of its own to
+			// make performing this write here safe the way nightRunGated's
+			// own out.readiness handling is (this path's audit write is
+			// best-effort, after commit, never a reason to redo anything).
+			// Fail loudly rather than silently commit a session referencing
+			// a readiness row nobody wrote - the exact trap review round 5
+			// finding 1 fixed one function over.
+			return fmt.Errorf("api: night command %q's decide function set nightCommandOutcome.readiness, which nightRunExempt does not know how to persist", cmd)
 		}
 		switch out.persist {
 		case "create":
@@ -418,21 +512,18 @@ func (h *handlers) nightRunExempt(ctx context.Context, now time.Time, cmd string
 	return out, nil, nil
 }
 
-// nightAuditUnavailableProblem is the four fail-closed commands' own 503:
-// nothing was dispatched and nothing was recorded (ADR-024 decision 11's
-// non-exempt direction).
-func nightAuditUnavailableProblem(cmd string) v1.Problem {
-	return v1.Problem{
-		Type: ProblemTypeNightAuditUnavailable, Title: "Command refused: it could not be durably recorded",
-		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf("%s was not applied: its audit entry could not be written, and this command is refused rather than proceeding without one", cmd),
-	}
-}
-
 // nightRunGated wraps decide and the resulting write in one atomic
 // transaction with the command's own audit entry (identity.Service.
-// AuditedWrite): an unwritable audit store here refuses the whole
-// command rather than proceeding degraded.
+// AuditedWrite). ADR-024 decision 11, amended 2026-08-26 (owner ruling):
+// an unwritable audit store no longer refuses the command. decide's own
+// decision (out, problem) was already computed from a consistent read
+// inside the now-rolled-back transaction (this store's own single
+// connection and _txlock=immediate mean nothing else could have written
+// underneath it), so on an audit failure this redoes ONLY the persist
+// step, through the plain non-transactional store methods, and proceeds
+// with degraded attribution, mirroring dispatchFPPCommand/
+// handleDispatchResolumeAction's identical fallback, never re-running
+// decide itself.
 func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string, issuer identity.AuditEntry,
 	decide func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error),
 ) (nightCommandOutcome, *v1.Problem, error) {
@@ -453,6 +544,11 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 		}
 		if problem != nil {
 			return identity.AuditEntry{}, errNightCommandRefused
+		}
+		if out.readiness != nil {
+			if err := tx.CreateNightReadiness(ctx, *out.readiness); err != nil {
+				return identity.AuditEntry{}, err
+			}
 		}
 		switch out.persist {
 		case "create":
@@ -482,8 +578,37 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 			return nightCommandOutcome{}, problem, nil
 		}
 		if errors.Is(auditErr, identity.ErrAuditWrite) {
-			p := nightAuditUnavailableProblem(cmd)
-			return nightCommandOutcome{}, &p, nil
+			// ADR-024 decision 11, amended 2026-08-26 (owner ruling): redo
+			// every write the rolled-back transaction made non-
+			// transactionally (decide's own decision above is still valid;
+			// only the audit append failed), and proceed with degraded
+			// attribution. readiness is redone before persist: persist's
+			// own out.result can reference its ID (out.readiness's own doc
+			// comment on nightCommandOutcome explains why this can no
+			// longer be decide's own problem to remember).
+			if out.readiness != nil {
+				if err := h.deps.NightSessions.CreateNightReadiness(ctx, *out.readiness); err != nil {
+					return nightCommandOutcome{}, nil, err
+				}
+			}
+			switch out.persist {
+			case "create":
+				if err := h.deps.NightSessions.CreateNightSession(ctx, out.result, now); err != nil {
+					return nightCommandOutcome{}, nil, err
+				}
+			case "update":
+				if err := h.deps.NightSessions.UpdateNightSession(ctx, out.result, now); err != nil {
+					return nightCommandOutcome{}, nil, err
+				}
+			}
+			// nightRunGated is never called for a command in
+			// nightExemptFromDegradedGate (those route through
+			// nightRunExempt instead), so every command reaching here was
+			// previously fail-closed outright, never safety-class exempt:
+			// the only applicable reason is the general one.
+			h.reportDegradedAttribution(now, issuer, auditErr, degradedAttributionReasonAuditNeverBlocks)
+			out.result.AttributionDegraded = true
+			return out, nil, nil
 		}
 		return nightCommandOutcome{}, nil, auditErr
 	}
@@ -580,6 +705,7 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 	var gateObjectID string
 	var gateRevision int64
 	var overrideAuditParams []map[string]any
+	var newEpochPayload config.NightSessionPayload
 	if willAttemptNewEpoch {
 		objectID, revision, payload, problem, err := h.nightResolveActiveConfigForGate(ctx)
 		if err != nil {
@@ -596,12 +722,13 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 			return nightCommandOutcome{}, &p, nil
 		}
 		gateObjectID, gateRevision = objectID, revision
+		newEpochPayload = payload
 		if len(gate.Overridden) > 0 {
 			overrideAuditParams = nightInterlockOverrideAuditParams(gate.Overridden)
 		}
 	}
 
-	return h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+	out, problem, err := h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
 			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
 			return nightCommandOutcome{}, &p, nil
@@ -612,6 +739,154 @@ func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, i
 		}
 		return out, problem, err
 	})
+	// Item 3: prepare-site is where this coordinator gets the site into a
+	// known state, so a genuinely NEW epoch (never an idempotent replay or
+	// an already-open session - see nightPrepareSiteTx) resets every
+	// announcement cue's own audio session. Only after nightRunGated has
+	// durably committed the new session: this dispatches live, WARN AND
+	// PROCEED (nightResetAnnouncementSessionsAtPrepareSite's own doc
+	// comment), and must never affect whether prepare-site itself
+	// succeeded.
+	if err == nil && problem == nil && out.outcome == nightOutcomeApplied {
+		h.nightResetAnnouncementSessionsAtPrepareSite(ctx, now, out.result, newEpochPayload)
+	}
+	return out, problem, err
+}
+
+// nightAnnouncementResetAtPrepareSiteBudget bounds, to at most itself
+// plus one in-flight audioCommandConfirmDeadline, the TOTAL real
+// wall-clock time nightResetAnnouncementSessionsAtPrepareSite's own pass
+// may add to prepare-site, regardless of how many distinct announcement
+// sessions the active night.session configures. Checked BEFORE each
+// distinct session's own audio.session.clear
+// (nightResetAnnouncementCueSessionOnce), not derived from ctx: that
+// dispatch (executeAudioSessionDispatch) awaits its result on
+// context.WithoutCancel(ctx) (audiodispatch.go's own "bgCtx cutover" —
+// deliberate, so a caller walking away can never abort a dispatch that is
+// already durably recorded), so nightBoundInterlockDispatch's own ctx
+// deadline cannot cut a stalled await short here the way it can for a
+// live interlock read elsewhere in this file. Without this, an
+// unreachable node costs this pass a full audioCommandConfirmDeadline
+// (15s) PER distinct session, unbounded by session count.
+//
+// Real time.Now(), deliberately independent of h.now() (Options.Clock,
+// fixed in tests to make STAMPED timestamps deterministic) — the
+// identical split confirmFPPCommand's own doc comment explains for the
+// same reason: a wait paced by a clock that never advances would never
+// end.
+//
+// A var, not a const, so a test can drive it to prove the bound the way
+// nightInterlockAggregateDispatchBudget already is.
+var nightAnnouncementResetAtPrepareSiteBudget = 2 * audioCommandConfirmDeadline
+
+// nightResetAnnouncementSessionsAtPrepareSite issues Item 3's reset: an
+// audio.session.clear against every announcement cue's own audio session
+// in the epoch just opened, so a node still holding whatever a PREVIOUS
+// night session left cannot make this session's first announcement play
+// against stale desired state. This runs at prepare-site, never at
+// run-readiness - readiness is a verification step and must stay free of
+// side effects (nightRunReadinessCommand's own doc comment); prepare-site
+// is already the "get the site into a known state" moment.
+//
+// WARN AND PROCEED, BOUNDED: the night must never block on an unreachable
+// node, and proceeding here is not free. This pass adds at most
+// nightAnnouncementResetAtPrepareSiteBudget plus one in-flight
+// audioCommandConfirmDeadline to prepare-site's own latency - never more,
+// because the budget is checked before each dispatch and a dispatch
+// already under way is never interrupted - regardless of how many
+// announcement sessions are configured: once the budget is spent, every
+// remaining distinct (node, session) pair is SKIPPED rather than
+// dispatched. A skipped session keeps whatever a previous night session
+// left on its node until a later prepare-site, or until the night loop's
+// own per-cycle clear reaches it once that cue actually runs. Every
+// failure here - skipped, unacknowledged, or refused - only logs a
+// warning and continues; none is ever returned to the caller, and none
+// is ever a reason to fail prepare-site itself.
+//
+// No node-reported revision is read or trusted here (RULED: deriving the
+// floor from what the node currently reports computes desired state from
+// observed state and fails exactly when the node is unreachable, per
+// nightAnnouncementRevisions's own doc comment). The revision this clear
+// carries is computed the SAME way the night loop's own per-cycle clear
+// is (nightAnnouncementRevisions over the persisted audio_sessions row),
+// so this reset counts as that floor's next advance rather than a second,
+// disagreeing source of truth for the same session.
+func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
+	dispatchCtx, cancel := nightBoundInterlockDispatch(ctx)
+	defer cancel()
+	budgetDeadline := time.Now().Add(nightAnnouncementResetAtPrepareSiteBudget)
+	seen := map[string]bool{}
+	skipped := 0
+	for _, cue := range payload.EnterShow.Cues {
+		skipped += h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen, budgetDeadline)
+	}
+	for _, cue := range payload.EnterResting.Cues {
+		skipped += h.nightResetAnnouncementCueSessionOnce(dispatchCtx, now, rec, cue, seen, budgetDeadline)
+	}
+	if skipped > 0 {
+		h.logWarn("night loop: prepare-site: announcement session reset budget exhausted; skipping the rest so prepare-site is never blocked on an unreachable node - each skipped session keeps whatever a previous night session left until a later prepare-site or the night loop's own per-cycle clear reaches it",
+			"sessionId", rec.ID, "skipped", skipped, "budget", nightAnnouncementResetAtPrepareSiteBudget)
+	}
+}
+
+// nightResetAnnouncementCueSessionOnce resolves cue's own announcement
+// session, if any, and clears it - skipping a (node, session) pair
+// already reset this pass so a cue reused across enterShow/enterResting
+// (or two cues bound to the same session) never dispatches the same
+// clear twice. Also skips - and reports as skipped via its own return
+// value - a pair reached after budgetDeadline: see
+// nightAnnouncementResetAtPrepareSiteBudget's own doc comment for why
+// that check happens here, in real wall-clock time, rather than through
+// ctx.
+func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, seen map[string]bool, budgetDeadline time.Time) (skipped int) {
+	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	if !ok {
+		return 0
+	}
+	for _, nodeID := range target.AudioNodeIDs {
+		skipped += h.nightResetAnnouncementNodeSessionOnce(ctx, now, rec, cue, nodeID, target.AudioSessionID, seen, budgetDeadline)
+	}
+	return skipped
+}
+
+// nightResetAnnouncementNodeSessionOnce is
+// [handlers.nightResetAnnouncementCueSessionOnce]'s own per-node body: one
+// (node, session) pair's own reset, skipped independently of every other
+// node's own outcome or budget standing.
+func (h *handlers) nightResetAnnouncementNodeSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, nodeID, sessionID string, seen map[string]bool, budgetDeadline time.Time) (skipped int) {
+	key := nodeID + "/" + sessionID
+	if seen[key] {
+		return 0
+	}
+	seen[key] = true
+
+	if !time.Now().Before(budgetDeadline) {
+		return 1
+	}
+
+	persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID)
+	clearRevision, _, _ := nightAnnouncementRevisions(persisted)
+	idemKey := fmt.Sprintf("night-prepare-site-reset:%s:%s:%s", rec.ID, nodeID, sessionID)
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.clear", NodeID: nodeID, SessionID: sessionID,
+		Params: map[string]any{
+			"sessionId": sessionID, "invocationId": idemKey, "revision": uint64(clearRevision),
+		},
+		Revision: uint64(clearRevision), IdempotencyKey: idemKey,
+		IssuerID: "night-controller", IssuerName: "night controller",
+	})
+	if err != nil {
+		h.logWarn("night loop: prepare-site: announcement session reset was not acknowledged", "sessionId", sessionID, "nodeId", nodeID, "cue", cue.Name, "error", err)
+		return
+	}
+	if problem != nil {
+		h.logWarn("night loop: prepare-site: announcement session reset was refused", "sessionId", sessionID, "nodeId", nodeID, "cue", cue.Name, "reason", problem.Detail)
+		return
+	}
+	if nightAudioCueOutcome(result.Outcome) != nightCueOutcomeConfirmed {
+		h.logWarn("night loop: prepare-site: announcement session reset did not confirm", "sessionId", sessionID, "nodeId", nodeID, "cue", cue.Name, "outcome", result.Outcome, "reason", result.Reason)
+	}
+	return 0
 }
 
 // nightResolveActiveConfigForGate is [handlers.resolveActiveNightSessionConfigTx]'s
@@ -704,7 +979,12 @@ func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time
 // stored readiness result the freshness check just accepted) refuses
 // start-night unless every withholding rule is covered by a valid,
 // authorized override in interlockOverrides.
-func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
+//
+// skipEnterShowLead, when true, is the operator's own request to start a
+// late night without waiting out the enterShow lead (see boundaryE
+// below): an announcement still dispatches, but the show itself launches
+// immediately rather than the usual lead later.
+func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		p := nightNotReadyProblem("start-night: no active preparation; run prepare-site, run-readiness, and start-preshow first")
 		return nightCommandOutcome{}, &p, nil
@@ -752,10 +1032,28 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		next.Cycle = current.Cycle + 1
 		next.ContentAnchorJSON = ""
 		// The first show of the night has no resting playback to lead
-		// from, so E is the moment this transition begins - written
-		// explicitly, never left for a fallback to reconstruct.
-		boundaryE := now
-		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &boundaryE, Reason: "content boundary E is this transition's own start; no resting playback preceded it"})
+		// from, so E is placed its own enterShow lead ahead of this
+		// transition's start (RESTING-MODE.md section 7.1's own rule,
+		// [nightEnterShowLeadMs]), never left at now itself - a night
+		// with no negatively offset enterShow cues still gets lead 0
+		// and launches immediately, unchanged. skipEnterShowLead is the
+		// operator's own request to skip that wait for a late start.
+		lead := time.Duration(nightEnterShowLeadMs(payload.EnterShow.Cues)) * time.Millisecond
+		if skipEnterShowLead {
+			lead = 0
+		}
+		boundaryE := now.Add(lead)
+		// LastTickAt is the clock-jump guard's own checkpoint
+		// (nightboundary.go's nightBoundary doc comment, nightloop.go's
+		// resync branch): it must read "now", the instant this was
+		// committed, never boundaryE itself - a future LastTickAt trips
+		// the guard's backstep check on the very next tick for any lead
+		// past nightClockBackstepTolerance, discarding this Reason for
+		// "resynchronized after a clock discontinuity" on a healthy
+		// clock.
+		lastTick := now
+		reason := fmt.Sprintf("content boundary E is this transition's own start plus its enterShow lead; no resting playback preceded it to lead from otherwise; show launch expected at %s", boundaryE.Format(time.RFC3339))
+		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: reason})
 		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
 		if len(gate.Overridden) > 0 {
 			out.auditParams = map[string]any{"interlockOverrides": nightInterlockOverrideAuditParams(gate.Overridden)}
@@ -773,6 +1071,69 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		p := nightNotReadyProblem("start-night: not ready; operator recovery completes readiness and invokes start-preshow first")
 		return nightCommandOutcome{}, &p, nil
 	}
+}
+
+// nightStartNightCommand is start-night's own top-level entry, mirroring
+// [handlers.nightPrepareSiteCommand] and [handlers.nightRunReadinessCommand]'s
+// own shape: it may dispatch live evidence, outside any store transaction,
+// before entering the transaction [handlers.nightRunGated] wraps
+// [handlers.nightStartNightTx] in.
+//
+// Ordinarily nothing here dispatches anything: no current session, every
+// state but preshow, a missing readiness result, a prior epoch's
+// readiness result, and an already-fresh readiness result are all still
+// decided entirely inside nightStartNightTx's own transaction, unchanged.
+// The one case this adds is a preshow epoch whose own trusted readiness
+// result has gone stale (age past h.nightReadinessMaxAge, and never the
+// negative-age clock-step case, which stays nightStartNightTx's own
+// refusal exactly as before), the bug this seam fixes: a pre-show of one
+// to two hours is the normal case, and refusing outright once a
+// maximum-age measured in minutes had passed made that normal case fail.
+// This runs a fresh run-readiness pass instead, live and outside this
+// transaction for the identical reason
+// [handlers.nightRunReadinessCommand]'s own doc comment gives, mirroring
+// exactly what an operator re-running run-readiness by hand before
+// retrying start-night would produce, including that command's own audit
+// entry and its own phase="run-readiness" interlock gate. A fresh pass
+// that itself refuses or errors is reported here as THAT failure, never
+// the staleness message it replaced; a fresh pass that succeeds leaves a
+// new, zero-age readiness result for nightStartNightTx's own unchanged
+// age and phase="start-night" gate checks to evaluate next.
+//
+// This pre-check reads current state and the stored readiness result
+// without a transaction, so a concurrent write can race it exactly the
+// way nightPrepareSiteTx's own doc comment already names and accepts:
+// nightStartNightTx re-reads both, inside its own transaction, before
+// acting on either.
+func (h *handlers) nightStartNightCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem, error) {
+	current, hasCurrent, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	if err != nil {
+		return nightCommandOutcome{}, nil, err
+	}
+	if hasCurrent && !current.Degraded && current.State == nightStatePreshow {
+		readiness, rerr := h.deps.NightSessions.GetLatestNightReadiness(ctx, current.ID)
+		switch {
+		case rerr == nil && readiness.EpochID == current.ID:
+			age := now.Sub(readiness.CompletedAt)
+			if age > 0 && age > h.nightReadinessMaxAge {
+				if _, problem, err := h.nightRunReadinessCommand(ctx, now, issuer, interlockOverrides, callerHasOverrideScope); err != nil {
+					return nightCommandOutcome{}, nil, err
+				} else if problem != nil {
+					return nightCommandOutcome{}, problem, nil
+				}
+			}
+		case rerr != nil && !errors.Is(rerr, store.ErrNightReadinessNotFound):
+			return nightCommandOutcome{}, nil, rerr
+		}
+	}
+
+	return h.nightRunGated(ctx, now, nightCommandStartNight, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
+			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
+			return nightCommandOutcome{}, &p, nil
+		}
+		return h.nightStartNightTx(ctx, tx, now, cur, interlockOverrides, callerHasOverrideScope, skipEnterShowLead)
+	})
 }
 
 func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
@@ -805,7 +1166,26 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 // path. It never reaches stopped on its own: stopped requires an issued
 // FPP stop and fresh idle evidence, which the night loop's own
 // fading-out tick owns (nightshutdown.go).
-func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, intent string) (store.NightSessionRecord, bool) {
+//
+// force, when true, skips the deferral entirely and always enters the
+// fade/shutdown path immediately, even from nightStateLive. The emergency-stop feature's own
+// emergency-stop level 2 is the one caller that sets it: RESTING-MODE.md's
+// own words ("Only an explicitly configured and invoked emergency/force
+// operation may interrupt playback or remove power immediately") and
+// end-session's existing precedent (nightEndSessionDecide, never deferred,
+// never interlocked) both already carve out exactly this case: an
+// operator's own explicit emergency command is what ADR-038 reserves the
+// exception for, and playout has already been stopped immediately by the
+// caller before this ever runs.
+//
+// Every call site passes [nightShutdownOrdinary] or [nightShutdownForced],
+// never a bare true/false literal. That is this repo's own convention for
+// a bool this shape (see callerHasOverrideScope, threaded through roughly
+// ten signatures in this same file and nightinterlock.go): a bare bool
+// TYPE, never a named bool type (none exists anywhere in this repo), but
+// always a named value at the call site, so a reader never has to look up
+// what a literal true or false means here.
+func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, intent string, force bool) (store.NightSessionRecord, bool) {
 	changed := false
 	if !rec.AdmissionClosed {
 		rec.AdmissionClosed = true
@@ -818,7 +1198,7 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 		changed = true
 	}
 
-	deferring := rec.State == nightStateLive || (rec.State == nightStateTransitionToShow && rec.ShowCommitted)
+	deferring := !force && (rec.State == nightStateLive || (rec.State == nightStateTransitionToShow && rec.ShowCommitted))
 	switch {
 	case rec.State == nightStateFadingOut || rec.State == nightStateStopped:
 		// Nothing left to fade.
@@ -883,7 +1263,7 @@ func (h *handlers) nightFadeOutNightCommand(ctx context.Context, now time.Time, 
 		})
 	}
 
-	_, changed := applyNightShutdownEffect(now, current, "fade-out")
+	_, changed := applyNightShutdownEffect(now, current, "fade-out", nightShutdownOrdinary)
 	var overrideAuditParams []map[string]any
 	if changed {
 		payload, err := h.getPinnedNightSessionPayload(ctx, current)
@@ -928,7 +1308,7 @@ func (h *handlers) nightFadeOutNightApply(current *store.NightSessionRecord, now
 	if current == nil {
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
-	next, changed := applyNightShutdownEffect(now, *current, "fade-out")
+	next, changed := applyNightShutdownEffect(now, *current, "fade-out", nightShutdownOrdinary)
 	if !changed {
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
@@ -973,16 +1353,16 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 	}
 	if !hasCurrent {
 		return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil)
+			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, nightShutdownOrdinary)
 		})
 	}
 	if current.State == nightStateStopped && current.PowerPhase != "" {
 		return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil)
+			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, nightShutdownOrdinary)
 		})
 	}
 
-	_, shutdownChanged := applyNightShutdownEffect(now, current, "power-down")
+	_, shutdownChanged := applyNightShutdownEffect(now, current, "power-down", nightShutdownOrdinary)
 	var overrideAuditParams []map[string]any
 	if shutdownChanged {
 		payload, err := h.getPinnedNightSessionPayload(ctx, current)
@@ -1008,7 +1388,7 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 	// nightPowerDownPresentationApply already recomputes fresh from
 	// whatever that state actually is.
 	return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, overrideAuditParams)
+		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, overrideAuditParams, nightShutdownOrdinary)
 	})
 }
 
@@ -1017,7 +1397,7 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 // been made by [handlers.nightPowerDownPresentationCommand] before this
 // runs. The PowerPhase resolution below is bookkeeping, not a dispatch,
 // and consults no interlock.
-func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord, now time.Time, overrideAuditParams []map[string]any) (nightCommandOutcome, *v1.Problem, error) {
+func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord, now time.Time, overrideAuditParams []map[string]any, force bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
@@ -1028,7 +1408,7 @@ func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *stor
 		// and must still be allowed through below to resolve it.
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
-	next, changed := applyNightShutdownEffect(now, *current, "power-down")
+	next, changed := applyNightShutdownEffect(now, *current, "power-down", force)
 	if next.State == nightStateStopped && next.PowerPhase == "" {
 		phase := "not_configured"
 		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil &&
@@ -1180,12 +1560,9 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 			ID: uuid.NewString(), SessionID: curTx.ID, EpochID: curTx.ID,
 			CompletedAt: now, Outcome: outcome, ChecksJSON: string(checksJSON),
 		}
-		if err := tx.CreateNightReadiness(ctx, rec); err != nil {
-			return nightCommandOutcome{}, nil, err
-		}
 		next := *curTx
 		next.ReadinessID = rec.ID
-		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update", readiness: &rec}
 		if len(overrideAuditParams) > 0 {
 			out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
 		}
@@ -1220,10 +1597,15 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 // (not_verifiable, excluded from outcome - see [nightCheckState]). None
 // of this touches the store transactionally; every read here is the
 // ordinary non-tx form.
+//
+// nightcatalogreadiness.go's own per-participating-node catalog-currency
+// check runs here too: every node holding an unacknowledged catalog
+// revision for the active show fails readiness, naming both revisions,
+// unless a deploy is currently held safely pending for it, in which case
+// it warns instead of failing.
 func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, payload config.NightSessionPayload, interlockChecks []nightReadinessCheck) ([]nightReadinessCheck, string) {
 	instanceIDs := map[string]bool{payload.ShowPlaylist.FPPInstanceID: true, payload.Resting.FPPInstanceID: true}
 	var checks []nightReadinessCheck
-	worst := nightHealthHealthy()
 	for id := range instanceIDs {
 		if id == "" {
 			continue
@@ -1264,6 +1646,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	for _, p := range restingPlaylists {
 		checks = append(checks, nightCheckRestingAssetExactVariant(p.prefix, p.playlist))
 	}
+	checks = append(checks, h.nightCheckCatalogCurrent(ctx, now, payload.Show)...)
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))
@@ -1283,14 +1666,27 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// Track F seam F5: resting.backgroundAudio's own readiness (RESTING-
 	// MODE.md §13), only when it is configured at all.
 	if ba := payload.Resting.BackgroundAudio; ba != nil {
-		checks = append(checks, h.nightCheckBackgroundAudioAssets(ctx, payload.Show, ba))
-		checks = append(checks, nightCheckBackgroundAudioItemTransition(ba))
-		checks = append(checks, nightCheckAudioOutputCapabilities(ba.OutputNodeID()))
+		checks = append(checks, h.nightCheckBackgroundAudioReadiness(ctx, now, payload.Show, ba)...)
 	}
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
 	checks = append(checks, nightCheckAnnouncementAssets(allCues))
 	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))
 
+	return checks, nightOutcomeFromChecks(checks)
+}
+
+// nightOutcomeFromChecks maps a computed checks list to the aggregate
+// NightReadiness.outcome string: the worst health among checks that
+// participate in the aggregate (nightHealthSeverity's own ranking; a
+// not_verifiable or not_configured check never participates, matching
+// nightComputeReadinessChecks' own prior behaviour before this was pulled
+// out as its own function), then straight to the wire vocabulary.
+// ready_with_warnings is degraded's own wire name: the night can still
+// start (only the epoch/freshness gate in nightStartNightCommand withholds
+// start-night, never outcome itself), but a real, non-blocking condition
+// wants an operator's eye rather than reading as fully healthy.
+func nightOutcomeFromChecks(checks []nightReadinessCheck) string {
+	worst := nightHealthHealthy()
 	for _, c := range checks {
 		if c.health == nightCheckStateNotVerifiable || c.health == nightCheckStateNotConfigured {
 			continue
@@ -1299,16 +1695,16 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 			worst = c.health
 		}
 	}
-	var outcome string
 	switch worst {
 	case nightHealthHealthy():
-		outcome = "ready"
+		return "ready"
 	case nightHealthUnknown():
-		outcome = "unknown"
+		return "unknown"
+	case nightHealthDegraded():
+		return "ready_with_warnings"
 	default:
-		outcome = "not_ready"
+		return "not_ready"
 	}
-	return checks, outcome
 }
 
 func nightHealthSeverity(h nightCheckState) int {
@@ -1441,7 +1837,16 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 
 // --- wire mapping ---
 
-func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, maxAge time.Duration) v1.NightSessionState {
+// current distinguishes the "current session" call sites (GET
+// /night/session, the SSE hub's nightSession.changed frame, and a night
+// command's own response) from GET /night/sessions/{id}: only the former
+// gate pinnedMaxGainDb to a running state. The by-id endpoint's whole
+// purpose is looking at a past night, so it reports that record's own
+// pinned ceiling regardless of state (owner ruling 2026-08-30) - the
+// dishonesty the gate prevents (a dead session's ceiling read back as if
+// it were live) cannot happen there, because the value is already scoped
+// to the specific record the caller asked for.
+func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, maxAge time.Duration, current bool) v1.NightSessionState {
 	out := v1.NightSessionState{
 		ID: rec.ID, ConfigObjectID: rec.ConfigObjectID, ConfigRevision: rec.ConfigRevision,
 		State: rec.State, StateEnteredAt: formatTime(rec.StateEnteredAt), Cycle: rec.Cycle,
@@ -1461,8 +1866,29 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
-	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec)
+	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
 	return out
+}
+
+// nightSessionIsRunning reports whether rec.State is one where the night
+// session is actually presenting, as opposed to "inactive" (no session),
+// "preparing" (site prep, before the session presents anything to an
+// audience), or "stopped" (the night has already ended). pinnedMaxGainDb
+// is gated on this only when current is true (mapNightBackgroundAudio):
+// the owner ruling (2026-08-28, refined 2026-08-30) is that the CURRENT-
+// session views never read back a stale ceiling as live once the night
+// has ended or before it has begun; GET /night/sessions/{id} has no such
+// gate, because that value is already scoped to the specific historical
+// record requested.
+func nightSessionIsRunning(state string) bool {
+	switch state {
+	case nightStatePreshow, nightStateTransitionToShow, nightStateLive,
+		nightStateTransitionToResting, nightStateRestingIntershow,
+		nightStateEndOfNightResting, nightStateFadingOut:
+		return true
+	default:
+		return false
+	}
 }
 
 // mapNightBackgroundAudio is RESTING-MODE.md section 14's own surface for
@@ -1472,7 +1898,19 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 // already follows. Empty Steps with State Recorded is a legitimate
 // reading (backgroundAudio not configured, or never started this
 // cycle), distinct from a read failure.
-func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightBackgroundAudio {
+//
+// pinnedMaxGainDb is a strictly additive field on top of that step log: a
+// failure reading it (or, when current, the session simply not being in a
+// running state) must never hide the step log an operator needs to see a
+// stuck or refused announcement clear - so unlike the two step-log reads
+// above, a pinnedMaxGainDb read failure stays State Recorded with the
+// steps already read, nil PinnedMaxGainDb, and its own Reason (found by
+// review: an earlier version flipped the whole block to Unknown on this
+// failure, which drops the entire step log an operator needs from an
+// unrelated config-read hiccup). current selects which of the two
+// endpoint behaviors applies to pinnedMaxGainDb - see
+// [mapNightSessionState]'s own doc comment.
+func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, current bool) v1.NightBackgroundAudio {
 	if rec.ID == "" {
 		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}}
 	}
@@ -1493,20 +1931,122 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	}
 	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
-		step, ok := nightParseBackgroundAudioRow(row)
+		step, nodeID, ok := nightParseBackgroundAudioRow(row)
 		if !ok {
 			continue
 		}
-		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceBackground, step.Kind))
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceBackground, step.Kind, nodeID))
 	}
 	for _, row := range announcementRows {
-		kind, ok := nightParseAnnouncementRow(row)
+		kind, nodeID, ok := nightParseAnnouncementRow(row)
 		if !ok {
 			continue
 		}
-		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind))
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind, nodeID))
 	}
-	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+	out = append(out, mapNightAnnouncementPrimaryApplySteps(ctx, deps, rec)...)
+
+	if current && !nightSessionIsRunning(rec.State) {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+	}
+
+	pinnedMaxGainDb, reason, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
+	if err != nil {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out}
+	}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
+}
+
+// nightPinnedBackgroundMaxGainDb reads rec's own pinned night.session
+// revision's resting.backgroundAudio.maxGainDb; it makes no judgment on
+// whether rec was ever the running session, so the caller decides that.
+// A nil gain with a non-empty reason and a nil error means the pinned
+// revision configures no background audio at all - not a read failure.
+func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) (gain *float64, reason string, err error) {
+	if rec.ConfigObjectID == "" {
+		return nil, "", nil
+	}
+	payload, err := nightPinnedNightSessionPayload(ctx, deps, rec)
+	if err != nil {
+		return nil, "", err
+	}
+	ba := payload.Resting.BackgroundAudio
+	if ba == nil {
+		return nil, "resting.backgroundAudio is not configured on this session's pinned night.session revision", nil
+	}
+	if ba.MediaPlaylist != "" {
+		mp, _, ok := nightResolveMediaPlaylist(ctx, deps, ba.MediaPlaylist)
+		if !ok {
+			return nil, fmt.Sprintf("referenced media.playlist %q is missing or has been deleted", ba.MediaPlaylist), nil
+		}
+		g := mp.MaxGainDb
+		return &g, "", nil
+	}
+	g := ba.MaxGainDb
+	return &g, "", nil
+}
+
+// mapNightAnnouncementPrimaryApplySteps mirrors each announcement cue's
+// own bound-action apply outcome - already recorded in cues[] via the
+// generic per-cue engine (nightRunCue), under no node suffix at all, for
+// reasons unrelated to this array (barrier satisfaction gates on that
+// same row) - into backgroundAudio.steps[], tagged with that action's
+// own FIRST target node. Owner ruling: every node a cue's own action
+// names, including its first, is answerable from backgroundAudio.steps[]
+// alone; this never dispatches anything, it only projects a row
+// [mapNightCues] and barrier evaluation already depend on, unchanged,
+// into this array too.
+func mapNightAnnouncementPrimaryApplySteps(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) []v1.NightBackgroundAudioStep {
+	if rec.ID == "" || rec.ConfigObjectID == "" {
+		return nil
+	}
+	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
+	if err != nil {
+		return nil
+	}
+	var payload config.NightSessionPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return nil
+	}
+	rows, err := deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
+	if err != nil {
+		return nil
+	}
+	byKey := make(map[string]store.NightCueOutboxRecord, len(rows))
+	for _, row := range rows {
+		byKey[row.Phase+"\x00"+row.CueName] = row
+	}
+
+	type phaseCues struct {
+		phase string
+		cues  []config.NightSessionCue
+	}
+	lists := []phaseCues{
+		{nightPhaseEnterShow, payload.EnterShow.Cues},
+		{nightPhaseEnterResting, payload.EnterResting.Cues},
+		// fadeOut replays the enterShow cue definitions under its own
+		// phase, mirroring mapNightCues' own appendDispatchedNightCues.
+		{nightPhaseFadeOut, payload.EnterShow.Cues},
+	}
+
+	var out []v1.NightBackgroundAudioStep
+	for _, list := range lists {
+		for _, cue := range list.cues {
+			if cue.Role != config.NightSessionCueRoleAnnouncement {
+				continue
+			}
+			row, has := byKey[list.phase+"\x00"+cue.Name]
+			if !has {
+				continue
+			}
+			action, _, err := nightResolveShowAction(ctx, deps.Config, cue.Action)
+			if err != nil || !nightAnnouncementTargetDeclarable(action.Target) || len(action.Target.AudioNodeIDs) == 0 {
+				continue
+			}
+			out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, nightAnnouncementStepApply, action.Target.AudioNodeIDs[0]))
+		}
+	}
+	return out
 }
 
 // mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read
@@ -1667,10 +2207,9 @@ func mapNightReadiness(ctx context.Context, deps Dependencies, rec store.NightSe
 // --- problems ---
 
 const (
-	ProblemTypeNightNotReady         = problemBaseURI + "night-not-ready"
-	ProblemTypeNightStateRejected    = problemBaseURI + "night-state-rejected"
-	ProblemTypeNightAmbiguous        = problemBaseURI + "night-ambiguous"
-	ProblemTypeNightAuditUnavailable = problemBaseURI + "night-command-refused-audit-unavailable"
+	ProblemTypeNightNotReady      = problemBaseURI + "night-not-ready"
+	ProblemTypeNightStateRejected = problemBaseURI + "night-state-rejected"
+	ProblemTypeNightAmbiguous     = problemBaseURI + "night-ambiguous"
 )
 
 // nightNotReadyProblem is showmeshctl's exitNightNotReady (26).
@@ -1841,9 +2380,9 @@ func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, r
 
 // nightMapAudioStep is one durable audio step's wire shape, shared by the
 // background-audio and announcement-session sequences.
-func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind string) v1.NightBackgroundAudioStep {
+func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind, nodeID string) v1.NightBackgroundAudioStep {
 	return v1.NightBackgroundAudioStep{
-		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, Kind: kind,
+		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, NodeID: nodeID, Kind: kind,
 		ActionRevision: row.ActionRevision,
 		State:          row.State, Outcome: row.Outcome, Reason: row.OutcomeReason,
 		DispatchedAt: formatTimePtr(row.DispatchedAt), ResolvedAt: formatTimePtr(row.ResolvedAt),

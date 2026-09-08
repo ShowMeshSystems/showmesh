@@ -1,3 +1,4 @@
+import type { Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ApiStore } from './store'
 import { getStoredToken, setStoredToken } from './token'
@@ -13,6 +14,8 @@ import {
 } from './test-support/test-server'
 import {
   makeAuthenticatedSession,
+  makeCurrentRuns,
+  makeCurrentRunsChangedEvent,
   makeEvent,
   makeEventsResponse,
   makeFPPInstance,
@@ -27,10 +30,11 @@ import {
 import {
   makeRemote01Instance,
   makeRemote04Instance,
-} from '../app/test-support/fppFleetFixtures'
+} from './test-support/fppFleetFixtures'
 import type { components } from './generated/schema'
 
 type Evidence = components['schemas']['Evidence']
+type AuditStoreStatus = components['schemas']['AuditStoreStatus']
 
 // A fast backoff schedule for tests only (spec section 5.4 allows this:
 // it is a timing knob on our own client, not a mock of the transport —
@@ -700,6 +704,7 @@ describe('ApiStore: supplementary coverage', () => {
     // the freshly fetched page, instead of reconciling by seq, is
     // exactly the defect this test is written to catch.
     let streamAttempt = 0
+    let firstStreamSocket: Socket | undefined
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
@@ -712,15 +717,13 @@ describe('ApiStore: supplementary coverage', () => {
           snapshotRequired: true,
         })
         if (thisAttempt === 1) {
+          firstStreamSocket = req.socket
           setTimeout(() => {
             writeSSEFrame(res, 'event.recorded', {
               serverTime: new Date().toISOString(),
               event: makeEvent(2, { summary: 'live, seen before the reconnect' }),
             })
           }, 20)
-          setTimeout(() => {
-            req.socket.destroy()
-          }, 60)
         }
         return
       }
@@ -745,6 +748,11 @@ describe('ApiStore: supplementary coverage', () => {
     await waitFor(() => store.getSnapshot().events.some((e) => e.seq === 2), {
       message: 'the live event.recorded frame before the reconnect was never applied',
     })
+
+    // Drop the connection only now that the live frame is demonstrably
+    // applied, so the reconnect can never race the frame's own arrival.
+    firstStreamSocket?.destroy()
+
     await waitFor(() => streamAttempt >= 2, { message: 'store never reconnected' })
     await waitFor(() => store.getSnapshot().connection.kind === 'live', {
       message: 'store never returned to live after reconnect',
@@ -1411,6 +1419,106 @@ describe('ApiStore: stream idle timeout (D2)', () => {
   })
 })
 
+describe('ApiStore: auditStore stays live on an open connection (ADR-024 decision 11 amendment)', () => {
+  it('re-fetches the snapshot on its own poll interval and updates only auditStore', async () => {
+    // auditStore carries no change-stream event of its own (store.ts's
+    // own AUDIT_STORE_POLL_INTERVAL_MS doc comment), so a dashboard left
+    // open on one long-lived connection would otherwise show whatever
+    // value was current at connect time, indefinitely - this is the
+    // proof that a client-side poll keeps it live instead.
+    let snapshotAttempt = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        snapshotAttempt += 1
+        // The FIRST snapshot (stream.start's own reloadSnapshot) reports
+        // usable; the poll's own re-fetch reports unusable - the model
+        // must show the LATER value, proving the poll actually landed,
+        // not merely that a fetch happened.
+        const auditStore: AuditStoreStatus =
+          snapshotAttempt === 1 ? { state: 'usable', reason: null } : { state: 'unusable', reason: 'disk full' }
+        respondJson(res, 200, makeSnapshot({ auditStore }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    // A FakeClock (test-support/fake-clock.ts): the poll interval is a
+    // virtual deadline this test advances itself, exactly like D2's own
+    // idle-timeout tests above, so this cannot flake on real scheduling
+    // delay.
+    const clock = new FakeClock()
+    const store = makeStore(s.baseUrl, { clock, auditStorePollIntervalMs: 30 })
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    expect(store.getSnapshot().auditStore).toEqual({ state: 'usable', reason: null })
+
+    clock.advance(30)
+
+    await waitFor(() => store.getSnapshot().auditStore?.state === 'unusable', {
+      message: 'the audit-store poll never landed its own re-fetch',
+    })
+    expect(store.getSnapshot().auditStore).toEqual({ state: 'unusable', reason: 'disk full' })
+    // Nothing else on the model moved: the poll must fold in ONLY
+    // auditStore, never re-run the full applySnapshot merge.
+    expect(snapshotAttempt).toBe(2)
+  })
+
+  it('stops polling once the store is disposed', async () => {
+    let snapshotAttempt = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        snapshotAttempt += 1
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const clock = new FakeClock()
+    const store = makeStore(s.baseUrl, { clock, auditStorePollIntervalMs: 30 })
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    const attemptsBeforeDispose = snapshotAttempt
+    store.dispose()
+    clock.advance(30)
+    // No waitFor to satisfy here on purpose: this proves an ABSENCE (no
+    // further fetch), so this test asserts on a settled state rather than
+    // racing a condition that is never expected to become true.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(snapshotAttempt).toBe(attemptsBeforeDispose)
+  })
+})
+
 describe('ApiClient: a request that never gets a response times out and is retried, not hung forever (D2)', () => {
   it('treats a request timeout as a normal retryable failure', async () => {
     let streamAttempt = 0
@@ -1860,6 +1968,7 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
     }
 
     let streamAttempt = 0
+    let firstStreamSocket: Socket | undefined
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
         streamAttempt += 1
@@ -1872,6 +1981,7 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
           snapshotRequired: true,
         })
         if (thisAttempt === 1) {
+          firstStreamSocket = req.socket
           setTimeout(() => {
             writeSSEFrame(res, 'fpp.observations.changed', {
               serverTime: new Date().toISOString(),
@@ -1880,11 +1990,6 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
               removed: [],
             })
           }, 20)
-          setTimeout(() => {
-            // No closing frame at all -- an ordinary interruption per
-            // api/openapi.yaml's /stream description.
-            req.socket.destroy()
-          }, 50)
         }
         return
       }
@@ -1906,6 +2011,12 @@ describe('ApiStore: observation deltas (ADR-023)', () => {
       () => findSignal(findInstance(store, 'fpp-fleet')?.observations ?? [], 'fpp.uptime.seconds')?.value === deltaValueBeforeDrop,
       { message: 'the pre-drop delta was never applied' },
     )
+
+    // Drop the connection only now that the delta is demonstrably applied --
+    // no closing frame at all, an ordinary interruption per
+    // api/openapi.yaml's /stream description -- so the reconnect can never
+    // race the delta's own arrival.
+    firstStreamSocket?.destroy()
 
     await waitFor(() => streamAttempt >= 2, { message: 'store never reconnected' })
     await waitFor(() => store.getSnapshot().connection.kind === 'live', {
@@ -2590,6 +2701,106 @@ describe('ApiStore: Step 7 seam A configuration (RES-008 D1)', () => {
   })
 })
 
+// ADR-048: the fallback-program readiness reads.
+// Both are plain ApiClient.getJson pass-throughs, same as
+// getFPPEndpointsConfig above, so they are proven the same way. Neither
+// touches store.connect() / the SSE read loop.
+describe('ApiStore: fallback programs (ADR-048, Track J’s J1)', () => {
+  it('listFallbackPrograms() GETs /fallback-programs and returns the decoded list', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        programs: [
+          {
+            fppInstanceUuid: 'uuid-1',
+            packageId: 'pkg-1',
+            revision: 'rev-1',
+            show: 'demo',
+            generation: 3,
+            expiresAt: '2026-09-02T00:00:00Z',
+            compiledAt: '2026-09-01T00:00:00Z',
+          },
+        ],
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.listFallbackPrograms()
+
+    expect(gotPath).toBe('/fallback-programs')
+    expect(resp.programs).toHaveLength(1)
+    expect(resp.programs[0]?.fppInstanceUuid).toBe('uuid-1')
+    expect(resp.programs[0]?.packageId).toBe('pkg-1')
+  })
+
+  it('listFallbackPrograms() rejects with a typed error on 404 (older coordinator, route unknown)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 404, makeProblem({
+        type: 'https://showmesh.dev/problems/resource-not-found', status: 404,
+        detail: 'no such route',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.listFallbackPrograms()).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('getFallbackProgram() GETs /fallback-programs/{fppInstanceId} and returns the decoded response', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        fppInstanceUuid: 'uuid-1',
+        published: true,
+        signatureBase64: 'c2ln',
+        acknowledgedStatus: 'fallback-program-current',
+        acknowledgedPackageId: 'pkg-1',
+        acknowledgedAt: '2026-09-01T00:05:00Z',
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.getFallbackProgram('uuid-1')
+
+    expect(gotPath).toBe('/fallback-programs/uuid-1')
+    expect(resp.published).toBe(true)
+    expect(resp.acknowledgedStatus).toBe('fallback-program-current')
+  })
+
+  it('getFallbackProgram() encodes the instance id in the path', async () => {
+    let gotPath = ''
+    const s = await server((req, res) => {
+      gotPath = req.url ?? ''
+      respondJson(res, 200, {
+        serverTime: new Date().toISOString(),
+        fppInstanceUuid: 'uuid with space',
+        published: false,
+        acknowledgedStatus: 'fallback-program-unacknowledged',
+      })
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.getFallbackProgram('uuid with space')
+
+    expect(gotPath).toBe('/fallback-programs/uuid%20with%20space')
+  })
+
+  it('getFallbackProgram() rejects with a typed error on 403 (fpp:fallback is admin/scheduler only)', async () => {
+    const s = await server((_req, res) => {
+      respondProblem(res, 403, makeProblem({
+        type: 'https://showmesh.dev/problems/forbidden', status: 403,
+        detail: 'missing scope fpp:fallback',
+      }))
+    })
+    const store = makeStore(s.baseUrl)
+
+    await expect(store.getFallbackProgram('uuid-1')).rejects.toMatchObject({ status: 403 })
+  })
+})
+
 // Track D seam D-2a (ADR-032): getResolumeComposition is a plain
 // ApiClient.getJson pass-through, same as getFPPEndpointsConfig above, so
 // it is proven the same way. uploadResolumeComposition is NOT — it
@@ -3086,6 +3297,76 @@ describe('ApiStore: Step 7 seam C — stopFPPPlaylist (this application\'s first
   })
 })
 
+describe('ApiStore: dispatchNightCommand skipEnterShowLead (RESTING-MODE.md §7.1)', () => {
+  function nightCommandResponse(command: string) {
+    return {
+      serverTime: '2026-08-12T22:00:00Z',
+      command: { command, outcome: 'applied', attributionDegraded: false },
+      session: {},
+    }
+  }
+
+  it('sends skipEnterShowLead: true on start-night when requested', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/start-night' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('start-night'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('start-night', undefined, undefined, true)
+    expect(gotBody.skipEnterShowLead).toBe(true)
+  })
+
+  it('sends no skipEnterShowLead field on start-night when not requested', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/start-night' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('start-night'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('start-night', undefined, undefined, false)
+    expect('skipEnterShowLead' in gotBody).toBe(false)
+  })
+
+  it('never sends skipEnterShowLead for a command other than start-night, even when true', async () => {
+    let gotBody: { skipEnterShowLead?: boolean } = {}
+    const s = await server((req, res) => {
+      if (req.url === '/night/commands/end-session' && req.method === 'POST') {
+        void (async () => {
+          const chunks: Buffer[] = []
+          for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+          gotBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+          respondJson(res, 200, nightCommandResponse('end-session'))
+        })()
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    await store.dispatchNightCommand('end-session', undefined, undefined, true)
+    expect('skipEnterShowLead' in gotBody).toBe(false)
+  })
+})
+
 // Step 8, ADR-015: FPPCommandRequest.params used to be generated as
 // Record<string, never> (api/openapi.yaml declared it as a bare object
 // with no JSON Schema `properties`), a type no non-empty object
@@ -3148,6 +3429,74 @@ describe('FPPCommandRequest params (type-level only, Step 8/ADR-015)', () => {
       params: { paylist: 'showmesh-test', repeat: false, ifBusy: 'refuse' },
     }
     expect(misspelled.action).toBe('startPlaylist')
+  })
+})
+
+describe('ApiStore: current runner playback', () => {
+  it('fetches GET /current-runs after the baseline and applies concurrent runners', async () => {
+    let stream: import('node:http').ServerResponse | null = null
+    const current = makeCurrentRuns({
+      runs: [
+        makeCurrentRuns().runs[0]!,
+        { ...makeCurrentRuns().runs[0]!, id: 'run-audio-1', runner: 'showmesh-audio' },
+      ],
+    })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        stream = res
+        writeSSEFrame(res, 'stream.start', { streamId: 's1', apiVersion: 1, serverTime: '2026-08-11T12:00:00.000Z', snapshotRequired: true })
+      } else if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+      } else if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+      } else if (req.url === '/current-runs') {
+        respondJson(res, 200, current)
+      } else if (req.url === '/session') {
+        respondJson(res, 200, makeSessionResponse())
+      } else {
+        res.writeHead(404).end()
+      }
+    })
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().currentRuns?.runs.length === 2)
+
+    expect(s.requestsFor('/current-runs')).toHaveLength(1)
+    expect(store.getSnapshot().currentRuns?.runs.map((run) => run.runner)).toEqual(['fpp', 'showmesh-audio'])
+    expect(stream).not.toBeNull()
+  })
+
+  it('replaces current playback from a currentRuns.changed full frame', async () => {
+    let stream: import('node:http').ServerResponse | null = null
+    const initial = makeCurrentRuns()
+    const changed = makeCurrentRunsChangedEvent({ runs: [], activeShow: { configured: false, show: null, generation: null } })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        stream = res
+        writeSSEFrame(res, 'stream.start', { streamId: 's1', apiVersion: 1, serverTime: '2026-08-11T12:00:00.000Z', snapshotRequired: true })
+      } else if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+      } else if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+      } else if (req.url === '/current-runs') {
+        respondJson(res, 200, initial)
+      } else if (req.url === '/session') {
+        respondJson(res, 200, makeSessionResponse())
+      } else {
+        res.writeHead(404).end()
+      }
+    })
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().currentRuns !== null)
+    if (stream === null) throw new Error('stream was not opened')
+    writeSSEFrame(stream, 'currentRuns.changed', changed)
+    await waitFor(() => store.getSnapshot().currentRuns?.runs.length === 0)
+    expect(store.getSnapshot().currentRuns?.activeShow.configured).toBe(false)
   })
 })
 
@@ -3414,6 +3763,135 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     })
   })
 
+  it('applies a resolumeRecovery.changed frame as a whole-object replace of model.resolumeRecovery', async () => {
+    const changed = {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      resolumeConfigured: true,
+      autoRestoreEnabled: true,
+      autoRestoreConfigured: true,
+      settleDelaySeconds: 5,
+      record: [{ layer: 'Base', layerNameGenerated: false, state: 'dark' as const }],
+      lastRestore: {
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        trigger: 'automatic' as const,
+        outcome: 'restored' as const,
+        principal: 'coordinator',
+        layers: [],
+        omittedLayerCount: 0,
+      },
+    }
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'resolumeRecovery.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+
+    // Model.resolumeRecovery is not part of Snapshot (unlike resolume/fpp)
+    // — this asserts the "before the first live frame" state a view
+    // relies on for its own REST fallback (screens/ResolumeConfig.tsx).
+    expect(store.getSnapshot().resolumeRecovery).toBeNull()
+
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().resolumeRecovery?.lastRestore?.outcome === 'restored', {
+      message: 'resolumeRecovery.changed was never applied to the model',
+    })
+
+    expect(store.getSnapshot().resolumeRecovery).toEqual({
+      serverTime: changed.serverTime,
+      resolumeConfigured: changed.resolumeConfigured,
+      autoRestoreEnabled: changed.autoRestoreEnabled,
+      autoRestoreConfigured: changed.autoRestoreConfigured,
+      settleDelaySeconds: changed.settleDelaySeconds,
+      record: changed.record,
+      lastRestore: changed.lastRestore,
+    })
+  })
+
+  it('a stream.reset clears model.resolumeRecovery back to null, matching model.nightSession', async () => {
+    const changed = {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      resolumeConfigured: true,
+      autoRestoreEnabled: true,
+      autoRestoreConfigured: true,
+      settleDelaySeconds: 5,
+      record: [] as unknown[],
+      lastRestore: null,
+    }
+    let streamRes = null as import('node:http').ServerResponse | null
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamRes = res
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'resolumeRecovery.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().resolumeRecovery !== null, {
+      message: 'resolumeRecovery.changed was never applied to the model',
+    })
+
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'stream.reset', {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      reason: 'subscriber_too_slow',
+      snapshotRequired: true,
+    })
+
+    await waitFor(() => store.getSnapshot().resolumeRecovery === null, {
+      message: 'stream.reset did not clear model.resolumeRecovery',
+    })
+  })
+
   it('applies an fppPlaylistEntry.changed frame as a whole-object replace of the named instance in model.fppPlaylistEntryObservations', async () => {
     const observation = makeFPPPlaylistEntryObservation({
       instanceUuid: 'fpp-uuid-1',
@@ -3602,5 +4080,77 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     const resp = await store.submitMacroRun('begin-set')
     expect(resp.run.id).toBe('run-new')
     expect(store.getSnapshot().macroRuns.some((r) => r.id === 'run-new')).toBe(true)
+  })
+})
+
+describe('ApiStore: exact int64 audio session revisions', () => {
+  /**
+   * The defect this guards: a cue-activation session's desired_revision
+   * is UnixNano-scale and exceeds Number.MAX_SAFE_INTEGER. Sending it as
+   * a JS `number` either rounds it or (via a naive JSON.stringify of a
+   * bigint) throws; the wire contract (api/openapi.yaml: `revision`,
+   * `format: int64`) needs a bare, exact JSON number literal.
+   */
+  it('pauseAudioSession() sends an oversized revision as a bare, exact JSON number literal, never a rounded number or a quoted string', async () => {
+    const bigRevision = 1788358834726046721n
+    let gotBody = ''
+    const s = await server((req, res) => {
+      void (async () => {
+        const chunks: Buffer[] = []
+        for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk)
+        gotBody = Buffer.concat(chunks).toString('utf-8')
+        respondJson(res, 200, {
+          command: {
+            commandId: 'c1',
+            idempotencyKey: 'k1',
+            action: 'audio.session.pause',
+            nodeId: 'audio-node-01',
+            sessionId: 'cue-activation:show',
+            replay: false,
+            outcome: 'started',
+            reason: '',
+            dispatchedAt: null,
+            resolvedAt: null,
+            attributionDegraded: false,
+          },
+        })
+      })()
+    })
+    const store = makeStore(s.baseUrl)
+
+    await store.pauseAudioSession('audio-node-01', 'cue-activation:show', bigRevision)
+
+    expect(gotBody).toContain(`"revision":${bigRevision.toString()}`)
+    expect(gotBody).not.toContain(`"revision":"${bigRevision.toString()}"`)
+  })
+
+  /**
+   * The other half of the defect: `response.json()` rounds an oversized
+   * integer the moment it parses it, before the UI ever sees it. This
+   * asserts listObservations() preserves the exact digits instead,
+   * matching what was actually observed on a rehearsal coordinator.
+   */
+  it('listObservations() preserves an observed desired_revision beyond Number.MAX_SAFE_INTEGER as an exact decimal string', async () => {
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/observations')) {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'ShowMesh-API-Version': '1' })
+        // Spliced in as raw text: 1788358834726046720 would already round
+        // to a different double the moment it is written as a JS number
+        // literal in this test file, before the response is ever sent.
+        res.end(
+          '{"observations":[{"resource":{"kind":"audio_session","id":"cue-activation:show"},' +
+            '"signal":"audio_session.desired_revision","value":1788358834726046720,"unit":null,' +
+            '"state":"current","reason":null,"observedAt":"2026-09-01T21:00:00Z",' +
+            '"collectedAt":"2026-09-01T21:00:00Z","source":"agent","quality":"direct","validForSeconds":null}]}',
+        )
+        return
+      }
+      res.writeHead(404).end()
+    })
+    const store = makeStore(s.baseUrl)
+
+    const resp = await store.listObservations('audio_session')
+
+    expect(resp.observations[0]?.value).toBe('1788358834726046720')
   })
 })

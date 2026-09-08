@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -66,6 +67,7 @@ func (s *svc) WriteAudit(ctx context.Context, entry AuditEntry) error {
 		OutcomeState:   entry.OutcomeState,
 		OutcomeReason:  entry.OutcomeReason,
 	})
+	s.recordAuditWriteOutcome(err)
 	if err != nil {
 		return fmt.Errorf("identity: write audit: %w", err)
 	}
@@ -89,10 +91,10 @@ func (s *svc) WriteAudit(ctx context.Context, entry AuditEntry) error {
 // composing store.Store.InTx and a raw store.Tx.AppendAuditEntry call
 // itself each time.
 func (s *svc) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) (AuditEntry, error)) error {
-	return s.st.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
-		entry, err := fn(ctx, tx)
-		if err != nil {
-			return err
+	err := s.st.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		entry, ferr := fn(ctx, tx)
+		if ferr != nil {
+			return ferr
 		}
 
 		paramsJSON := "{}"
@@ -128,6 +130,95 @@ func (s *svc) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx 
 		}
 		return nil
 	})
+	return s.classifyAuditedWriteResult(err)
+}
+
+// classifyAuditedWriteResult updates the [Service.AuditWriteStatus] latch
+// from AuditedWrite's own [store.Store.InTx] result and returns the error
+// AuditedWrite's caller sees. Two review findings on the same task fixed
+// together here:
+//
+//   - the latch used to flip to "usable" INSIDE the InTx closure, before
+//     COMMIT had actually run, so a commit failure left the latch
+//     claiming health at the exact moment the row was lost. It is set
+//     only from InTx's own return value now, which is not known until
+//     after COMMIT has actually been attempted.
+//   - a commit failure ([store.ErrCommitFailed], returned when the
+//     append above already succeeded inside the transaction but COMMIT
+//     itself then failed, e.g. a disk that fills between the last write
+//     and the fsync COMMIT performs) used to fall through to this
+//     package's generic error path, invisible to every caller's
+//     `errors.Is(err, identity.ErrAuditWrite)` check, so ADR-024
+//     decision 11's own callers (actioninvoke.go and friends) refused the
+//     action on this failure mode even after they stopped refusing on a
+//     plain append failure. A commit failure after a successful append
+//     is the SAME "could not be attributed" fact decision 11 already
+//     reasons about, just caught one step later, so it is now wrapped in
+//     ErrAuditWrite too.
+//
+// fn's own business error (anything that is neither of the two cases
+// above) never touches the latch: it never reached the append at all, so
+// it says nothing about whether the audit store itself is writable; see
+// [svc.recordAuditWriteOutcome]'s own doc comment for the identical
+// reasoning applied to its two call sites.
+func (s *svc) classifyAuditedWriteResult(err error) error {
+	switch {
+	case err == nil:
+		s.recordAuditWriteOutcome(nil)
+		return nil
+	case errors.Is(err, store.ErrCommitFailed):
+		// Two %w verbs, not %v: keeps both ErrAuditWrite and the wrapped
+		// store.ErrCommitFailed reachable via errors.Is. Go 1.20+
+		// fmt.Errorf supports more than one %w.
+		wrapped := fmt.Errorf("%w: %w", ErrAuditWrite, err)
+		s.recordAuditWriteOutcome(wrapped)
+		return wrapped
+	case errors.Is(err, ErrAuditWrite):
+		s.recordAuditWriteOutcome(err)
+		return err
+	default:
+		return err
+	}
+}
+
+// recordAuditWriteOutcome updates the state [Service.AuditWriteStatus]
+// reports from the outcome of an actual audit_log append attempt. The
+// only two call sites are [svc.WriteAudit] and [svc.AuditedWrite]'s own
+// append step above, deliberately never AuditedWrite's fn: fn's error is
+// the caller's own business-logic failure, not a fact about whether the
+// audit store itself is writable, and conflating the two would report
+// "audit unusable" for e.g. a duplicate-key business error that never
+// touched audit_log at all.
+func (s *svc) recordAuditWriteOutcome(err error) {
+	s.auditWriteMu.Lock()
+	defer s.auditWriteMu.Unlock()
+	if err != nil {
+		s.auditWriteState = "unusable"
+		s.auditWriteReason = fmt.Sprintf("the coordinator's most recent attempt to write an audit_log entry failed: %v", err)
+		return
+	}
+	s.auditWriteState = "usable"
+	s.auditWriteReason = ""
+}
+
+// AuditWriteStatus implements [Service.AuditWriteStatus]: a real probe
+// write against audit_log (store.Store.ProbeAuditWrite, always rolled
+// back), computed fresh on every call rather than read from
+// [svc.recordAuditWriteOutcome]'s own latch. A review finding on this
+// task's own change named the latch's failure mode directly: with no
+// real command traffic to update it, a store that fails between two
+// snapshot polls (the middle of the night, an idle coordinator) would
+// otherwise keep reporting the LAST latched value indefinitely, an
+// ADR-011 "stale evidence read as healthy" case in exactly the surface
+// meant to catch it. The probe's own result also updates the latch, so
+// [AuditedWrite]/[WriteAudit] callers checking immediately afterward see
+// the same answer this method would give right now.
+func (s *svc) AuditWriteStatus(ctx context.Context) (state, reason string) {
+	err := s.st.ProbeAuditWrite(ctx)
+	s.recordAuditWriteOutcome(err)
+	s.auditWriteMu.Lock()
+	defer s.auditWriteMu.Unlock()
+	return s.auditWriteState, s.auditWriteReason
 }
 
 // ListAudit returns audit entries after since (the id [AuditEntry.ID]

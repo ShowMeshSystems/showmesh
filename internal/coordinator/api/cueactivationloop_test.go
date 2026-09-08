@@ -311,11 +311,11 @@ func simulateNodeAudioSessionRevision(t *testing.T, activationID string, evidenc
 // plain uint64 column, set directly from the Go value this seam computed
 // (persistAudioSessionDesiredState's in.Revision, audiodispatch.go), so
 // reading it back here is the precise value actually dispatched.
-func dispatchedAudioStopRevision(t *testing.T, st *store.Store) uint64 {
+func dispatchedAudioStopRevision(t *testing.T, st *store.Store, nodeID string) uint64 {
 	t.Helper()
-	rec, err := st.GetAudioSession(context.Background(), blackAndSilenceAudioSessionID)
+	rec, err := st.GetAudioSession(context.Background(), nodeID, blackAndSilenceAudioSessionID)
 	if err != nil {
-		t.Fatalf("get audio session %q: %v", blackAndSilenceAudioSessionID, err)
+		t.Fatalf("get audio session %q for node %q: %v", blackAndSilenceAudioSessionID, nodeID, err)
 	}
 	return rec.Revision
 }
@@ -339,6 +339,7 @@ func TestDispatchBlackAndSilenceAudioStopSurvivesNodeClockAheadOfCoordinator(t *
 
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 	act.EvidenceAt = nodeClockEvidenceAt
 	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
@@ -352,7 +353,7 @@ func TestDispatchBlackAndSilenceAudioStopSurvivesNodeClockAheadOfCoordinator(t *
 	// cue.activate command row on file for this node — exactly what
 	// dispatchBlackAndSilenceAudioStop now reads back to compensate for
 	// the node's ahead-of-coordinator clock.
-	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if activateOutcome.Err != nil || !activateOutcome.Confirmed {
 		t.Fatalf("dispatchOneCueActivation: outcome = %+v", activateOutcome)
 	}
@@ -362,7 +363,7 @@ func TestDispatchBlackAndSilenceAudioStopSurvivesNodeClockAheadOfCoordinator(t *
 	// condition that left the old bare-now derivation refused as stale.
 	h.dispatchBlackAndSilence(context.Background(), now, []string{nodeID}, issuer, "skew-episode-1")
 
-	stopRevision := dispatchedAudioStopRevision(t, setup.st)
+	stopRevision := dispatchedAudioStopRevision(t, setup.st, nodeID)
 
 	rs := simulateNodeAudioSessionRevision(t, act.ActivationID, nodeClockEvidenceAt)
 	decision := rs.Apply(pkgaudio.InvocationID("stop-invocation"), pkgaudio.Revision(stopRevision))
@@ -382,6 +383,7 @@ func TestDispatchBlackAndSilenceAudioStopOrdinaryCoordinatorClockAhead(t *testin
 
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 	act.EvidenceAt = nodeClockEvidenceAt
 	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
@@ -391,14 +393,14 @@ func TestDispatchBlackAndSilenceAudioStopOrdinaryCoordinatorClockAhead(t *testin
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	activateOutcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if activateOutcome.Err != nil || !activateOutcome.Confirmed {
 		t.Fatalf("dispatchOneCueActivation: outcome = %+v", activateOutcome)
 	}
 
 	h.dispatchBlackAndSilence(context.Background(), now, []string{nodeID}, issuer, "ordinary-episode-1")
 
-	stopRevision := dispatchedAudioStopRevision(t, setup.st)
+	stopRevision := dispatchedAudioStopRevision(t, setup.st, nodeID)
 
 	rs := simulateNodeAudioSessionRevision(t, act.ActivationID, nodeClockEvidenceAt)
 	decision := rs.Apply(pkgaudio.InvocationID("stop-invocation"), pkgaudio.Revision(stopRevision))
@@ -510,7 +512,7 @@ func TestDispatchOneCueActivationAssetMissingNamesTheSequenceAndAsset(t *testing
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}
@@ -545,3 +547,127 @@ func TestDispatchOneCueActivationAssetMissingNamesTheSequenceAndAsset(t *testing
 		t.Fatal("no refused cue.activate audit entry was written")
 	}
 }
+
+// --- nextPlaylistEntryCueID ---
+
+func putThreeEntryPlaylistForNextEntryTest(t *testing.T, st *store.Store) {
+	t.Helper()
+	putPlaylistForTest(t, st, "playlist-1", config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-1", Cue: "cue-1"},
+			{ID: "entry-2", Cue: "cue-2"},
+			{ID: "entry-3", Cue: "cue-3"},
+		},
+	})
+}
+
+// TestNextPlaylistEntryCueIDFindsTheNextEntry proves the coordinator's own
+// ordered lookup a node's flat, unordered catalog cannot derive itself:
+// given the entry a Cue is currently activating from, it returns the
+// CueID of the entry immediately after it, in Playlist order.
+func TestNextPlaylistEntryCueIDFindsTheNextEntry(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "entry-2")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if !ok || cueID != "cue-3" {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, %v), want (\"cue-3\", true)", cueID, ok)
+	}
+}
+
+// TestNextPlaylistEntryCueIDNoNextOnLastEntry proves the last entry in a
+// Playlist reports ok=false, not an error: there is genuinely nothing to
+// prepare ahead when the show is about to end.
+func TestNextPlaylistEntryCueIDNoNextOnLastEntry(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "entry-3")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if ok {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, true), want ok=false (entry-3 is this Playlist's own last entry)", cueID)
+	}
+}
+
+// TestNextPlaylistEntryCueIDSkipsWhenEntryIDEmpty proves an empty entryID
+// — a directly-activated announcement, or a safeCue mismatch fallback,
+// neither of which advances through an ordered Playlist (cueactivate/
+// decide.go's own resolveActivationsForCue) — never looks anything up and
+// never errors.
+func TestNextPlaylistEntryCueIDSkipsWhenEntryIDEmpty(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if ok {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, true), want ok=false for an empty entryID", cueID)
+	}
+}
+
+// TestNextPlaylistEntryCueIDUnknownEntryID proves an entryID this
+// Playlist revision does not contain reports ok=false, not an error —
+// mirrors TestNextPlaylistEntryCueIDNoNextOnLastEntry one case over.
+func TestNextPlaylistEntryCueIDUnknownEntryID(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	putThreeEntryPlaylistForNextEntryTest(t, setup.st)
+
+	cueID, ok, err := nextPlaylistEntryCueID(context.Background(), setup.st, "playlist-1", 1, "entry-does-not-exist")
+	if err != nil {
+		t.Fatalf("nextPlaylistEntryCueID: %v", err)
+	}
+	if ok {
+		t.Fatalf("nextPlaylistEntryCueID = (%q, true), want ok=false for an entryID this Playlist revision does not contain", cueID)
+	}
+}
+
+// TestShouldLogCueActivationRefusalBacksOffOnIdenticalRepeat is Part 4's
+// own narrow coverage: an identical, still-unresolved refusal must log
+// once, not once per tick; a genuinely new fact (a different node, or a
+// changed NodeOutcome for the same node) must still log on its own first
+// occurrence; and a refusal that recurs after being cleared by a
+// confirmed activation is a fresh episode, not a continuation, and must
+// log again even when it happens to produce the identical NodeOutcome
+// string as before.
+func TestShouldLogCueActivationRefusalBacksOffOnIdenticalRepeat(t *testing.T) {
+	h := &handlers{logger: testLogger()}
+
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-a", "stale-catalog") {
+		t.Fatal("first occurrence should log")
+	}
+	if h.shouldLogCueActivationRefusal("instance-1", "node-a", "stale-catalog") {
+		t.Fatal("an identical, still-unresolved refusal must not log again")
+	}
+	if h.shouldLogCueActivationRefusal("instance-1", "node-a", "stale-catalog") {
+		t.Fatal("a third identical tick must still not log")
+	}
+
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-b", "stale-catalog") {
+		t.Fatal("a different node's first occurrence should log")
+	}
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-a", "unknown-cue") {
+		t.Fatal("a changed NodeOutcome for the same node should log again")
+	}
+
+	h.clearCueActivationRefusalLog("instance-1", "node-a")
+	if !h.shouldLogCueActivationRefusal("instance-1", "node-a", "unknown-cue") {
+		t.Fatal("after a confirmed activation clears the entry, an identical refusal recurring later is a fresh episode and must log again")
+	}
+}
+
+// dispatchPrepareAheadAudio's own revision derivation (act.EvidenceAt plus
+// a step past every AudioSessionStep* constant) is proven in
+// cueactivationdispatch_test.go's
+// TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds and
+// TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently, alongside
+// that file's other dispatchPrepareAheadAudio coverage.

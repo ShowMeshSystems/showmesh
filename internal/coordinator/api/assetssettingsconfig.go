@@ -297,6 +297,12 @@ func (h *handlers) handlePutAssetsSettingsConfig(w http.ResponseWriter, r *http.
 		return
 	}
 
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
+
 	fields, err := decodeAssetsSettingsConfigPutBody(io.LimitReader(r.Body, maxAssetsSettingsConfigRequestBodyBytes+1))
 	if err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
@@ -326,11 +332,16 @@ func (h *handlers) handlePutAssetsSettingsConfig(w http.ResponseWriter, r *http.
 		nextRevisionNo int64
 	)
 	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		currentRevision := int64(0)
 		nextRevisionNo = 1
 		if obj, gerr := tx.GetConfigObject(ctx, config.AssetSettingsConfigKind, config.AssetSettingsConfigObjectID); gerr == nil {
+			currentRevision = obj.CurrentRevision
 			nextRevisionNo = obj.CurrentRevision + 1
 		} else if !errors.Is(gerr, store.ErrConfigObjectNotFound) {
 			return identity.AuditEntry{}, gerr
+		}
+		if err := checkRevisionPrecondition(config.AssetSettingsConfigKind, config.AssetSettingsConfigObjectID, precondition, currentRevision); err != nil {
+			return identity.AuditEntry{}, err
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
@@ -369,9 +380,23 @@ func (h *handlers) handlePutAssetsSettingsConfig(w http.ResponseWriter, r *http.
 		}, nil
 	})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write assets.settings config revision", writeErr)
 		return
 	}
+
+	// FC3 (ADR-028 decision 8): a node's registrar reads contentBaseUrl
+	// through the pushed coordinatorBaseUrl field, resolved fresh on every
+	// fppconnect.configure push (internal/coordinator/fppconnectpush). A
+	// changed contentBaseUrl is exactly the kind of write ADR-039/ADR-036
+	// requires apply without a node restart, matching the identical push
+	// this package already fires on a show/show.active/fppconnect.settings
+	// write, best-effort per node.
+	h.pushFPPConnectToAllNodes(ctx, now)
 
 	jsonWrite(w, mapAssetsSettingsConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.AssetSettingsConfigKind, ID: config.AssetSettingsConfigObjectID,

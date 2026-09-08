@@ -146,7 +146,8 @@ func TestMigrateV19ClampsTheOldCeilingBoundIntoRange(t *testing.T) {
 // never convert a value twice.
 func TestMigrateV19LeavesAlreadyMigratedRevisionsAlone(t *testing.T) {
 	const already = `{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,` +
-		`"defaultMaxBackgroundGainDb":-4.44,"duckTargetGainDb":-12.04,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
+		`"defaultMaxBackgroundGainDb":-4.44,"duckTargetGainDb":-12.04,"duckFadeDurationMs":200,` +
+		`"duckRestoreFadeDurationMs":800,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1, already)

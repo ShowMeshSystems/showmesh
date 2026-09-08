@@ -4,7 +4,7 @@ Thanks for looking. This document covers how to build and test, and — more imp
 
 ## Getting set up
 
-Requirements: Go 1.25+, Node 22+, Docker (for the Compose bundle and integration tests), `make`.
+Requirements: Go 1.26+, Node 22+, Docker (for the Compose bundle and integration tests), `make`.
 
 ```sh
 git clone https://github.com/ShowMeshSystems/showmesh.git
@@ -26,7 +26,7 @@ make check     # what CI runs on the fast path
 
 Both integration targets sit behind the `integration` build tag and never run as part of `make test` or `make check`.
 
-CI runs on Go 1.25.0 and 1.26.5 across Linux and macOS with the race detector, builds the coordinator CGo-free, and builds the multi-arch image. A behavior verified only on macOS is **not** verified for this project — CI's first run caught a Linux-only `SO_REUSEADDR` difference that is now recorded in ADR-013.
+CI runs on Go 1.26.6 across Linux and macOS with the race detector, builds the coordinator CGo-free, and builds the multi-arch image. A behavior verified only on macOS is **not** verified for this project: CI's first run caught a Linux-only `SO_REUSEADDR` difference that is now recorded in ADR-013.
 
 ## Before you write code
 
@@ -95,7 +95,7 @@ Operator guides, tutorials, integration usage, troubleshooting, public reference
 
 Do not copy this repository's `docs/` tree into the public site. Verify human-facing claims against code, tests that constrain the behavior, the OpenAPI contract, compiled CLI help, and captured running-system evidence; engineering prose can lag implementation. Public docs may summarize architecture but never supersede its engineering source.
 
-There is no linked-PR requirement, documentation release gate, or automated docs-update workflow yet. Those mechanisms are intentionally deferred until the first release process is defined.
+There is no linked-PR requirement, documentation release gate, or automated docs-update workflow yet. The release process itself is defined: see [`docs/RELEASING.md`](docs/RELEASING.md) for the versioning scheme and the cut procedure.
 
 Use the repository's pull-request template and keep its verification, review,
 and acceptance sections distinct. Run `make pr-ready-check` after pushing the
@@ -109,6 +109,33 @@ state. It does not lint the PR body, run tests, or perform a review.
 - Nothing in `cmd/showmeshctl` may import a coordinator package. An import-graph test enforces this; it exists so a JSON tag rename breaks the build instead of silently renaming the field on both sides.
 - The coordinator must stay CGo-free. Pure-Go dependencies only — `modernc.org/sqlite`, never `mattn/go-sqlite3`.
 - Don't add `docs/private/` to version control. It is deliberately untracked local working notes and nothing moves out of it into tracked documentation.
+
+### Required checks before merge
+
+Merges to `main` require these checks from the CI workflow to pass, matched
+by exact job name: `lint`, `vuln`, `ui`, `docker`, and `test-gate`.
+`test-gate` needs the whole `test` go-version matrix and fails unless every
+leg succeeded; its own name stays stable across a matrix version bump, so
+bumping `test`'s Go version cannot silently rename the required check the
+way requiring `test (1.26.6)` directly would have. These are deterministic:
+the same commit produces the same result, which is what makes it safe to
+block merges on them.
+
+The CI workflow's `integration`, `integration-fppmqtt`, and
+`integration-broker` jobs, plus `test-integration-fpp` from the separate
+"FPP Integration (bench fppd)" workflow, stay advisory. They still run and
+report on every pull request, but a failure does not block merge, because
+their current flakiness would otherwise block `main` on failures unrelated
+to the change under review.
+
+The CI workflow's `fpp-plugin-release` job is not on the required list.
+
+A repository administrator may bypass a required check, but only as a
+deliberate, recorded exception, never a routine override. Record what was
+bypassed and why in the pull request before merging.
+
+Branch protection enforcing this list is Eric's to apply; as of this
+writing it is pending, not live.
 
 ## Scope notes
 

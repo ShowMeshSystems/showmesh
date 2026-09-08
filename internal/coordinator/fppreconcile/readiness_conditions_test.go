@@ -392,3 +392,77 @@ func declareNode(t *testing.T, st *store.Store, nodeID string) {
 		t.Fatalf("declare node %q: %v", nodeID, err)
 	}
 }
+
+// TestPlaylistReadinessAssetsMissingNodeHoldsEverythingPasses proves the
+// happy path of assetsMissingReadiness: an ACTIVE show whose node genuinely
+// holds every asset its own Cues resolve to reports ready. This is
+// deliberately distinct from TestGetFPPPlaylistReadinessReady
+// (internal/coordinator/api/fppreconciliation_test.go), which configures NO
+// active show at all, so [assetsync.ResolveActiveShow]'s own
+// !active.Configured short-circuit skips this condition entirely without
+// ever exercising its "every expected asset is actually held" branch. This
+// fixture activates show-1 and gives node-1 a fresh, complete inventory
+// report that genuinely holds the asset cue-1's render output resolves to
+// -- the case this condition exists to PASS, not merely skip.
+func TestPlaylistReadinessAssetsMissingNodeHoldsEverythingPasses(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	hash := hash64("a1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putPlaylist(t, st, "playlist-1", p)
+	declareNode(t, st, "node-1")
+	putSurface(t, st, "surface-1", "show-1", "node-1")
+	putSurfacePipelineState(t, st, "surface-1", "node-1", "running", time.Unix(1000, 0).UTC())
+
+	ctx := context.Background()
+
+	// A real asset for cue-1's render sequence (putCue's default,
+	// "seq-cue-1") genuinely exists in the store, targeted at node-1.
+	if _, _, err := st.CreateAsset(ctx, store.AssetRecord{
+		ID: "sha256:present-node-node-1", ShowID: "show-1", SequenceID: "seq-cue-1",
+		TargetKind: store.AssetTargetKindNode, TargetID: "node-1", MediaType: "fseq",
+		ContentHash: "sha256:present", RuntimeFilename: "Opening.fseq", SizeBytes: 1024,
+		Backend: "volume", StorageKey: "sha256:present",
+	}); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "node-1")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	if err := st.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
+		NodeID: "node-1", Revision: catalog.Revision, ShowID: "show-1", Generation: active.Generation,
+	}); err != nil {
+		t.Fatalf("put node cue catalog ack: %v", err)
+	}
+
+	obs := baseObservation("inst-1")
+	obs.PlaylistName, obs.PlaylistHash, obs.Section, obs.Position = "Main", hash, "mainPlaylist", 0
+	obs.EntryKey = entryKeyFor(t, p, "entry-1")
+	putObservation(t, st, obs)
+
+	// node-1's own reported inventory GENUINELY holds the asset above --
+	// the one thing the failing "assets-missing" case
+	// (readiness_call_site_test.go) deliberately leaves out.
+	if err := st.ReplaceNodeAssetInventory(ctx, "node-1",
+		[]store.NodeAssetInventoryRecord{{NodeID: "node-1", ContentHash: "sha256:present", RuntimeFilename: "Opening.fseq", SizeBytes: 1024, VerifiedAt: time.Now()}},
+		store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory: %v", err)
+	}
+
+	report, err := PlaylistReadiness(ctx, st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("Ready = false, want true (failing condition %q: %s)", report.FailingCondition, report.Reason)
+	}
+}

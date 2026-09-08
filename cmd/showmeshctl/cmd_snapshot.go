@@ -35,14 +35,15 @@ func cmdSnapshot(args []string, stdout, stderr io.Writer, clock func() time.Time
 	defer cancel()
 
 	var snap snapshot
-	if err := c.getJSON(ctx, "/api/v1/snapshot", nil, &snap); err != nil {
+	raw, err := c.getJSONKeepingRaw(ctx, "/api/v1/snapshot", nil, &snap)
+	if err != nil {
 		return reportError(stderr, "snapshot", err)
 	}
 
 	printClockSkew(stderr, snap.ServerTime, clock())
 
 	if g.output == outputJSON {
-		if err := printJSON(stdout, snap); err != nil {
+		if err := printJSONBody(stdout, raw); err != nil {
 			return reportError(stderr, "snapshot", err)
 		}
 		return exitOK

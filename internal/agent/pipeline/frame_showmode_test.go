@@ -70,7 +70,7 @@ func startCoverageGapWriter(t *testing.T, showMode ShowModeSource) (*Supervisor,
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, gapTimelinePosMS)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, gapChannelCount, surfaceWidth, 1, IdleOutputBlack, showMode, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, gapChannelCount, surfaceWidth, 1, IdleOutputBlack, showMode, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestFailureEvidenceIsDistinctFromHealthyIdleInBothModes(t *testing.T) {
 			tl := &fakeTimelineSource{}
 			tl.set(multisync.StateStopped, gapTimelinePosMS) // healthy, operator-chosen idle
 
-			fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, gapChannelCount, surfaceWidth, 1,
+			fw, err := NewFrameWriter(sup, surfaceID, source, tl, "seq.fseq", 0, gapChannelCount, surfaceWidth, 1,
 				IdleOutputBlack, newFakeShowMode(tc.behavesAsShow), testLogger{})
 			if err != nil {
 				t.Fatalf("NewFrameWriter: %v", err)
@@ -311,7 +311,7 @@ func TestNewFrameWriterRefusesEmptySource(t *testing.T) {
 	sup, _ := newTestFrameWriterSupervisor(t, surfaceID)
 
 	source := &fakeFrameSource{frameCount: 0, stepTimeMS: 25, uncoveredFrom: -1}
-	if _, err := NewFrameWriter(sup, surfaceID, source, &fakeTimelineSource{}, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{}); err == nil {
+	if _, err := NewFrameWriter(sup, surfaceID, source, &fakeTimelineSource{}, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{}); err == nil {
 		t.Fatalf("NewFrameWriter over a source with no frames: want an error, got nil")
 	}
 }
@@ -326,7 +326,7 @@ func TestNewFrameWriterReportsCoercedIdleOutput(t *testing.T) {
 	source := &fakeFrameSource{frameCount: 10, stepTimeMS: 25, uncoveredFrom: -1}
 
 	logger := &recordingLogger{}
-	if _, err := NewFrameWriter(sup, surfaceID, source, &fakeTimelineSource{}, 0, 8, 8, 1, "strobe", nil, logger); err != nil {
+	if _, err := NewFrameWriter(sup, surfaceID, source, &fakeTimelineSource{}, "seq.fseq", 0, 8, 8, 1, "strobe", nil, logger); err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
 	if logger.warnCount() != 1 {
@@ -334,7 +334,7 @@ func TestNewFrameWriterReportsCoercedIdleOutput(t *testing.T) {
 	}
 
 	quiet := &recordingLogger{}
-	if _, err := NewFrameWriter(sup, surfaceID, source, &fakeTimelineSource{}, 0, 8, 8, 1, IdleOutputBlack, nil, quiet); err != nil {
+	if _, err := NewFrameWriter(sup, surfaceID, source, &fakeTimelineSource{}, "seq.fseq", 0, 8, 8, 1, IdleOutputBlack, nil, quiet); err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
 	if quiet.warnCount() != 0 {

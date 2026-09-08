@@ -20,7 +20,7 @@ func publishAndDecodeRenderReport(t *testing.T, sup *pipeline.Supervisor, store 
 	pub := newFakePublisher()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	publishOneRenderReport(ctx, pub, "showmesh/nodes/media-03/observed/render", "media-03", sup, store, newMultiSyncStatus(), time.Now, discardLogger())
+	publishOneRenderReport(ctx, pub, "showmesh/nodes/media-03/observed/render", "media-03", sup, store, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, discardLogger())
 
 	calls := pub.snapshot()
 	if len(calls) != 1 {

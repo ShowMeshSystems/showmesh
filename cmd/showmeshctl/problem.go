@@ -48,6 +48,16 @@ const (
 	// replayed idempotency key reused against different action/target/params.
 	problemConflict = "https://showmesh.dev/problems/conflict"
 
+	// problemConfigRevisionPreconditionFailed:
+	// internal/coordinator/api/showconfig.go's
+	// ProblemTypeConfigRevisionPreconditionFailed: this config PUT's
+	// If-Match no longer names the object's current revision, because
+	// someone else wrote a newer one since this command last read it (or
+	// since the fresh read this command performed just before the PUT).
+	// Distinct from problemConflict: the remedy is specific and mechanical
+	// (re-read the object, then retry), not "figure out what changed".
+	problemConfigRevisionPreconditionFailed = "https://showmesh.dev/problems/config-revision-precondition-failed"
+
 	// problemFPPStartPlaylistEvidenceNotCurrent: "fpp start-playlist"
 	// ifBusy=refuse's OTHER 409 — the coordinator could not tell what is
 	// playing, rather than confirming a different playlist is. Shares
@@ -97,6 +107,15 @@ const (
 	problemNightNotReady      = "https://showmesh.dev/problems/night-not-ready"
 	problemNightStateRejected = "https://showmesh.dev/problems/night-state-rejected"
 	problemNightAmbiguous     = "https://showmesh.dev/problems/night-ambiguous"
+
+	// problemEmergencyStopHardStopNotArmed: "emergency-stop hard-stop fire"
+	// presented no valid, unexpired, unconsumed arm token. Distinct from
+	// problemConflict (both are 409s): the remedy differs, "arm again,
+	// then fire promptly" versus "someone else already consumed THIS
+	// token, check whether the hard stop already happened before retrying
+	// blindly". Mapped to its own exit code below rather than falling
+	// into the generic exitConflict every other 409 in this file shares.
+	problemEmergencyStopHardStopNotArmed = "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed"
 )
 
 // Exit codes, documented in --help (usage.go) so a script wrapping this
@@ -297,6 +316,8 @@ func exitCodeForProblem(status int, p *problem) int {
 			return exitForbidden
 		case problemTooManyRequests:
 			return exitRateLimited
+		case problemConfigRevisionPreconditionFailed:
+			return exitConflict
 		case problemConflict, problemFPPStartPlaylistEvidenceNotCurrent, problemFPPStartPlaylistBusy,
 			problemMacroRunAlreadyInFlight, problemMacroRunIdempotencyMacroConflict, problemMacroRunIdempotencyRevisionConflict:
 			return exitConflict
@@ -306,6 +327,8 @@ func exitCodeForProblem(status int, p *problem) int {
 			return exitNightStateRejected
 		case problemNightAmbiguous:
 			return exitNightAmbiguous
+		case problemEmergencyStopHardStopNotArmed:
+			return exitActionRefused
 		}
 	}
 	switch status {

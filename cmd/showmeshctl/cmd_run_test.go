@@ -118,14 +118,34 @@ func TestCmdRunListAppliesQueryFilters(t *testing.T) {
 	defer ts.Close()
 
 	var stdout, stderr bytes.Buffer
+	code := cmdRun([]string{"list", "--server", ts.URL, "--macro", "begin-set", "--show", "halloween-2026", "--state", "finished", "--limit", "10"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{"macroId=begin-set", "show=halloween-2026", "state=finished", "limit=10"} {
+		if !strings.Contains(gotQuery, want) {
+			t.Errorf("query = %q, want it to contain %q", gotQuery, want)
+		}
+	}
+}
+
+func TestCmdRunListOmitsShowQueryParamWhenFlagNotGiven(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-14T21:05:00Z","runs":[]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
 	code := cmdRun([]string{"list", "--server", ts.URL, "--macro", "begin-set", "--state", "finished", "--limit", "10"}, &stdout, &stderr, time.Now)
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"macroId=begin-set", "state=finished", "limit=10"} {
-		if !strings.Contains(gotQuery, want) {
-			t.Errorf("query = %q, want it to contain %q", gotQuery, want)
-		}
+	if strings.Contains(gotQuery, "show=") {
+		t.Errorf("query = %q, want no show query parameter when --show is not given", gotQuery)
 	}
 }
 

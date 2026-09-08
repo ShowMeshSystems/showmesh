@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -97,6 +98,11 @@ func (h *handlers) handlePutShowPlaylist(w http.ResponseWriter, r *http.Request)
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -160,9 +166,14 @@ func (h *handlers) handlePutShowPlaylist(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowPlaylistConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.ShowPlaylistConfigKind, id, payloadJSON, precondition,
 		map[string]any{"show": payload.Show, "name": payload.Name, "runner": payload.Runner, "entryCount": len(payload.Entries)})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write show.playlist config revision", writeErr)
 		return
 	}
@@ -220,6 +231,14 @@ func (h *handlers) reapplyShowmeshAudioPlaylistIfActive(ctx context.Context, now
 
 func (h *handlers) handleGetShowPlaylistRevisions(w http.ResponseWriter, r *http.Request) {
 	h.handleGetShowConfigRevisions(w, r, config.ShowPlaylistConfigKind)
+}
+
+// handleDeleteShowPlaylist serves DELETE /api/v1/config/show.playlist/{id}:
+// a tombstone. Nothing in this codebase's reference graph names a
+// show.playlist id from another configuration object, so there is no
+// dangling reference to consider on this side.
+func (h *handlers) handleDeleteShowPlaylist(w http.ResponseWriter, r *http.Request) {
+	h.handleDeleteShowConfigObject(w, r, config.ShowPlaylistConfigKind, nil)
 }
 
 func mapConfigShowPlaylistEntries(entries []config.ShowPlaylistEntry) []v1.ConfigShowPlaylistEntry {

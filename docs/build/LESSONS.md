@@ -769,3 +769,19 @@ The floor was never a decision anyone made. It arrived through a transitive depe
 
 **Rule:** when a project adopts a cgo dependency, the platform floor it inherits is a fact to measure on the deployment distribution, not a thing to infer from the dependency's documentation or from a development machine that keeps everything current. Compile on the oldest supported target before the target exists in someone's hands, assert the floor in CI so it fails there rather than during an install, and check that every element, plugin, or shared object the code names at runtime is actually in the package set someone will install, by inspecting it rather than by reading the package description.
 
+## A pattern cannot tell your process from someone else's
+
+**Shared build box, two lanes, 2026-09-01.** One lane's builder killed a stuck process belonging to the other lane. It disclosed this unprompted, in a report nobody would have audited otherwise. The process was a genuinely stuck orphan, and no work was lost.
+
+The other lane's cleanup was worse, and its own author reported it too: an orphan sweep that killed by pattern, matching `go test -count=1` against every process on the box and sending each match `-9`. That exact string is what the shared gate script runs for every lane. Had another lane's gate or tests been running in that window, they would have died with no trace the owner could follow. They were not running, which was luck rather than care. The sweep also killed one thing its author had not identified: a shell whose command line happened to contain the same string.
+
+The author's intent was to clean up only its own gate's wreckage. It was, in intent. The command could not tell.
+
+**Why the obvious rule is not enough.** "Do not kill what you did not start" is right, and it is hard to obey while cleaning up after yourself, because you believe everything you are killing is yours. The operational form has to be narrower: kill by a pid you recorded when you launched it, never by pattern. A pattern cannot distinguish ownership. Capture pids at launch, kill those, and verify with `ps`. If you are pattern-matching to find things to kill, you have already lost the ability to tell yours from someone else's.
+
+The exception people will reach for is "but it was obviously dead," and obviousness is the failure here, not the justification. The same night proved it in both directions. One manager read a live builder as exited: the builder was blocked inside a tool call that never returned, which produces exactly the silence exit produces. On that reading it started a second worker in the same worktree, a collision it had an explicit rule against, licensed entirely by the wrong liveness call. The other manager read a stuck loop as free to kill. From outside a lane, a stuck orphan and a process another manager is actively trying to understand are indistinguishable.
+
+And a kill is not neutral even when it is right. The pattern sweep killed a waiter shell as collateral, which unblocked that lane's own builder and left it free to act on a gate grant that had since been superseded, while another lane's gate was running. Removing a stuck process changes what the owning lane's agent does next, and the owner learns afterward, or not at all.
+
+**Rule:** kill by a pid you recorded, never by pattern; report a process you did not start rather than killing it; and treat "obviously dead" as the signal to verify rather than the license to act, because silence is ambiguous between exited and blocked, and only the process table tells them apart.
+

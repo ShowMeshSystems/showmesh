@@ -44,13 +44,14 @@ func cmdNightLifecycleStatus(args []string, stdout, stderr io.Writer, clock func
 	defer cancel()
 
 	var resp nightSessionLifecycleResponse
-	if err := c.getJSON(ctx, "/api/v1/night/session", nil, &resp); err != nil {
+	raw, err := c.getJSONKeepingRaw(ctx, "/api/v1/night/session", nil, &resp)
+	if err != nil {
 		return reportError(stderr, "night status", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
 
 	if g.output == outputJSON {
-		if err := printJSON(stdout, resp); err != nil {
+		if err := printJSONBody(stdout, raw); err != nil {
 			return reportError(stderr, "night status", err)
 		}
 		return exitOK
@@ -150,7 +151,7 @@ func cmdNightPrepareSite(args []string, stdout, stderr io.Writer, clock func() t
 
 func cmdNightReadiness(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night readiness", "run-readiness",
-		"Run readiness for the current preparation epoch (POST\n/api/v1/night/commands/run-readiness). Rejected when no preparation\nepoch is open.\n\nThis build checks FPP reachability for the session's own referenced FPP\ninstances (\"fpp:<id>:reachable\"), the pinned resting FSEQ asset's own\nparseable non-zero duration (\"resting:asset-duration\"), the resting\nplaylist's idle-read shape (\"resting:playlist-shape:<playlist>\"), the\nshow playlist's presence (\"show:playlist-present:<playlist>\"), and every\nconfigured interlock's own current outcome (\"interlock:<phase>:<name>\"),\ndispatched live at run-readiness time. \"resting:asset-exact-variant:<playlist>\"\nis PERMANENTLY \"not_verifiable\": FPP exposes no content hash, so this\ncannot confirm the live host is running the pinned asset's exact bytes,\nstated rather than defaulted to a pass, but excluded from \"outcome\" (it\nstays listed), so \"ready\" is still reachable once every checkable check\npasses. Neither that nor a plain \"unknown\" outcome blocks start-night by\nitself; only a missing or stale readiness result does. Read every check\nname and reason before trusting this as a complete pre-flight.\n\nA configured \"block\" interlock for phase run-readiness is dispatched\nLIVE, at the instant this command runs, and can refuse the command itself\n(409, nothing computed or stored) unless covered by --override; a rule\ndeclared for any OTHER phase is still evaluated and shown above, never\nwithholding this command.")
+		"Run readiness for the current preparation epoch (POST\n/api/v1/night/commands/run-readiness). Rejected when no preparation\nepoch is open.\n\nThis build checks FPP reachability for the session's own referenced FPP\ninstances (\"fpp:<id>:reachable\"), the pinned resting FSEQ asset's own\nparseable non-zero duration (\"resting:asset-duration\"), the resting\nplaylist's idle-read shape (\"resting:playlist-shape:<playlist>\"), the\nshow playlist's presence (\"show:playlist-present:<playlist>\"), and every\nconfigured interlock's own current outcome (\"interlock:<phase>:<name>\"),\ndispatched live at run-readiness time. \"resting:asset-exact-variant:<playlist>\"\nis PERMANENTLY \"not_verifiable\": FPP exposes no content hash, so this\ncannot confirm the live host is running the pinned asset's exact bytes,\nstated rather than defaulted to a pass, but excluded from \"outcome\" (it\nstays listed), so \"ready\" is still reachable once every checkable check\npasses. A worst check reported as degraded yields outcome\n\"ready_with_warnings\": the night can still start, but at least one check\nwants an operator's eye before it does. Neither that, a plain \"unknown\"\noutcome, nor \"ready_with_warnings\" blocks start-night by itself; only a\nmissing or stale readiness result does. Read every check name and reason\nbefore trusting this as a complete pre-flight.\n\nA configured \"block\" interlock for phase run-readiness is dispatched\nLIVE, at the instant this command runs, and can refuse the command itself\n(409, nothing computed or stored) unless covered by --override; a rule\ndeclared for any OTHER phase is still evaluated and shown above, never\nwithholding this command.")
 }
 
 func cmdNightPreshow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -183,7 +184,7 @@ func (f nightOverrideFlag) Set(s string) error {
 
 func cmdNightStart(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	return runGatedNightLifecycleCommand(args, stdout, stderr, clock, "night start", "start-night",
-		"Authorize the night session and begin the first transition (POST\n/api/v1/night/commands/start-night). Requires a completed readiness\nresult from the SAME preparation epoch, within the coordinator's\nconfigured maximum age.\n\nA configured \"block\" interlock for phase start-night is gated against\nthat same readiness result (never a live dispatch here) and can refuse\nthis command (409) unless covered by --override.")
+		"Authorize the night session and begin the first transition (POST\n/api/v1/night/commands/start-night). Requires a completed readiness\nresult from the SAME preparation epoch. When that result is older than\nthe coordinator's configured maximum age, this runs a fresh run-readiness\npass itself before proceeding (a pre-show commonly runs one to two\nhours, well past a maximum age measured in minutes); a fresh pass that\nitself fails refuses this command with THAT failure, never a staleness\nmessage.\n\nA configured \"block\" interlock for phase start-night is gated against\nthe readiness result start-night actually proceeds on (a live re-run's,\nwhen one ran; otherwise the stored one, never a live dispatch of its own)\nand can refuse this command (409) unless covered by --override.")
 }
 
 func cmdNightFinalShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {

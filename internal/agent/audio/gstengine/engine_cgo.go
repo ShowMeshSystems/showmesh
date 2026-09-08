@@ -13,6 +13,7 @@ import (
 	"time"
 
 	glib "github.com/go-gst/go-glib/pkg/glib/v2"
+	gobject "github.com/go-gst/go-glib/pkg/gobject/v2"
 	"github.com/go-gst/go-gst/pkg/gst"
 
 	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -59,9 +60,14 @@ type Engine struct {
 	mu      sync.Mutex
 	handles map[agentaudio.EngineHandle]*branch
 
-	// elementIndex maps a branch's own element names to itself, for
-	// [Engine.branchForSource] to attribute a bus error to the right
-	// branch. It is populated as soon as a branch's elements exist —
+	// elementIndex maps every one of a branch's own element names (all
+	// eight from [branch.elements], not only filesrc/decodebin — every
+	// one of them is a direct sibling in the shared pipeline, per
+	// branch's own doc comment, so any of them can be a bus error's
+	// source, not only decodebin's dynamically created internal children)
+	// to that branch, for [Engine.branchForSource] to attribute a bus
+	// error to the right branch. It is populated as soon as a branch's
+	// element names are known — before the elements themselves exist and
 	// before the branch is confirmed loaded and added to handles — since
 	// a decode error arrives exactly during that unconfirmed window.
 	elementIndex map[string]*branch
@@ -100,6 +106,16 @@ type Engine struct {
 	// would otherwise never see that branch and would report a false
 	// clean Close.
 	anyTeardownIncomplete atomic.Bool
+
+	// pipelineStateAtClose is the pipeline's own GStreamer state, read
+	// once by Close immediately before releasing its reference to
+	// e.pipeline (see releaseBus: go-gst's finalizer does not reliably
+	// reclaim a GStreamer object's own internal resources, so Close
+	// drops this reference explicitly rather than leaving it for GC,
+	// which makes the live object unsafe to query afterward). Zero value
+	// when Close's own SetState(NULL) attempt was abandoned or deferred
+	// rather than confirmed.
+	pipelineStateAtClose gst.State
 
 	closeOnce sync.Once
 	closeErr  error
@@ -318,6 +334,18 @@ func (e *Engine) Close() error {
 			if err != nil {
 				slog.Warn("gstengine: output pipeline did not reach NULL within the shutdown timeout", "error", err)
 				e.anyTeardownIncomplete.Store(true)
+			} else {
+				// See pipelineStateAtClose's doc comment: read before
+				// the reference is dropped, not after. Set to nil once
+				// released, not left dangling, so any caller that still
+				// checks "if e.pipeline != nil" (as this same block
+				// does) sees a released pipeline as absent rather than
+				// touching a freed object.
+				e.pipelineStateAtClose, _, _ = e.pipeline.GetState(0)
+				if obj, ok := e.pipeline.(gobject.Object); ok {
+					gobject.UnsafeObjectUnref(obj)
+				}
+				e.pipeline = nil
 			}
 		}
 		if e.ltc != nil {
@@ -467,7 +495,7 @@ func (e *Engine) buildPipeline() error {
 			if err != nil {
 				return fmt.Errorf("could not build LTC chain for channel %d: %w", ch, err)
 			}
-			if ltc.capsfilter.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
+			if ltc.queue.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
 				return fmt.Errorf("could not link LTC chain to interleave for channel %d", ch)
 			}
 			e.ltc = ltc
@@ -529,6 +557,7 @@ const buildSettleWindow = 300 * time.Millisecond
 // [Engine.watchBus], which only starts once this returns nil.
 func (e *Engine) awaitSustainedPlaying() error {
 	bus := e.pipeline.GetBus()
+	defer releaseBus(bus)
 	deadline := time.Now().Add(buildSettleWindow)
 	for {
 		remaining := time.Until(deadline)
@@ -539,10 +568,25 @@ func (e *Engine) awaitSustainedPlaying() error {
 		if msg == nil {
 			return nil
 		}
-		if msg.Type() == gst.MessageError {
-			text, _ := msg.ParseError()
+		msgType := msg.Type()
+		var text string
+		if msgType == gst.MessageError {
+			text, _ = msg.ParseError()
+		}
+		gst.UnsafeMessageUnref(msg)
+		if msgType == gst.MessageError {
 			return fmt.Errorf("output pipeline failed to sustain PLAYING: %s", text)
 		}
+	}
+}
+
+// releaseBus drops this package's own reference to a bus returned by
+// GetBus. Each GetBus call takes a fresh reference go-gst's own
+// finalizer never reclaims in practice, so every caller must release it
+// explicitly rather than letting it go out of scope.
+func releaseBus(bus gst.Bus) {
+	if obj, ok := bus.(gobject.Object); ok {
+		gobject.UnsafeObjectUnref(obj)
 	}
 }
 
@@ -681,6 +725,7 @@ func addMixerKeepAlive(bin gst.Bin, mixer gst.Element, ch int, sampleRate int) e
 
 func (e *Engine) watchBus() {
 	bus := e.pipeline.GetBus()
+	defer releaseBus(bus)
 	for {
 		select {
 		case <-e.done:
@@ -696,6 +741,7 @@ func (e *Engine) watchBus() {
 			text, gerr := msg.ParseError()
 			if b := e.branchForSource(msg.Source()); b != nil {
 				b.reportLoadError(classifyBranchError(text, gerr))
+				gst.UnsafeMessageUnref(msg)
 				continue
 			}
 			e.markBroken(fmt.Sprintf("output pipeline error: %s", text))
@@ -716,6 +762,7 @@ func (e *Engine) watchBus() {
 			// A downstream element dropped/skipped a buffer for the clock.
 			e.qosCount.Add(1)
 		}
+		gst.UnsafeMessageUnref(msg)
 	}
 }
 
@@ -810,21 +857,24 @@ func (e *Engine) branchForSource(src gst.Object) *branch {
 	return nil
 }
 
-// indexBranch registers b's own element names so a bus error naming any
-// of them, or any of their internal children, attributes back to b — see
-// elementIndex's doc comment for why this happens before b is loaded.
+// indexBranch registers every one of b's own element names so a bus
+// error naming any of them, or any of their internal children, attributes
+// back to b — see elementIndex's doc comment for why this happens before
+// b is loaded.
 func (e *Engine) indexBranch(b *branch) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.elementIndex[b.filesrcName] = b
-	e.elementIndex[b.decodebinName] = b
+	for _, name := range b.elementNames {
+		e.elementIndex[name] = b
+	}
 }
 
 func (e *Engine) unindexBranch(b *branch) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	delete(e.elementIndex, b.filesrcName)
-	delete(e.elementIndex, b.decodebinName)
+	for _, name := range b.elementNames {
+		delete(e.elementIndex, name)
+	}
 }
 
 // classifyBranchError maps a branch-scoped GStreamer error onto this

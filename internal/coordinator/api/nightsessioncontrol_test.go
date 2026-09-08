@@ -332,14 +332,39 @@ func TestInvariant2_StartNightRejectsWithoutReadiness(t *testing.T) {
 	}
 }
 
-func TestInvariant2_StartNightRejectsStaleReadiness(t *testing.T) {
+// TestInvariant2_StaleReadinessPassingRerunStartsTheNight is this seam's own
+// fix: a pre-show of one to two hours is the normal case, so start-night
+// finding the stored readiness result older than the configured maximum age
+// must run a fresh readiness pass and proceed on it, not refuse outright.
+// completedAt moving forward past the original stale timestamp is direct
+// evidence the fresh pass actually ran, not merely that the age check was
+// skipped.
+func TestInvariant2_StaleReadinessPassingRerunStartsTheNight(t *testing.T) {
 	api, _, token, advance, obs := setupNightControlFixture(t, time.Minute)
 	runToPreshow(t, api, token, obs, testNow)
-	advance(2 * time.Minute)
 
-	status, p := nightCommandProblem(t, api, token, "start-night")
-	if status != http.StatusConflict || p.Type != ProblemTypeNightNotReady {
-		t.Fatalf("start-night with stale readiness: status=%d type=%q, want 409/%s", status, p.Type, ProblemTypeNightNotReady)
+	before := mustGetNightSession(t, api)
+	staleAt, err := time.Parse(time.RFC3339Nano, before.Session.Readiness.CompletedAt)
+	if err != nil {
+		t.Fatalf("parse readiness completedAt: %v", err)
+	}
+
+	advance(2 * time.Minute)
+	setHealthyFPPReachable(obs, testNow.Add(2*time.Minute))
+
+	got := mustNightCommand(t, api, token, "start-night")
+	if got.Command.Outcome != nightOutcomeApplied {
+		t.Fatalf("start-night with a stale readiness result and a passing fresh re-run: outcome = %q, want %s", got.Command.Outcome, nightOutcomeApplied)
+	}
+	if got.Session.State != nightStateTransitionToShow {
+		t.Fatalf("start-night with a stale readiness result and a passing fresh re-run: state = %q, want %s", got.Session.State, nightStateTransitionToShow)
+	}
+	freshAt, err := time.Parse(time.RFC3339Nano, got.Session.Readiness.CompletedAt)
+	if err != nil {
+		t.Fatalf("parse post-start-night readiness completedAt: %v", err)
+	}
+	if !freshAt.After(staleAt) {
+		t.Fatalf("start-night on a stale readiness result did not run a fresh pass: completedAt stayed %s, want newer than %s", freshAt, staleAt)
 	}
 }
 
@@ -795,9 +820,13 @@ func TestFinding8_CommittedTransitionToShowDefersRatherThanCancels(t *testing.T)
 	}
 }
 
-// --- finding 9: fail-closed for the four admission-opening commands ---
+// --- finding 9: ADR-024 decision 11 amended 2026-08-26 (owner ruling) -
+// the four admission-opening commands (prepare-site, run-readiness,
+// start-preshow, start-night) no longer fail closed on an audit-write
+// failure either; start-night refused for a full audit disk is the
+// literal show-stopper the ruling exists to prevent. ---
 
-func TestFinding9_PrepareSiteRefusedWhenAuditWriteFails(t *testing.T) {
+func TestFinding9_PrepareSiteRunsDegradedWhenAuditWriteFails(t *testing.T) {
 	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	adminToken := mustIssueToken(t, svc, admin.ID)
@@ -815,17 +844,92 @@ func TestFinding9_PrepareSiteRefusedWhenAuditWriteFails(t *testing.T) {
 
 	installFailAuditTrigger(t, storeDir)
 
-	status, p := nightCommandProblem(t, api, opToken, "prepare-site")
-	if status != http.StatusServiceUnavailable || p.Type != ProblemTypeNightAuditUnavailable {
-		t.Fatalf("prepare-site with a failing audit write: status=%d type=%q, want 503/%s", status, p.Type, ProblemTypeNightAuditUnavailable)
+	out := mustNightCommand(t, api, opToken, "prepare-site")
+	if !out.Command.AttributionDegraded {
+		t.Fatalf("command.attributionDegraded = false, want true (the audit write failed and prepare-site must still run)")
+	}
+	if !out.Session.AttributionDegraded {
+		t.Fatalf("session.attributionDegraded = false, want true")
 	}
 	_, ok, err := st.GetCurrentNightSession(context.Background())
 	if err != nil {
 		t.Fatalf("get current night session: %v", err)
 	}
-	if ok {
-		t.Fatalf("prepare-site refused for want of audit still created a session; the whole transaction must have rolled back")
+	if !ok {
+		t.Fatalf("prepare-site with a failing audit write created no session; ADR-024 decision 11's amendment requires it to still run")
 	}
+}
+
+// TestRunReadinessDegradedNeverLeavesADanglingReadinessID is review round
+// 5's own named requirement (finding 1): before this fix, nightRunGated's
+// audit-failure fallback replayed only out.persist (the night_sessions
+// write), never nightRunReadinessCommand's own tx.CreateNightReadiness -
+// which the failed transaction had already rolled back. The session
+// still ended up with a readiness_id pointing at a row that was never
+// recreated, and there is no FK on that column to catch it: a false
+// "applied" outcome, worse than the 503 refusal it replaced, exactly the
+// "you cannot see" failure ADR-024 decision 11 is written against. This
+// proves the fix: run-readiness under a failing audit store still
+// creates a readable readiness row, and a later start-night (which reads
+// it by that exact ID) is never refused for want of one.
+func TestRunReadinessDegradedNeverLeavesADanglingReadinessID(t *testing.T) {
+	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	opToken := mustIssueToken(t, svc, operator.ID)
+
+	deps, obs := nightControlTestDeps(svc, st)
+	deps.FPP = nightWireFPPForReadiness(t)
+	backend := nightTestAssetBackend(t)
+	deps.AssetBackend = backend
+
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustCreateNightSessionFSEQAsset(t, st, backend, "halloween-2026", "resting-loop", "player-01")
+	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+	setHealthyFPPReachable(obs, testNow)
+
+	mustNightCommand(t, api, opToken, "prepare-site")
+
+	installFailAuditTrigger(t, storeDir)
+
+	out := mustNightCommand(t, api, opToken, "run-readiness")
+	if !out.Command.AttributionDegraded {
+		t.Fatalf("command.attributionDegraded = false, want true (the audit write failed and run-readiness must still run)")
+	}
+	if !out.Session.AttributionDegraded {
+		t.Fatalf("session.attributionDegraded = false, want true")
+	}
+
+	rec, ok, err := st.GetCurrentNightSession(context.Background())
+	if err != nil {
+		t.Fatalf("get current night session: %v", err)
+	}
+	if !ok {
+		t.Fatalf("run-readiness with a failing audit write left no session")
+	}
+	if rec.ReadinessID == "" {
+		t.Fatalf("session.ReadinessID = empty after run-readiness, want a readiness row referenced")
+	}
+	readiness, err := st.GetLatestNightReadiness(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatalf("GetLatestNightReadiness for the session run-readiness just degraded on: %v (a dangling readiness_id with no matching row is the exact defect this test guards)", err)
+	}
+	if readiness.ID != rec.ReadinessID {
+		t.Fatalf("readiness row ID = %q, session.ReadinessID = %q, want them to match", readiness.ID, rec.ReadinessID)
+	}
+
+	// The practical consequence, not just the row: start-preshow then
+	// start-night must not be refused for want of a readiness result -
+	// mustNightCommand itself t.Fatalf's on anything but 202, so a
+	// regression here fails loudly with the exact "no readiness result
+	// recorded" problem detail this defect used to produce.
+	mustNightCommand(t, api, opToken, "start-preshow")
+	mustNightCommand(t, api, opToken, "start-night")
 }
 
 func TestFinding9_AttributionDegradedIsPopulatedOnTheExemptPath(t *testing.T) {
@@ -970,6 +1074,37 @@ func TestInvariant5_UnknownReadinessNeverBlocksStartNight(t *testing.T) {
 	}
 }
 
+// TestNightOutcomeFromChecks_WorstDegradedYieldsReadyWithWarnings proves
+// the ruling this seam adds: a checks list whose worst participating
+// health is degraded (nothing failed, nothing unknown) maps to
+// "ready_with_warnings", not the "ready" a pre-seam build would have
+// reported for the identical evidence, and not "not_ready" either: the
+// night can still start.
+func TestNightOutcomeFromChecks_WorstDegradedYieldsReadyWithWarnings(t *testing.T) {
+	checks := []nightReadinessCheck{
+		{name: "fpp:player-01:reachable", health: nightHealthHealthy(), reason: "ok"},
+		{name: "catalog:node-catalog-stale:render-01", health: nightHealthDegraded(), reason: "a deploy is held"},
+	}
+	if got := nightOutcomeFromChecks(checks); got != "ready_with_warnings" {
+		t.Fatalf("outcome with worst=degraded = %q, want ready_with_warnings", got)
+	}
+}
+
+// TestNightOutcomeFromChecks_FailedBeatsDegradedIntoNotReady proves
+// degraded never masks a real failure: a checks list carrying both a
+// degraded check and a failed check must still report "not_ready", the
+// same severity ordering nightHealthSeverity already ranks (failed above
+// degraded above unknown above healthy) and this seam does not change.
+func TestNightOutcomeFromChecks_FailedBeatsDegradedIntoNotReady(t *testing.T) {
+	checks := []nightReadinessCheck{
+		{name: "catalog:node-catalog-stale:render-01", health: nightHealthDegraded(), reason: "a deploy is held"},
+		{name: "fpp:player-02:reachable", health: nightHealthFailed(), reason: "unreachable"},
+	}
+	if got := nightOutcomeFromChecks(checks); got != "not_ready" {
+		t.Fatalf("outcome with a failed check alongside a degraded one = %q, want not_ready", got)
+	}
+}
+
 // --- invariant 6: power-down with no power configuration ---
 
 func TestInvariant6_PowerDownWithNoPowerConfigReachesStoppedWithoutError(t *testing.T) {
@@ -1059,11 +1194,16 @@ func newTableTestHandlers(t *testing.T) (*handlers, *store.Store) {
 
 func runStartNightTx(t *testing.T, h *handlers, st *store.Store, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem) {
 	t.Helper()
+	return runStartNightTxWithSkip(t, h, st, current, false)
+}
+
+func runStartNightTxWithSkip(t *testing.T, h *handlers, st *store.Store, current *store.NightSessionRecord, skipEnterShowLead bool) (nightCommandOutcome, *v1.Problem) {
+	t.Helper()
 	var out nightCommandOutcome
 	var problem *v1.Problem
 	err := st.InTx(context.Background(), func(ctx context.Context, tx *store.Tx) error {
 		var derr error
-		out, problem, derr = h.nightStartNightTx(ctx, tx, testNow, current, nil, false)
+		out, problem, derr = h.nightStartNightTx(ctx, tx, testNow, current, nil, false, skipEnterShowLead)
 		return derr
 	})
 	if err != nil {
@@ -1166,6 +1306,144 @@ func TestStartNightTable_Inactive_RejectedAsNotReady(t *testing.T) {
 		t.Fatalf("inactive (no session): problem=%v, want %s", problem, ProblemTypeNightNotReady)
 	}
 	_ = out
+}
+
+// --- The first show of the night must lead the same way every
+// later cycle already does (RESTING-MODE.md section 7.1), never collapse
+// its own boundary E to "now" and fire every negatively offset cue at once.
+
+const leadTestConfigPayload = `{
+	"show": "halloween-2026", "label": "lead test",
+	"showPlaylist": {"fppInstanceId": "player-01", "playlist": "halloween-show"},
+	"resting": {"fppInstanceId": "player-01", "playlist": "halloween-resting", "timelineAsset": {"show":"halloween-2026","sequence":"resting-loop","target":"player-01"}, "endOfNightRepeat": true},
+	"enterShow": {"cues": [{"name": "announce", "role": "announcement", "action": "announce-intro", "offsetMs": -60000}], "blackoutHoldMs": 0},
+	"enterResting": {"cues": [], "blackoutAfterShowMs": 0}
+}`
+
+func seedNightSessionWithPayload(t *testing.T, st *store.Store, state string, payload string) store.NightSessionRecord {
+	t.Helper()
+	if _, err := st.CreateConfigObject(context.Background(), "night.session", "halloween-main"); err != nil {
+		t.Fatalf("seed night.session config object: %v", err)
+	}
+	if _, err := st.CreateConfigRevision(context.Background(), store.ConfigRevisionRecord{
+		Kind: "night.session", ObjectID: "halloween-main", Revision: 1, PayloadJSON: payload, Source: "api",
+	}); err != nil {
+		t.Fatalf("seed night.session config revision: %v", err)
+	}
+	rec := store.NightSessionRecord{ID: "s1", ConfigObjectID: "halloween-main", ConfigRevision: 1, State: state, StateEnteredAt: testNow}
+	if err := st.CreateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("seed night session in state %q: %v", state, err)
+	}
+	return rec
+}
+
+func TestStartNightTx_EnterShowLead_HoldsLaunchForTheLead(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSessionWithPayload(t, st, "preshow", leadTestConfigPayload)
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTx(t, h, st, &session)
+	if problem != nil {
+		t.Fatalf("start-night with a -60000 enterShow cue: problem=%v, want success", problem)
+	}
+	boundary, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || boundary.ExpectedAt == nil {
+		t.Fatalf("start-night with a -60000 enterShow cue: no boundary recorded, want one armed with an ExpectedAt")
+	}
+	want := testNow.Add(60 * time.Second)
+	if !boundary.ExpectedAt.Equal(want) {
+		t.Fatalf("start-night with a -60000 enterShow cue: boundary E = %s, want %s (60s lead held, not collapsed to the transition's own start %s)", boundary.ExpectedAt, want, testNow)
+	}
+}
+
+// TestStartNightTx_EnterShowLead_ReasonSurvivesOneTick is the
+// operator-visible half of the lead fix: the launch-time explanation
+// nightStartNightTx writes into the boundary's Reason (session.transition
+// on the wire, rendered by the NightSession UI panel regardless of
+// lifecycle state) must still read that way after the night loop ticks
+// once, not "resynchronized after a clock discontinuity" - the clock-jump
+// guard's own resync text (nightloop.go), which fires on a healthy clock
+// whenever LastTickAt is left at a future instant instead of the tick
+// that actually committed it.
+func TestStartNightTx_EnterShowLead_ReasonSurvivesOneTick(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSessionWithPayload(t, st, "preshow", leadTestConfigPayload)
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTx(t, h, st, &session)
+	if problem != nil {
+		t.Fatalf("start-night with a -60000 enterShow cue: problem=%v, want success", problem)
+	}
+	before, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || before.Reason == "" {
+		t.Fatalf("start-night with a -60000 enterShow cue: no boundary reason recorded")
+	}
+
+	// runStartNightTx exercises nightStartNightTx exactly like
+	// handleNightCommand's own gated path, but neither persists the
+	// result - handleNightCommand's persistence is nightRunGated's own
+	// job, one layer up. Persist it here so the tick below (which reads
+	// and writes the store, not this in-memory result) finds the session
+	// it is actually meant to advance.
+	if err := st.UpdateNightSession(context.Background(), out.result, testNow); err != nil {
+		t.Fatalf("persist start-night result: %v", err)
+	}
+
+	// nightAdvanceTransitionToShow reads the pinned payload through
+	// deps.Config directly (unlike nightStartNightTx's tx-bound read), so
+	// the tick's own handlers need Config wired to the same store.
+	hTick := &handlers{deps: Dependencies{NightSessions: st, Config: st}.withDefaults(), clock: h.clock, nightReadinessMaxAge: h.nightReadinessMaxAge}
+	oneTickLater := testNow.Add(3 * time.Second)
+	hTick.nightAdvanceTransitionToShow(context.Background(), oneTickLater, out.result)
+
+	after := mustGetCurrentSession(t, st)
+	afterBoundary, ok := decodeNightBoundary(after.BoundaryJSON)
+	if !ok {
+		t.Fatalf("after one tick: no boundary decodable at all")
+	}
+	if afterBoundary.Reason != before.Reason {
+		t.Fatalf("after one tick following start-night with a 60s lead: boundary reason = %q, want unchanged from start-night's own %q (an operator reading this panel mid-wait must not see a false clock-discontinuity alarm)", afterBoundary.Reason, before.Reason)
+	}
+}
+
+func TestStartNightTx_NoNegativeOffsetCues_LaunchesImmediately(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSession(t, st, "preshow")
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTx(t, h, st, &session)
+	if problem != nil {
+		t.Fatalf("start-night with no negatively offset enterShow cues: problem=%v, want success", problem)
+	}
+	boundary, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || boundary.ExpectedAt == nil {
+		t.Fatalf("start-night with no negatively offset enterShow cues: no boundary recorded, want one armed with an ExpectedAt")
+	}
+	if !boundary.ExpectedAt.Equal(testNow) {
+		t.Fatalf("start-night with no negatively offset enterShow cues: boundary E = %s, want %s (no lead, unchanged path)", boundary.ExpectedAt, testNow)
+	}
+}
+
+func TestStartNightTx_SkipEnterShowLead_BypassesTheWaitForALateStart(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	session := seedNightSessionWithPayload(t, st, "preshow", leadTestConfigPayload)
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{ID: "r1", SessionID: "s1", EpochID: "s1", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]"}); err != nil {
+		t.Fatalf("seed readiness: %v", err)
+	}
+	out, problem := runStartNightTxWithSkip(t, h, st, &session, true)
+	if problem != nil {
+		t.Fatalf("start-night with skipEnterShowLead: problem=%v, want success", problem)
+	}
+	boundary, ok := decodeNightBoundary(out.result.BoundaryJSON)
+	if !ok || boundary.ExpectedAt == nil {
+		t.Fatalf("start-night with skipEnterShowLead: no boundary recorded, want one armed with an ExpectedAt")
+	}
+	if !boundary.ExpectedAt.Equal(testNow) {
+		t.Fatalf("start-night with skipEnterShowLead: boundary E = %s, want %s (operator skip bypasses the 60s lead)", boundary.ExpectedAt, testNow)
+	}
 }
 
 // --- RESTING-MODE.md §4.5's request-final-show table, one test per row ---

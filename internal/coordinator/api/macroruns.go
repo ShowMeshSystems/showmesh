@@ -166,7 +166,7 @@ func (h *handlers) handleListMacroRuns(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runs, err := h.deps.Macros.ListRuns(r.Context(), MacroRunFilter{
-		MacroObjectID: q.Get("macroId"), State: state, Limit: limit,
+		MacroObjectID: q.Get("macroId"), Show: q.Get("show"), State: state, Limit: limit,
 	})
 	if err != nil {
 		h.writeInternalError(w, now, "list macro runs", err)

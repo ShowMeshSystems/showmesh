@@ -99,9 +99,9 @@ export const PROBLEM_TYPE = {
   // full actionable message (which precondition, which state rejected it,
   // or that the session is degraded and end-session/prepare-site is the
   // recovery path). No dedicated error class dispatches on any of these
-  // — see NightCommandButton.tsx for the caller that branches on `type`
-  // directly, matching this file's own "listed individually so this
-  // constant stays complete" posture for showConfig*/fppCommand* above.
+  // — see ShowNight.tsx for the caller that branches on `type` directly,
+  // matching this file's own "listed individually so this constant
+  // stays complete" posture for showConfig*/fppCommand* above.
   nightNotReady: 'https://showmesh.dev/problems/night-not-ready',
   nightStateRejected: 'https://showmesh.dev/problems/night-state-rejected',
   nightAmbiguous: 'https://showmesh.dev/problems/night-ambiguous',

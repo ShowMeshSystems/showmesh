@@ -76,10 +76,21 @@ type Config struct {
 	// ever grows a real state-directory concept.
 	AssetDir string
 
-	// AgentAPIToken is an optional bearer credential asset.fetch sends when
-	// downloading asset bytes from the coordinator's read API. Only needed
-	// when the coordinator has closed anonymous reads (ADR-024's
-	// CloseReads); empty means send no Authorization header.
+	// AgentAPIToken is a bearer credential this agent sends to the
+	// coordinator. asset.fetch sends it when downloading asset bytes from
+	// the coordinator's read API, but that half is only needed when the
+	// coordinator has closed anonymous reads (ADR-024's CloseReads); empty
+	// means send no Authorization header there. FC3's FPP Connect
+	// registration (internal/agent/fppconnectregister.go) also sends this
+	// same token on its own POST /api/v1/assets, which is gated by
+	// asset:write, not node:read, and that listener binds unconditionally
+	// on every node regardless of the coordinator's read policy: a node
+	// that will ever be an FPP Connect target needs this token set to a
+	// credential carrying asset:write REGARDLESS of whether reads are
+	// closed, or registration fails on every upload. An empty token here
+	// draws a 401 the registrar now retries indefinitely (see
+	// fppConnectRegisterTerminalStatuses); a present token lacking
+	// asset:write draws a 403, which is terminal.
 	AgentAPIToken string
 
 	// AssetInventoryInterval is how often this agent publishes its asset
@@ -121,6 +132,16 @@ type Config struct {
 	// one named network interface. Empty means join every suitable
 	// interface (pkg/multisync.NewListener's own default).
 	MultiSyncInterface string
+
+	// FPPConnectListenAddr is the local "host:port" this node's FPP Connect
+	// HTTP compatibility listener binds. xLights contacts port 80 with the
+	// port hardcoded in both the discovery and upload URLs (RES-003 section
+	// 10.4), so the production default is ":80"; this override exists for
+	// dev stacks and tests that cannot bind a privileged port. It is the
+	// only environment variable ADR-044 decision 5 adds, allow-listed under
+	// ADR-039 decision 9 for the same reason as MultiSyncListenAddr: a bind
+	// address must be known before the process starts.
+	FPPConnectListenAddr string
 
 	// DiagnosticSurface is this node's own locally configured diagnostic
 	// idle surface. See [DiagnosticSurface].
@@ -179,6 +200,7 @@ const (
 	envClockReportInterval    = "SHOWMESH_CLOCK_REPORT_INTERVAL"
 	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
 	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
+	envFPPConnectListenAddr   = "SHOWMESH_FPPCONNECT_LISTEN_ADDR"
 
 	envDiagnosticSurface       = "SHOWMESH_RENDER_DIAGNOSTIC_SURFACE"
 	envDiagnosticWidth         = "SHOWMESH_RENDER_DIAGNOSTIC_WIDTH"
@@ -193,6 +215,11 @@ const (
 	defaultRenderReportInterval   = 15 * time.Second
 	defaultAudioReportInterval    = 15 * time.Second
 	defaultClockReportInterval    = 15 * time.Second
+
+	// defaultFPPConnectListenAddr is port 80, hardcoded because xLights
+	// builds its discovery and upload URLs with no port at all (RES-003
+	// section 10.4, ADR-044 decision 5).
+	defaultFPPConnectListenAddr = ":80"
 
 	// The diagnostic surface's defaults are an ordinary 1080p projector
 	// output at the reference profile's own frame rate (RES-004/the Track B
@@ -333,6 +360,7 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		ClockReportInterval:    clockReportInterval,
 		MultiSyncListenAddr:    getEnvDefault(lookup, envMultiSyncListenAddr, ""),
 		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
+		FPPConnectListenAddr:   getEnvDefault(lookup, envFPPConnectListenAddr, defaultFPPConnectListenAddr),
 		DiagnosticSurface:      diagnostic,
 	}
 
@@ -521,6 +549,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%s must be positive", envClockReportInterval)
 	}
 
+	if c.FPPConnectListenAddr == "" {
+		return fmt.Errorf("%s must not be empty", envFPPConnectListenAddr)
+	}
+
 	if c.DiagnosticSurface.Enabled() {
 		if c.DiagnosticSurface.Width <= 0 || c.DiagnosticSurface.Height <= 0 {
 			return fmt.Errorf("%s and %s must be positive", envDiagnosticWidth, envDiagnosticHeight)
@@ -577,6 +609,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("clock_report_interval", c.ClockReportInterval),
 		slog.String("multisync_listen_addr", c.MultiSyncListenAddr),
 		slog.String("multisync_interface", c.MultiSyncInterface),
+		slog.String("fppconnect_listen_addr", c.FPPConnectListenAddr),
 		slog.String("diagnostic_surface_id", c.DiagnosticSurface.SurfaceID),
 	)
 }

@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+[data-panes] { display: grid; grid-template-columns: minmax(0,1fr) minmax(320px,420px); align-items: start; min-width: 0; }
+[data-panes] > aside { position: sticky; top: 0; padding: 20px 28px 0 0; }
+@media (max-width: 1100px) {
+  [data-panes] { grid-template-columns: minmax(0,1fr); }
+  [data-panes] > aside { position: static; padding: 20px 28px 0 28px; }
+}
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">&#9662;</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 &middot; next in 1:06</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:0 0 80px">
+
+      <div style="padding:20px 28px 0">
+        <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Shows</a> <span style="color:var(--text-faint)">/</span> Winter Ridge 2026</p>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:8px">
+          <div style="min-width:0">
+            <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Winter Ridge 2026</h1>
+            <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">Revision <span style="font:var(--t-data);color:var(--text)">47</span> · saved by erbartos at 18:22</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Show details</button>
+            <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Check readiness</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:18px;padding:0 28px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:2px;flex-wrap:wrap">
+          <span style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid var(--accent);color:var(--accent);font:var(--t-body);font-weight:600">Playlists<span style="font:var(--t-data);font-size:11px;color:var(--accent)">2</span></span>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Cues<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">14</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Assets<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">22</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Presentation<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">3</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Automation<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">2</span></a>
+        </div>
+      </div>
+
+      <div data-panes>
+
+        <section style="min-width:0;padding:20px 24px 0 28px">
+
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <p style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Playlists in this show</p>
+            <button type="button" style="height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">New playlist</button>
+          </div>
+
+          <div style="display:grid;gap:1px;margin-top:12px;background:var(--border);border:1px solid var(--border);border-radius:5px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;background:var(--accent-bg);border-left:2px solid var(--accent);cursor:pointer">
+              <div style="min-width:0">
+                <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                  <span style="font:var(--t-subhead);color:var(--accent)">Main Show</span>
+                  <span style="display:inline-flex;align-items:center;height:19px;padding:0 6px;border:1px solid var(--accent-border);border-radius:3px;font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--accent)">FPP runner</span>
+                </div>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">FPP owns order and progression · 6 entries bound</p>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:3px;background:var(--warn-bg);border:1px solid var(--warn-fg);color:var(--warn-fg);font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase"><span aria-hidden="true">⚠</span>Bindings held</span>
+                <span style="display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:3px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase">Editing</span>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;background:var(--surface);border-left:2px solid transparent;cursor:pointer" style-hover="background:var(--raised);border-left-color:var(--border-strong)">
+              <div style="min-width:0">
+                <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                  <span style="font:var(--t-subhead)">Background Music</span>
+                  <span style="display:inline-flex;align-items:center;height:19px;padding:0 6px;border:1px solid var(--border-strong);border-radius:3px;font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--text-muted)">ShowMesh audio</span>
+                </div>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">ShowMesh owns order and progression · 9 entries · repeat all</p>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:3px;background:var(--good-bg);border:1px solid var(--good-fg);color:var(--good-fg);font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase"><span aria-hidden="true">✓</span>Ready</span>
+                <span style="font:var(--t-small);color:var(--text-muted);white-space:nowrap">Edit <span aria-hidden="true">→</span></span>
+              </div>
+            </div>
+          </div>
+
+          <p style="margin:12px 0 0;padding:11px 13px;border-left:3px solid var(--accent-border);background:var(--raised);font:var(--t-small);color:var(--text-muted)">These two run <strong style="color:var(--text)">concurrently</strong>. FPP advances the lighting sequence while ShowMesh independently advances the music bed. Two runners are never authoritative for the same playlist.</p>
+
+          <sc-if value="{{ isFpp }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:28px;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Editing</span>
+              <span style="font:var(--t-heading);letter-spacing:-0.015em">Main Show</span>
+              <span style="display:inline-flex;align-items:center;height:19px;padding:0 6px;border:1px solid var(--accent-border);border-radius:3px;font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--accent)">FPP runner</span>
+            </div>
+            <div style="margin-top:16px;border:1px solid var(--border);border-radius:5px;background:var(--surface)">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border)">
+                <p style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Imported from FPP</p>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span style="display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:3px;background:var(--warn-bg);border:1px solid var(--warn-fg);color:var(--warn-fg);font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase"><span aria-hidden="true">⚠</span>Hash changed</span>
+                  <button type="button" style="height:26px;padding:0 9px;border:1px solid var(--border-strong);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;cursor:pointer" style-hover="border-color:var(--accent)">Re-import</button>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;padding:14px">
+                <label style="display:grid;gap:5px;min-width:0">
+                  <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Instance</span>
+                  <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                    <option>barn-player</option>
+                    <option>garage-player</option>
+                  </select>
+                </label>
+                <label style="display:grid;gap:5px;min-width:0">
+                  <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">FPP playlist</span>
+                  <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                    <option>WinterRidge_Main</option>
+                    <option>WinterRidge_Preshow</option>
+                  </select>
+                </label>
+                <div style="display:grid;gap:5px;min-width:0">
+                  <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Canonical hash</span>
+                  <p style="margin:0;display:flex;align-items:center;height:32px;padding:0 8px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);font:var(--t-data);color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">4f1c…9ab2</p>
+                </div>
+              </div>
+              <p style="margin:0;padding:0 14px 12px;font:var(--t-small);color:var(--text-muted)">Imported 3 days ago. FPP's definition changed at <span style="font:var(--t-data);color:var(--text)">20:54</span>, so the canonical hash no longer matches and <strong style="color:var(--warn-fg)">every binding below is held</strong> until you re-import and reconcile. The hash is derived evidence, not a field.</p>
+            </div>
+
+            <div style="display:grid;grid-template-columns:158px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:20px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Authority</span>
+              <div>
+                <p style="margin:0;font:var(--t-subhead)">FPP decides what plays next</p>
+                <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">You cannot reorder this list here — it mirrors FPP's playlist. Your job is to bind each imported entry to a cue.</p>
+              </div>
+            </div>
+
+            <div style="margin-top:20px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+              <table style="width:100%;min-width:520px;border-collapse:collapse;font:var(--t-body)">
+                <thead>
+                  <tr>
+                    <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">FPP entry</th>
+                    <th style="width:196px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Bound cue</th>
+                    <th style="width:92px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Verdict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Lead in · 0</span><br><span style="font:var(--t-body)">preshow-loop.fseq</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><select style="height:30px;padding:0 7px;border:1px solid var(--border-strong);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-small)"><option>House Preshow Loop</option><option>Blackout Hold</option></select></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Bound</span></td>
+                  </tr>
+                  <tr>
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Main · 0</span><br><span style="font:var(--t-body)">wizards-in-winter.fseq</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><select style="height:30px;padding:0 7px;border:1px solid var(--border-strong);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-small)"><option>Wizards in Winter</option><option>Carol of the Bells</option></select></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Bound</span></td>
+                  </tr>
+                  <tr style="background:var(--accent-bg)">
+                    <td style="padding:9px 10px 9px 12px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);border-left:2px solid var(--accent)"><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Main · 1</span><br><span style="font:var(--t-body);font-weight:600;color:var(--accent)">carol-of-the-bells.fseq</span></td>
+                    <td style="padding:9px 10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border)"><select style="height:30px;padding:0 7px;border:1px solid var(--accent-border);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-small)"><option>Carol of the Bells</option><option>Wizards in Winter</option></select></td>
+                    <td style="padding:9px 14px 9px 10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Bound</span></td>
+                  </tr>
+                  <tr>
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Main · 2</span><br><span style="font:var(--t-body)">sponsor-read.mp3</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><select style="height:30px;padding:0 7px;border:1px solid var(--border-strong);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-small)"><option>Sponsor Announcement</option></select></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Bound</span></td>
+                  </tr>
+                  <tr>
+                    <td style="padding:9px 10px 9px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--warn-fg)"><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Main · 3</span><br><span style="font:var(--t-body)">rooftop-finale-v2.fseq</span><br><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--warn-fg)">Filename changed in FPP</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><select style="height:30px;padding:0 7px;border:1px solid var(--warn-border);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-small)"><option>Rooftop Finale</option><option>Carol of the Bells</option></select></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--warn-fg)">⚠ Re-check</span></td>
+                  </tr>
+                  <tr>
+                    <td style="padding:9px 10px 9px 12px;border-left:2px dashed var(--text-faint)"><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">Lead out · 0</span><br><span style="font:var(--t-body)">blackout-hold.fseq</span></td>
+                    <td style="padding:9px 10px"><select style="height:30px;padding:0 7px;border:1px dashed var(--text-faint);border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small)"><option>No cue bound</option><option>Blackout Hold</option></select></td>
+                    <td style="padding:9px 14px 9px 10px"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint)">Unbound</span></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="padding:9px 14px;border-top:1px solid var(--border);background:var(--raised)">
+                <span style="font:var(--t-small);color:var(--text-muted)">6 imported entries · all bindings held pending reconciliation. One entry's filename also changed; one has no cue at all.</span>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:158px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:20px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">On mismatch</span>
+              <div>
+                <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+                  <button type="button" aria-pressed="{{ true }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">Hold</button>
+                  <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Black &amp; silence</button>
+                  <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Safe cue</button>
+                </div>
+                <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted)">If FPP plays something this playlist cannot resolve, hold the current output rather than guessing.</p>
+                <p style="margin:6px 0 0;font:var(--t-small);color:var(--warn-fg)">Not wired yet — this is expected to follow Show vs Program mode rather than being set per playlist.</p>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isAudio }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:28px;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Editing</span>
+              <span style="font:var(--t-heading);letter-spacing:-0.015em">Background Music</span>
+              <span style="display:inline-flex;align-items:center;height:19px;padding:0 6px;border:1px solid var(--border-strong);border-radius:3px;font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--text-muted)">ShowMesh audio</span>
+            </div>
+            <div style="display:grid;grid-template-columns:158px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:16px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Authority</span>
+              <div>
+                <p style="margin:0;font:var(--t-subhead)">ShowMesh decides what plays next</p>
+                <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">You author this order. ShowMesh owns progression, repeat, and the audio playhead. No LTC is emitted unless a cue declares it.</p>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:20px">
+              <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Repeat</span>
+                <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px">
+                  <button type="button" aria-pressed="{{ false }}" style="padding:5px 11px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">None</button>
+                  <button type="button" aria-pressed="{{ true }}" style="padding:5px 11px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">All</button>
+                </div>
+                <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" defaultChecked="{{ true }}" style="width:15px;height:15px;accent-color:var(--accent)"><span style="font:var(--t-small)">Resume where it left off</span></label>
+              </div>
+              <button type="button" style="height:30px;padding:0 12px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Add cue</button>
+            </div>
+
+            <div style="margin-top:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+              <table style="width:100%;min-width:480px;border-collapse:collapse;font:var(--t-body)">
+                <thead>
+                  <tr>
+                    <th style="width:56px;padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Ord</th>
+                    <th style="padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Cue</th>
+                    <th style="width:86px;padding:8px 14px 8px 10px;text-align:right;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Length</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--text-faint)">⠿ 1</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-body)">Winter Bed — Track 1</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-bed-01.wav</span></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">4:12</td>
+                  </tr>
+                  <tr style="background:var(--accent-bg)">
+                    <td style="padding:9px 10px 9px 12px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);border-left:2px solid var(--accent);font:var(--t-data);color:var(--accent)">⠿ 2</td>
+                    <td style="padding:9px 10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border)"><span style="font:var(--t-body);font-weight:600;color:var(--accent)">Winter Bed — Track 2</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-bed-02.wav</span></td>
+                    <td style="padding:9px 14px 9px 10px;border-top:1px solid var(--accent-border);border-bottom:1px solid var(--accent-border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">3:48</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--text-faint)">⠿ 3</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-body)">Winter Bed — Track 3</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-bed-03.wav</span></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">5:02</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:9px 10px 9px 12px;border-left:2px dashed var(--text-faint);font:var(--t-data);color:var(--text-faint)">⠿ 4</td>
+                    <td style="padding:9px 10px"><span style="font:var(--t-body)">Winter Bed — Track 4</span><br><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint)">Asset not yet uploaded</span></td>
+                    <td style="padding:9px 14px 9px 10px;text-align:right;font:var(--t-data);color:var(--text-faint)">—</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="padding:9px 14px;border-top:1px solid var(--border);background:var(--raised)">
+                <span style="font:var(--t-small);color:var(--text-muted)">Drag to reorder. 9 entries · total 38:14 · repeats until the transition fades it out.</span>
+              </div>
+            </div>
+          </sc-if>
+
+        </section>
+
+        <aside style="min-width:0">
+          <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+
+            <div style="padding:14px;border-bottom:1px solid var(--border);background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Cue</p>
+              <h2 id="sh-cue" style="margin:5px 0 0;font:var(--t-heading);letter-spacing:-0.015em">Carol of the Bells</h2>
+              <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted)">Used by <a href="#">2 playlists</a> · edits here apply to both</p>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Name</span>
+                <input type="text" value="Carol of the Bells" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+              </label>
+            </div>
+
+            <div style="padding:14px;border-bottom:1px solid var(--border)">
+              <h3 style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Outputs</h3>
+              <p style="margin:7px 0 0;font:var(--t-small);color:var(--text-muted)">What ShowMesh runs when this cue activates. At least one is required.</p>
+
+              <div style="margin-top:14px;border:1px solid var(--border);border-radius:4px">
+                <label style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer"><input type="checkbox" defaultChecked="{{ true }}" style="width:15px;height:15px;accent-color:var(--accent)"><span style="font:var(--t-body);font-weight:500">Render</span></label>
+                <div style="padding:11px">
+                  <label style="display:grid;gap:5px">
+                    <span style="font:var(--t-small);color:var(--text-muted)">Logical sequence</span>
+                    <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                      <option>carol-of-the-bells</option>
+                      <option>wizards-in-winter</option>
+                      <option>rooftop-finale</option>
+                    </select>
+                    <span style="font:var(--t-small);color:var(--text-faint)">Per-target render assets resolve from this. Never a filename.</span>
+                  </label>
+                </div>
+              </div>
+
+              <div style="margin-top:10px;border:1px solid var(--border);border-radius:4px">
+                <label style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer"><input type="checkbox" defaultChecked="{{ true }}" style="width:15px;height:15px;accent-color:var(--accent)"><span style="font:var(--t-body);font-weight:500">Audience audio</span></label>
+                <div style="padding:11px;display:grid;gap:12px">
+                  <label style="display:grid;gap:5px">
+                    <span style="font:var(--t-small);color:var(--text-muted)">Asset</span>
+                    <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                      <option>carol-of-the-bells.wav — 2:48</option>
+                      <option>wizards-in-winter.wav — 3:22</option>
+                    </select>
+                    <span style="font:var(--t-small);color:var(--text-faint)">This show's assets only. <a href="#">Upload</a></span>
+                  </label>
+                  <label style="display:grid;gap:5px;max-width:148px">
+                    <span style="font:var(--t-small);color:var(--text-muted)">Start offset</span>
+                    <input type="text" value="00:00.000" style="height:32px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                  </label>
+                </div>
+              </div>
+
+              <div style="margin-top:10px;border:1px solid var(--border);border-radius:4px">
+                <label style="display:flex;align-items:center;justify-content:space-between;gap:9px;padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer">
+                  <span style="display:flex;align-items:center;gap:9px"><input type="checkbox" defaultChecked="{{ true }}" style="width:15px;height:15px;accent-color:var(--accent)"><span style="font:var(--t-body);font-weight:500">LTC</span></span>
+                  <span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Needs audio</span>
+                </label>
+                <div style="padding:11px">
+                  <label style="display:grid;gap:5px;max-width:148px">
+                    <span style="font:var(--t-small);color:var(--text-muted)">Start offset</span>
+                    <input type="text" value="00:00.000" style="height:32px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                  </label>
+                  <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-faint)">Lives on the cue, not the entry — the same timecode wherever this cue runs.</p>
+                </div>
+              </div>
+
+              <div style="margin-top:10px;border:1px solid var(--border);border-radius:4px;opacity:0.62">
+                <label style="display:flex;align-items:center;justify-content:space-between;gap:9px;padding:9px 11px;cursor:pointer">
+                  <span style="display:flex;align-items:center;gap:9px"><input type="checkbox" style="width:15px;height:15px;accent-color:var(--accent)"><span style="font:var(--t-body);font-weight:500">Announcement</span></span>
+                  <span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Off</span>
+                </label>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--raised)">
+              <span style="font:var(--t-small);color:var(--text-muted)">Cue rev <span style="font:var(--t-data);color:var(--text)">12</span> · unsaved</span>
+              <div style="display:flex;gap:8px">
+                <button type="button" style="height:32px;padding:0 10px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--surface)">Discard</button>
+                <button type="button" style="height:32px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save cue</button>
+              </div>
+            </div>
+
+          </div>
+        </aside>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;runner&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;fpp&quot;, &quot;showmesh-audio&quot;], &quot;default&quot;: &quot;fpp&quot;, &quot;tsType&quot;: &quot;'fpp' | 'showmesh-audio'&quot;, &quot;section&quot;: &quot;Playlist&quot; },
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot;, &quot;section&quot;: &quot;Theme&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const runner = this.props.runner ?? 'fpp';
+    return {
+      theme: this.props.theme ?? 'dark',
+      isFpp: runner === 'fpp',
+      isAudio: runner === 'showmesh-audio',
+    };
+  }
+}
+
+</script>
+</body>
+</html>

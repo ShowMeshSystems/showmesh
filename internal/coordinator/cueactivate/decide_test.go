@@ -2,14 +2,17 @@ package cueactivate
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
 // --- fixtures, mirroring internal/coordinator/fppreconcile's and
@@ -86,6 +89,43 @@ func putLTCCue(t *testing.T, st *store.Store, id, showID string) {
 		t.Fatalf("encode show.cue payload: %v", err)
 	}
 	putConfig(t, st, config.ShowCueConfigKind, id, payload)
+}
+
+// editLTCCue re-saves id's show.cue payload as a NEW revision (2, 3, ...),
+// mirroring what an operator's save of an edited Cue actually does to the
+// store: [putLTCCue] itself can only write the FIRST revision (it always
+// activates revision 1), so a test that needs to simulate a MID-SHOW edit
+// of an already-created Cue calls this instead. startOffsetMillis is
+// varied so the resulting payload, and therefore cueObj.CurrentRevision's
+// own hash inputs and the cue catalog's computed revision, actually
+// differs from whatever revision came before, exactly like a genuine
+// operator edit would.
+func editLTCCue(t *testing.T, st *store.Store, id, showID string, startOffsetMillis int) {
+	t.Helper()
+	payload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: showID, Name: id,
+		Outputs: config.ShowCueOutputs{
+			Audio: &config.ShowCueAudioOutput{Asset: "asset-" + id},
+			LTC:   &config.ShowCueLTCOutput{StartOffsetMillis: startOffsetMillis},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	ctx := context.Background()
+	obj, err := st.GetConfigObject(ctx, config.ShowCueConfigKind, id)
+	if err != nil {
+		t.Fatalf("get show.cue %q before edit: %v", id, err)
+	}
+	nextRevision := obj.CurrentRevision + 1
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.ShowCueConfigKind, ObjectID: id, Revision: nextRevision, PayloadJSON: payload, Source: "api",
+	}); err != nil {
+		t.Fatalf("create config revision show.cue/%s rev %d: %v", id, nextRevision, err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.ShowCueConfigKind, id, nextRevision); err != nil {
+		t.Fatalf("activate config revision show.cue/%s rev %d: %v", id, nextRevision, err)
+	}
 }
 
 func putAudioNode(t *testing.T, st *store.Store, nodeID string) {
@@ -187,7 +227,7 @@ func TestDecideResolvedActivationCarriesEveryPinnedIdentity(t *testing.T) {
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -248,7 +288,7 @@ func TestAuthorizeCrossShowRefusesDispatchingNothing(t *testing.T) {
 
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
 	obs := baseObservation("inst-1")
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -262,7 +302,7 @@ func TestAuthorizeCrossShowRefusesDispatchingNothing(t *testing.T) {
 	putShow(t, st, "show-2", "Show Two")
 	putActiveShow(t, st, "show-2")
 
-	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", act, nil)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -287,7 +327,7 @@ func TestAuthorizeStaleGenerationRefused(t *testing.T) {
 
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
 	obs := baseObservation("inst-1")
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -301,7 +341,7 @@ func TestAuthorizeStaleGenerationRefused(t *testing.T) {
 	// now older than what the coordinator holds.
 	putActiveShow(t, st, "show-1")
 
-	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", act, nil)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -329,7 +369,7 @@ func TestDecideMismatchHoldDispatchesNothing(t *testing.T) {
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -362,7 +402,7 @@ func TestDecideMismatchBlackAndSilenceClearsParticipatingNodes(t *testing.T) {
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -396,7 +436,7 @@ func TestDecideMismatchSafeCueActivatesTheSafeCue(t *testing.T) {
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -428,7 +468,7 @@ func TestDecideUnboundWhenFppreconcileFoundNoBindingAnywhere(t *testing.T) {
 	result := fppreconcile.Result{Outcome: fppreconcile.OutcomeUnbound, Reason: "no ShowMesh output was ever authorized by this instance"}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -458,7 +498,7 @@ func TestDecideUnboundWhenActiveShowHasNoOwnBindingForThisInstance(t *testing.T)
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -474,7 +514,7 @@ func TestDecideIdentityUnavailable(t *testing.T) {
 	result := fppreconcile.Result{Outcome: fppreconcile.OutcomeIdentityUnavailable, Reason: "FPP could not establish identity"}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1")
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -505,11 +545,11 @@ func TestActivationIDStableAcrossRepeatedDecideForTheSameEntry(t *testing.T) {
 	obs2 := baseObservation("inst-1")
 	obs2.Sequence, obs2.Position = 2, 5000
 
-	dec1, err := Decide(context.Background(), st, result, obs1, "inst-1")
+	dec1, err := Decide(context.Background(), st, result, obs1, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide (1): %v", err)
 	}
-	dec2, err := Decide(context.Background(), st, result, obs2, "inst-1")
+	dec2, err := Decide(context.Background(), st, result, obs2, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide (2): %v", err)
 	}
@@ -522,7 +562,7 @@ func TestActivationIDStableAcrossRepeatedDecideForTheSameEntry(t *testing.T) {
 	otherCueID := "cue-other"
 	putLTCCue(t, st, otherCueID, "show-1")
 	resultOther := resolvedResult("show-1", "playlist-1", 1, "entry-2", otherCueID, 1)
-	decOther, err := Decide(context.Background(), st, resultOther, obs2, "inst-1")
+	decOther, err := Decide(context.Background(), st, resultOther, obs2, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide (other entry): %v", err)
 	}
@@ -565,11 +605,11 @@ func TestActivationIDChangesAcrossALoopingEntryOccurrence(t *testing.T) {
 	firstLapTick2 := baseObservation("inst-1")
 	firstLapTick2.Sequence, firstLapTick2.EntryOccurrenceSequence, firstLapTick2.Position = 2, 1, 5000
 
-	dec1, err := Decide(context.Background(), st, result, firstLapTick1, "inst-1")
+	dec1, err := Decide(context.Background(), st, result, firstLapTick1, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide (first lap, tick 1): %v", err)
 	}
-	dec2, err := Decide(context.Background(), st, result, firstLapTick2, "inst-1")
+	dec2, err := Decide(context.Background(), st, result, firstLapTick2, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide (first lap, tick 2): %v", err)
 	}
@@ -585,7 +625,7 @@ func TestActivationIDChangesAcrossALoopingEntryOccurrence(t *testing.T) {
 	secondLapTick := baseObservation("inst-1")
 	secondLapTick.Sequence, secondLapTick.EntryOccurrenceSequence, secondLapTick.Position = 3, 3, 1000
 
-	dec3, err := Decide(context.Background(), st, result, secondLapTick, "inst-1")
+	dec3, err := Decide(context.Background(), st, result, secondLapTick, "inst-1", nil)
 	if err != nil {
 		t.Fatalf("Decide (second lap): %v", err)
 	}
@@ -672,7 +712,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 	putPlaylist(t, st, "playlist-other", singleEntryPlaylist("show-1", "inst-other", hash64("b2"), "cue-other", config.ShowPlaylistMismatchPolicyHold, ""))
 
 	ownResult := resolvedResult("show-1", "playlist-own", 1, "entry-1", "cue-own", 1)
-	ownDec, err := Decide(context.Background(), st, ownResult, baseObservation("inst-own"), "inst-own")
+	ownDec, err := Decide(context.Background(), st, ownResult, baseObservation("inst-own"), "inst-own", nil)
 	if err != nil {
 		t.Fatalf("Decide(cue-own): %v", err)
 	}
@@ -682,7 +722,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 	}
 
 	otherResult := resolvedResult("show-1", "playlist-other", 1, "entry-1", "cue-other", 1)
-	otherDec, err := Decide(context.Background(), st, otherResult, baseObservation("inst-other"), "inst-other")
+	otherDec, err := Decide(context.Background(), st, otherResult, baseObservation("inst-other"), "inst-other", nil)
 	if err != nil {
 		t.Fatalf("Decide(cue-other): %v", err)
 	}
@@ -691,7 +731,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 		t.Fatalf("no activation built for node-1/cue-other")
 	}
 
-	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", ownAct)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", ownAct, nil)
 	if err != nil {
 		t.Fatalf("Authorize(cue-own): %v", err)
 	}
@@ -700,7 +740,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 			"an unrelated cue's missing asset must never refuse it", outcome)
 	}
 
-	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", otherAct)
+	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", otherAct, nil)
 	if err != nil {
 		t.Fatalf("Authorize(cue-other): %v", err)
 	}
@@ -712,5 +752,396 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 	}
 	if !strings.Contains(reason, "other-seq") || !strings.Contains(reason, "node-1") || !strings.Contains(reason, "cue-other") {
 		t.Fatalf("reason = %q, want it to name the sequence (other-seq), the node (node-1) and the cue (cue-other)", reason)
+	}
+}
+
+// TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit is a
+// regression test for the incident this type exists to close: an operator
+// edits the PLAYING Cue's show.cue object mid-show, and, WITHOUT a pin,
+// the coordinator's own next Decide/Authorize pass mints a changed
+// CatalogRevision/CueRevision for every Cue in the Show, which is exactly
+// what a node's own held (only-explicitly-deployed) catalog cannot follow,
+// producing the reported stale-catalog refusal storm. WITH a pin (ADR-033
+// show mode), the identical edit must be invisible to Decide and Authorize
+// until a fresh pin starts, per Eric's ruling: "the live activation
+// identity re-snapshots each show loop" (no pin) versus "the identity
+// captured at show start stays authoritative until the show is fully
+// stopped and restarted" (pinned).
+func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	// putLTCCue's own audio output names "asset-cue-1"; genuinely upload
+	// and hold it, so this pin-focused test exercises a healthy
+	// installation rather than tripping cueAssetsPresent's own
+	// never-uploaded-sequence refusal.
+	ltcCueAsset := createAsset(t, st, "show-1", "asset-cue-1", store.AssetTargetKindNode, "node-1", "sha256:ltc-cue-1", "Cue1.wav")
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "node-1",
+		[]store.NodeAssetInventoryRecord{{NodeID: "node-1", ContentHash: ltcCueAsset.ContentHash, RuntimeFilename: ltcCueAsset.RuntimeFilename, SizeBytes: ltcCueAsset.SizeBytes, VerifiedAt: now}},
+		store.NodeAssetReportRecord{NodeID: "node-1", ReportedAt: now, Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory: %v", err)
+	}
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
+	obs := baseObservation("inst-1")
+
+	t.Run("pinned (show mode): the edit is staged", func(t *testing.T) {
+		active, err := assetsync.ResolveActiveShow(context.Background(), st)
+		if err != nil {
+			t.Fatalf("ResolveActiveShow: %v", err)
+		}
+		pin := NewShowPin(active)
+
+		decBefore, err := Decide(context.Background(), st, result, obs, "inst-1", pin)
+		if err != nil {
+			t.Fatalf("Decide (before edit): %v", err)
+		}
+		before, ok := decBefore.Activations["node-1"]
+		if !ok {
+			t.Fatalf("no activation built for node-1 before the edit")
+		}
+		outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", before, pin)
+		if err != nil {
+			t.Fatalf("Authorize (before edit): %v", err)
+		}
+		if !ok {
+			t.Fatalf("Authorize (before edit) refused with outcome %q, want authorized", outcome)
+		}
+
+		// The operator edits the PLAYING cue.
+		editLTCCue(t, st, "cue-1", "show-1", 9999)
+
+		decAfter, err := Decide(context.Background(), st, result, obs, "inst-1", pin)
+		if err != nil {
+			t.Fatalf("Decide (after edit): %v", err)
+		}
+		after, ok := decAfter.Activations["node-1"]
+		if !ok {
+			t.Fatalf("no activation built for node-1 after the edit")
+		}
+		if after.CatalogRevision != before.CatalogRevision {
+			t.Fatalf("CatalogRevision changed under a pin: before %q, after %q; a mid-show cue edit must be invisible until the show restarts", before.CatalogRevision, after.CatalogRevision)
+		}
+		if after.CueRevision != before.CueRevision {
+			t.Fatalf("CueRevision changed under a pin: before %d, after %d; a mid-show cue edit must be invisible until the show restarts", before.CueRevision, after.CueRevision)
+		}
+
+		// Authorize, called again (a fresh independent re-check, exactly as
+		// a real dispatch would), must still authorize the SAME pinned
+		// identity; this is the stale-catalog refusal storm's own
+		// non-occurrence, proven directly rather than inferred from the
+		// tuple alone.
+		outcome, _, _, ok, err = Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", after, pin)
+		if err != nil {
+			t.Fatalf("Authorize (after edit, pinned): %v", err)
+		}
+		if !ok {
+			t.Fatalf("Authorize (after edit, pinned) refused with outcome %q, want authorized: a mid-show cue edit must never trigger a stale-catalog refusal under a pin", outcome)
+		}
+	})
+
+	t.Run("unpinned (program mode): the edit takes effect at the next tick", func(t *testing.T) {
+		decBefore, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+		if err != nil {
+			t.Fatalf("Decide (before edit): %v", err)
+		}
+		before := decBefore.Activations["node-1"]
+
+		editLTCCue(t, st, "cue-1", "show-1", 12345)
+
+		decAfter, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+		if err != nil {
+			t.Fatalf("Decide (after edit): %v", err)
+		}
+		after := decAfter.Activations["node-1"]
+
+		if after.CueRevision == before.CueRevision {
+			t.Fatalf("CueRevision did not change across an unpinned edit: still %d; program mode must re-snapshot live on its own next tick", before.CueRevision)
+		}
+		if after.CatalogRevision == before.CatalogRevision {
+			t.Fatalf("CatalogRevision did not change across an unpinned edit: still %q; program mode must re-snapshot live on its own next tick", before.CatalogRevision)
+		}
+	})
+}
+
+// TestAuthorizeRefusesASequenceThatWasNeverUploaded proves this coordinator
+// refuses a Cue output naming a sequence with NO asset ever uploaded for it
+// anywhere — not merely missing from this node's own inventory, but absent
+// from the asset store entirely (createAsset is deliberately never called
+// for "never-uploaded-seq") — exactly like any other missing asset, never
+// treated as present. This is what keeps this coordinator's own dispatch
+// gate agreeing with the node's own assetPresent (internal/agent/
+// cueactivationops.go), which has always refused an empty filename: before
+// this fix, this coordinator authorized the activation and the refusal
+// only ever surfaced later, at the node, past the point a readiness check
+// could have told an operator anything.
+func TestAuthorizeRefusesASequenceThatWasNeverUploaded(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+
+	putAudioCue(t, st, "cue-1", "show-1", "never-uploaded-seq")
+	// node-1's own inventory report is fresh and complete, but nothing was
+	// ever uploaded for "never-uploaded-seq" anywhere.
+	putFreshReport(t, st, "node-1", now)
+
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
+	dec, err := Decide(context.Background(), st, result, baseObservation("inst-1"), "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	act, ok := dec.Activations["node-1"]
+	if !ok {
+		t.Fatalf("no activation built for node-1")
+	}
+
+	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, time.Time{}, "node-1", act, nil)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if ok {
+		t.Fatal("Authorize ok = true, want false: never-uploaded-seq has no asset anywhere, so this activation can never resolve to a runtime file on the node")
+	}
+	if outcome != cueauth.OutcomeAssetMissing {
+		t.Fatalf("outcome = %q, want %q", outcome, cueauth.OutcomeAssetMissing)
+	}
+	if !strings.Contains(reason, "never-uploaded-seq") || !strings.Contains(reason, "node-1") || !strings.Contains(reason, "cue-1") {
+		t.Fatalf("reason = %q, want it to name the sequence (never-uploaded-seq), the node (node-1) and the cue (cue-1)", reason)
+	}
+}
+
+// --- StateEvidenceBroken: owner ruling 2026-09-02, cue-deactivate-on-jump ---
+
+// TestDecideEvidenceBrokenOutranksResolvedOutcome proves the marker's own
+// precedence rule (StateEvidenceBroken's own doc comment): with
+// obs.EvidenceBrokenAt set, Decide reaches StateEvidenceBroken even though
+// result.Outcome is OutcomeResolved, and Decision.EvidenceBroken carries
+// exactly the SAME per-node identity decideResolved would have built from
+// this same frozen result — the Cue this coordinator actually activated
+// before evidence broke — never Decision.Activations.
+func TestDecideEvidenceBrokenOutranksResolvedOutcome(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	putFreshReport(t, st, "node-1", now)
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
+	obs := baseObservation("inst-1")
+	brokenAt := time.Unix(3500, 0).UTC()
+	obs.EvidenceBrokenAt = &brokenAt
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateEvidenceBroken {
+		t.Fatalf("State = %q, want %q (the marker must outrank OutcomeResolved)", dec.State, StateEvidenceBroken)
+	}
+	if len(dec.Activations) != 0 {
+		t.Fatalf("Activations = %+v, want empty: an evidence-broken decision must never be dispatched as a cue.activate", dec.Activations)
+	}
+	if len(dec.ClearNodes) != 0 {
+		t.Fatalf("ClearNodes = %+v, want empty: this is not an H0.2 mismatch effect", dec.ClearNodes)
+	}
+	act, ok := dec.EvidenceBroken["node-1"]
+	if !ok {
+		t.Fatalf("no EvidenceBroken entry for node-1; EvidenceBroken = %+v", dec.EvidenceBroken)
+	}
+	if act.CueID != "cue-1" || act.Show != "show-1" {
+		t.Errorf("EvidenceBroken[node-1] = %+v, want the Cue actually resolved before evidence broke (cue-1/show-1)", act)
+	}
+	if !strings.Contains(dec.Reason, "sequence-regression") {
+		t.Errorf("Reason = %q, want it to name the sequence-regression discontinuity", dec.Reason)
+	}
+}
+
+// TestDecideEvidenceBrokenOutranksIdentityUnavailable proves the marker
+// check runs before EVEN the identity-unavailable/unbound early returns,
+// not merely before the mismatch/resolved routing further down.
+func TestDecideEvidenceBrokenOutranksIdentityUnavailable(t *testing.T) {
+	st := openTestStore(t)
+	result := fppreconcile.Result{Outcome: fppreconcile.OutcomeIdentityUnavailable, Reason: "FPP could not establish identity"}
+	obs := baseObservation("inst-1")
+	brokenAt := time.Unix(3500, 0).UTC()
+	obs.EvidenceBrokenAt = &brokenAt
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateEvidenceBroken {
+		t.Fatalf("State = %q, want %q", dec.State, StateEvidenceBroken)
+	}
+	if len(dec.EvidenceBroken) != 0 {
+		t.Fatalf("EvidenceBroken = %+v, want empty: OutcomeIdentityUnavailable never resolved a Cue to undo", dec.EvidenceBroken)
+	}
+}
+
+// TestDecideEvidenceBrokenWithNonResolvedOutcomeHasNothingToUndo proves the
+// "nothing was cleanly activated to begin with" case: a broken marker on a
+// row whose own last resolution was a mismatch outcome (never resolved to
+// an authorized Cue) reaches StateEvidenceBroken with an empty
+// EvidenceBroken map, not an error and not a guess.
+func TestDecideEvidenceBrokenWithNonResolvedOutcomeHasNothingToUndo(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := fppreconcile.Result{
+		Outcome: fppreconcile.OutcomeStaleImport, Reason: "the FPP playlist was edited and re-imported",
+		PlaylistID: "playlist-1", PlaylistRevision: 1, Show: "show-1",
+	}
+	obs := baseObservation("inst-1")
+	brokenAt := time.Unix(3500, 0).UTC()
+	obs.EvidenceBrokenAt = &brokenAt
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateEvidenceBroken {
+		t.Fatalf("State = %q, want %q", dec.State, StateEvidenceBroken)
+	}
+	if len(dec.EvidenceBroken) != 0 {
+		t.Fatalf("EvidenceBroken = %+v, want empty: nothing was resolved from this evidence before it broke", dec.EvidenceBroken)
+	}
+}
+
+// --- cueAssetsPresent: reconnect-staleness allowance ---
+//
+// The reported incident: the coordinator lost its own broker connection for
+// several minutes, reconnected cleanly, and then refused Wake Up for about
+// a minute because it counted its OWN disconnected time against
+// showmesh-node-01's inventory-report staleness window. The node never
+// lost a file and kept the show running throughout. These tests exercise
+// cueAssetsPresent directly (a synthetic cuecatalog.Entry with no declared
+// Render/Audio output) so only the report-freshness branch this fix
+// touches is under test, never the asset-hash branches beneath it.
+
+func TestCueAssetsPresentStaleWhileConnectedStillRefused(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(10000, 0).UTC()
+	reportedAt := now.Add(-4 * testInterval) // older than StalenessWindow (3x)
+
+	// The coordinator's own last reconnect was long before this report was
+	// even received: it was connected the whole time the node stopped
+	// reporting, so this is a genuine staleness, not an outage artifact,
+	// and must refuse exactly as it always has.
+	reconnectedAt := reportedAt.Add(-10 * testInterval)
+	putFreshReport(t, st, "node-1", reportedAt)
+
+	present, reason, err := cueAssetsPresent(context.Background(), st, now, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent: %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: the report is genuinely stale and the coordinator was connected throughout")
+	}
+	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
+	if reason != want {
+		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
+	}
+}
+
+func TestCueAssetsPresentNeverReportedStillRefused(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(10000, 0).UTC()
+
+	// A very recent reconnect must not turn "never reported" into
+	// "trusted": the allowance only ever extends a freshness deadline that
+	// a report must already exist to have.
+	reconnectedAt := now.Add(-1 * time.Second)
+
+	present, reason, err := cueAssetsPresent(context.Background(), st, now, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent: %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: node-1 has never reported its asset inventory at all")
+	}
+	want := `cue "cue-1": node "node-1" has never reported its asset inventory, so it cannot be trusted to hold anything`
+	if reason != want {
+		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
+	}
+}
+
+func TestCueAssetsPresentNeverConnectedNoOpenEndedAllowance(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(10000, 0).UTC()
+	reportedAt := now.Add(-4 * testInterval)
+	putFreshReport(t, st, "node-1", reportedAt)
+
+	// Zero value: this coordinator has never connected to the broker at
+	// all (a fresh start against an unreachable broker). It must not read
+	// as "just reconnected" and grant an allowance.
+	present, reason, err := cueAssetsPresent(context.Background(), st, now, testInterval, time.Time{}, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent: %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: a coordinator that has never connected must not get an open-ended staleness allowance")
+	}
+	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
+	if reason != want {
+		t.Fatalf("reason = %q, want %q (unchanged text)", reason, want)
+	}
+}
+
+// TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires is the
+// fix itself: a report received before an outage, now individually stale,
+// is not refused for one inventoryInterval after this coordinator's own
+// reconnect, but the allowance is not permanent immunity, and a node that
+// stays silent past that one interval is refused again.
+func TestCueAssetsPresentReconnectAllowanceGrantsOneIntervalThenExpires(t *testing.T) {
+	st := openTestStore(t)
+	base := time.Unix(10000, 0).UTC()
+	reportedAt := base.Add(-4 * testInterval) // already stale by base
+	reconnectedAt := base.Add(-30 * time.Second)
+	putFreshReport(t, st, "node-1", reportedAt)
+
+	// Grant: only 30s of this coordinator's own one-interval grace period
+	// has elapsed since reconnect.
+	present, reason, err := cueAssetsPresent(context.Background(), st, base, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent (within grace): %v", err)
+	}
+	if !present {
+		t.Fatalf("present = false (reason %q), want true: the node's own report predates a reconnect that happened within one inventoryInterval of now", reason)
+	}
+
+	// Expire: the SAME reconnect, now two intervals in the past. The node
+	// still never reported, so the allowance has run out.
+	later := reconnectedAt.Add(2 * testInterval)
+	present, reason, err = cueAssetsPresent(context.Background(), st, later, testInterval, reconnectedAt, "node-1", cuecatalog.Entry{CueID: "cue-1"})
+	if err != nil {
+		t.Fatalf("cueAssetsPresent (after grace expires): %v", err)
+	}
+	if present {
+		t.Fatal("present = true, want false: the reconnect allowance grants one inventoryInterval, not permanent immunity")
+	}
+	want := fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		"cue-1", "node-1", reportedAt.Format(time.RFC3339))
+	if reason != want {
+		t.Fatalf("reason = %q, want %q", reason, want)
 	}
 }

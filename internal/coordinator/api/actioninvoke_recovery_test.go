@@ -93,8 +93,8 @@ func TestActionInvokeRevisionPinningAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get outer command: %v", err)
 	}
-	if outer.RequestedRevision != "1" {
-		t.Errorf("outer requested_revision = %q, want \"1\"", outer.RequestedRevision)
+	if outer.CallerIntent != "revision:1" {
+		t.Errorf("outer caller_intent = %q, want \"revision:1\"", outer.CallerIntent)
 	}
 
 	// Child journal (the nested FPP dispatch).
@@ -102,8 +102,8 @@ func TestActionInvokeRevisionPinningAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get child command: %v", err)
 	}
-	if child.RequestedRevision != "1" {
-		t.Errorf("child requested_revision = %q, want \"1\"", child.RequestedRevision)
+	if child.CallerIntent != "revision:1" {
+		t.Errorf("child caller_intent = %q, want \"revision:1\"", child.CallerIntent)
 	}
 	if child.TargetID != "player-a" {
 		t.Errorf("child target = %q, want player-a", child.TargetID)
@@ -147,7 +147,7 @@ func TestActionInvokeRevisionPinningAcceptance(t *testing.T) {
 	// startup order (FPP children before the outer sweep — coordinator.go).
 	strandOuter, err := setup.st.InsertCommand(context.Background(), store.CommandRecord{
 		ID: "stranded-pin-outer", IdempotencyKey: "pin-key-2", Action: "action.invoke:fpp",
-		TargetKind: actionInvokeTargetKind, TargetID: "toggle", RequestedRevision: "1",
+		TargetKind: actionInvokeTargetKind, TargetID: "toggle", CallerIntent: "revision:1",
 		IssuerPrincipalID: admin.ID, IssuerPrincipalName: admin.Name,
 		ConfirmationMethod: "evidence", State: "pending", OutcomeReason: actionInvokePendingOutcomeReason,
 	})
@@ -163,7 +163,7 @@ func TestActionInvokeRevisionPinningAcceptance(t *testing.T) {
 	}
 	strandChild, err := setup.st.InsertCommand(context.Background(), store.CommandRecord{
 		ID: "stranded-pin-child", IdempotencyKey: actionInvokeFPPChildIdempotencyKeyPrefix + strandOuter.ID,
-		Action: "fpp.stop_playlist", TargetKind: "fpp", TargetID: "player-a", RequestedRevision: "1",
+		Action: "fpp.stop_playlist", TargetKind: "fpp", TargetID: "player-a", CallerIntent: "revision:1",
 		IssuerPrincipalID: admin.ID, IssuerPrincipalName: admin.Name,
 		ConfirmationMethod: "evidence", State: "pending",
 	})
@@ -191,8 +191,8 @@ func TestActionInvokeRevisionPinningAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get outer after reconcile: %v", err)
 	}
-	if afterOuter.RequestedRevision != "1" {
-		t.Errorf("post-reconcile outer requested_revision = %q, want \"1\"", afterOuter.RequestedRevision)
+	if afterOuter.CallerIntent != "revision:1" {
+		t.Errorf("post-reconcile outer caller_intent = %q, want \"revision:1\"", afterOuter.CallerIntent)
 	}
 	if afterOuter.State != "resolved" {
 		t.Errorf("post-reconcile outer state = %q, want resolved", afterOuter.State)

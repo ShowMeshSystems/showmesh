@@ -8,6 +8,21 @@ import (
 // This file renders types_night_lifecycle.go's wire types as text,
 // following night_print.go's own established conventions one file over.
 
+// nightReadinessOutcomeGlyph renders NightReadiness.outcome so
+// ready_with_warnings reads as visually distinct from a plain "ready" in a
+// skimmed terminal line, the same shout-case convention stateGlyph and
+// healthGlyph use elsewhere in this program for a non-default state (no
+// colour: this tool is run over SSH, piped, and redirected to a file).
+// Every other value renders verbatim, including "ready" itself: the point
+// is to make the new value loud, never to make it read as a refusal like
+// "not_ready" does.
+func nightReadinessOutcomeGlyph(outcome string) string {
+	if outcome == "ready_with_warnings" {
+		return "READY-WITH-WARNINGS"
+	}
+	return outcome
+}
+
 func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	_, _ = fmt.Fprintf(w, "State:       %s\n", s.State)
 	if s.ID == "" {
@@ -24,6 +39,16 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	}
 	if s.AttributionDegraded {
 		_, _ = fmt.Fprintf(w, "ATTRIBUTION DEGRADED: this command applied, but its audit entry could not be written\n")
+	}
+
+	if s.Authorization.State == "recorded" {
+		_, _ = fmt.Fprintf(w, "Authorized by: %s", s.Authorization.PrincipalName)
+		if s.Authorization.Command != "" {
+			_, _ = fmt.Fprintf(w, " (%s)", s.Authorization.Command)
+		}
+		_, _ = fmt.Fprintln(w)
+	} else {
+		_, _ = fmt.Fprintln(w, "Authorized by: unknown")
 	}
 
 	_, _ = fmt.Fprintf(w, "\nFinal show requested: %v", s.FinalShowRequested)
@@ -46,7 +71,7 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 
 	_, _ = fmt.Fprintf(w, "\nReadiness:   %s", s.Readiness.State)
 	if s.Readiness.Outcome != "" {
-		_, _ = fmt.Fprintf(w, " (outcome=%s sameEpoch=%v fresh=%v)", s.Readiness.Outcome, s.Readiness.SameEpoch, s.Readiness.Fresh)
+		_, _ = fmt.Fprintf(w, " (outcome=%s sameEpoch=%v fresh=%v)", nightReadinessOutcomeGlyph(s.Readiness.Outcome), s.Readiness.SameEpoch, s.Readiness.Fresh)
 	}
 	_, _ = fmt.Fprintln(w)
 	if s.Readiness.Reason != "" {
@@ -95,6 +120,16 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		return
 	}
 
+	// Printed once, ahead of either step section: it describes the
+	// SESSION, not one sequence's step log. Only ever present while
+	// running here because this command only ever hits GET
+	// /night/session, which has no by-id command yet.
+	if s.BackgroundAudio.PinnedMaxGainDb != nil {
+		_, _ = fmt.Fprintf(w, "\nPinned max gain: %.1f dB\n", *s.BackgroundAudio.PinnedMaxGainDb)
+	} else if s.BackgroundAudio.Reason != "" {
+		_, _ = fmt.Fprintf(w, "\nPinned max gain: none (%s)\n", s.BackgroundAudio.Reason)
+	}
+
 	// The two audio sequences print under their own headings. An
 	// announcement's clear and start arrive in the same step list as the
 	// bed's own steps, and a failure in one says something quite
@@ -105,7 +140,16 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	announcement := nightAudioStepsForSequence(s.BackgroundAudio.Steps, "announcement")
 
 	if len(background) == 0 {
-		_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+		// A non-nil PinnedMaxGainDb is proof the pinned revision DOES
+		// configure background audio (found by review: printing "not
+		// configured, or never started" right under a real pinned ceiling
+		// offered a false reading), so narrow the header to the one
+		// reading that is still possible.
+		if s.BackgroundAudio.PinnedMaxGainDb != nil {
+			_, _ = fmt.Fprintf(w, "\nBackground audio: never started this cycle\n")
+		} else {
+			_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+		}
 	} else {
 		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
 		printNightAudioSteps(w, background)
@@ -135,7 +179,7 @@ func nightAudioStepsForSequence(steps []nightBackgroundAudioStepWire, sequence s
 
 func printNightAudioSteps(w io.Writer, steps []nightBackgroundAudioStepWire) {
 	for _, step := range steps {
-		_, _ = fmt.Fprintf(w, "  - [%s] %s (kind=%s rev=%d): %s", step.Phase, step.CueName, step.Kind, step.ActionRevision, step.State)
+		_, _ = fmt.Fprintf(w, "  - node=%s [%s] %s (kind=%s rev=%d): %s", step.NodeID, step.Phase, step.CueName, step.Kind, step.ActionRevision, step.State)
 		if step.Outcome != "" {
 			_, _ = fmt.Fprintf(w, " outcome=%s", step.Outcome)
 		}

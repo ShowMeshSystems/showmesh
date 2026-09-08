@@ -62,6 +62,64 @@ var migrations = []migration{
 	{version: 17, sql: schemaV17},
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
+	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
+	// v21, v22, and v23 are dead numbers: each sits at or below this
+	// migration's own shipped maximum (24), so migrate()'s own
+	// current == target short-circuit means a migration entry at any of
+	// them can never run for a store some other binary already stamped
+	// at 24 or higher, exactly the failure the v25 entry below this one
+	// exists to fix. The audio_sessions re-key that once reserved v21 is
+	// renumbered to v27, below, for the identical reason. This migration
+	// itself took the next free number (24) rather than the lowest one
+	// (21) specifically to avoid colliding with that reservation when it
+	// landed; that choice is left as it shipped rather than rewritten
+	// here, even though a number below the maximum is unusable regardless
+	// of which branch reaches it first.
+	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
+	// v25 is Track J's J1 (ADR-048, TRACK-J-fpp-fallback.md J1): the next
+	// free number after v24 landed on main first. Nothing at or below the
+	// shipped maximum is ever reserved for future work again after this
+	// point: a reservation below the stamp is a migration that can never
+	// run, which is the exact mechanism this renumbering and v21/v22's
+	// own now-dead reservations both demonstrate.
+	{version: 25, sql: schemaV25},
+	// v26 (owner ruling 2026-08-19): renaming commands.requested_revision
+	// to commands.caller_intent and formalizing its per-family
+	// discriminator. Renumbered from v22, itself renumbered from v13, for
+	// the identical reason v25 was renumbered from v23: a reservation at
+	// or below the shipped maximum can never run.
+	{version: 26, fn: migrateV26RenameRequestedRevisionToCallerIntent},
+	// v27: re-keys audio_sessions from `id TEXT PRIMARY KEY` to a
+	// composite `(node_id, id)` primary key (schemaV27's own doc
+	// comment). Renumbered from v21 for the identical reason v25 and v26
+	// were renumbered: a reservation at or below the shipped maximum can
+	// never run.
+	{version: 27, sql: schemaV27},
+	// v28 (ADR-028 decision 1's amendment, 2026-09-01): widens assets_current
+	// to include media_type (schemaV28's own doc comment).
+	{version: 28, sql: schemaV28},
+	// v29 (owner ruling 2026-09-02): records a persisted sequence-regression
+	// discontinuity directly on the instance's own row
+	// (migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn's own
+	// doc comment).
+	{version: 29, fn: migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn},
+	// v30 (owner ruling, tombstone delete for every configuration kind):
+	// adds config_objects.deleted_at, a nullable tombstone marker
+	// (migrateV30AddConfigObjectDeletedAtColumn's own doc comment).
+	{version: 30, fn: migrateV30AddConfigObjectDeletedAtColumn},
+	// v31: rewrites every stored timestamp from schemaV1's original
+	// trimmed time.RFC3339Nano text to timeLayout's fixed nine-digit-
+	// fraction format (migrateV31FixedWidthTimestamps's own doc comment,
+	// migration_v31.go), so a plain string ORDER BY on any of this
+	// package's timestamp columns sorts in true chronological order.
+	{version: 31, fn: migrateV31FixedWidthTimestamps},
+	// v32: adds fpp_playlist_entry_observations.playlist_loop, FPP's own
+	// mainPlaylist pass counter as the plugin reported it, NULL when it
+	// reported none (migrateV32AddFPPPlaylistEntryObservationPlaylistLoop
+	// Column's own doc comment, migration_v32.go). Ingestion compares it to
+	// see a playlist loop back into an entry it already visited, which is
+	// the only signal that does so on FPP 10.
+	{version: 32, fn: migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -986,13 +1044,16 @@ CREATE TABLE macro_run_steps (
 // This is a pure-addition migration — nothing from schemaV1 through
 // schemaV7 is touched.
 //
-// assets_identity (ADR-028 decision 1: "identity is show plus logical
-// sequence plus target plus content hash") is the permanent, never-pruned
-// identity of an artifact — it has no WHERE clause, so re-registering a
-// hash already seen under that identity never inserts a second row.
-// assets.go's createAsset resolves the hit two ways: still current is the
-// idempotent no-op (ErrAssetExists); superseded is ADR-028 decision 10's
-// rollback, which un-supersedes that row instead of inserting a new one.
+// assets_identity (ADR-028 decision 1, in its original text: "identity is
+// show plus logical sequence plus target plus content hash") is the
+// permanent, never-pruned identity of an artifact: it has no WHERE
+// clause, so re-registering a hash already seen under that identity never
+// inserts a second row. assets.go's createAsset resolves the hit two ways:
+// still current is the idempotent no-op (ErrAssetExists); superseded is
+// ADR-028 decision 10's rollback, which un-supersedes that row instead of
+// inserting a new one. Widened by schemaV28 to also key on media_type,
+// alongside assets_current; this original shape is left as documentation
+// of what a pre-v28 database carries.
 //
 // assets_current is the structural half of that same decision: at most one
 // row per (show_id, sequence_id, target_kind, target_id) may have
@@ -1041,12 +1102,17 @@ CREATE TABLE assets (
     superseded_at              TEXT
 );
 
--- ADR-028 decision 1: identity is show + logical sequence + target + content hash.
+-- ADR-028 decision 1's original text: identity is show + logical sequence +
+-- target + content hash. Widened by schemaV28 to also key on media_type;
+-- this original shape is left as documentation of what a pre-v28 database
+-- carries.
 CREATE UNIQUE INDEX assets_identity
     ON assets (show_id, sequence_id, target_kind, target_id, content_hash);
 
 -- Exactly one CURRENT asset per (show, sequence, target), enforced structurally
--- rather than by a convention a later query could forget.
+-- rather than by a convention a later query could forget. Widened by
+-- schemaV28 to also key on media_type; this original shape is left as
+-- documentation of what a pre-v28 database carries.
 CREATE UNIQUE INDEX assets_current
     ON assets (show_id, sequence_id, target_kind, target_id)
     WHERE superseded_at IS NULL;
@@ -1080,6 +1146,11 @@ CREATE TABLE node_asset_reports (
 // agent is a session's actual authority: a running session must survive
 // coordinator loss, so this table is the coordinator's durable RECORD of
 // what it last told a session to be, not a second engine.
+//
+// id alone is this table's PRIMARY KEY only up to this migration:
+// schemaV27 re-keys it to (node_id, id), because a session id is not
+// globally unique (see schemaV27's own doc comment); do not copy this
+// table's shape for a new migration without reading that one first.
 const schemaV9 = `
 CREATE TABLE audio_sessions (
     id           TEXT PRIMARY KEY,
@@ -1340,6 +1411,360 @@ const schemaV18 = `
 ALTER TABLE fpp_playlist_entry_observations
     ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
 `
+
+// schemaV25 is Track J's J1 own migration (ADR-048,
+// TRACK-J-fpp-fallback.md J1): the coordinator-side store for a
+// compiled, signed fallback program and its per-FPP-host
+// acknowledgement, one row per fpp_instance_uuid in each table, on
+// node_cue_catalog_ack's exact upsert shape (schemaV17) next door:
+// "the fact this host was last given/acknowledged," never re-derived
+// from the coordinator's current state.
+//
+// fallback_programs holds the LAST PUBLISHED package for a host, not a
+// history: publication is a wholesale replacement (ADR-048 decision 1,
+// "It is a complete replacement, not a patch"), so a fresh compile
+// upserts this row rather than appending one. program_json is the
+// signed program's [fallbackprogram.SignedProgram], marshaled whole, so
+// a re-fetch (a plugin re-polling GET) always reproduces exactly the
+// bytes that were signed. A second, independent re-serialization at
+// read time could not be guaranteed byte-identical to the signed
+// payload the way replaying the stored bytes can.
+//
+// fallback_program_acknowledgements holds the host's own evidence of
+// what it verified and installed, reported separately from
+// fallback_programs for the identical reason node_cue_catalog_ack is
+// its own table rather than a column on the resolved catalog: an
+// acknowledgement is a report of a past fact from the other side, and
+// the comparison against "what the coordinator has published now"
+// happens at read time, never at write time.
+//
+// Both CREATE TABLE statements use IF NOT EXISTS, unlike every other
+// bare CREATE TABLE in this file: internal/coordinator/audioconfigpush's
+// own tests deliberately stamp PRAGMA user_version back to 18 or 19 and
+// reopen the store to force migrations 19 and 20 (Go functions that
+// rewrite payloads, safe to replay) to run again. schemaV25 is the first
+// SQL migration to sit above that rewind point, so replaying it against
+// a database that already has these tables must tolerate finding them
+// present rather than fail. The other 31 CREATE TABLEs in this file
+// have never sat above a rewind point a test actually exercises.
+const schemaV25 = `
+CREATE TABLE IF NOT EXISTS fallback_programs (
+    fpp_instance_uuid TEXT PRIMARY KEY,
+    package_id        TEXT NOT NULL,
+    revision          TEXT NOT NULL,
+    show_id           TEXT NOT NULL,
+    generation        INTEGER NOT NULL,
+    program_json      TEXT NOT NULL,
+    signature_b64     TEXT NOT NULL,
+    expires_at        TEXT NOT NULL,
+    compiled_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fallback_program_acknowledgements (
+    fpp_instance_uuid    TEXT PRIMARY KEY,
+    package_id           TEXT NOT NULL,
+    revision             TEXT NOT NULL,
+    verification_result  TEXT NOT NULL,
+    installed_at         TEXT NOT NULL,
+    acknowledged_at      TEXT NOT NULL
+);
+`
+
+// migrateV26RenameRequestedRevisionToCallerIntent renames
+// commands.requested_revision to commands.caller_intent (owner ruling
+// 2026-08-19): the column has held four unrelated writer shapes since
+// Step 9. Two are genuinely revision-shaped (a show.action invocation's
+// plain revision, and a macro run's own "macro:" tagged reference, which
+// embeds one); the other two are not revisions at all, but two
+// DIFFERENTLY SHAPED caller-identity JSON structs, one per dispatch route
+// (render, cue-catalog deploy), each carrying no revision at their own
+// top level. A name built around "revision" was never true for those
+// last two writers. The rename itself is metadata-only (SQLite 3.25+,
+// bundled by this project's modernc.org/sqlite): every existing value,
+// tagged or not, is preserved byte-for-byte, and no backfill runs. See
+// [ParseCallerIntent] (caller_intent.go) for the discriminator this
+// rename exists to make possible, and its own doc comment for why an
+// untagged pre-v26 row is never reinterpreted as one of the tagged kinds,
+// including between these two structurally similar JSON shapes.
+//
+// A Go function rather than bare SQL, unlike every other rename in this
+// file, because this one has to tolerate being replayed against a
+// database that already ran it: internal/coordinator/audioconfigpush's
+// own tests rewind PRAGMA user_version to 18 (see schemaV25's own doc
+// comment for the identical precedent with migrations 19 and 20) and
+// reopen the store to force later migrations to run again. A bare
+// ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent
+// fails outright on that second pass, because the column it names no
+// longer exists under that name; checking first and no-opping when it is
+// already renamed is what makes replay safe, the same property CREATE
+// TABLE IF NOT EXISTS gives schemaV25's own tables.
+//
+// Checking only "does requested_revision still exist" is not enough: that
+// is also 0 if the commands table itself is missing or malformed, which
+// is a genuine problem this migration must surface, not swallow. So this
+// checks BOTH column names and only tolerates the one combination replay
+// can actually produce (caller_intent already there, requested_revision
+// gone); any other combination, including a real failure from the rename
+// itself, is returned as an error rather than treated as "nothing to do".
+func migrateV26RenameRequestedRevisionToCallerIntent(ctx context.Context, tx *sql.Tx) error {
+	var hasOldName, hasNewName int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name = 'requested_revision'`,
+	).Scan(&hasOldName); err != nil {
+		return fmt.Errorf("check commands.requested_revision exists: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name = 'caller_intent'`,
+	).Scan(&hasNewName); err != nil {
+		return fmt.Errorf("check commands.caller_intent exists: %w", err)
+	}
+	switch {
+	case hasOldName == 1 && hasNewName == 0:
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent`); err != nil {
+			return fmt.Errorf("rename commands.requested_revision to caller_intent: %w", err)
+		}
+		return nil
+	case hasOldName == 0 && hasNewName == 1:
+		// Already renamed: the one replay shape this function exists to
+		// tolerate.
+		return nil
+	default:
+		return fmt.Errorf("commands table is in an unexpected state for the caller_intent rename: requested_revision present=%v, caller_intent present=%v", hasOldName == 1, hasNewName == 1)
+	}
+}
+
+// schemaV27 re-keys audio_sessions (schemaV9) from `id TEXT PRIMARY KEY`
+// to a composite `(node_id, id)` primary key. This migration is numbered
+// 27, not 21: migrate skips every version at or below a store's stamped
+// PRAGMA user_version, and 21 already sits at or below main's shipped
+// maximum, so a released binary would never run it under that number.
+// The defect it fixes is that
+// a session id is not globally unique — the cue and blackAndSilence
+// session ids are global constants (STEP-9-SPEC.md / TRACK-C-audio-node.md's
+// fixed session-id vocabulary), so two audio nodes each dispatching the
+// same session id shared one row under schemaV9's bare `id` key:
+// whichever node wrote second either silently overwrote the first node's
+// desired state (if its own revision happened to be higher) or had ITS
+// OWN write silently dropped by PutAudioSession's anti-rewind guard (if
+// not) — that guard compares revisions within a row that, after this
+// migration, can never again be shared by two nodes.
+//
+// Follows the same SQLite "12 steps to altering a table" pattern schemaV2/
+// schemaV4 already established (SQLite's ALTER TABLE cannot change an
+// existing PRIMARY KEY in place): create the new table shape, copy every
+// existing row across unchanged — including desired_json, revision,
+// created_at, and updated_at exactly as stored, so no in-flight session's
+// history or revision counter is disturbed by this migration — drop the
+// old table, and rename the new one into its place.
+//
+// audio_sessions_by_node (schemaV9) is not recreated: SQLite maintains an
+// implicit index over a table's PRIMARY KEY, and (node_id, id) already
+// serves every "WHERE node_id = ?" lookup ListAudioSessionsByNode issues,
+// so a separate single-column index on node_id would be redundant with
+// the key itself.
+const schemaV27 = `
+CREATE TABLE audio_sessions_v27 (
+    node_id      TEXT NOT NULL,
+    id           TEXT NOT NULL,
+    desired_json TEXT NOT NULL,
+    revision     INTEGER NOT NULL,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (node_id, id)
+);
+
+INSERT INTO audio_sessions_v27 (node_id, id, desired_json, revision, created_at, updated_at)
+    SELECT node_id, id, desired_json, revision, created_at, updated_at FROM audio_sessions;
+
+DROP TABLE audio_sessions;
+
+ALTER TABLE audio_sessions_v27 RENAME TO audio_sessions;
+`
+
+// schemaV28 widens BOTH schemaV8 unique indexes on assets to include
+// media_type, because ADR-028 decision 1's original text named identity as
+// "show plus logical sequence plus target plus content hash" and never
+// mentioned media type: an FSEQ and an audio asset uploaded under the same
+// sequence id competed for the one assets_current slot the old index
+// allowed, so the second upload superseded the first regardless of media
+// type, and a later render or audio resolution (assetsync/cuecatalog.go's
+// resolveAssetFor, sorting every current asset for the sequence by content
+// hash with no media-type filter) could then hand a cue's render output
+// the audio file's name, or vice versa, decided by hash sort order rather
+// than by what the output actually needed. ADR-028 decision 1 is amended
+// alongside this migration: media type joins identity.
+//
+// assets_current: at most one CURRENT row per (show_id, sequence_id,
+// target_kind, target_id, media_type), rather than per (show_id,
+// sequence_id, target_kind, target_id) alone, so an FSEQ and an audio
+// asset for one sequence may both be current at once.
+//
+// assets_identity: store/assets.go's getAssetByIdentity (createAsset's
+// step 1, the idempotent-reupload and rollback precheck) is scoped to
+// media_type alongside this migration, so its query and this index must
+// agree on what counts as one identity or the precheck stops matching
+// what the index actually enforces. Left disagreeing, registering the
+// identical bytes under the same tuple but a different media type (an
+// operator's mediaType form field error re-submitting a file already
+// uploaded under the other type, not a sha256 collision) would pass the
+// precheck, since getAssetByIdentity would find nothing under the stated
+// media type, and then fail the INSERT on the OLD index's bare
+// show/sequence/target/hash key: a raw UNIQUE constraint violation
+// surfaced to the operator instead of the documented idempotent-no-op or
+// rollback response. Widening this index alongside assets_current keeps
+// store/assets.go's own "the identity check above already ruled out an
+// assets_identity collision" invariant (createAsset's step-3 comment)
+// true regardless of media type, rather than leaving it true only by
+// the accident of every existing upload happening to use distinct bytes
+// per media type.
+//
+// Both widenings are pure, not a data fix, for the identical reason:
+// every row either old index already accepted has exactly one media type
+// per (show, sequence, target[, content hash]) tuple by construction,
+// since neither old index allowed anything else to coexist under it, so
+// every existing current or historical row still satisfies its new, more
+// permissive index unchanged. SQLite rebuilds each index against the
+// existing table in place, no ALTER TABLE and no data migration is
+// needed, and TestMigrateV28FromPreV28DatabaseWithExistingRows proves it
+// against a seeded pre-v28 database.
+const schemaV28 = `
+DROP INDEX assets_current;
+
+CREATE UNIQUE INDEX assets_current
+    ON assets (show_id, sequence_id, target_kind, target_id, media_type)
+    WHERE superseded_at IS NULL;
+
+DROP INDEX assets_identity;
+
+CREATE UNIQUE INDEX assets_identity
+    ON assets (show_id, sequence_id, target_kind, target_id, media_type, content_hash);
+`
+
+// migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn (owner ruling
+// 2026-09-02, cue-deactivate-on-jump) adds a marker column to
+// fpp_playlist_entry_observations recording a persisted sequence-regression
+// discontinuity for one instance.
+//
+// evidence_broken_at_millis is NULL whenever this instance's stored
+// observation is believed to still be corroborated, and the epoch
+// milliseconds at which a sequence-regression refusal was recorded
+// (fppobservations.go's handlePostFPPPlaylistEntryObservation, contract
+// §1.5) otherwise. It is deliberately a column on THIS row, never a read of
+// the audit_log entry that same refusal also writes: the audit write is
+// best-effort (WriteAudit's own error is logged and swallowed, correct for
+// a forensic record), so treating it as a control input would let a database
+// write failure silently degrade a real discontinuity back into looking
+// like ordinary silence, exactly when the store is already unhealthy. This
+// column's own write goes through identity.AuditedWrite instead, in the
+// same transaction as its own audit entry, so the two commit or fail
+// together and a failure is never swallowed.
+//
+// cueactivate.Decide reads this field directly off the
+// store.FPPPlaylistEntryObservationRecord it already takes, before routing
+// on whatever fppreconcile.Reconcile computed from this same (now
+// possibly-stale) row: a broken marker outranks that classification,
+// because there is no outcome a discontinuity-broken row can report that is
+// still safe to trust once its continuity is known to be broken.
+//
+// Cleared on this instance's next ACCEPTED observation, unconditionally
+// (putFPPPlaylistEntryObservation's own ON CONFLICT DO UPDATE SET, and
+// implicitly on a fresh INSERT) — never exclusively by the existing
+// DELETE .../playlist-entry-observations/{instanceUuid} operator reset
+// route. That route still works: deleting the whole row removes this column
+// with it, so the very next post (nothing left to compare its sequence
+// against) is unconditionally accepted and starts clean. But an operator
+// reset is not the only way this instance's evidence can genuinely recover:
+// if the plugin's own sequence counter climbs back past the pre-restart
+// high-water mark on its own, that later post is accepted on its own
+// merits, and the same evidentiary bar this coordinator already trusts
+// enough to ACTIVATE a Cue from is more than enough to clear a strictly
+// weaker distrust flag. Gating clearance on the operator action alone would
+// leave this coordinator reporting "evidence broken" after FPP has already
+// demonstrated positive, accepted evidence to the contrary — silence-shaped
+// caution applied to a case that is no longer silent.
+//
+// Nullable rather than defaulted to a sentinel epoch (schemaV14's own
+// identity columns use 0-as-absent; this one does not): 0 is itself a real,
+// reachable epoch-millis value in principle, and this table is never seeded
+// outside a live coordinator, so there is no pre-migration row whose absent
+// value needs a safe non-NULL default the way schemaV18's
+// entry_occurrence_sequence did.
+//
+// A Go function, unlike schemaV18's identical single-ALTER-TABLE-on-this-
+// table shape, for the same reason migrateV26RenameRequestedRevisionTo
+// CallerIntent is one: internal/coordinator/audioconfigpush's own tests
+// rewind PRAGMA user_version to 18 and reopen the store to force every
+// later migration to run again, and a bare ALTER TABLE ... ADD COLUMN fails
+// outright on that second pass ("duplicate column name") once the column
+// already exists. Checking first and no-opping when it is already present
+// is what makes replay safe, the same property CREATE TABLE IF NOT EXISTS
+// gives schemaV25's own tables and the explicit column-presence check gives
+// v26's rename.
+func migrateV29AddFPPPlaylistEntryObservationEvidenceBrokenColumn(ctx context.Context, tx *sql.Tx) error {
+	var hasColumn int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('fpp_playlist_entry_observations') WHERE name = 'evidence_broken_at_millis'`,
+	).Scan(&hasColumn); err != nil {
+		return fmt.Errorf("check fpp_playlist_entry_observations.evidence_broken_at_millis exists: %w", err)
+	}
+	if hasColumn > 0 {
+		// Already added: the one replay shape this function exists to
+		// tolerate.
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE fpp_playlist_entry_observations ADD COLUMN evidence_broken_at_millis INTEGER`); err != nil {
+		return fmt.Errorf("add fpp_playlist_entry_observations.evidence_broken_at_millis: %w", err)
+	}
+	return nil
+}
+
+// migrateV30AddConfigObjectDeletedAtColumn (owner ruling, tombstone delete
+// for every configuration kind) adds config_objects.deleted_at: a nullable
+// RFC3339Nano timestamp, NULL for a live object, set the moment an
+// operator deletes a per-object configuration kind (audio.node, show,
+// show.surface, show.action, show.macro, show.cue, show.playlist,
+// night.session). config_revisions is untouched: a tombstone is a fact
+// about config_objects' mutable pointer, never a revision of its own, so
+// ADR-009's immutable revision history reads back unchanged before,
+// during, and after a delete.
+//
+// A pure addition: every existing row's deleted_at is implicitly NULL, so
+// every row this store already holds is a live object after this
+// migration runs, exactly as it was before it. No data fix follows.
+//
+// The twelve singleton configuration kinds (fpp.endpoints, resolume.
+// instances, fpp.mqtt, assets.settings, show.emergencystop, show.active,
+// show.mode, audio.settings, fppconnect.settings, render.settings,
+// resolume.recovery, night.session.active) never have this column set:
+// this store's own repository methods (config.go) never call
+// TombstoneConfigObject for them, because the API layer registers no
+// DELETE route for a singleton path at all.
+//
+// A Go function, not a plain ALTER TABLE (schemaV18's shape, which this
+// migration wrongly followed at first): internal/coordinator/audioconfigpush's
+// own tests rewind PRAGMA user_version and reopen the store to force every
+// later migration to run again, and a bare ALTER TABLE ... ADD COLUMN fails
+// outright on that second pass ("duplicate column name") once the column
+// already exists. Checking first and no-opping when it is already present
+// is what makes replay safe, exactly like migrateV29AddFPPPlaylistEntry
+// ObservationEvidenceBrokenColumn immediately above.
+func migrateV30AddConfigObjectDeletedAtColumn(ctx context.Context, tx *sql.Tx) error {
+	var hasColumn int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('config_objects') WHERE name = 'deleted_at'`,
+	).Scan(&hasColumn); err != nil {
+		return fmt.Errorf("check config_objects.deleted_at exists: %w", err)
+	}
+	if hasColumn > 0 {
+		// Already added: the one replay shape this function exists to
+		// tolerate.
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE config_objects ADD COLUMN deleted_at TEXT`); err != nil {
+		return fmt.Errorf("add config_objects.deleted_at: %w", err)
+	}
+	return nil
+}
 
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):

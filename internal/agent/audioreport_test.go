@@ -423,6 +423,15 @@ func TestRunAudioReportObservedAtAdvancesWhileDiscoveredAtStaysPinned(t *testing
 type stubSnapshotter struct {
 	results [][]audio.SessionSnapshot
 	calls   int
+
+	// nodeRestoreState and its companions script
+	// NodeRestoreRetryStatus's return; left zero, it reports
+	// EngineRestoreIdle/all-zero, matching audio.Manager's own
+	// zero-value convention.
+	nodeRestoreState         audio.EngineRestoreState
+	nodeRestoreAttempts      int
+	nodeRestoreNextAttemptAt time.Time
+	nodeRestoreLastReason    string
 }
 
 func (s *stubSnapshotter) Snapshot(context.Context) []audio.SessionSnapshot {
@@ -432,6 +441,22 @@ func (s *stubSnapshotter) Snapshot(context.Context) []audio.SessionSnapshot {
 	}
 	s.calls++
 	return s.results[i]
+}
+
+// NodeRestoreRetryStatus reports EngineRestoreIdle/all-zero unless a test
+// overrides nodeRestoreState, matching a stubSnapshotter's default
+// zero-value convention for everything it does not script.
+func (s *stubSnapshotter) NodeRestoreRetryStatus(now time.Time) (audio.EngineRestoreState, int, time.Duration, string) {
+	if s.nodeRestoreState == "" {
+		return audio.EngineRestoreIdle, 0, 0, ""
+	}
+	next := time.Duration(0)
+	if !s.nodeRestoreNextAttemptAt.IsZero() {
+		if d := s.nodeRestoreNextAttemptAt.Sub(now); d > 0 {
+			next = d
+		}
+	}
+	return s.nodeRestoreState, s.nodeRestoreAttempts, next, s.nodeRestoreLastReason
 }
 
 // TestRunAudioReportRebuildsSessionsEveryTick proves the report's session half of
@@ -453,6 +478,7 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 			ID: "s1", State: pkgaudio.StatePlaying, Fault: pkgaudio.FaultPipelineCrash,
 			FaultReason:   "engine: audio: pipeline crashed",
 			PositionKnown: true, Position: 4200 * time.Millisecond, ObservedAt: time.Unix(9000, 0).UTC(),
+			LTCClaimState: audio.LTCClaimRefused, LTCClaimReason: "this node's one LTC run is held by session s0",
 		}},
 	}}
 
@@ -492,6 +518,9 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 	if got.Fault != string(pkgaudio.FaultPipelineCrash) || got.FaultReason == "" {
 		t.Errorf("second tick fault = %q/%q, want %q with a non-empty reason", got.Fault, got.FaultReason, pkgaudio.FaultPipelineCrash)
 	}
+	if got.LTCClaimState != string(audio.LTCClaimRefused) || got.LTCClaimReason == "" {
+		t.Errorf("second tick ltc claim = %q/%q, want %q with a non-empty reason", got.LTCClaimState, got.LTCClaimReason, audio.LTCClaimRefused)
+	}
 	if !got.PositionKnown || got.PositionMs != 4200 {
 		t.Errorf("second tick position = known=%v ms=%d, want known=true ms=4200", got.PositionKnown, got.PositionMs)
 	}
@@ -502,6 +531,9 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 	firstSession := firstReport.Sessions[0]
 	if firstSession.Fault != "none" {
 		t.Errorf("first tick fault = %q, want %q (FaultNone renders as the literal string \"none\")", firstSession.Fault, "none")
+	}
+	if firstSession.LTCClaimState != "none" {
+		t.Errorf("first tick ltc claim state = %q, want %q (the zero value renders as the literal string \"none\")", firstSession.LTCClaimState, "none")
 	}
 	if firstSession.PositionKnown {
 		t.Error("first tick PositionKnown = true, want false (no engine evidence was ever supplied)")
@@ -758,6 +790,105 @@ func TestRunAudioReportLeavesGlitchCountsUnknownWhenEngineCannotCollectThem(t *t
 	}
 	if got.EngineGlitchCountsSince != nil {
 		t.Errorf("EngineGlitchCountsSince = %v, want nil when not collected", got.EngineGlitchCountsSince)
+	}
+}
+
+// TestRunAudioReportPublishesNodeLevelRestoreStatus proves
+// applyEngineRestoreStatus carries mgr's node-level automatic
+// restore-retry status onto the published report's four
+// EngineRestore* fields, live from [audioSessionSnapshotter.
+// NodeRestoreRetryStatus] on every tick -- the wire evidence this whole
+// issue exists to add, independent of Sessions (empty here) or of
+// anything RestorePending-gated one resource kind down.
+func TestRunAudioReportPublishesNodeLevelRestoreStatus(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	mgr := &stubSnapshotter{
+		results:                  [][]audio.SessionSnapshot{{}},
+		nodeRestoreState:         audio.EngineRestoreScheduled,
+		nodeRestoreAttempts:      3,
+		nodeRestoreNextAttemptAt: time.Unix(1_700_000_040, 0),
+		nodeRestoreLastReason:    "engine build refused: no advertised probe evidence for hw:1,0",
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, func() time.Time { return time.Unix(1_700_000_000, 0) }, ticks, discardLogger())
+	}()
+
+	ticks <- time.Unix(1_700_000_000, 0)
+	<-pub.notify
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(calls))
+	}
+	got := decodeAudioReport(t, calls[0].payload)
+	if got.EngineRestoreState != "scheduled" {
+		t.Errorf("EngineRestoreState = %q, want %q", got.EngineRestoreState, "scheduled")
+	}
+	if got.EngineRestoreAttempts != 3 {
+		t.Errorf("EngineRestoreAttempts = %d, want 3", got.EngineRestoreAttempts)
+	}
+	if got.EngineRestoreNextAttemptMs != 40_000 {
+		t.Errorf("EngineRestoreNextAttemptMs = %d, want 40000", got.EngineRestoreNextAttemptMs)
+	}
+	if got.EngineRestoreLastReason != "engine build refused: no advertised probe evidence for hw:1,0" {
+		t.Errorf("EngineRestoreLastReason = %q, want the scripted reason preserved", got.EngineRestoreLastReason)
+	}
+}
+
+// TestRunAudioReportNilSnapshotterReportsIdleRestoreStatus proves a node
+// with no asset directory configured (mgr nil, matching this loop's
+// other nil-safe optional sources) still publishes a valid report: every
+// EngineRestore* field at its zero value, which reads as
+// [audio.EngineRestoreIdle] on the wire -- never omitted, never a
+// fabricated "exhausted".
+func TestRunAudioReportNilSnapshotterReportsIdleRestoreStatus(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
+	}()
+
+	ticks <- time.Now()
+	<-pub.notify
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(calls))
+	}
+	got := decodeAudioReport(t, calls[0].payload)
+	if got.EngineRestoreState != "" {
+		t.Errorf("EngineRestoreState with a nil snapshotter = %q, want \"\" (reads as idle on the wire)", got.EngineRestoreState)
+	}
+	if got.EngineRestoreAttempts != 0 || got.EngineRestoreNextAttemptMs != 0 || got.EngineRestoreLastReason != "" {
+		t.Errorf("EngineRestore attempts/next/reason with a nil snapshotter = %d/%d/%q, want 0/0/\"\"",
+			got.EngineRestoreAttempts, got.EngineRestoreNextAttemptMs, got.EngineRestoreLastReason)
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("Validate() with all engineRestore* fields omitted = %v, want nil", err)
 	}
 }
 

@@ -27,6 +27,8 @@ import type {
   ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
   ConfigFPPMQTTPutRequest,
+  ConfigFPPConnectSettingsPayload,
+  FPPConnectSettingsConfigResponse,
   ConfigNightSessionActive,
   ConfigNightSessionWrite,
   ConfigRenderSettingsPayload,
@@ -40,8 +42,12 @@ import type {
   ConfigShowCue,
 
   ConfigShowPlaylist,
+  ConfigMediaPlaylist,
   ConfigShowWrite,
   CreatePrincipalRequest,
+  CurrentRunsResponse,
+  EmergencyStopArmResponse,
+  EmergencyStopResult,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   FPPMQTTConfigResponse,
@@ -50,9 +56,11 @@ import type {
   Model,
   NightCommandName,
   NightCommandResponse,
+  NightInterlockOverride,
   NightSessionActiveConfigResponse,
   NightSessionConfigResponse,
   NightSessionResponse,
+  ObservationsResponse,
   PrincipalResponse,
   PrincipalsResponse,
   AudioSessionCommandResult,
@@ -80,8 +88,10 @@ import type {
   AudioSettingsConfigResponse,
   ConfigAudioNode,
   ConfigAudioSettingsPayload,
+  CueActivateResponse,
   CueCatalogDeployResult,
   ResolumeActionResult,
+  ResyncNodeAssetsResult,
 } from './domain'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
@@ -94,6 +104,10 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+// ADR-048, Track J's J1: the fallback-program metadata list and one
+// host's full signed-program read.
+type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
@@ -103,6 +117,7 @@ type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigR
 type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
 
 type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+type SchemaMediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -225,6 +240,16 @@ export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsRespons
   return store.getFPPEndpointsConfigRevisions()
 }
 
+// ADR-048, Track J's J1: the fallback-program readiness evidence. Same
+// thin pass-through pattern as every method above.
+export function listFallbackPrograms(): Promise<SchemaFallbackProgramListResponse> {
+  return store.listFallbackPrograms()
+}
+
+export function getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {
+  return store.getFallbackProgram(fppInstanceId)
+}
+
 // Track G seam G-2 (ADR-039): the same thin pass-through pattern, for the
 // resolume.instances configuration write surface.
 export function getResolumeInstancesConfig(): Promise<ResolumeInstancesConfigResponse> {
@@ -258,6 +283,18 @@ export function putFPPMQTTConfig(
 
 export function getFPPMQTTConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPMQTTConfigRevisions()
+}
+
+export function getFPPConnectSettingsConfig(): Promise<FPPConnectSettingsConfigResponse> {
+  return store.getFPPConnectSettingsConfig()
+}
+
+export function putFPPConnectSettingsConfig(payload: ConfigFPPConnectSettingsPayload): Promise<FPPConnectSettingsConfigResponse> {
+  return store.putFPPConnectSettingsConfig(payload)
+}
+
+export function getFPPConnectSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getFPPConnectSettingsConfigRevisions()
 }
 
 // Track G seam G-4 (ADR-039): the same thin pass-through pattern, for the
@@ -401,6 +438,25 @@ export function setFPPVolume(instanceId: string, volume: number): Promise<FPPCom
   return store.setFPPVolume(instanceId, volume)
 }
 
+// The three-level emergency stop and its hard-stop arm/fire gate. Same
+// thin pass-through pattern.
+
+export function emergencyStop(): Promise<EmergencyStopResult> {
+  return store.emergencyStop()
+}
+
+export function emergencyStopPowerDown(): Promise<EmergencyStopResult> {
+  return store.emergencyStopPowerDown()
+}
+
+export function armEmergencyStopHardStop(): Promise<EmergencyStopArmResponse> {
+  return store.armEmergencyStopHardStop()
+}
+
+export function fireEmergencyStopHardStop(armToken: string): Promise<EmergencyStopResult> {
+  return store.fireEmergencyStopHardStop(armToken)
+}
+
 // Track B seam B2b-front: the three render.* dispatch endpoints. Same
 // thin pass-through pattern.
 export function applyRenderSurface(
@@ -421,22 +477,22 @@ export function restartRenderPipeline(nodeId: string, surfaceId: string): Promis
 
 // The first audio-dispatch slice. Same thin pass-through pattern.
 
-export function pauseAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function pauseAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.pauseAudioSession(nodeId, sessionId, revision)
 }
 
-export function resumeAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function resumeAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.resumeAudioSession(nodeId, sessionId, revision)
 }
 
-export function stopAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function stopAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.stopAudioSession(nodeId, sessionId, revision)
 }
 
 export function muteAudioSessionOutput(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
 ): Promise<AudioSessionCommandResult> {
   return store.muteAudioSessionOutput(nodeId, sessionId, revision)
 }
@@ -444,33 +500,33 @@ export function muteAudioSessionOutput(
 export function unmuteAudioSessionOutput(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
 ): Promise<AudioSessionCommandResult> {
   return store.unmuteAudioSessionOutput(nodeId, sessionId, revision)
 }
 
 // Second audio-dispatch slice. Same thin pass-through pattern.
 
-export function prepareAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function prepareAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.prepareAudioSession(nodeId, sessionId, revision)
 }
 
-export function startAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function startAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.startAudioSession(nodeId, sessionId, revision)
 }
 
-export function advanceAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function advanceAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.advanceAudioSession(nodeId, sessionId, revision)
 }
 
-export function clearAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+export function clearAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
   return store.clearAudioSession(nodeId, sessionId, revision)
 }
 
 export function seekAudioSession(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   positionMs: number,
 ): Promise<AudioSessionCommandResult> {
   return store.seekAudioSession(nodeId, sessionId, revision, positionMs)
@@ -479,7 +535,7 @@ export function seekAudioSession(
 export function setAudioSessionGain(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   gainDb: number,
 ): Promise<AudioSessionCommandResult> {
   return store.setAudioSessionGain(nodeId, sessionId, revision, gainDb)
@@ -488,7 +544,7 @@ export function setAudioSessionGain(
 export function applyAudioSession(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   params?: Record<string, unknown>,
 ): Promise<AudioSessionCommandResult> {
   return store.applyAudioSession(nodeId, sessionId, revision, params)
@@ -497,15 +553,26 @@ export function applyAudioSession(
 export function fadeAudioSessionGain(
   nodeId: string,
   sessionId: string,
-  revision: number,
+  revision: bigint,
   targetGainDb: number,
-  durationMs: number,
+  durationMs?: number,
 ): Promise<AudioSessionCommandResult> {
   return store.fadeAudioSessionGain(nodeId, sessionId, revision, targetGainDb, durationMs)
 }
 
 export function probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
   return store.probeRenderTransport(nodeId, surfaceId)
+}
+
+// GET /observations, the flat evidence list used to discover a
+// real audio session id and its desired_revision. Same thin
+// pass-through pattern as every method above.
+export function listObservations(
+  resourceKind?: 'node' | 'fpp' | 'coordinator' | 'resolume' | 'surface' | 'audio_session',
+  resourceId?: string,
+  signal?: string,
+): Promise<ObservationsResponse> {
+  return store.listObservations(resourceKind, resourceId, signal)
 }
 
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same
@@ -535,6 +602,7 @@ export function listConfigObjects(
     | 'show.surface'
     | 'show.cue'
     | 'show.playlist'
+    | 'media.playlist'
     | 'night.session'
     | 'audio.node',
   show?: string,
@@ -584,6 +652,10 @@ export function listActionBindings(show?: string): Promise<ActionBinding[]> {
 
 export function invokeAction(id: string): Promise<ActionInvocationResult> {
   return store.invokeAction(id)
+}
+
+export function activateCue(cueId: string): Promise<CueActivateResponse> {
+  return store.activateCue(cueId)
 }
 
 export function getShowMacro(id: string): Promise<SchemaShowMacroConfigResponse> {
@@ -761,6 +833,22 @@ export function getShowPlaylistRevisions(id: string): Promise<ConfigRevisionsRes
   return store.getShowPlaylistRevisions(id)
 }
 
+export function getMediaPlaylist(id: string): Promise<SchemaMediaPlaylistConfigResponse> {
+  return store.getMediaPlaylist(id)
+}
+
+export function putMediaPlaylist(id: string, payload: ConfigMediaPlaylist): Promise<SchemaMediaPlaylistConfigResponse> {
+  return store.putMediaPlaylist(id, payload)
+}
+
+export function getMediaPlaylistRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getMediaPlaylistRevisions(id)
+}
+
+export function deleteMediaPlaylist(id: string): Promise<void> {
+  return store.deleteMediaPlaylist(id)
+}
+
 export function getShowActive(): Promise<SchemaShowActiveConfigResponse> {
   return store.getShowActive()
 }
@@ -793,12 +881,20 @@ export function assetContentUrl(id: string): string {
   return store.assetContentUrl(id)
 }
 
+export function getAssetContent(id: string): Promise<Blob> {
+  return store.getAssetContent(id)
+}
+
 export function getAssetManifest(): Promise<SchemaAssetManifestResponse> {
   return store.getAssetManifest()
 }
 
 export function getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetManifestResponse> {
   return store.getNodeAssetManifest(nodeId)
+}
+
+export function resyncNodeAssets(nodeId: string): Promise<ResyncNodeAssetsResult> {
+  return store.resyncNodeAssets(nodeId)
 }
 
 export function listAudit(filter?: {
@@ -829,6 +925,10 @@ export function getCurrentNightSession(): Promise<NightSessionResponse> {
   return store.getCurrentNightSession()
 }
 
+export function getCurrentRuns(): Promise<CurrentRunsResponse> {
+  return store.getCurrentRuns()
+}
+
 export function getNightSessionById(id: string): Promise<NightSessionResponse> {
   return store.getNightSessionById(id)
 }
@@ -836,8 +936,10 @@ export function getNightSessionById(id: string): Promise<NightSessionResponse> {
 export function dispatchNightCommand(
   command: NightCommandName,
   idempotencyKey?: string,
+  interlockOverrides?: readonly NightInterlockOverride[],
+  skipEnterShowLead?: boolean,
 ): Promise<NightCommandResponse> {
-  return store.dispatchNightCommand(command, idempotencyKey)
+  return store.dispatchNightCommand(command, idempotencyKey, interlockOverrides, skipEnterShowLead)
 }
 
 export function getNightSessionConfig(id: string): Promise<NightSessionConfigResponse> {

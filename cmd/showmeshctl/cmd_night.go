@@ -48,6 +48,8 @@ func cmdNight(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdNightActivate(rest, stdout, stderr, clock)
 	case "deactivate":
 		return cmdNightDeactivate(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdNightDelete(rest, stdout, stderr, clock)
 	case "status":
 		return cmdNightLifecycleStatus(rest, stdout, stderr, clock)
 	case "prepare-site":
@@ -101,6 +103,11 @@ Subcommands:
   deactivate        clear the active night session back to unset (write;
                      the zero-to-one-and-back-to-zero transition ADR-039
                      rule 4 requires)
+  delete --confirm <id>
+                     tombstone this session (write); revision history
+                     stays readable via "revisions"/"revision". Refused
+                     with a conflict while this id is the active night
+                     session ("night active"); deactivate it first
 
 Lifecycle (RESTING-MODE.md, ADR-038 — the closed state machine and its
 seven commands; reads open, writes require night:command):
@@ -210,6 +217,7 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 	fs, g := newFlagSet("showmeshctl night set", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON night.session payload; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night set [flags] <session-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new night.session configuration revision (PUT")
@@ -223,6 +231,10 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision (ADR-009). A cue's own offsetMs is NOT")
 		_, _ = fmt.Fprintln(stderr, "bounded here: checking it against the resting FSEQ's actual length needs")
 		_, _ = fmt.Fprintln(stderr, "a live FPP read and is readiness work, not this write-time check.")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"night get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is \"night get --output json\"'s own shape, otherwise a fresh read), refusing")
+		_, _ = fmt.Fprintln(stderr, "with a 409 if the session changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -242,6 +254,11 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 	if err != nil {
 		return reportError(stderr, "night set", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
+	raw, err = unwrapConfigGetResponse(raw)
+	if err != nil {
+		return reportError(stderr, "night set", newCLIError(exitUsage, "%v", err))
+	}
 	if !json.Valid(raw) {
 		return reportError(stderr, "night set", newCLIError(exitUsage, "payload must be valid JSON"))
 	}
@@ -253,8 +270,21 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	apiPath := "/api/v1/config/night.session/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r nightSessionConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "night set", err)
+	}
+
 	var resp nightSessionConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/night.session/"+url.PathEscape(id), json.RawMessage(raw), &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, json.RawMessage(raw), &resp); err != nil {
 		return reportError(stderr, "night set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -267,6 +297,60 @@ func cmdNightSet(args []string, stdout, stderr io.Writer, clock func() time.Time
 	}
 	printNightSessionDetail(stdout, resp)
 	_, _ = fmt.Fprintf(stderr, "\nshowmeshctl night set: revision %d is now active.\n", resp.Revision)
+	return exitOK
+}
+
+// cmdNightDelete mirrors cmdShowDelete's own shape (cmd_show.go):
+// --confirm is required and checked locally before any request is sent. A
+// tombstone, not a hard delete: revision history stays readable through
+// "night revisions"/"night revision" afterward. The coordinator refuses
+// with a conflict while this id is the active night session; this command
+// does not special-case that, since reportError already maps a 409 to
+// exitConflict generically.
+func cmdNightDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl night delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this night session")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night delete --confirm <session-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a night.session object (DELETE /api/v1/config/night.session/{id}).")
+		_, _ = fmt.Fprintln(stderr, "A tombstone, not a hard delete: revision history stays readable via")
+		_, _ = fmt.Fprintln(stderr, "\"night revisions\"/\"night revision\" afterward. Refused if this session is")
+		_, _ = fmt.Fprintln(stderr, "currently active (\"night active\"); deactivate it first. Requires")
+		_, _ = fmt.Fprintln(stderr, "config:write and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "night delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl night delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "night delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/night.session/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "night delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "night session %s deleted\n", id)
 	return exitOK
 }
 
@@ -408,7 +492,7 @@ func cmdNightActive(args []string, stdout, stderr io.Writer, clock func() time.T
 	return exitOK
 }
 
-func putNightSessionActive(g *globalFlags, stdout, stderr io.Writer, clock func() time.Time, cmdName, session string) int {
+func putNightSessionActive(g *globalFlags, stdout, stderr io.Writer, clock func() time.Time, cmdName, session string, ifMatchRevision int64, ifMatchSet, force bool) int {
 	c, err := newRequestClient(g)
 	if err != nil {
 		return reportError(stderr, cmdName, err)
@@ -416,9 +500,21 @@ func putNightSessionActive(g *globalFlags, stdout, stderr io.Writer, clock func(
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const nightSessionActiveAPIPath = "/api/v1/config/night.session.active"
+	ifMatch, err := resolveIfMatch(force, ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r nightSessionActiveConfigResponse
+		if err := c.getJSON(ctx, nightSessionActiveAPIPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, cmdName, err)
+	}
+
 	body := nightSessionActive{Session: session}
 	var resp nightSessionActiveConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/night.session.active", body, &resp); err != nil {
+	if err := c.putJSON(ctx, nightSessionActiveAPIPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, cmdName, err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -435,11 +531,14 @@ func putNightSessionActive(g *globalFlags, stdout, stderr io.Writer, clock func(
 
 func cmdNightActivate(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl night activate", stderr)
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night activate [flags] <session-id>")
 		_, _ = fmt.Fprintln(stderr, "\nMake <session-id> the active night session (PUT")
 		_, _ = fmt.Fprintln(stderr, "/api/v1/config/night.session.active). Requires config:write, admin only.")
 		_, _ = fmt.Fprintln(stderr, "Audited and revisioned like any other configuration write.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "active session pointer changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -453,17 +552,21 @@ func cmdNightActivate(args []string, stdout, stderr io.Writer, clock func() time
 		fs.Usage()
 		return exitUsage
 	}
-	return putNightSessionActive(g, stdout, stderr, clock, "night activate", rest[0])
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	return putNightSessionActive(g, stdout, stderr, clock, "night activate", rest[0], ifMatchRevision, ifMatchSet, forceFlag())
 }
 
 func cmdNightDeactivate(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl night deactivate", stderr)
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night deactivate [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nClear the active night session back to unset (PUT")
 		_, _ = fmt.Fprintln(stderr, "/api/v1/config/night.session.active with an empty session). Requires")
 		_, _ = fmt.Fprintln(stderr, "config:write, admin only. This is the \"back to zero\" half of ADR-039")
 		_, _ = fmt.Fprintln(stderr, "rule 4's zero-to-one-and-back-to-zero transition.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "active session pointer changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -476,5 +579,6 @@ func cmdNightDeactivate(args []string, stdout, stderr io.Writer, clock func() ti
 		fs.Usage()
 		return exitUsage
 	}
-	return putNightSessionActive(g, stdout, stderr, clock, "night deactivate", "")
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	return putNightSessionActive(g, stdout, stderr, clock, "night deactivate", "", ifMatchRevision, ifMatchSet, forceFlag())
 }

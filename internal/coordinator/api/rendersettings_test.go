@@ -258,3 +258,47 @@ func TestPutRenderSettingsConfigCSRF(t *testing.T) {
 		t.Fatalf("status = %d, want 403 (csrf-rejected); body: %s", resp.StatusCode, body)
 	}
 }
+
+// TestPutRenderSettingsConfigRevisionPreconditionWiring is a smoke test
+// proving handlePutRenderSettingsConfig actually threads the shared
+// revision precondition through to its own call site. The full
+// behavioural matrix lives once, on the representative kind
+// fpp.endpoints (config_test.go).
+func TestPutRenderSettingsConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := func(idleOutput string) string {
+		return `{"idleOutput":"` + idleOutput + `","restartPolicy":{"initialDelaySeconds":2,"maxDelaySeconds":45,"maxConsecutiveFastFailures":6}}`
+	}
+	put := func(idleOutput string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/render.settings", body(idleOutput), h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, respBody := put("hold", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	if resp, respBody := put("black", map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	resp, respBody := put("hold", map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, respBody)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/render.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["idleOutput"] != "black" {
+		t.Errorf("payload.idleOutput = %v, want black (the matching-If-Match writer's value, which must have survived the refused stale write); body: %s", payload["idleOutput"], getBody)
+	}
+}

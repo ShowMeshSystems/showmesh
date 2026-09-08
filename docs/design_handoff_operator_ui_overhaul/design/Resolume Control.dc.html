@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">&#9662;</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 &middot; next in 1:06</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night<span style="font:var(--t-meta);color:var(--good-fg)">LIVE</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Live Control</a>
+      <a href="#" style="display:flex;align-items:center;min-height:30px;padding:0 14px 0 26px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-small);font-weight:600;text-decoration:none">Resolume</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--bad-bg);border:1px solid var(--bad-border);color:var(--bad-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:22px 28px 80px;max-width:1220px">
+
+      <p style="margin:0;display:flex;align-items:center;gap:7px;font:var(--t-small);color:var(--text-faint)"><a href="#" style="color:var(--text-muted);text-decoration:none" style-hover="color:var(--accent)">Live Control</a><span aria-hidden="true">/</span><span style="color:var(--text)">Resolume</span></p>
+      <h1 style="margin:8px 0 0;font:var(--t-display);letter-spacing:-0.02em">Resolume Control</h1>
+      <p style="margin:6px 0 0;font:var(--t-body);color:var(--text-muted);max-width:82ch;text-wrap:pretty">Driving the wall by hand, outside any cue or macro. Everything here is named, never an id, and every name is resolved against the composition ShowMesh has stored &mdash; Arena is never asked what it contains. Each dispatch waits for evidence and reports what actually happened.</p>
+
+      <div style="margin-top:18px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:14px 16px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface)">
+        <div style="min-width:0">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <h2 style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">arena-main</h2>
+            <span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:3px;background:var(--good-bg);border:1px solid var(--good-fg);color:var(--good-fg);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Healthy &middot; answered 0.8 s ago</span>
+          </div>
+          <p style="margin:7px 0 0;font:var(--t-small);color:var(--text-muted);max-width:76ch">Resolume Arena at <span style="font:var(--t-data)">10.20.0.30:8080</span> &middot; timecode-driven, never frame-synced by ShowMesh. Composition <span style="font:var(--t-data)">WinterRidge_2026_v4.avc</span>, identified, uploaded 2026-08-24. <a href="#">Stored composition and recovery</a>.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          <button type="button" style="height:44px;padding:0 20px;border:1px solid var(--bad-fg);border-radius:5px;background:var(--bad-bg);color:var(--bad-fg);font:var(--t-body);font-weight:700;letter-spacing:0.04em;text-transform:uppercase;cursor:pointer" style-hover="background:var(--bad-fg);color:var(--bg)">Blackout</button>
+          <span style="font:var(--t-small);color:var(--text-faint);text-align:right;max-width:30ch">Every layer dark. Runs even when the audit store cannot be written &mdash; it is one of the two safety-exempt actions.</span>
+        </div>
+      </div>
+
+      <section aria-labelledby="rc-deck" style="margin-top:26px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <h2 id="rc-deck" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Deck</h2>
+          <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">selectDeck</span>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <button type="button" aria-pressed="{{ true }}" style="height:36px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer">Main Show</button>
+          <button type="button" aria-pressed="{{ false }}" style="height:36px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Resting</button>
+          <button type="button" aria-pressed="{{ false }}" style="height:36px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Weather Hold</button>
+          <p style="margin:0;flex:1 1 320px;min-width:0;font:var(--t-small);color:var(--text-muted)">The grid below is this deck's. Launching a clip that lives on another deck is refused rather than silently switching decks &mdash; select the deck first.</p>
+        </div>
+      </section>
+
+      <section aria-labelledby="rc-grid" style="margin-top:26px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <h2 id="rc-grid" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Main Show</h2>
+          <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">launchClip &middot; launchColumn</span>
+        </div>
+
+        <div style="margin-top:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <div style="min-width:940px;display:grid;grid-template-columns:170px repeat(5, minmax(140px, 1fr));gap:1px;background:var(--border)">
+
+            <div style="padding:9px 12px;background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Layer</div>
+            <button type="button" style="display:grid;gap:2px;padding:8px 10px;border:0;border-bottom:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-small);font-weight:600;text-align:left;cursor:pointer">Opening<span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;opacity:0.85">Launch column</span></button>
+            <button type="button" style="display:grid;gap:2px;padding:8px 10px;border:0;background:var(--raised);color:var(--text);font:var(--t-small);font-weight:600;text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Verse<span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--text-faint)">Launch column</span></button>
+            <button type="button" style="display:grid;gap:2px;padding:8px 10px;border:0;background:var(--raised);color:var(--text);font:var(--t-small);font-weight:600;text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Chorus<span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--text-faint)">Launch column</span></button>
+            <button type="button" style="display:grid;gap:2px;padding:8px 10px;border:0;background:var(--raised);color:var(--text);font:var(--t-small);font-weight:600;text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Finale<span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--text-faint)">Launch column</span></button>
+            <button type="button" style="display:grid;gap:2px;padding:8px 10px;border:0;background:var(--raised);color:var(--text);font:var(--t-small);font-weight:600;text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Bows<span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--text-faint)">Launch column</span></button>
+
+            <div style="display:grid;align-content:center;gap:2px;padding:9px 12px;background:var(--raised)"><span style="font:var(--t-body);font-weight:600">Whole House 1</span><span style="font:var(--t-meta);font-size:10px;color:var(--good-fg)">playing</span></div>
+            <button type="button" style="display:grid;align-content:start;gap:3px;min-height:56px;padding:9px 10px;border:0;border-left:3px solid var(--good-fg);background:var(--good-bg);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer"><span style="font-weight:600">Snowfall Wide</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)">On air &middot; relaunch is unconfirmable</span></button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Snowfall Tight</button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Bells Burst</button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Full Bloom</button>
+            <div style="min-height:56px;background:var(--sunken)"></div>
+
+            <div style="display:grid;align-content:center;gap:2px;padding:9px 12px;background:var(--raised)"><span style="font:var(--t-body);font-weight:600">Whole House 2</span><span style="font:var(--t-meta);font-size:10px;color:var(--good-fg)">playing</span></div>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Drift Slow</button>
+            <button type="button" style="display:grid;align-content:start;gap:3px;min-height:56px;padding:9px 10px;border:0;border-left:3px solid var(--good-fg);background:var(--good-bg);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer"><span style="font-weight:600">Drift Fast</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)">On air</span></button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Ember Rise</button>
+            <div style="min-height:56px;background:var(--sunken)"></div>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Curtain</button>
+
+            <div style="display:grid;align-content:center;gap:2px;padding:9px 12px;background:var(--raised)"><span style="font:var(--t-body);font-weight:600">Roofline</span><span style="font:var(--t-meta);font-size:10px;color:var(--text-faint)">dark</span></div>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Icicle Sweep</button>
+            <div title="Two clips on this deck are both named Snow" style="display:grid;align-content:start;gap:3px;min-height:56px;padding:9px 10px;background:repeating-linear-gradient(135deg, var(--sunken), var(--sunken) 5px, var(--hatch) 5px, var(--hatch) 6px);color:var(--text-faint);font:var(--t-small)"><span style="font-weight:600;text-decoration:line-through">Snow</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--warn-fg)">Ambiguous name</span></div>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Ridge Pulse</button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Ridge Strobe</button>
+            <div style="min-height:56px;background:var(--sunken)"></div>
+
+            <div style="display:grid;align-content:center;gap:2px;padding:9px 12px;background:var(--raised)"><span style="font:var(--t-body);font-weight:600">Windows</span><span style="font:var(--t-meta);font-size:10px;color:var(--good-fg)">playing</span></div>
+            <button type="button" style="display:grid;align-content:start;gap:3px;min-height:56px;padding:9px 10px;border:0;border-left:3px solid var(--good-fg);background:var(--good-bg);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer"><span style="font-weight:600">Warm Glow</span><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)">On air</span></button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Candle Flicker</button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Frost Bloom</button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Frost Fade</button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Warm Out</button>
+
+            <div style="display:grid;align-content:center;gap:2px;padding:9px 12px;background:var(--raised)"><span style="font:var(--t-body);font-weight:600">Yard Sign</span><span style="font:var(--t-meta);font-size:10px;color:var(--unk-fg)">not reporting</span></div>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Sign Idle</button>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Tune To 88.1</button>
+            <div style="min-height:56px;background:var(--sunken)"></div>
+            <button type="button" style="display:grid;align-content:start;min-height:56px;padding:9px 10px;border:0;background:var(--surface);color:var(--text);font:var(--t-small);text-align:left;cursor:pointer" style-hover="background:var(--accent-bg);color:var(--accent)">Thank You</button>
+            <div style="min-height:56px;background:var(--sunken)"></div>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;font:var(--t-small);color:var(--text-muted)">
+          <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-left:3px solid var(--good-fg);background:var(--good-bg)"></span>On air, from <span style="font:var(--t-data)">resolume.layer.&lt;name&gt;.active_clip</span></span>
+          <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:11px;height:11px;background:var(--sunken);border:1px solid var(--border)"></span>No clip in this slot</span>
+          <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:11px;height:11px;background:repeating-linear-gradient(135deg, var(--sunken), var(--sunken) 3px, var(--hatch) 3px, var(--hatch) 4px)"></span>Cannot be addressed by name</span>
+        </div>
+
+        <div style="margin-top:12px;padding:12px 14px;border:1px solid var(--warn-border);border-left:3px solid var(--warn-fg);border-radius:5px;background:var(--surface)">
+          <p style="margin:0;font:var(--t-small);color:var(--text)">Two clips on this deck are both named <span style="font:var(--t-data)">Snow</span>, so neither can be launched: a name is the only way to address one, and this one picks out two. Rename one in Arena and re-upload the composition. <a href="#">Clips that cannot be named</a>.</p>
+        </div>
+      </section>
+
+      <section aria-labelledby="rc-persist" style="margin-top:26px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <h2 id="rc-persist" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Persistent clips</h2>
+          <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">launchClip &middot; persistent</span>
+        </div>
+        <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-muted);max-width:80ch">Outside every deck, so they launch whichever deck is selected. This is the one case where the deck check does not apply.</p>
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+          <button type="button" style="height:36px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Weather Hold Card</button>
+          <button type="button" style="height:36px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Intermission Card</button>
+          <button type="button" style="height:36px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Tune To 88.1 FM</button>
+          <button type="button" style="height:36px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">House Lights Up</button>
+        </div>
+      </section>
+
+      <section aria-labelledby="rc-layers" style="margin-top:26px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <h2 id="rc-layers" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Layers</h2>
+          <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">clearLayer &middot; setLayerBypass &middot; setLayerMaster</span>
+        </div>
+        <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-muted);max-width:82ch">Layers are the same on every deck, so nothing here changes when the deck does. Ready is the word the layer itself reports &mdash; it is a state, not a yes or no.</p>
+
+        <div style="margin-top:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <table style="width:100%;min-width:820px;border-collapse:collapse;font:var(--t-body)">
+            <thead>
+              <tr>
+                <th style="width:180px;padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Layer</th>
+                <th style="width:110px;padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Ready</th>
+                <th style="padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Active clip</th>
+                <th style="width:210px;padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Master</th>
+                <th style="width:190px;padding:9px 12px;text-align:right;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font-weight:600">Whole House 1</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--good-fg)">ready</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-data)">Snowfall Wide</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;align-items:center;gap:9px">
+                    <div style="flex:1 1 auto;height:6px;border-radius:3px;background:var(--sunken);overflow:hidden"><div style="width:100%;height:6px;background:var(--accent)"></div></div>
+                    <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">1.00</span>
+                  </div>
+                </td>
+                <td style="padding:9px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;gap:7px;justify-content:flex-end">
+                    <button type="button" aria-pressed="{{ false }}" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Bypass</button>
+                    <button type="button" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--bad-fg);color:var(--bad-fg)">Clear</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font-weight:600">Whole House 2</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--good-fg)">ready</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-data)">Drift Fast</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;align-items:center;gap:9px">
+                    <div style="flex:1 1 auto;height:6px;border-radius:3px;background:var(--sunken);overflow:hidden"><div style="width:82%;height:6px;background:var(--accent)"></div></div>
+                    <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">0.82</span>
+                  </div>
+                </td>
+                <td style="padding:9px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;gap:7px;justify-content:flex-end">
+                    <button type="button" aria-pressed="{{ false }}" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Bypass</button>
+                    <button type="button" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--bad-fg);color:var(--bad-fg)">Clear</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font-weight:600">Roofline</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--good-fg)">ready</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-faint)">Dark</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;align-items:center;gap:9px">
+                    <div style="flex:1 1 auto;height:6px;border-radius:3px;background:var(--sunken);overflow:hidden"><div style="width:100%;height:6px;background:var(--accent)"></div></div>
+                    <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">1.00</span>
+                  </div>
+                </td>
+                <td style="padding:9px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;gap:7px;justify-content:flex-end">
+                    <button type="button" aria-pressed="{{ false }}" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Bypass</button>
+                    <button type="button" disabled="{{ true }}" title="Already dark" style="height:30px;padding:0 10px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);color:var(--text-faint);font:var(--t-small);cursor:not-allowed">Clear</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font-weight:600">Windows</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--good-fg)">ready</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border);font:var(--t-data)">Warm Glow</td>
+                <td style="padding:11px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;align-items:center;gap:9px">
+                    <div style="flex:1 1 auto;height:6px;border-radius:3px;background:var(--sunken);overflow:hidden"><div style="width:64%;height:6px;background:var(--accent)"></div></div>
+                    <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">0.64</span>
+                  </div>
+                </td>
+                <td style="padding:9px 12px;border-bottom:1px solid var(--border)">
+                  <div style="display:flex;gap:7px;justify-content:flex-end">
+                    <button type="button" aria-pressed="{{ true }}" style="height:30px;padding:0 10px;border:1px solid var(--warn-fg);border-radius:5px;background:var(--warn-bg);color:var(--warn-fg);font:var(--t-small);font-weight:600;cursor:pointer">Bypassed</button>
+                    <button type="button" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--bad-fg);color:var(--bad-fg)">Clear</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:11px 12px;font-weight:600">Yard Sign</td>
+                <td style="padding:11px 12px;font:var(--t-data);color:var(--unk-fg)">unknown</td>
+                <td style="padding:11px 12px;font:var(--t-small);color:var(--text-faint)">Not reported since 20:41:07</td>
+                <td style="padding:11px 12px;font:var(--t-small);color:var(--text-faint)">Not reported</td>
+                <td style="padding:9px 12px">
+                  <div style="display:flex;gap:7px;justify-content:flex-end">
+                    <button type="button" aria-pressed="{{ false }}" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent)">Bypass</button>
+                    <button type="button" style="height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);cursor:pointer" style-hover="border-color:var(--bad-fg);color:var(--bad-fg)">Clear</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="padding:11px 14px;border-top:1px solid var(--border);background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Master is 0.00&ndash;1.00 and is compared with a tolerance, so a nudge too small to matter reads as no change rather than a failure. Clear waits for the layer's own transition to finish before it decides &mdash; a slow fade is not a failed clear. A layer that is not reporting can still be commanded; the result will say what happened.</span>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="rc-results" style="margin-top:26px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <h2 id="rc-results" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">What each dispatch did</h2>
+          <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">this session only</span>
+        </div>
+        <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-muted);max-width:82ch">Sent is not done. Every dispatch resolves to one of five words and always says why, including when it worked.</p>
+
+        <div style="margin-top:14px;display:grid;gap:10px">
+
+          <div style="border:1px solid var(--good-border);border-left:3px solid var(--good-fg);border-radius:5px;background:var(--surface);padding:12px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <p style="margin:0;font:var(--t-subhead)"><span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--good-fg)">Confirmed</span> &middot; launchClip <span style="font:var(--t-data)">Warm Glow</span> on <span style="font:var(--t-data)">Windows</span></p>
+              <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">20:54:12 &rarr; 20:54:12 &middot; 240 ms</span>
+            </div>
+            <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">The layer reported this clip active on evidence collected after dispatch. Resolved to <span style="font:var(--t-data)">clip/2/4</span>. The selected deck did not change while it landed.</p>
+          </div>
+
+          <div style="border:1px solid var(--warn-border);border-left:3px solid var(--warn-fg);border-radius:5px;background:var(--surface);padding:12px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <p style="margin:0;font:var(--t-subhead)"><span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--warn-fg)">Unconfirmable</span> &middot; launchClip <span style="font:var(--t-data)">Snowfall Wide</span></p>
+              <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">20:53:48 &rarr; 20:53:48</span>
+            </div>
+            <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">It was already playing, so the effect cannot be told apart from the state before it. It was sent, and it is not being called a success.</p>
+          </div>
+
+          <div style="border:1px solid var(--bad-border);border-left:3px solid var(--bad-fg);border-radius:5px;background:var(--surface);padding:12px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <p style="margin:0;font:var(--t-subhead)"><span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--bad-fg)">Refused</span> &middot; launchClip <span style="font:var(--t-data)">Hold Card A</span></p>
+              <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">20:52:31 &middot; never dispatched</span>
+            </div>
+            <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">That clip lives on <span style="font:var(--t-data)">Weather Hold</span>, which is not the selected deck. Nothing was sent to Arena and the deck was not switched. Select the deck, then launch.</p>
+          </div>
+
+          <div style="border:1px solid var(--warn-border);border-left:3px solid var(--warn-fg);border-radius:5px;background:var(--surface);padding:12px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <p style="margin:0;font:var(--t-subhead)"><span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--warn-fg)">Unconfirmed</span> &middot; clearLayer <span style="font:var(--t-data)">Roofline</span></p>
+              <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">20:49:02 &rarr; 20:49:14 &middot; deadline 12 s</span>
+            </div>
+            <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">Sent, but the layer had not reported itself dark before the deadline derived from its own 10 s transition. It may still have worked &mdash; the layer row above is the current truth.</p>
+          </div>
+
+          <div style="border:1px solid var(--border);border-left:3px solid var(--unk-border);border-radius:5px;background:var(--surface);padding:12px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <p style="margin:0;font:var(--t-subhead)"><span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--unk-fg)">Replay</span> &middot; blackout</p>
+              <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">20:47:55 &middot; original result</span>
+            </div>
+            <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">A double-press reused the same key, so nothing was dispatched twice. This is the first press's own outcome: <span style="color:var(--good-fg)">confirmed</span>. Its audit entry could not be written, so attribution for it is degraded &mdash; blackout runs anyway.</p>
+          </div>
+
+        </div>
+      </section>
+
+      <section aria-labelledby="rc-absent" style="margin-top:26px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <h2 id="rc-absent" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">When this page cannot be drawn</h2>
+        </div>
+        <div style="margin-top:14px;display:grid;gap:10px;max-width:860px">
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;padding:12px 14px;border:1px solid var(--border);border-left:3px solid var(--unk-border);border-radius:5px;background:var(--surface)">
+            <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--unk-fg)">No composition</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Nothing has been uploaded, so there are no names to address. The grid and the layer table are absent, not empty, and the page says so with a link to upload one. Blackout still works &mdash; it addresses nothing.</p>
+          </div>
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;padding:12px 14px;border:1px solid var(--border);border-left:3px solid var(--unk-border);border-radius:5px;background:var(--surface)">
+            <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--unk-fg)">Not identified</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">A composition is stored but the coordinator cannot tell that Arena is running that one. Every dispatch would be refused, so the controls are closed with that sentence rather than left live to fail one at a time.</p>
+          </div>
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;padding:12px 14px;border:1px solid var(--border);border-left:3px solid var(--unk-border);border-radius:5px;background:var(--surface)">
+            <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--unk-fg)">Not permitted</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Without <span style="font:var(--t-data)">resolume:action</span> the whole page is still readable &mdash; state, grid, layers, past results &mdash; and every control is closed with one line naming the permission. Reads stay open; only the writing closes.</p>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="rc-strip" style="margin-top:26px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border-strong)">
+          <h2 id="rc-strip" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">What stays on Live Control</h2>
+        </div>
+        <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-muted);max-width:82ch">The clip grid needs the width, so this is its own page under Live Control rather than a section inside it. Live Control keeps the two things an operator needs without leaving: the wall's current state, and the one button that is an emergency.</p>
+
+        <div style="margin-top:14px;max-width:860px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);overflow:hidden">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--border);background:var(--raised)">
+            <h3 style="margin:0;font:var(--t-subhead)">Resolume &middot; arena-main</h3>
+            <a href="#" style="font:var(--t-small);font-weight:600">Open Resolume control</a>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:14px 16px">
+            <div style="min-width:0">
+              <p style="margin:0;font:var(--t-body)">Deck <span style="font:var(--t-data);color:var(--text)">Main Show</span> &middot; 3 of 5 layers on air</p>
+              <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Snowfall Wide &middot; Drift Fast &middot; Warm Glow <span style="color:var(--warn-fg)">(Windows bypassed)</span></p>
+            </div>
+            <button type="button" style="height:40px;padding:0 18px;border:1px solid var(--bad-fg);border-radius:5px;background:var(--bad-bg);color:var(--bad-fg);font:var(--t-body);font-weight:700;letter-spacing:0.04em;text-transform:uppercase;cursor:pointer" style-hover="background:var(--bad-fg);color:var(--bg)">Blackout</button>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;,&quot;contrast&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark' | 'light' | 'contrast'&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'dark' };
+  }
+}
+
+</script>
+</body>
+</html>

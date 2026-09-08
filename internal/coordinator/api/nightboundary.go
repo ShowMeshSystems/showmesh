@@ -58,6 +58,15 @@ type nightContentAnchor struct {
 	// Attempts counts dispatches of a shutdown stop that were not
 	// confirmed, so each retry takes its own command identity.
 	Attempts int64 `json:"attempts,omitempty"`
+
+	// DerivationInvalidAttempts counts consecutive ticks on which THIS
+	// anchor was re-derived and came back invalid (nightBoundaryKindDerivation).
+	// It is distinct from Attempts above (an unrelated shutdown-stop
+	// counter): this one paces nightAdvanceRestingIntershow's own bounded
+	// retry-from-fresh-evidence before it gives up and degrades. Reset to
+	// zero on a successful (armed) re-derivation, and naturally zero on any
+	// freshly dispatched anchor.
+	DerivationInvalidAttempts int `json:"derivationInvalidAttempts,omitempty"`
 }
 
 // nightBoundary is the derived expected content-end time E, or the
@@ -65,11 +74,22 @@ type nightContentAnchor struct {
 // "unknown", never a guess. LastTickAt is transition-to-show's own clock
 // sanity checkpoint (nightloop.go's clock-jump guard); every other state
 // leaves it nil.
+//
+// Kind classifies WHY an invalid boundary is invalid, which nightAdvanceRestingIntershow's
+// own persisted-invalid check needs to decide whether a retry from fresh
+// evidence is safe (nightBoundaryRetryEligible). Every boundary persisted
+// before this field existed decodes with Kind empty, and so does a
+// boundary this coordinator cannot classify (nightBoundaryKindUnresolvedAsset,
+// below); both read as NOT eligible, the conservative default: an
+// invalid boundary this coordinator cannot positively identify as a
+// derivation is treated exactly like a contradiction, which is rule 3's
+// own "never recompute past an invalidation" default, not a preference.
 type nightBoundary struct {
 	State      string     `json:"state"` // "armed" | "invalid" | "unknown"
 	Reason     string     `json:"reason"`
 	ExpectedAt *time.Time `json:"expectedAt,omitempty"`
 	LastTickAt *time.Time `json:"lastTickAt,omitempty"`
+	Kind       string     `json:"kind,omitempty"`
 }
 
 const (
@@ -77,6 +97,37 @@ const (
 	nightBoundaryStateInvalid = "invalid"
 	nightBoundaryStateUnknown = "unknown"
 )
+
+const (
+	// nightBoundaryKindDerivation marks an invalid boundary produced by
+	// deriveNightBoundary from an anchor's own observed evidence (arithmetic
+	// came back invalid, nothing contradicted anything): the only kind
+	// nightBoundaryRetryEligible allows a later tick to retry.
+	nightBoundaryKindDerivation = "derivation"
+	// nightBoundaryKindContradiction marks an invalid boundary produced by
+	// nightBoundaryContradicted (fresh evidence disagreed with an already-
+	// armed boundary) or the clock-backstep check: rule 3's own
+	// load-bearing invalidation, never retried automatically.
+	nightBoundaryKindContradiction = "contradiction"
+	// nightBoundaryKindUnresolvedAsset marks an invalid boundary written
+	// when the resting FSEQ's own duration could not be resolved at all
+	// (nightResolveFSEQDuration failure). This never reaches the
+	// persisted-invalid retry check in practice: that branch is only
+	// taken when no anchor has yet been committed for this cycle, so the
+	// pairing nightBoundaryRetryEligible gates (an anchor with ObservedAt
+	// set) cannot exist yet. It is stamped anyway, though, so this coordinator
+	// never persists an invalid boundary it declines to classify.
+	nightBoundaryKindUnresolvedAsset = "unresolved-asset"
+)
+
+// nightBoundaryRetryEligible reports whether a persisted invalid boundary
+// may be retried from fresh observation rather than degrading immediately.
+// Only an explicit derivation stamp is eligible; everything else, Kind
+// empty included, is not. See nightBoundary's own doc comment for why
+// empty must default to conservative rather than to derivation.
+func nightBoundaryRetryEligible(b nightBoundary) bool {
+	return b.Kind == nightBoundaryKindDerivation
+}
 
 // FPP signal names this file reads beyond the ones fppcommand_primitives.go
 // already declares (fppStatusSignal, fppPlaylistNameSignal). Inlined

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">&#9662;</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 &middot; next in 1:06</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night<span style="font:var(--t-meta);color:var(--good-fg)">LIVE</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="{{ railBadgeStyle }}">{{ railBadge }}</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:22px 28px 80px;max-width:1120px">
+
+      <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Dashboard</h1>
+      <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">Snapshot 0.4 s ago · Winter Ridge 2026 is the active show</p>
+
+      <sc-if value="{{ hasItems }}" hint-placeholder-val="{{ true }}">
+
+        <section aria-labelledby="db-ready" style="margin-top:26px">
+          <h2 id="db-ready" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Readiness</h2>
+          <div style="margin-top:10px;border-top:1px solid var(--border-strong)">
+            <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:14px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--good-fg)">✓ Running</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">The show in progress has every output it needs. Nothing on this page will interrupt it.</p>
+            </div>
+            <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:14px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--warn-fg)">⚠ Next start gated</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Readiness last passed at 16:28, <strong style="color:var(--warn-fg)">4 h 39 m ago and from an earlier epoch</strong>. <span style="font:var(--t-data)">start-night</span> would be withheld until it runs again. <a href="#">Run readiness</a></p>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="db-attention" style="margin-top:26px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+            <h2 id="db-attention" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Needs you</h2>
+            <span style="font:var(--t-small);color:var(--text-muted)">2 items · neither is stopping tonight's show</span>
+          </div>
+          <div style="margin-top:10px;border-top:1px solid var(--border-strong)">
+            <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:14px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--bad-fg)">✕ Offline · 26 m</span>
+              <div>
+                <p style="margin:0;font:var(--t-subhead)"><a href="#" style="text-decoration:none">media-garage</a> stopped reporting at 20:41</p>
+                <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">Its garage-door surface has reported nothing since, so one of three projection surfaces is dark or unverified. <a href="#">Open node</a></p>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:14px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--warn-fg)">⚠ Bindings held</span>
+              <div>
+                <p style="margin:0;font:var(--t-subhead)"><a href="#" style="text-decoration:none">barn-player</a> changed its playlist definition</p>
+                <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">The canonical hash changed at 20:54, so Main Show bindings are held rather than guessed. FPP itself is healthy. <a href="#">Re-import and reconcile</a></p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="db-health" style="margin-top:26px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+            <h2 id="db-health" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">System health</h2>
+            <a href="#" style="font:var(--t-small);white-space:nowrap">Open Monitor →</a>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;margin-top:12px;background:var(--border);border:1px solid var(--border);border-radius:5px;overflow:hidden">
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--bad-fg)">Nodes</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">3 / 4</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">1 offline</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--good-fg)">FPP players</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">2 / 2</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">healthy · 1 import held</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--good-fg)">Resolume</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">1 / 1</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">healthy</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--warn-fg)">Signals current</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">353 / 412</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">48 stale · 11 unobserved</p>
+            </a>
+          </div>
+          <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-muted);max-width:78ch">Health is each resource's own report. 47 of the stale signals belong to media-garage alone — one offline node moves the whole fleet's freshness.</p>
+        </section>
+
+      </sc-if>
+
+      <sc-if value="{{ isClear }}" hint-placeholder-val="{{ false }}">
+
+        <section aria-labelledby="db-ready-ok" style="margin-top:26px">
+          <h2 id="db-ready-ok" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Readiness</h2>
+          <div style="margin-top:10px;border-top:1px solid var(--border-strong)">
+            <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:14px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--good-fg)">✓ Running</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">The show in progress has every output it needs.</p>
+            </div>
+            <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:14px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--good-fg)">✓ Next start clear</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Readiness passed at 20:55, 12 m ago, from this epoch. 14 of 14 checks.</p>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="db-attention-ok" style="margin-top:26px">
+          <h2 id="db-attention-ok" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Needs you</h2>
+          <div style="margin-top:10px;border-top:1px solid var(--border-strong);border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;gap:16px;padding:26px 0">
+              <span aria-hidden="true" style="font-size:30px;line-height:1;filter:grayscale(1);opacity:0.5">🎉</span>
+              <div style="min-width:0">
+                <p style="margin:0;font:var(--t-subhead)">Nothing needs you</p>
+                <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted);max-width:70ch">No failed, held, or stale-and-actionable conditions are reported. That is not proof the show <em>looks</em> right — only that nothing has asked for you.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="db-health-ok" style="margin-top:26px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+            <h2 id="db-health-ok" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">System health</h2>
+            <a href="#" style="font:var(--t-small);white-space:nowrap">Open Monitor →</a>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;margin-top:12px;background:var(--border);border:1px solid var(--border);border-radius:5px;overflow:hidden">
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--good-fg)">Nodes</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">4 / 4</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">all online</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--good-fg)">FPP players</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">2 / 2</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">healthy</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--good-fg)">Resolume</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">1 / 1</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">healthy</p>
+            </a>
+            <a href="#" style="display:block;padding:13px 15px;background:var(--surface);text-decoration:none" style-hover="background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--good-fg)">Signals current</p>
+              <p style="margin:6px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums;color:var(--text)">412 / 412</p>
+              <p style="margin:2px 0 0;font:var(--t-small);color:var(--text-muted)">none stale</p>
+            </a>
+          </div>
+        </section>
+
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;attention&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;items&quot;, &quot;clear&quot;], &quot;default&quot;: &quot;items&quot;, &quot;tsType&quot;: &quot;'items' | 'clear'&quot;, &quot;section&quot;: &quot;State&quot; },
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot;, &quot;section&quot;: &quot;Theme&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const attention = this.props.attention ?? 'items';
+    const clear = attention === 'clear';
+    const base = 'display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;font:var(--t-meta);font-size:10px;';
+    return {
+      theme: this.props.theme ?? 'dark',
+      hasItems: !clear,
+      isClear: clear,
+      railBadge: clear ? '' : '2',
+      railBadgeStyle: clear
+        ? 'display:none'
+        : base + 'background:var(--bad-bg);border:1px solid var(--bad-border);color:var(--bad-fg)',
+    };
+  }
+}
+
+</script>
+</body>
+</html>

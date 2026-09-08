@@ -30,7 +30,7 @@ type surfaceOutputParams struct {
 // truth for RealSink, never a probe or a guess.
 type outputSinkOutcome struct {
 	// Configured is true when params.output was present at all. false
-	// means no output was requested yet (e.g. B2a's bare test-pattern
+	// means no output was requested yet (e.g. a content-less establish
 	// apply with no output block), which is not a degradation to report —
 	// there was nothing to report evidence about.
 	Configured bool
@@ -51,10 +51,11 @@ type outputSinkOutcome struct {
 // applyOutputSink swaps base's "sink" stage for the one named by
 // params.output.transport, leaving every other stage (including build
 // contract ruling 5's queue-before-sink) untouched. base is whichever
-// pipeline the caller already built — [pipeline.DefaultTestPatternSpec] for
-// a surface with no FSEQ information, or [pipeline.FSEQSourceSpec]'s real
-// extraction pipeline for one with — so a real assignment's output choice
-// and a diagnostic assignment's go through this one path.
+// pipeline the caller already built: [pipeline.FSEQSourceSpec], real
+// content or (renderops.go's buildAssignedSpec) an idle
+// [pipeline.NewIdleFrameWriter] source with no sequence, so a real
+// assignment's output choice and a content-less assignment's go through
+// this one path.
 //
 // An absent or unrecognized output, HDMI (this seam builds no HDMI sink —
 // ADR-026 decision 4: NDI support is never evidence for HDMI support), or

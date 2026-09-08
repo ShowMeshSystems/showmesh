@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+[data-page='connections'] [data-nav='connections'],
+[data-page='mode'] [data-nav='mode'],
+[data-page='delivery'] [data-nav='delivery'],
+[data-page='recovery'] [data-nav='recovery'],
+[data-page='defaults'] [data-nav='defaults'],
+[data-page='appearance'] [data-nav='appearance'],
+[data-page='audio'] [data-nav='audio'] { border-bottom-color: var(--accent) !important; color: var(--accent) !important; font-weight: 600 !important; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" data-page="{{ page }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">▾</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 · next in 1:06</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night<span style="font:var(--t-meta);color:var(--good-fg)">LIVE</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--bad-bg);border:1px solid var(--bad-border);color:var(--bad-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:22px 28px 80px;max-width:1160px">
+
+      <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Settings</h1>
+      <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:80ch">Installation-wide configuration. Every save creates a coordinator revision, is attributed to you, and can conflict with someone else's.</p>
+
+      <div style="margin-top:18px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:2px;flex-wrap:wrap">
+          <a href="#" data-nav="connections" style="display:flex;align-items:center;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Connections</a>
+          <a href="#" data-nav="delivery" style="display:flex;align-items:center;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Content delivery</a>
+          <a href="#" data-nav="recovery" style="display:flex;align-items:center;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Render recovery</a>
+          <a href="#" style="display:flex;align-items:center;gap:6px;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Access<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)" aria-hidden="true">↗</span></a>
+          <a href="#" data-nav="appearance" style="display:flex;align-items:center;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Appearance</a>
+          <a href="#" data-nav="defaults" style="display:flex;align-items:center;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Audio defaults</a>
+          <a href="#" data-nav="audio" style="display:flex;align-items:center;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Node routing</a>
+          <a href="#" data-nav="mode" style="display:flex;align-items:center;height:38px;padding:0 13px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Mode</a>
+        </div>
+      </div>
+
+      <div style="min-width:0;margin-top:22px">
+
+          <sc-if value="{{ isAudio }}" hint-placeholder-val="{{ true }}">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Settings</a> <span style="color:var(--text-faint)">/</span> Audio <span style="color:var(--text-faint)">/</span> Node routing</p>
+          <h2 style="margin:8px 0 0;font:var(--t-heading);letter-spacing:-0.015em">Where this node's audio leaves the building</h2>
+          <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Program and LTC leave through one interface in one clock domain — the coordinator refuses a split. A route this node has not advertised is refused on save.</p>
+
+          <section aria-labelledby="st-node" style="margin-top:22px;max-width:640px">
+            <h3 id="st-node" style="margin:0 0 12px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Node</h3>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Audio node</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                <option>audio-node-01 — online</option>
+                <option>media-front — no audio capability</option>
+              </select>
+              <span style="font:var(--t-small);color:var(--text-faint)">Nodes advertising <span style="font:var(--t-data)">audio.output.local</span> or <span style="font:var(--t-data)">audio.output.ltc</span>.</span>
+            </label>
+          </section>
+
+          <section aria-labelledby="st-program" style="margin-top:26px;max-width:640px">
+            <h3 id="st-program" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Program output</h3>
+            <div style="display:grid;gap:16px;margin-top:12px">
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Route</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                  <option>hw:CARD=USB,DEV=0</option>
+                  <option>hw:CARD=PCH,DEV=0</option>
+                </select>
+                <span style="font:var(--t-small);color:var(--text-faint)">Advertised by audio-node-01 at 21:07:14.</span>
+              </label>
+
+              <div style="padding:14px;border:1px dashed var(--text-faint);border-radius:4px">
+                <p style="margin:0;font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">No channel inventory</p>
+                <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:66ch">The agent advertises routes, not which channels exist behind them, so there is nothing to pick from. Enter the channels yourself — a route or channel the node rejects is refused on save.</p>
+                <label style="display:grid;gap:5px;margin-top:14px;max-width:300px">
+                  <span style="font:var(--t-body);font-weight:500">Program channels</span>
+                  <input type="text" value="1, 2" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <span style="font:var(--t-small);color:var(--text-faint)">Distinct, 1-based, comma separated.</span>
+                </label>
+              </div>
+            </div>
+
+            <div style="margin-top:14px;padding:14px;border:1px solid var(--border);border-radius:4px;background:var(--raised)">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--accent)">Once the agent advertises groups</p>
+              <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:66ch">The manual field above is replaced by this picker. It needs <span style="font:var(--t-data)">outputGroups</span> on the <span style="font:var(--t-data)">audio.output.local</span> capability, which nothing sends today — shown so the target is on record, not because it works.</p>
+              <div aria-hidden="true" style="display:grid;gap:1px;margin-top:12px;background:var(--border);border:1px solid var(--border);border-radius:4px;overflow:hidden;opacity:0.5">
+                <div style="display:flex;align-items:center;gap:10px;min-height:38px;padding:0 12px;background:var(--surface)"><span style="width:15px;height:15px;border:1px solid var(--text-faint);border-radius:2px"></span><span style="font:var(--t-body)">House left / right</span><span style="margin-left:auto;font:var(--t-data);font-size:11px;color:var(--text-muted)">ch 1, 2</span></div>
+                <div style="display:flex;align-items:center;gap:10px;min-height:38px;padding:0 12px;background:var(--surface)"><span style="width:15px;height:15px;border:1px solid var(--text-faint);border-radius:2px"></span><span style="font:var(--t-body)">Lawn overflow</span><span style="margin-left:auto;font:var(--t-data);font-size:11px;color:var(--text-muted)">ch 3, 4</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section aria-labelledby="st-ltc" style="margin-top:26px;max-width:640px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+              <h3 id="st-ltc" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">LTC output</h3>
+              <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px">
+                <button type="button" aria-pressed="{{ false }}" style="padding:5px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Off</button>
+                <button type="button" aria-pressed="{{ true }}" style="padding:5px 12px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">On</button>
+              </div>
+            </div>
+            <div style="display:grid;gap:16px;margin-top:12px">
+              <div style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Route</span>
+                <p style="margin:0;display:flex;align-items:center;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);font:var(--t-data);color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">hw:CARD=USB,DEV=0</p>
+                <span style="font:var(--t-small);color:var(--text-faint)">Follows the program route — it cannot differ.</span>
+              </div>
+              <label style="display:grid;gap:5px;max-width:300px">
+                <span style="font:var(--t-body);font-weight:500">Channel</span>
+                <input type="text" value="3" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <span style="font:var(--t-small);color:var(--text-faint)">1-based, and not one of the program channels above. No inventory is advertised, so this is entered too.</span>
+              </label>
+            </div>
+          </section>
+
+          <section aria-labelledby="st-clock" style="margin-top:26px;max-width:640px">
+            <h3 id="st-clock" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Clock domain</h3>
+            <div style="margin-top:12px;padding:14px;border:1px dashed var(--text-faint);border-radius:4px">
+              <p style="margin:0;font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">No API evidence</p>
+              <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:66ch">The coordinator does not advertise authoritative clock choices, so there is nothing to pick from and no browser clock is used. These two fields are your declaration, and they are recorded as such.</p>
+              <div style="display:grid;gap:14px;margin-top:14px">
+                <label style="display:grid;gap:5px">
+                  <span style="font:var(--t-body);font-weight:500">Domain</span>
+                  <input type="text" value="usb-audio-0" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                </label>
+                <label style="display:grid;gap:5px">
+                  <span style="font:var(--t-body);font-weight:500">How you know</span>
+                  <input type="text" value="Single USB interface; verified by bench test 2026-08-22" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                  <span style="font:var(--t-small);color:var(--text-faint)">Recorded with the revision so a later reader knows what this claim rests on.</span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:26px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);max-width:640px">
+            <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--good-fg)">✓ Will be accepted</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">One route, program on channels 1 and 2, LTC on 3, one clock domain. Both routes match and no channel is claimed twice.</p>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px;max-width:640px">
+            <button type="button" style="height:34px;padding:0 16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save routing</button>
+            <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Discard changes</button>
+            <span style="margin-left:auto;font:var(--t-small);color:var(--text-muted)">Creates revision <span style="font:var(--t-data);color:var(--text)">5</span></span>
+          </div>
+
+          <section aria-labelledby="st-rev" style="margin-top:24px;max-width:640px">
+            <h3 id="st-rev" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Revisions</h3>
+            <div style="margin-top:10px;border-top:1px solid var(--border)">
+              <div style="display:grid;grid-template-columns:96px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-bottom:1px solid var(--border)">
+                <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--accent)">Active · 4</span>
+                <p style="margin:0;font:var(--t-small);color:var(--text-muted)">22 Aug 19:04 by erbartos — LTC moved to channel 3</p>
+              </div>
+              <div style="display:grid;grid-template-columns:96px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-bottom:1px solid var(--border)">
+                <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">3</span>
+                <p style="margin:0;font:var(--t-small);color:var(--text-muted)">18 Aug 14:51 by erbartos — program-only, no LTC</p>
+              </div>
+            </div>
+          </section>
+          </sc-if>
+
+          <sc-if value="{{ isConnections }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Settings</a> <span style="color:var(--text-faint)">/</span> Connections</p>
+          <h2 style="margin:8px 0 0;font:var(--t-heading);letter-spacing:-0.015em">Reaching the systems ShowMesh talks to</h2>
+          <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Addresses must be reachable from the coordinator, not from this browser. Saving does not disturb a running show — the coordinator re-polls on the next cycle.</p>
+
+          <section aria-labelledby="st-fpp" style="margin-top:22px;max-width:660px">
+            <h3 id="st-fpp" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">FPP players</h3>
+            <div style="display:grid;gap:1px;margin-top:12px;background:var(--border);border:1px solid var(--border);border-radius:5px;overflow:hidden">
+              <div style="padding:14px;background:var(--surface)">
+                <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap">
+                  <label style="display:grid;gap:5px;flex:1 1 220px;min-width:0">
+                    <span style="font:var(--t-body);font-weight:500">barn-player</span>
+                    <input type="text" value="10.20.0.14" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  </label>
+                  <button type="button" style="height:34px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Test</button>
+                </div>
+                <p style="margin:8px 0 0;font:var(--t-small);color:var(--good-fg)">✓ Answered in 42 ms at 21:06:58 · FPP 9.5.3</p>
+              </div>
+              <div style="padding:14px;background:var(--surface)">
+                <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap">
+                  <label style="display:grid;gap:5px;flex:1 1 220px;min-width:0">
+                    <span style="font:var(--t-body);font-weight:500">garage-player</span>
+                    <input type="text" value="10.20.0.15" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  </label>
+                  <button type="button" style="height:34px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Test</button>
+                </div>
+                <p style="margin:8px 0 0;font:var(--t-small);color:var(--good-fg)">✓ Answered in 38 ms at 21:06:58 · FPP 9.5.3</p>
+              </div>
+            </div>
+            <button type="button" style="height:32px;margin-top:10px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Add a player</button>
+          </section>
+
+          <section aria-labelledby="st-res" style="margin-top:26px;max-width:660px">
+            <h3 id="st-res" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Resolume</h3>
+            <div style="margin-top:12px;padding:14px;border:1px solid var(--warn-border);border-radius:5px;background:var(--surface)">
+              <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap">
+                <label style="display:grid;gap:5px;flex:1 1 220px;min-width:0">
+                  <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font:var(--t-body);font-weight:500">arena-main</span><span style="display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:3px;background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn-fg);font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase">Unsaved</span></span>
+                  <input type="text" value="10.20.0.30:7000" style="height:34px;padding:0 10px;border:1px solid var(--warn-border);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                </label>
+                <button type="button" style="height:34px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Test</button>
+              </div>
+              <p style="margin:8px 0 0;font:var(--t-small);color:var(--warn-fg)">⚠ Test refused the connection at 21:04:12. Port 7000 is Resolume's OSC input, not its web server.</p>
+              <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">The saved value is <span style="font:var(--t-data);color:var(--text)">10.20.0.30:8080</span> and the coordinator is still polling it — which is why Monitor shows this instance healthy. Nothing changes until you save.</p>
+            </div>
+          </section>
+
+          <section aria-labelledby="st-mqtt" style="margin-top:26px;max-width:660px">
+            <h3 id="st-mqtt" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Event feed</h3>
+            <p style="margin:7px 0 0;font:var(--t-small);color:var(--text-muted)">How FPP's plugin reaches the coordinator. Playlist-entry identity arrives here.</p>
+            <div style="display:grid;gap:14px;margin-top:12px;max-width:420px">
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Broker</span>
+                <input type="text" value="mqtt://10.20.0.5:1883" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Topic prefix</span>
+                <input type="text" value="showmesh/fpp" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+              </label>
+            </div>
+            <p style="margin:10px 0 0;font:var(--t-small);color:var(--good-fg)">✓ Connected · last entry-identity message 21:05:44</p>
+          </section>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:18px;border-top:1px solid var(--border);max-width:660px">
+            <button type="button" style="height:34px;padding:0 16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save connections</button>
+            <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Discard changes</button>
+            <span style="margin-left:auto;font:var(--t-small);color:var(--warn-fg)">1 unsaved change · active revision <span style="font:var(--t-data)">12</span></span>
+          </div>
+          <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-faint);max-width:74ch">A test is a live check from the coordinator. It is not saved, and it does not prove the address will still answer at showtime.</p>
+          </sc-if>
+
+          <sc-if value="{{ isMode }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Settings</a> <span style="color:var(--text-faint)">/</span> Mode</p>
+          <h2 style="margin:8px 0 0;font:var(--t-heading);letter-spacing:-0.015em">What this installation is for right now</h2>
+          <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Installation-wide, and every screen reads it. Changing it creates a coordinator revision attributed to you.</p>
+
+          <section aria-labelledby="st-mode" style="margin-top:22px;max-width:660px">
+            <h3 id="st-mode" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Mode</h3>
+            <div style="display:grid;gap:12px;margin-top:12px">
+              <label style="display:flex;align-items:flex-start;gap:12px;padding:16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent-bg);cursor:pointer">
+                <input type="radio" name="st-mode-choice" defaultChecked="{{ true }}" style="width:16px;height:16px;margin-top:3px;accent-color:var(--accent)">
+                <span style="min-width:0">
+                  <span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span style="font:var(--t-subhead);color:var(--accent)">Show mode</span><span style="display:inline-flex;align-items:center;height:19px;padding:0 6px;border-radius:3px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase">Active</span></span>
+                  <span style="display:block;margin-top:6px;font:var(--t-small);color:var(--text-muted)">There is an audience. When something cannot be resolved, output is held rather than guessed, and destructive changes ask twice.</span>
+                </span>
+              </label>
+              <label style="display:flex;align-items:flex-start;gap:12px;padding:16px;border:1px solid var(--border);border-radius:5px;background:var(--surface);cursor:pointer" style-hover="border-color:var(--border-strong)">
+                <input type="radio" name="st-mode-choice" style="width:16px;height:16px;margin-top:3px;accent-color:var(--accent)">
+                <span style="min-width:0">
+                  <span style="font:var(--t-subhead)">Program mode</span>
+                  <span style="display:block;margin-top:6px;font:var(--t-small);color:var(--text-muted)">Setup and authoring. Nothing assumes an audience is watching, so reconfiguration is expected rather than guarded.</span>
+                </span>
+              </label>
+            </div>
+          </section>
+
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:22px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);max-width:660px">
+            <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--warn-fg)">⚠ Show in progress</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Cycle 3 is live. Switching to Program mode now is allowed, but it stops treating the audience as present — do it after <span style="font:var(--t-data)">fade-out-night</span> unless you mean it.</p>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px;max-width:660px">
+            <button type="button" disabled="{{ true }}" style="height:34px;padding:0 16px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text-faint);font:var(--t-body);font-weight:500;cursor:not-allowed">Apply mode</button>
+            <span style="font:var(--t-small);color:var(--text-faint)">Show mode is already active, so there is nothing to apply.</span>
+          </div>
+          <p style="margin:20px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Playlist mismatch handling is expected to follow this setting rather than being configured per playlist. That wiring does not exist yet — today the per-playlist control on Shows is what takes effect.</p>
+          </sc-if>
+
+          <sc-if value="{{ isDelivery }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Settings</a> <span style="color:var(--text-faint)">/</span> Content delivery</p>
+          <h2 style="margin:8px 0 0;font:var(--t-heading);letter-spacing:-0.015em">Where asset bytes live and when they move</h2>
+          <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Metadata lives in the coordinator's database; bytes never do. Nodes play from their own disk, so nothing here is in the playback path.</p>
+
+          <section aria-labelledby="st-store" style="margin-top:22px;max-width:640px">
+            <h3 id="st-store" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Store backend</h3>
+            <div style="display:grid;gap:14px;margin-top:12px">
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Backend</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                  <option>Coordinator volume</option>
+                  <option>Mounted filesystem</option>
+                  <option>SMB share</option>
+                </select>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-body);font-weight:500">Path</span>
+                <input type="text" value="/var/lib/showmesh/assets" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <span style="font:var(--t-small);color:var(--text-faint)">Reachable from the coordinator container.</span>
+              </label>
+            </div>
+            <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:18px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Disk</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><span style="font:var(--t-data);color:var(--text)">1.8 GB</span> of 64 GB used by 56 assets across all shows — per-target FSEQ variants are tens of megabytes, not gigabytes. Worth watching anyway: the coordinator moves bytes now, and there is no retention policy yet, so this only grows across seasons.</p>
+            </div>
+          </section>
+
+          <section aria-labelledby="st-sync" style="margin-top:26px;max-width:640px">
+            <h3 id="st-sync" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Distribution</h3>
+            <label style="display:grid;gap:5px;margin-top:12px;max-width:220px">
+              <span style="font:var(--t-body);font-weight:500">Sync interval</span>
+              <input type="text" value="15 min" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+              <span style="font:var(--t-small);color:var(--text-faint)">Plus immediately on every upload.</span>
+            </label>
+            <p style="margin:14px 0 0;padding:11px 13px;border-left:3px solid var(--accent-border);background:var(--raised);font:var(--t-small);color:var(--text-muted);max-width:74ch">Sync never runs because a show started. A node missing an asset is a readiness fault found before a show, not discovered during one.</p>
+          </section>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:18px;border-top:1px solid var(--border);max-width:640px">
+            <button type="button" style="height:34px;padding:0 16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save delivery</button>
+            <span style="margin-left:auto;font:var(--t-small);color:var(--text-muted)">Active revision <span style="font:var(--t-data);color:var(--text)">7</span> · erbartos 14 Aug</span>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ isRecovery }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Settings</a> <span style="color:var(--text-faint)">/</span> Render recovery</p>
+          <h2 style="margin:8px 0 0;font:var(--t-heading);letter-spacing:-0.015em">What a render node shows when nothing is driving it</h2>
+
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:20px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);max-width:700px">
+            <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--warn-fg)">⚠ Read this first</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Idle output is what the audience sees when a pipeline has failed. Black is honest; a held last frame can look like a working show for an hour. Restart bounds exist so a broken pipeline stops retrying forever rather than flickering at the audience.</p>
+          </div>
+
+          <section aria-labelledby="st-idle" style="margin-top:26px;max-width:640px">
+            <h3 id="st-idle" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Idle output</h3>
+            <p style="margin:7px 0 0;font:var(--t-small);color:var(--text-muted)">What a render pipeline puts out when it has nothing to render.</p>
+            <div style="display:grid;gap:12px;margin-top:12px">
+              <label style="display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent-bg);cursor:pointer">
+                <input type="radio" name="st-idle-choice" defaultChecked="{{ true }}" style="width:16px;height:16px;margin-top:3px;accent-color:var(--accent)">
+                <span style="min-width:0"><span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font:var(--t-subhead);color:var(--accent)">Black</span><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">black</span></span><span style="display:block;margin-top:5px;font:var(--t-small);color:var(--text-muted)">Nothing is being driven, and it looks like nothing.</span></span>
+              </label>
+              <label style="display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);cursor:pointer" style-hover="border-color:var(--border-strong)">
+                <input type="radio" name="st-idle-choice" style="width:16px;height:16px;margin-top:3px;accent-color:var(--accent)">
+                <span style="min-width:0"><span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font:var(--t-subhead)">Hold the last frame</span><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">hold</span></span><span style="display:block;margin-top:5px;font:var(--t-small);color:var(--warn-fg)">A frozen frame is indistinguishable from a running show. Only pick this if someone is watching the monitor.</span></span>
+              </label>
+              <label style="display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);cursor:pointer" style-hover="border-color:var(--border-strong)">
+                <input type="radio" name="st-idle-choice" style="width:16px;height:16px;margin-top:3px;accent-color:var(--accent)">
+                <span style="min-width:0"><span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font:var(--t-subhead)">Diagnostic pattern</span><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">diagnostic</span></span><span style="display:block;margin-top:5px;font:var(--t-small);color:var(--text-muted)">Unmistakably not show content. Useful during setup, never with an audience present.</span></span>
+              </label>
+            </div>
+          </section>
+
+          <section aria-labelledby="st-restart" style="margin-top:26px;max-width:640px">
+            <h3 id="st-restart" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Restart policy</h3>
+            <p style="margin:7px 0 0;font:var(--t-small);color:var(--text-muted)">The pipeline supervisor backs off between restarts, and gives up rather than looping forever.</p>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:12px">
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Initial delay</span>
+                <input type="text" value="2 s" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">1–60</span>
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Max delay</span>
+                <input type="text" value="30 s" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">1–300</span>
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Fast failures before giving up</span>
+                <input type="text" value="5" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">1–20 consecutive</span>
+              </label>
+            </div>
+            <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-muted);max-width:70ch">After 5 fast failures in a row the pipeline stays failed and says so, rather than restarting for the rest of the night.</p>
+          </section>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:18px;border-top:1px solid var(--border);max-width:640px">
+            <button type="button" style="height:34px;padding:0 16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save recovery</button>
+            <span style="margin-left:auto;font:var(--t-small);color:var(--text-muted)">Active revision <span style="font:var(--t-data);color:var(--text)">4</span> · erbartos 12 Aug</span>
+          </div>
+          <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-faint);max-width:74ch">Saving does not restart anything now. It changes what happens the next time a pipeline fails.</p>
+          </sc-if>
+
+          <sc-if value="{{ isDefaults }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Settings</a> <span style="color:var(--text-faint)">/</span> Audio <span style="color:var(--text-faint)">/</span> Installation defaults</p>
+          <h2 style="margin:8px 0 0;font:var(--t-heading);letter-spacing:-0.015em">Audio behaviour every node starts from</h2>
+          <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Installation-wide. A node's own routing decides where sound goes; these decide how it behaves once it gets there.</p>
+
+          <section aria-labelledby="st-fades" style="margin-top:22px;max-width:640px">
+            <h3 id="st-fades" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Fades and gain</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:12px">
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Default fade curve</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                  <option>linear</option>
+                </select>
+                <span style="font:var(--t-small);color:var(--text-faint)">Linear is the only curve implemented. More would be an audio-engine change, not a setting.</span>
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Default fade duration</span>
+                <input type="text" value="1 500 ms" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Max background gain</span>
+                <input type="text" value="−6 dB" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">Ceiling for the bed. A night session can lower it, never raise it.</span>
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Duck target gain</span>
+                <input type="text" value="−18 dB" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">Below 0. A cue may override it.</span>
+              </label>
+            </div>
+          </section>
+
+          <section aria-labelledby="st-timing" style="margin-top:26px;max-width:640px">
+            <h3 id="st-timing" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Timing and LTC</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:12px">
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">Drift ignore threshold</span>
+                <input type="text" value="40 ms" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">Below this, drift is not corrected at all.</span>
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">LTC frame rate</span>
+                <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+                  <option>30</option>
+                  <option>29.97</option>
+                  <option>25</option>
+                  <option>24</option>
+                </select>
+                <span style="font:var(--t-small);color:var(--text-faint)">Must match what Resolume expects, or timecode reads as drift.</span>
+              </label>
+              <label style="display:grid;gap:5px;min-width:0">
+                <span style="font:var(--t-body);font-weight:500">LTC default start offset</span>
+                <input type="text" value="00:00:00:00" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">A cue's own offset wins over this.</span>
+              </label>
+            </div>
+            <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-muted);max-width:72ch">Drift is corrected at track boundaries, never by continuously changing playback rate.</p>
+          </section>
+
+          <section aria-labelledby="st-loss" style="margin-top:26px;max-width:640px">
+            <h3 id="st-loss" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">If the audio device disappears</h3>
+            <div style="margin-top:12px;padding:14px;border:1px solid var(--border-strong);border-radius:4px;background:var(--surface)">
+              <p style="margin:0;font:var(--t-body);font-weight:500">Fails silent — not configurable</p>
+              <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:66ch">A lost audio device produces silence rather than falling back to another route. Uncontrolled gain into an FM transmitter is worse than nothing, so this is a recorded exception to the local-fallback rule and has no toggle.</p>
+            </div>
+          </section>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:18px;border-top:1px solid var(--border);max-width:640px">
+            <button type="button" style="height:34px;padding:0 16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save defaults</button>
+            <span style="margin-left:auto;font:var(--t-small);color:var(--text-muted)">Active revision <span style="font:var(--t-data);color:var(--text)">9</span> · erbartos 20 Aug</span>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ isAppearance }}" hint-placeholder-val="{{ false }}">
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Settings</a> <span style="color:var(--text-faint)">/</span> Appearance</p>
+          <h2 style="margin:8px 0 0;font:var(--t-heading);letter-spacing:-0.015em">How this browser looks</h2>
+
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:20px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);max-width:700px">
+            <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Local only</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Everything on this page is stored in this browser. It creates no coordinator revision, is not attributed to you, and no one else sees it — which is why it has no Save button.</p>
+          </div>
+
+          <section aria-labelledby="st-contrast" style="margin-top:26px;max-width:640px">
+            <h3 id="st-contrast" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Theme</h3>
+            <div style="display:flex;gap:1px;padding:1px;margin-top:12px;background:var(--border);border-radius:5px;width:max-content;max-width:100%;flex-wrap:wrap">
+              <button type="button" aria-pressed="{{ true }}" style="padding:6px 14px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">Follow the system</button>
+              <button type="button" aria-pressed="{{ false }}" style="padding:6px 14px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Dark</button>
+              <button type="button" aria-pressed="{{ false }}" style="padding:6px 14px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Light</button>
+            </div>
+            <p style="margin:12px 0 0;font:var(--t-small);color:var(--text-muted);max-width:70ch">Dark is the show-time default. Light is for daylight setup work.</p>
+          </section>
+
+          <section aria-labelledby="st-hc" style="margin-top:26px;max-width:640px">
+            <h3 id="st-hc" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">High contrast</h3>
+            <label style="display:flex;align-items:flex-start;gap:12px;margin-top:12px;padding:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);cursor:pointer" style-hover="border-color:var(--border-strong)">
+              <input type="checkbox" style="width:16px;height:16px;margin-top:3px;accent-color:var(--accent)">
+              <span style="min-width:0"><span style="font:var(--t-body);font-weight:500">Maximum legibility mode</span><span style="display:block;margin-top:5px;font:var(--t-small);color:var(--text-muted)">Pure black, pure white, saturated status colours, thicker borders. For outdoors at night, in the cold, with gloves — turn it on deliberately, not because a system setting inferred it.</span></span>
+            </label>
+          </section>
+          </sc-if>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;page&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;audio&quot;, &quot;connections&quot;, &quot;mode&quot;, &quot;delivery&quot;, &quot;recovery&quot;, &quot;defaults&quot;, &quot;appearance&quot;], &quot;default&quot;: &quot;audio&quot;, &quot;tsType&quot;: &quot;'audio' | 'connections' | 'mode' | 'delivery' | 'recovery' | 'defaults' | 'appearance'&quot;, &quot;section&quot;: &quot;Page&quot; },
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot;, &quot;section&quot;: &quot;Theme&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const page = this.props.page ?? 'audio';
+    return {
+      theme: this.props.theme ?? 'dark',
+      page,
+      isAudio: page === 'audio',
+      isConnections: page === 'connections',
+      isMode: page === 'mode',
+      isDelivery: page === 'delivery',
+      isRecovery: page === 'recovery',
+      isDefaults: page === 'defaults',
+      isAppearance: page === 'appearance',
+    };
+  }
+}
+
+</script>
+</body>
+</html>

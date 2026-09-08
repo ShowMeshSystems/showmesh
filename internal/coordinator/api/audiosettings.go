@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -52,6 +53,48 @@ func resolveAudioSettings(ctx context.Context, cs ConfigStore) (payload config.A
 		return config.AudioSettingsPayload{}, false, fmt.Errorf("api: decode audio.settings payload: %s", verr.Error())
 	}
 	return payload, true, nil
+}
+
+// audioConfigPushStatus reports whether the audio.settings singleton
+// itself decodes. "usable" claims nothing about a node's own audio.node
+// binding or reachability. err is a store failure, never a decode
+// failure — see [audioConfigPushStatusDegradeOnError].
+func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConfigPushRunState, reason *string, err error) {
+	obj, err := cs.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+		return AudioConfigPushUsable, nil, nil
+	case err != nil:
+		return "", nil, fmt.Errorf("api: get audio.settings config object: %w", err)
+	case obj.CurrentRevision == 0:
+		return AudioConfigPushUsable, nil, nil
+	}
+
+	rev, err := cs.GetConfigRevision(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return "", nil, fmt.Errorf("api: get audio.settings config revision %d: %w", obj.CurrentRevision, err)
+	}
+	if _, verr := config.DecodeAudioSettingsPayload(rev.PayloadJSON); verr != nil {
+		detail := fmt.Sprintf("the engine-wide audio.settings revision %d does not decode: %s", obj.CurrentRevision, verr.Error())
+		return AudioConfigPushUnusable, &detail, nil
+	}
+	return AudioConfigPushUsable, nil, nil
+}
+
+// audioConfigPushStatusDegradeOnError reads [audioConfigPushStatus],
+// logging and reporting state=unknown on a store error rather than
+// propagating it: the revision may be fine, only the read failed, so
+// this must not be conflated with "unusable" (a real decode failure).
+func audioConfigPushStatusDegradeOnError(ctx context.Context, cs ConfigStore, logger *slog.Logger, action string) (state AudioConfigPushRunState, reason *string) {
+	state, reason, err := audioConfigPushStatus(ctx, cs)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("audio.settings config push status read failed; reporting unknown", "action", action, "error", err)
+		}
+		detail := "the coordinator could not read its stored audio.settings configuration; see the coordinator log"
+		return AudioConfigPushUnknown, &detail
+	}
+	return state, reason
 }
 
 // handleGetAudioSettingsConfig serves GET /api/v1/config/audio.settings.
@@ -126,6 +169,12 @@ func (h *handlers) handlePutAudioSettingsConfig(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	ac := authFromContext(ctx)
 
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxAudioSettingsConfigRequestBodyBytes+1))
 	if err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("reading request body: %v", err)))
@@ -153,11 +202,16 @@ func (h *handlers) handlePutAudioSettingsConfig(w http.ResponseWriter, r *http.R
 		nextRevisionNo int64
 	)
 	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		currentRevision := int64(0)
 		nextRevisionNo = 1
 		if obj, gerr := tx.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID); gerr == nil {
+			currentRevision = obj.CurrentRevision
 			nextRevisionNo = obj.CurrentRevision + 1
 		} else if !errors.Is(gerr, store.ErrConfigObjectNotFound) {
 			return identity.AuditEntry{}, gerr
+		}
+		if err := checkRevisionPrecondition(config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, precondition, currentRevision); err != nil {
+			return identity.AuditEntry{}, err
 		}
 
 		rec, cerr := tx.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
@@ -182,6 +236,11 @@ func (h *handlers) handlePutAudioSettingsConfig(w http.ResponseWriter, r *http.R
 		}, nil
 	})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write audio.settings config revision", writeErr)
 		return
 	}
@@ -238,6 +297,8 @@ func mapAudioSettingsPayload(p config.AudioSettingsPayload) v1.ConfigAudioSettin
 		DefaultFadeDurationMs:      p.DefaultFadeDurationMs,
 		DefaultMaxBackgroundGainDb: p.DefaultMaxBackgroundGainDb,
 		DuckTargetGainDb:           p.DuckTargetGainDb,
+		DuckFadeDurationMs:         p.DuckFadeDurationMs,
+		DuckRestoreFadeDurationMs:  p.DuckRestoreFadeDurationMs,
 		LTCFrameRate:               p.LTCFrameRate,
 		LTCDefaultStartOffset:      p.LTCDefaultStartOffset,
 	}

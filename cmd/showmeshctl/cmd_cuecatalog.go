@@ -19,6 +19,7 @@ import (
 
 type cueCatalogRenderOutputRecord struct {
 	Sequence    string   `json:"sequence"`
+	Filename    string   `json:"filename"`
 	AssetHashes []string `json:"assetHashes"`
 }
 
@@ -205,7 +206,8 @@ func printCueCatalogResponse(w io.Writer, resp cueCatalogResponse) {
 	for _, e := range resp.Entries {
 		_, _ = fmt.Fprintf(w, "  cue %s (revision %d)\n", e.CueID, e.CueRevision)
 		if e.Outputs.Render != nil {
-			_, _ = fmt.Fprintf(w, "    render: sequence=%s assets=%d\n", e.Outputs.Render.Sequence, len(e.Outputs.Render.AssetHashes))
+			_, _ = fmt.Fprintf(w, "    render: sequence=%s filename=%s assets=%d\n",
+				e.Outputs.Render.Sequence, emptyOrDash(e.Outputs.Render.Filename), len(e.Outputs.Render.AssetHashes))
 		}
 		if e.Outputs.Audio != nil {
 			_, _ = fmt.Fprintf(w, "    audio: asset=%s startOffsetMillis=%d assets=%d\n",

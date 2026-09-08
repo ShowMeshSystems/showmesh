@@ -476,3 +476,48 @@ func TestDecodeResolumeRecoveryConfigPutBody(t *testing.T) {
 		})
 	}
 }
+
+// TestPutResolumeRecoveryConfigRevisionPreconditionWiring is a smoke test
+// proving handlePutResolumeRecoveryConfig actually threads the shared
+// revision precondition through to its own call site. The full
+// behavioural matrix lives once, on the representative kind
+// fpp.endpoints (config_test.go).
+func TestPutResolumeRecoveryConfigRevisionPreconditionWiring(t *testing.T) {
+	setup := newResolumeRecoveryTestSetup(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, setup.svc, admin.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(enabled bool, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		body := `{"autoRestoreEnabled":false}`
+		if enabled {
+			body = `{"autoRestoreEnabled":true}`
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/resolume.recovery", body, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := put(true, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put(false, map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put(true, map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/resolume.recovery", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["autoRestoreEnabled"] != false {
+		t.Errorf("payload.autoRestoreEnabled = %v, want false (the matching-If-Match writer's value, which must have survived the refused stale write); body: %s", payload["autoRestoreEnabled"], getBody)
+	}
+}

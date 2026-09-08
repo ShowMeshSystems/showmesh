@@ -36,7 +36,23 @@ type showModeConfigResponse struct {
 	CreatedByPrincipalName *string               `json:"createdByPrincipalName"`
 	Source                 string                `json:"source"`
 
-	ResolumeWebSocketEffect string `json:"resolumeWebSocketEffect"`
+	ResolumeWebSocketEffect string                 `json:"resolumeWebSocketEffect"`
+	CueActivationPin        configCueActivationPin `json:"cueActivationPin"`
+}
+
+// configCueActivationPin mirrors v1.CueActivationPin field for field, this
+// program's own independent transcription (this file's own header comment
+// gives the reason: no shared type with the coordinator). Whether a
+// show.cue edit saved right now is STAGED, invisible to every node until
+// the show restarts, or applies live: an operator working through
+// showmeshctl mid-show has no other way to see that, so this is not an
+// optional field to drop for a smaller struct.
+type configCueActivationPin struct {
+	Pinned     bool   `json:"pinned"`
+	Show       string `json:"show,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	PinnedAt   string `json:"pinnedAt,omitempty"`
+	Effect     string `json:"effect"`
 }
 
 // showModeValues is ADR-033's closed vocabulary, checked here so a typo is
@@ -168,12 +184,15 @@ func cmdShowModeGet(args []string, stdout, stderr io.Writer, clock func() time.T
 // ADR-033 decision 3 argues against.
 func cmdShowModeSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl show mode set", stderr)
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show mode set [flags] <program|show>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.mode revision (requires config:write, admin only).")
 		_, _ = fmt.Fprintln(stderr, "A full replacement, validated before activation: an invalid value is")
 		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision (ADR-009). Applies without a")
 		_, _ = fmt.Fprintln(stderr, "coordinator restart, in both directions.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "mode changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -200,8 +219,21 @@ func cmdShowModeSet(args []string, stdout, stderr io.Writer, clock func() time.T
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/show.mode"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r showModeConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "show mode set", err)
+	}
+
 	var resp showModeConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.mode", configShowModePayload{Mode: mode}, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, configShowModePayload{Mode: mode}, &resp); err != nil {
 		return reportError(stderr, "show mode set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -274,5 +306,12 @@ func printShowModeConfig(w io.Writer, resp showModeConfigResponse) {
 	}
 	if resp.ResolumeWebSocketEffect != "" {
 		_, _ = fmt.Fprintf(w, "  effect: %s\n", resp.ResolumeWebSocketEffect)
+	}
+	if resp.CueActivationPin.Pinned {
+		_, _ = fmt.Fprintf(w, "  cue activation: STAGED, held to show %q generation %d since %s\n",
+			resp.CueActivationPin.Show, resp.CueActivationPin.Generation, resp.CueActivationPin.PinnedAt)
+		_, _ = fmt.Fprintf(w, "    a show.cue edit saved now will NOT reach any node until the show is stopped and restarted\n")
+	} else if resp.CueActivationPin.Effect != "" {
+		_, _ = fmt.Fprintf(w, "  cue activation: %s\n", resp.CueActivationPin.Effect)
 	}
 }

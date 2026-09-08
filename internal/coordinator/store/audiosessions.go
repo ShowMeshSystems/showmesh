@@ -50,43 +50,52 @@ func scanAudioSession(row interface{ Scan(dest ...any) error }) (AudioSessionRec
 	return rec, nil
 }
 
-// PutAudioSession creates or replaces id's durable record (INSERT ... ON
-// CONFLICT), setting UpdatedAt to now and preserving the original
-// CreatedAt across an update. This is the coordinator's own mirror of
-// [pkg/audio.RevisionState]'s "revision only advances" rule, enforced
-// here by the ON CONFLICT's own WHERE clause: an update whose Revision
-// does not exceed the stored row's current revision is a silent no-op,
-// never a rewind. The first write for a given id always applies, at
-// whatever revision it names.
+// PutAudioSession creates or replaces (rec.NodeID, rec.ID)'s durable
+// record (INSERT ... ON CONFLICT), setting UpdatedAt to now and
+// preserving the original CreatedAt across an update. This is the
+// coordinator's own mirror of [pkg/audio.RevisionState]'s "revision only
+// advances" rule, enforced here by the ON CONFLICT's own WHERE clause: an
+// update whose Revision does not exceed the stored row's current revision
+// is a silent no-op, never a rewind. The first write for a given
+// (node_id, id) always applies, at whatever revision it names.
+//
+// The key is (node_id, id), not id alone (schemaV20): a session
+// id such as the cue or blackAndSilence session is a global constant, not
+// unique per node, so two nodes each dispatching the same session id are
+// two independent rows with independent revisions — one node's write can
+// never advance or be rewind-guarded against another node's revision
+// counter.
 func (s *Store) PutAudioSession(ctx context.Context, rec AudioSessionRecord) error {
 	guardNotInTx(ctx, "Store.PutAudioSession")
 	now := s.now()
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO audio_sessions (id, node_id, desired_json, revision, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			node_id = excluded.node_id,
+		ON CONFLICT(node_id, id) DO UPDATE SET
 			desired_json = excluded.desired_json,
 			revision = excluded.revision,
 			updated_at = excluded.updated_at
 		WHERE excluded.revision > audio_sessions.revision
 	`, rec.ID, rec.NodeID, rec.DesiredJSON, rec.Revision, timeToDB(now), timeToDB(now))
 	if err != nil {
-		return fmt.Errorf("store: put audio session %q: %w", rec.ID, err)
+		return fmt.Errorf("store: put audio session %q for node %q: %w", rec.ID, rec.NodeID, err)
 	}
 	return nil
 }
 
-// GetAudioSession returns one session by id, or [ErrAudioSessionNotFound].
-func (s *Store) GetAudioSession(ctx context.Context, id string) (AudioSessionRecord, error) {
+// GetAudioSession returns one session by (nodeID, id), or
+// [ErrAudioSessionNotFound]. Scoped by node (schemaV20): a
+// session id is not unique across nodes, so a lookup by id alone could
+// return a different node's row.
+func (s *Store) GetAudioSession(ctx context.Context, nodeID, id string) (AudioSessionRecord, error) {
 	guardNotInTx(ctx, "Store.GetAudioSession")
-	row := s.db.QueryRowContext(ctx, `SELECT `+audioSessionColumns+` FROM audio_sessions WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+audioSessionColumns+` FROM audio_sessions WHERE node_id = ? AND id = ?`, nodeID, id)
 	rec, err := scanAudioSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AudioSessionRecord{}, ErrAudioSessionNotFound
 	}
 	if err != nil {
-		return AudioSessionRecord{}, fmt.Errorf("store: get audio session %q: %w", id, err)
+		return AudioSessionRecord{}, fmt.Errorf("store: get audio session %q for node %q: %w", id, nodeID, err)
 	}
 	return rec, nil
 }
@@ -115,13 +124,15 @@ func (s *Store) ListAudioSessionsByNode(ctx context.Context, nodeID string) ([]A
 	return out, nil
 }
 
-// DeleteAudioSession removes id's record. Deleting an already-absent
-// record is not an error, matching assets.go's and FileSessionStore's
-// identical convention for a clear/stop-cleanup path.
-func (s *Store) DeleteAudioSession(ctx context.Context, id string) error {
+// DeleteAudioSession removes (nodeID, id)'s record. Deleting an
+// already-absent record is not an error, matching assets.go's and
+// FileSessionStore's identical convention for a clear/stop-cleanup path.
+// Scoped by node (schemaV20): an unscoped delete by id alone
+// could remove a different node's session sharing the same id.
+func (s *Store) DeleteAudioSession(ctx context.Context, nodeID, id string) error {
 	guardNotInTx(ctx, "Store.DeleteAudioSession")
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM audio_sessions WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("store: delete audio session %q: %w", id, err)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM audio_sessions WHERE node_id = ? AND id = ?`, nodeID, id); err != nil {
+		return fmt.Errorf("store: delete audio session %q for node %q: %w", id, nodeID, err)
 	}
 	return nil
 }

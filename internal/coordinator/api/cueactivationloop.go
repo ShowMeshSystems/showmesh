@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
@@ -76,6 +79,32 @@ type CueActivationLoop struct {
 	minNudgeInterval time.Duration
 	nudgeMu          sync.Mutex
 	lastNudgeTick    time.Time
+
+	// pinMu/pin hold ADR-033 show mode's own frozen authorization identity
+	// pin is nil whenever program mode applies (Decide/Authorize
+	// then resolve live, exactly as before this field existed), and holds
+	// a live *cueactivate.ShowPin whenever show mode applies, for as long
+	// as the active Show/Generation stays the one the pin was minted for,
+	// see [CueActivationLoop.resolvePin]'s own doc comment for exactly
+	// when it is (re)started or dropped. This is loop-lifetime state, not
+	// per-tick state, which is the entire point: a mid-show show.cue edit
+	// must never reach a fresh resolution before the show itself restarts.
+	pinMu    sync.Mutex
+	pin      *cueactivate.ShowPin
+	pinnedAt time.Time
+}
+
+// PinStatus implements [CueActivationPinStatus] for GET
+// /api/v1/config/show.mode: the operator-visible surface for
+// ADR-033 show mode's own frozen authorization identity, whenever one is
+// held.
+func (l *CueActivationLoop) PinStatus() (pinned bool, show string, generation int64, pinnedAt time.Time) {
+	l.pinMu.Lock()
+	defer l.pinMu.Unlock()
+	if l.pin == nil {
+		return false, "", 0, time.Time{}
+	}
+	return true, l.pin.Active.ShowID, l.pin.Active.Generation, l.pinnedAt
 }
 
 // NewCueActivationLoop builds a [CueActivationLoop] against deps/opts,
@@ -187,7 +216,12 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 	case l.inFlight <- struct{}{}:
 		go func() {
 			defer func() { <-l.inFlight }()
-			l.h.cueActivationTick(ctx, l.h.now())
+			pin, err := l.resolvePin(ctx)
+			if err != nil {
+				l.logger.Warn("cue activation loop: resolve show-mode pin failed; falling back to live resolution this tick", "error", err)
+				pin = nil
+			}
+			l.h.cueActivationTick(ctx, l.h.now(), pin)
 		}()
 	default:
 		// Previous tick still running; skip this one — the next tick
@@ -195,9 +229,59 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 	}
 }
 
+// resolvePin is ADR-033 show mode's own pin lifecycle. It reads
+// the CURRENT mode and active show fresh, every tick, and answers what
+// this tick's Decide/Authorize calls must use.
+//
+//   - Program mode: any existing pin is dropped and nil is returned, so
+//     the tick resolves live, unchanged from before pinning existed, and
+//     "close to today's behaviour" per Eric's ruling.
+//   - Show mode, no pin yet, or the active Show/Generation has changed
+//     since the pin held was minted: a fresh [cueactivate.NewShowPin] is
+//     started against the CURRENTLY active show, right now. This is "the
+//     show starts" and "the show stops and restarts" both, in this
+//     repository's own terms: ADR-027 already treats the active show as
+//     configuration, and Generation is show.active's own config revision
+//     number (assetsync.ActiveShow's own doc comment), the exact
+//     mechanism this codebase uses to express "a new run of a show began".
+//     A show.cue edit never touches show.active, so it can never look like
+//     a restart here; only actually changing which show (or which
+//     generation of it) is active does.
+//   - Show mode, existing pin still matches the live Show/Generation: that
+//     SAME pin is returned again, so a show.cue edit saved mid-show never
+//     reaches this tick's Decide/Authorize calls at all.
+func (l *CueActivationLoop) resolvePin(ctx context.Context) (*cueactivate.ShowPin, error) {
+	if l.h.deps.Config == nil || l.h.deps.AssetManifests == nil {
+		return nil, nil
+	}
+	mode, _, _, _, err := resolveShowMode(ctx, l.h.deps.Config)
+	if err != nil {
+		return nil, fmt.Errorf("resolve show mode: %w", err)
+	}
+	if mode.Mode != config.ShowModeShow {
+		l.pinMu.Lock()
+		l.pin = nil
+		l.pinMu.Unlock()
+		return nil, nil
+	}
+
+	active, err := assetsync.ResolveActiveShow(ctx, l.h.deps.AssetManifests)
+	if err != nil {
+		return nil, fmt.Errorf("resolve active show: %w", err)
+	}
+
+	l.pinMu.Lock()
+	defer l.pinMu.Unlock()
+	if l.pin == nil || l.pin.Active.ShowID != active.ShowID || l.pin.Active.Generation != active.Generation {
+		l.pin = cueactivate.NewShowPin(active)
+		l.pinnedAt = l.h.now()
+	}
+	return l.pin, nil
+}
+
 // cueActivationTick resolves and dispatches an activation for every FPP
 // instance this coordinator has an accepted observation from.
-func (h *handlers) cueActivationTick(ctx context.Context, now time.Time) {
+func (h *handlers) cueActivationTick(ctx context.Context, now time.Time, pin *cueactivate.ShowPin) {
 	if h.deps.FPPReconciliation == nil || h.deps.FPPObservations == nil {
 		return
 	}
@@ -207,11 +291,11 @@ func (h *handlers) cueActivationTick(ctx context.Context, now time.Time) {
 		return
 	}
 	for _, obs := range obsList {
-		h.cueActivationTickOne(ctx, now, obs)
+		h.cueActivationTickOne(ctx, now, obs, pin)
 	}
 }
 
-func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs store.FPPPlaylistEntryObservationRecord) {
+func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs store.FPPPlaylistEntryObservationRecord, pin *cueactivate.ShowPin) {
 	result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, obs)
 	if err != nil {
 		h.logWarn("cue activation loop: reconcile failed", "instanceUuid", obs.InstanceUUID, "error", err)
@@ -220,7 +304,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	if h.deps.AssetManifests == nil {
 		return
 	}
-	dec, err := cueactivate.Decide(ctx, h.deps.AssetManifests, result, obs, obs.InstanceUUID)
+	dec, err := cueactivate.Decide(ctx, h.deps.AssetManifests, result, obs, obs.InstanceUUID, pin)
 	if err != nil {
 		h.logWarn("cue activation loop: decide failed", "instanceUuid", obs.InstanceUUID, "error", err)
 		return
@@ -232,7 +316,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	case cueactivate.StateActivated, cueactivate.StateMismatched:
 		var outcomes []cueActivationDispatchOutcome
 		if len(dec.Activations) > 0 {
-			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer)
+			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer, pin)
 			for _, outcome := range outcomes {
 				switch {
 				case outcome.Err != nil:
@@ -245,9 +329,16 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 					// ever arrived — recorded durably either way (see
 					// writeCueActivationOutcomeAudit); this log line is
 					// operator-visible evidence at the moment it happens,
-					// not the only record of it.
-					h.logWarn("cue activation loop: node did not confirm this activation",
-						"instanceUuid", obs.InstanceUUID, "nodeId", outcome.NodeID, "nodeOutcome", outcome.NodeOutcome)
+					// not the only record of it. An identical, still-
+					// unresolved refusal backs off to logging once rather
+					// than once per tick: see shouldLogCueActivationRefusal's
+					// own doc comment.
+					if h.shouldLogCueActivationRefusal(obs.InstanceUUID, outcome.NodeID, outcome.NodeOutcome) {
+						h.logWarn("cue activation loop: node did not confirm this activation",
+							"instanceUuid", obs.InstanceUUID, "nodeId", outcome.NodeID, "nodeOutcome", outcome.NodeOutcome)
+					}
+				case outcome.Dispatched && outcome.Confirmed:
+					h.clearCueActivationRefusalLog(obs.InstanceUUID, outcome.NodeID)
 				}
 			}
 		}
@@ -297,10 +388,127 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 				h.dispatchAssetMissingFailToBlack(ctx, now, obs.InstanceUUID, targets, issuer, episode)
 			}()
 		}
+	case cueactivate.StateEvidenceBroken:
+		// Owner ruling 2026-09-02 (cue-deactivate-on-jump): a persisted
+		// sequence-regression marker outranks whatever else this tick would
+		// otherwise have decided (StateEvidenceBroken's own doc comment,
+		// cueactivate/decide.go) — stop exactly what dec.EvidenceBroken
+		// names, the same per-cue-scoped effect the asset-missing
+		// fail-to-black path already uses, and touch nothing else: never
+		// the background bed, never the prepare-staging session.
+		if len(dec.EvidenceBroken) == 0 {
+			return
+		}
+		targets, err := h.evidenceBrokenFailToBlackTargets(ctx, dec.EvidenceBroken)
+		if err != nil {
+			h.logWarn("cue activation loop: resolve evidence-broken fail-to-black targets failed", "instanceUuid", obs.InstanceUUID, "error", err)
+			return
+		}
+		if len(targets) == 0 {
+			return
+		}
+		// Detached, in its own goroutine, for the identical reason
+		// dispatchAssetMissingFailToBlack is (that function's own doc
+		// comment, immediately above): dispatchCueScopedBlackAndSilence
+		// awaits real per-surface/session node confirmation, and this
+		// method runs once per FPP instance from cueActivationTick's own
+		// sequential loop over every instance. h.cueActivationFailToBlackWG
+		// is reused rather than a second WaitGroup: it already exists to
+		// own exactly this shape of detached scoped-clear dispatch, and
+		// [CueActivationLoop.Run]'s own shutdown path already waits on it.
+		episode := evidenceBrokenEpisode(obs)
+		h.cueActivationFailToBlackWG.Add(1)
+		go func() {
+			defer h.cueActivationFailToBlackWG.Done()
+			h.dispatchCueScopedBlackAndSilence(ctx, now, targets, issuer, episode)
+		}()
 	case cueactivate.StateUnbound, cueactivate.StateIdentityUnavailable:
 		// Nothing to dispatch or hold — see [cueactivate.State]'s own doc
 		// comment.
 	}
+}
+
+// shouldLogCueActivationRefusal reports whether cueActivationTickOne's own
+// "node did not confirm this activation" log line should fire again for
+// (instanceUUID, nodeID) carrying nodeOutcome: only when nodeOutcome
+// differs from the last one already logged for that node, since an
+// operator cannot act on a repeated, identical, unactionable refusal any
+// faster than the first time it was seen, and writeCueActivationOutcomeAudit
+// already keeps the durable record a repeated log line would only
+// duplicate. The very first occurrence for a key always logs (no prior
+// entry to match).
+func (h *handlers) shouldLogCueActivationRefusal(instanceUUID, nodeID, nodeOutcome string) bool {
+	key := instanceUUID + "|" + nodeID
+	h.cueActivationRefusalLogMu.Lock()
+	defer h.cueActivationRefusalLogMu.Unlock()
+	if last, ok := h.cueActivationRefusalLog[key]; ok && last == nodeOutcome {
+		return false
+	}
+	if h.cueActivationRefusalLog == nil {
+		h.cueActivationRefusalLog = make(map[string]string)
+	}
+	h.cueActivationRefusalLog[key] = nodeOutcome
+	return true
+}
+
+// clearCueActivationRefusalLog drops (instanceUUID, nodeID)'s own
+// remembered refusal once a confirmed activation proves the node is no
+// longer stuck: a later refusal for the same node is a fresh episode, not
+// a continuation of the one already surfaced, and must log again even if
+// it happens to produce the identical NodeOutcome string.
+func (h *handlers) clearCueActivationRefusalLog(instanceUUID, nodeID string) {
+	key := instanceUUID + "|" + nodeID
+	h.cueActivationRefusalLogMu.Lock()
+	defer h.cueActivationRefusalLogMu.Unlock()
+	delete(h.cueActivationRefusalLog, key)
+}
+
+// evidenceBrokenFailToBlackTargets resolves evidenceBroken's own per-node
+// Activations (cueactivate.Decision.EvidenceBroken) into
+// cueScopedFailToBlackTarget{NodeID, Outputs} pairs, mirroring
+// dispatchPrepareAheadAudio's own reasoning for reusing act.Show/
+// act.Generation directly rather than re-resolving the active show live a
+// second time: cueactivate.Decide already resolved them, live, at decide
+// time. A node whose Cue no longer resolves in that catalog — the active
+// show changed, or the Cue itself was deleted, between when the now-broken
+// evidence was last resolved and this tick — is skipped: there is nothing
+// left to scope a stop to for that node.
+func (h *handlers) evidenceBrokenFailToBlackTargets(ctx context.Context, evidenceBroken map[string]cueactivation.Activation) ([]cueScopedFailToBlackTarget, error) {
+	if h.deps.AssetManifests == nil || len(evidenceBroken) == 0 {
+		return nil, nil
+	}
+	var out []cueScopedFailToBlackTarget
+	for nodeID, act := range evidenceBroken {
+		active := assetsync.ActiveShow{Configured: true, ShowID: act.Show, Generation: act.Generation}
+		catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve cue catalog for node %q: %w", nodeID, err)
+		}
+		entry, participates := prepareAheadCatalogEntry(catalog, act.CueID)
+		if !participates {
+			continue
+		}
+		out = append(out, cueScopedFailToBlackTarget{NodeID: nodeID, Outputs: entry.Outputs})
+	}
+	return out, nil
+}
+
+// evidenceBrokenEpisode is StateEvidenceBroken's own idempotency-key
+// dimension, mirroring blackAndSilenceEpisode's identical role for the H0.2
+// mismatch effect: obs.InstanceUUID and obs.EvidenceBrokenAt, never
+// obs.EntryOccurrenceSequence, which is frozen at whatever it was before
+// evidence broke and does not advance again until a fresh accepted
+// observation clears the marker (schemaV29's own doc comment). Stable
+// across repeat ticks of the SAME unresolved break, so a repeat tick
+// replays idempotently rather than re-dispatching; changes the moment the
+// marker clears and later sets again, so a later, distinct break gets a
+// fresh episode.
+func evidenceBrokenEpisode(obs store.FPPPlaylistEntryObservationRecord) string {
+	brokenAt := ""
+	if obs.EvidenceBrokenAt != nil {
+		brokenAt = obs.EvidenceBrokenAt.UTC().Format(time.RFC3339Nano)
+	}
+	return obs.InstanceUUID + "-" + brokenAt
 }
 
 // cueScopedFailToBlackTarget is one node this tick must fail to black,
@@ -329,17 +537,12 @@ type cueScopedFailToBlackTarget struct {
 //     asset-missing refusal only produced a log line
 //     (outcome.Dispatched && !outcome.Confirmed, cueActivationTickOne's
 //     own switch above), identical to a bare unconfirmed dispatch. This
-//     matters because a never-uploaded sequence can be resolved
-//     "present" by this coordinator's own manifest computation (an
-//     unauthored sequence is not "missing" — see [cueactivate.
-//     cueAssetsPresent]'s own doc comment) while the node itself, asked
-//     to open a file that was never uploaded at all, refuses — the
-//     single worst case Eric's ruling named, and the one case a
-//     fail-to-black gated only on THIS coordinator's own opinion could
-//     never reach. Whether that coordinator/node disagreement about a
-//     never-uploaded sequence is itself a separate defect is a question
-//     for its own fix; this path does not depend on the coordinator
-//     having noticed first, which is the requirement here.
+//     matters even now that [cueactivate.cueAssetsPresent] itself refuses
+//     a never-uploaded sequence (so the ordinary case reaches path 1,
+//     pre-dispatch): this coordinator's own view of a node's inventory can
+//     still be stale or wrong relative to what the node just observed on
+//     disk, and path 2 is what catches THAT residual disagreement rather
+//     than depending on the coordinator having noticed first.
 //
 // Every other outcome (successfully confirmed, refused for an unrelated
 // reason, or no result at all) is excluded — fail-to-black has no bearing
@@ -626,7 +829,7 @@ func (h *handlers) dispatchBlackAndSilenceAudioStopSession(ctx context.Context, 
 	// second, independently written revision rule left this stop refused
 	// as stale for the life of the session.
 	revision := cueactivation.AudioSessionRevision(stopAt, cueactivation.AudioSessionStepStop)
-	in := audioDispatchInput{
+	in := AudioDispatchInput{
 		Action: "audio.session.stop", NodeID: nodeID, SessionID: sessionID,
 		Params: map[string]any{
 			"sessionId": sessionID, "invocationId": idempotencyKey, "revision": revision,
@@ -646,6 +849,224 @@ func (h *handlers) dispatchBlackAndSilenceAudioStopSession(ctx context.Context, 
 		// above — a suppressed dispatch is logged, never silent.
 		h.logDebug("cue activation loop: blackAndSilence audio stop suppressed as a replay of an unchanged episode", "nodeId", nodeID, "sessionId", sessionID, "episode", episode)
 	}
+}
+
+// nextPlaylistEntryCueID looks up the entry immediately after entryID in
+// playlistID's own entries, at playlistRevision — the ordered knowledge a
+// node's own flat, unordered catalog cannot derive itself (see
+// [cueactivation.PrepareStagingSessionID]'s own doc comment for why the
+// coordinator, not the node, is what schedules a prepare-ahead). ok is
+// false, with no error, whenever there is genuinely nothing to prepare
+// ahead: playlistID or entryID is empty (a directly-activated
+// announcement, or a safeCue mismatch fallback — neither advances through
+// an ordered Playlist), the named revision no longer exists, entryID is
+// not one of its entries, or entryID is that revision's own last entry.
+//
+// The last-entry case is a KNOWN, deliberate gap, not an oversight: an FPP
+// playlist that loops (its last entry restarting its first, rather than
+// ending) is still a real cue start with the same video-leads-audio lead
+// this whole mechanism exists to close, but this coordinator has nothing
+// to prepare ahead with at that transition, because it cannot currently
+// tell whether a given FPP-runner show.playlist loops at all.
+// config.ShowPlaylistPayload's own Repeat field (ShowPlaylistShowmeshAudio)
+// is gated to Runner=="showmesh-audio" and does not exist for an
+// FPP-runner binding; FPP's own raw playlist definition JSON DOES carry a
+// "repeat" key (confirmed against real FPP fixtures), but
+// fppidentity.ParseDefinitionEntries — the coordinator's one reader of
+// that JSON — does not extract it, and nothing else in this codebase
+// surfaces it. Wiring that through would be new plumbing in a different
+// package, not a reversible detail of this function; guessing wrong here
+// (wrapping to the first entry when the playlist does not actually loop)
+// would stage a Cue that never activates, so skipping is the correct,
+// evidence-bounded choice until that data is actually available here.
+//
+// Reads the persisted revision directly, mirroring fppreconcile's own
+// decodeStoredShowPlaylistPayload one seam over (internal/coordinator/
+// fppreconcile/reconcile.go): a stored revision is already valid, and
+// re-running config.DecodeShowPlaylistPayload's own authoring-time
+// cross-reference validation (show exists, cue resolves) here would need
+// callbacks this read-only lookup has no use for.
+func nextPlaylistEntryCueID(ctx context.Context, cfg ConfigStore, playlistID string, playlistRevision int64, entryID string) (cueID string, ok bool, err error) {
+	if playlistID == "" || entryID == "" {
+		return "", false, nil
+	}
+	rev, err := cfg.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, playlistID, playlistRevision)
+	if err != nil {
+		if errors.Is(err, store.ErrConfigRevisionNotFound) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("get show.playlist %q revision %d: %w", playlistID, playlistRevision, err)
+	}
+	var payload config.ShowPlaylistPayload
+	if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
+		return "", false, fmt.Errorf("decode show.playlist %q revision %d: %w", playlistID, playlistRevision, err)
+	}
+	for i, entry := range payload.Entries {
+		if entry.ID != entryID {
+			continue
+		}
+		if i+1 >= len(payload.Entries) {
+			return "", false, nil
+		}
+		return payload.Entries[i+1].Cue, true, nil
+	}
+	return "", false, nil
+}
+
+// prepareAheadCatalogEntry mirrors cueactivate's own unexported
+// catalogEntry exactly — independently reproduced rather than imported,
+// matching this file's own established convention (see
+// activeShowFPPBinding's doc comment one package over, cueactivate/
+// decide.go) for a small, self-contained lookup neither side's own
+// internals need to share.
+func prepareAheadCatalogEntry(catalog assetsync.Catalog, cueID string) (cuecatalog.Entry, bool) {
+	for _, e := range catalog.Entries {
+		if e.CueID == cueID {
+			return e, true
+		}
+	}
+	return cuecatalog.Entry{}, false
+}
+
+// dispatchPrepareAheadAudio best-effort stages cue N+1's audio content
+// under [cueactivation.PrepareStagingSessionID] while cue N (act) is still
+// activating on nodeID — the coordinator's own half of closing the
+// video-leads-audio gap [audio.Manager.Promote] exists for (see that
+// method's own doc comment, internal/agent/audio/manager.go, for the
+// node-side mechanism this feeds).
+//
+// Deliberately NOT an authorization decision: it never calls
+// [cueauth.Check] or [cueactivate.Authorize] against the guessed next Cue.
+// [audio.Manager.Promote]'s own identity check, run at cue N+1's REAL
+// activation, is what actually gates whether this staged content is ever
+// used — a wrong or stale guess here costs nothing beyond one wasted
+// prepare; activateAudio's ordinary Apply+Prepare+Start fallback still
+// runs exactly as it would have if nothing had ever been staged. Every
+// failure here is logged and swallowed for the identical reason: this must
+// never fail, delay, or retry cue N's own activation, which has already
+// been dispatched (or refused) by the time this runs.
+//
+// Runs synchronously, not in its own goroutine, unlike
+// dispatchAssetMissingFailToBlack: that goroutine exists because an
+// asset-missing refusal recurs on EVERY tick for as long as the bad node/
+// cue stays active, which would otherwise stall every other FPP
+// instance's tick repeatedly. This dispatch's idempotency key is
+// act.ActivationID-derived, the identical key scope cue N's own
+// dispatchOneCueActivation already uses — so a repeat tick over an
+// unchanged act (the ordinary case between one entry-start and the next)
+// answers from the replay path with no publish and no await, exactly as
+// dispatchOneCueActivation's own repeat-tick cost already does today,
+// unguarded by a goroutine.
+func (h *handlers) dispatchPrepareAheadAudio(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) {
+	if h.deps.Config == nil || h.deps.AssetManifests == nil {
+		return
+	}
+	nextCueID, ok, err := nextPlaylistEntryCueID(ctx, h.deps.Config, act.Playlist, act.PlaylistRevision, act.EntryID)
+	if err != nil {
+		h.logWarn("cue activation loop: resolve next playlist entry for prepare-ahead failed", "nodeId", nodeID, "playlistId", act.Playlist, "error", err)
+		return
+	}
+	if !ok {
+		return
+	}
+
+	// act.Show/act.Generation are already this activation's own pinned or
+	// freshly-resolved identity (cueactivate.Decide's own job) — reused
+	// directly rather than re-resolving assetsync.ResolveActiveShow (or
+	// threading the tick's own *cueactivate.ShowPin through another layer)
+	// a second time for the identical answer.
+	active := assetsync.ActiveShow{Configured: true, ShowID: act.Show, Generation: act.Generation}
+	catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
+	if err != nil {
+		h.logWarn("cue activation loop: resolve cue catalog for prepare-ahead failed", "nodeId", nodeID, "cueId", nextCueID, "error", err)
+		return
+	}
+	entry, participates := prepareAheadCatalogEntry(catalog, nextCueID)
+	if !participates || entry.Outputs.Audio == nil || entry.Outputs.Audio.Filename == "" {
+		// Nothing to stage: the next Cue has no audio output on this node,
+		// or — cueAssetsPresent's own "never uploaded" rule (cueactivate/
+		// decide.go), mirrored here — no asset has ever been uploaded for
+		// it. Not an error: the ordinary Apply+Prepare+Start path at real
+		// activation time covers this exactly as it always has.
+		return
+	}
+	contentHash := ""
+	if len(entry.Outputs.Audio.AssetHashes) > 0 {
+		contentHash = entry.Outputs.Audio.AssetHashes[0]
+	}
+
+	// t is act.EvidenceAt, not this coordinator's own now: the apply and
+	// prepare idempotency keys below are stable for act's whole lifetime,
+	// so their params must be byte-identical on every repeat tick too, and
+	// only a value fixed to act itself (never a fresh wall-clock reading)
+	// gives that. [PrepareStagingSessionStepApply]/[PrepareStagingSessionStepPrepare]
+	// both sort past every AudioSessionStep* constant, so the resulting
+	// revisions still land above activationRevision(act, activationStepStart),
+	// the revision the node's own activateAudio already consumed against
+	// THIS SAME staging session (Promote or Clear) before this runs.
+	t := act.EvidenceAt
+
+	staging := cueactivation.PrepareStagingSessionID
+	applyInvocation := act.ActivationID + ":prepare-ahead-apply"
+	prepareInvocation := act.ActivationID + ":prepare-ahead-prepare"
+	applyRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepApply)
+	prepareRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepPrepare)
+
+	applyResult, applyProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.apply", NodeID: nodeID, SessionID: staging,
+		Params: map[string]any{
+			"sessionId": staging, "invocationId": applyInvocation, "revision": applyRevision,
+			"sourceRole": string(pkgaudio.SourceRoleShow),
+			"media": map[string]any{
+				"assetId": entry.Outputs.Audio.Asset, "contentHash": contentHash, "filename": entry.Outputs.Audio.Filename,
+			},
+		},
+		Revision: applyRevision, IdempotencyKey: applyInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	switch {
+	case err != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio apply dispatch failed", "nodeId", nodeID, "cueId", nextCueID, "error", err)
+		return
+	case applyProblem != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio apply dispatch refused", "nodeId", nodeID, "cueId", nextCueID, "detail", applyProblem.Detail)
+		return
+	case applyResult.Outcome == "refused" || applyResult.Outcome == "failed":
+		h.logWarn("cue activation loop: prepare-ahead audio apply outcome", "nodeId", nodeID, "cueId", nextCueID, "outcome", applyResult.Outcome, "reason", applyResult.Reason)
+		return
+	}
+
+	_, prepareProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.prepare", NodeID: nodeID, SessionID: staging,
+		Params:   map[string]any{"sessionId": staging, "invocationId": prepareInvocation, "revision": prepareRevision},
+		Revision: prepareRevision, IdempotencyKey: prepareInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	switch {
+	case err != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio prepare dispatch failed", "nodeId", nodeID, "cueId", nextCueID, "error", err)
+	case prepareProblem != nil:
+		h.logWarn("cue activation loop: prepare-ahead audio prepare dispatch refused", "nodeId", nodeID, "cueId", nextCueID, "detail", prepareProblem.Detail)
+	}
+}
+
+// safeDispatchPrepareAheadAudio wraps [handlers.dispatchPrepareAheadAudio]
+// with a recover, so best-effort means genuinely total: this runs on
+// runTick's own detached goroutine (this file's own Run), with no caller
+// left to recover a panic before it reaches the Go runtime and takes down
+// the entire process — cue N's own activation, dispatched by this same
+// caller (cueactivationdispatch.go's dispatchCueActivations) immediately
+// before this call, must never be put at that kind of risk by a wrong or
+// unanticipated guess about cue N+1.
+func (h *handlers) safeDispatchPrepareAheadAudio(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logWarn("cue activation loop: prepare-ahead audio dispatch panicked; recovered", "nodeId", nodeID, "cueId", act.CueID, "panic", fmt.Sprintf("%v", r))
+		}
+	}()
+	h.dispatchPrepareAheadAudio(ctx, now, nodeID, act, issuer)
 }
 
 // nodeHasAudioNodeObject reports whether nodeID has a current audio.node
