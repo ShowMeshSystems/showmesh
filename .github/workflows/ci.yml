@@ -172,7 +172,22 @@ jobs:
 
       - name: Download dependencies
         if: needs.changed-files.outputs.docs_only != 'true'
-        run: go mod download
+        # A precondition, not an evidence step: nothing after this step
+        # means anything if it fails, so retry a bounded number of times
+        # instead of aggregating past it the way the steps below do.
+        run: |
+          set -eu
+          max_attempts=3
+          attempt=1
+          until go mod download; do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "Download dependencies: attempt $attempt/$max_attempts failed; giving up" >&2
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            echo "Download dependencies: retrying (attempt $attempt/$max_attempts)"
+            sleep 5
+          done
 
       - name: Vet
         id: vet
