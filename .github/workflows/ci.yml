@@ -178,11 +178,19 @@ jobs:
         run: go mod download
 
       - name: Vet
+        id: vet
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: go vet ./...
 
       - name: Test the audio engine (race detector)
+        id: test_engine
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # gstengine drives real GStreamer pipelines in real time; run it
         # alone, before the rest of the suite claims the runner's other
         # cores, so its timing bounds reflect this package rather than
@@ -205,7 +213,11 @@ jobs:
           go test -race ./internal/agent/audio/gstengine/...
 
       - name: Test (race detector)
+        id: test_rest
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # Everything the step above did not run. grep -vx on the full
         # import path, not a substring: an unanchored match would also
         # exclude a future sibling like gstengineltc, which the step above
@@ -224,7 +236,11 @@ jobs:
           go test -race -timeout=20m $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
+        id: build_cgo
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # The agent's real GStreamer/libltc engine is a cgo build; without
         # this step, nothing in CI proves `./...` links with cgo enabled,
         # only that `go test -race` (which forces it on) happens not to
@@ -234,7 +250,11 @@ jobs:
         run: CGO_ENABLED=1 go build ./...
 
       - name: Build CGo-free (ADR-012)
+        id: build_cgofree
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # ADR-012 requires the coordinator build CGo-free so the image can
         # be a static binary on a distroless base and cross-compile cleanly
         # for arm64; `go test -race` above requires cgo and would not catch
@@ -242,7 +262,11 @@ jobs:
         run: CGO_ENABLED=0 go build ./...
 
       - name: Check formatting
+        id: check_fmt
         if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # gofmt -l lists files that are not formatted; fail the job if it
         # prints anything, since a clean `-l` output is empty. Scoped to
         # the directories that actually hold this project's Go source
@@ -256,6 +280,63 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "The following files are not gofmt-formatted:"
             echo "$unformatted"
+            exit 1
+          fi
+
+      - name: "Suite results (this log names which suites ran and which failed)"
+        if: always()
+        # The six steps above each carry continue-on-error, so a failure
+        # in an early one (Vet, or the audio engine test) no longer skips
+        # the ones after it -- this is the actual defect this job is
+        # fixing: an engine failure previously hid the rest of the Go
+        # packages, including a coordinator end-to-end test that had never
+        # once executed. continue-on-error also forces each of those
+        # steps' own `conclusion` to report success no matter what
+        # happened -- GitHub's own step list and job-view API show that
+        # forced `conclusion`, not the real result -- so this reads
+        # `outcome` instead, which still carries the real pass/fail.
+        # `skipped` is accepted because every one of those steps carries
+        # the same docs_only guard the rest of this job does: on a
+        # documentation-only pull request they legitimately do not run,
+        # and that must not turn this job red. Anything other than
+        # success or skipped -- failure, cancelled, or an empty string if
+        # a step never ran for some other reason -- fails this step, so
+        # an unexecuted suite cannot silently read as a passing one.
+        #
+        # Every step's name is printed next to its outcome, on both
+        # success and failure, both to stdout/stderr and to
+        # GITHUB_STEP_SUMMARY, because the step list itself now shows a
+        # green tick on a failed suite (the `conclusion` problem above):
+        # this step's own summary and log are where the real result
+        # actually lives, so both need the full list, not just the job's
+        # pass/fail verdict.
+        run: |
+          failed=false
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          for pair in \
+            "Vet:${{ steps.vet.outcome }}" \
+            "Test the audio engine (race detector):${{ steps.test_engine.outcome }}" \
+            "Test (race detector):${{ steps.test_rest.outcome }}" \
+            "Build with cgo (ADR-042 real agent backend):${{ steps.build_cgo.outcome }}" \
+            "Build CGo-free (ADR-012):${{ steps.build_cgofree.outcome }}" \
+            "Check formatting:${{ steps.check_fmt.outcome }}"; do
+            name="${pair%%:*}"
+            outcome="${pair#*:}"
+            case "$outcome" in
+              success|skipped)
+                line="PASS  $name: $outcome"
+                echo "$line"
+                ;;
+              *)
+                line="FAIL  $name: $outcome"
+                echo "$line" >&2
+                failed=true
+                ;;
+            esac
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" = true ]; then
             exit 1
           fi
 
