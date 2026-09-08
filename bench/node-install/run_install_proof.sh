@@ -32,6 +32,9 @@
 #     directory, installs the binary and unit;
 #   - a second install.sh run is idempotent and does not touch the env
 #     file or state directory contents;
+#   - install.sh still recognises and adopts its own account when the unit
+#     file that would otherwise confirm it is missing, rather than mistaking
+#     its own account for the home-directory collision hazard;
 #   - preflight.sh reports every check it claims to in its build-host mode,
 #     including the informational ndisink line;
 #   - preflight.sh --runtime-only, the mode install.sh actually runs on
@@ -283,6 +286,31 @@ if [ "$STATE_SUM_BEFORE" != "$STATE_SUM_AFTER" ]; then
   exit 1
 fi
 echo "OK: second install left agent.env and render state untouched"
+echo
+
+echo "=== 5b. Unit file missing: install.sh's own account must still be recognised ==="
+echo "The account this installer creates (system uid, nologin-equivalent shell,"
+echo "home == the state directory) is also the shape a collision hazard would"
+echo "have. Losing the unit file (a reset /etc, a partial uninstall, a renamed"
+echo "or relocated unit) must not make install.sh mistake its own account for"
+echo "that hazard and refuse it."
+rm -f /etc/systemd/system/showmesh-agent.service
+set +e
+OUT="$(./install.sh "$REPO/bin/showmesh-agent-native" 2>&1)"
+RC=$?
+set -e
+if [ "$RC" -ne 0 ]; then
+  echo "FAIL: install.sh refused its own account once the unit file was gone" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+if ! echo "$OUT" | grep -q 'matches the shape this installer creates'; then
+  echo "FAIL: install.sh adopted the account, but not by way of the expected recognition message" >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+test -f /etc/systemd/system/showmesh-agent.service
+echo "OK: install.sh recognised and adopted its own account with no unit file present, and reinstalled the unit"
 echo
 
 echo "=== 6. preflight.sh, build-host mode (no arguments) ==="
