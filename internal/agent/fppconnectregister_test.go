@@ -225,6 +225,23 @@ func waitForRegistrationState(t *testing.T, held *fppConnectHeldStore, dir, name
 	return fppConnectHeldRecord{}
 }
 
+// waitForInventoryTrigger blocks on trigger for waitForRegistrationState's
+// own 3 second deadline (failing t with notFiredMsg on timeout), then
+// drains it for a short quiet window to confirm it fires only once.
+func waitForInventoryTrigger(t *testing.T, trigger chan struct{}, notFiredMsg string) {
+	t.Helper()
+	select {
+	case <-trigger:
+	case <-time.After(3 * time.Second):
+		t.Fatal(notFiredMsg)
+	}
+	select {
+	case <-trigger:
+		t.Fatal("inventory trigger fired more than once")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -282,16 +299,7 @@ func TestFPPConnectRegisterCompletedBoundFileRegisters(t *testing.T) {
 		t.Fatal("file part bytes do not match the held file")
 	}
 
-	select {
-	case <-trigger:
-	default:
-		t.Fatal("inventory trigger did not fire after a successful registration")
-	}
-	select {
-	case <-trigger:
-		t.Fatal("inventory trigger fired more than once")
-	default:
-	}
+	waitForInventoryTrigger(t, trigger, "inventory trigger did not fire after a successful registration")
 }
 
 // TestFPPConnectRegisterUnboundFileProducesNoRequest proves an unbound held
@@ -717,16 +725,7 @@ func TestFPPConnectRegisterDoublePlaylistPostRegistersOnce(t *testing.T) {
 		t.Fatalf("registration requests = %d, want exactly 1", len(reqs))
 	}
 
-	select {
-	case <-trigger:
-	default:
-		t.Fatal("inventory trigger did not fire")
-	}
-	select {
-	case <-trigger:
-		t.Fatal("inventory trigger fired more than once")
-	default:
-	}
+	waitForInventoryTrigger(t, trigger, "inventory trigger did not fire")
 }
 
 // TestFPPConnectRegisterBootWalkRetriesUnregistered proves the startup
