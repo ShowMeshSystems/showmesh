@@ -383,7 +383,7 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.getByRole('button', { name: 'Discard changes' })).toBeDisabled()
     })
 
-    it('rebinding the FPP source playlist renders inert, citing the OPEN-DECISIONS entry', async () => {
+    it('rebinding the FPP source playlist renders inert, stating why', async () => {
       setup()
       await openPlaylistRow('Main Show')
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())

@@ -1,8 +1,7 @@
 /**
  * Shows / Media Playlists tab: the media.playlist configuration kind
- * (mediaplaylist.go), a sibling of show.playlist in the same workspace
- * (docs/ui-rebuild/OPEN-DECISIONS.md, "Media Playlists sits beside
- * Playlists"). Structured after ShowsPlaylists.tsx: a list Section on the
+ * (mediaplaylist.go), a sibling of show.playlist in the same workspace.
+ * Structured after ShowsPlaylists.tsx: a list Section on the
  * page body, a Drawer-hosted editor for the selected row or a new draft.
  *
  * The item editor here is the same audio-asset picker the night session's

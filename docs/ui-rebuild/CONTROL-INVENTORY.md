@@ -6,8 +6,9 @@ current build has, so that a control missing from a mock is a decision Eric
 makes rather than something lost in a deletion.
 
 **This file is not a parity checklist.** The rebuild targets the mocks. A row
-here that has no home in a mock stays parked until Eric rules on it in
-`OPEN-DECISIONS.md`.
+here that has no home in a mock stays parked until Eric rules on it. His
+rulings from the rebuild are in the design guide's section 11; anything still
+open is a Linear issue.
 
 Columns: what the control does · the scope it needs · the API operation behind
 it. A blank scope means the control is read-only or gated by the page.
@@ -279,8 +280,8 @@ Shows respectively). Nothing is lost by deleting them.
 ## Behaviour that lives only in code being deleted
 
 These rules are not in the mocks, the guide, or the OpenAPI contract. Each is
-re-derived from a named source during the rebuild, or it goes to
-`OPEN-DECISIONS.md`.
+re-derived from a named source during the rebuild, or it becomes a Linear
+issue.
 
 | Rule | Where it is today | Source to re-derive from |
 |---|---|---|

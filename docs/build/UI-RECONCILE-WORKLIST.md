@@ -5,7 +5,7 @@ Worktree verified fresh before this pass: `HEAD` and `origin/main` both
 
 This is a worklist, not a patch. No code was written during the survey. Read
 against `docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md`,
-`docs/ui-rebuild/OPEN-DECISIONS.md`, `CLAUDE.md`'s Operator UI section, and
+the rulings in that guide's section 11, `CLAUDE.md`'s Operator UI section, and
 `docs/build/UI-REBUILD-GAP-INVENTORY.md` (2026-08-30) before every row below.
 
 ## Headline finding: the gap inventory's rows were closed by the rebuild after it was written
@@ -239,8 +239,8 @@ wired" table because of how much of `CurrentRun` never reaches any screen:
 | `next` (itemId, media, source) | Nowhere. | **Contract-display-needed**, no ruling covers it: "what's cued next" has no display anywhere despite being in the primary frame. |
 
 None of these four unread fields (`status`/`statusReason`, `reconciliation`,
-`activation`, `next`) appear in `OPEN-DECISIONS.md`. Only `targets` has an
-explicit ruling (D-006). This is worth Eric's read: it may be that these are
+`activation`, `next`) carry a ruling from the rebuild. Only `targets` does
+(D-006, now in the design guide's section 11). This is worth Eric's read: it may be that these are
 genuinely not wanted yet (same posture as `targets`), or it may be an
 oversight distinct from the `targets` case, since D-006's stated reason
 (needs real-hardware verification) doesn't obviously apply to `status`,
@@ -258,7 +258,7 @@ Not a contract gap, a documentation/code discrepancy in source 3 (the merged
 UI itself), surfaced because it was checked directly rather than trusted from
 a relayed summary, per instruction mid-task.
 
-`docs/ui-rebuild/OPEN-DECISIONS.md` D-009's ruling states: *"The rail as
+D-009's ruling, now in the design guide's section 11, states: *"The rail as
 built is correct: current cycle, whether more cycles are open, whether end
 of night has been requested, plus the footnote that earlier cycles are not
 listed."*
@@ -288,7 +288,7 @@ built and what is actually on `main`. Two possibilities, and only Eric can
 say which: (a) the code changed after D-009's entry was last edited and the
 doc is stale, or (b) this reads as a small, deliberate design refinement
 (numbered placeholder slots being more honest than a bare footnote) that was
-never written back into OPEN-DECISIONS.md. Either way, the two disagree
+never written back into the ruling record. Either way, the two disagree
 today, and I'm flagging it rather than picking a side.
 
 Read in code only, both files, directly, not relayed.
