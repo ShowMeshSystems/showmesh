@@ -117,15 +117,12 @@ jobs:
       # failure when it could have reported two, and each hidden one costs
       # a full round trip to discover.
       fail-fast: false
-      # Test both the minimum Go version this project claims to support
-      # (go.mod) and the compiler the Dockerfile actually ships the
-      # coordinator binary on, so the two never silently diverge. These are
-      # literal versions, not go-version-file, precisely so this matrix
-      # doesn't collapse back into one entry; update both by hand when
-      # either go.mod's `go` directive or the Dockerfile's golang: tag
-      # changes.
+      # Test the compiler the Dockerfile actually ships the coordinator
+      # binary on. This is a literal version, not go-version-file, so it
+      # cannot silently drift from the Dockerfile's own pin; update by hand
+      # when the Dockerfile's golang: tag changes.
       matrix:
-        go-version: ["1.25.0", "1.26.6"]
+        go-version: ["1.26.6"]
     steps:
       # ubuntu-latest ships GStreamer 1.24 and go-gst needs 1.26 or newer,
       # so every job that compiles the agent's cgo backend runs on Debian 13
@@ -323,8 +320,12 @@ jobs:
             name="${pair%%:*}"
             outcome="${pair#*:}"
             case "$outcome" in
-              success|skipped)
+              success)
                 line="PASS  $name: $outcome"
+                echo "$line"
+                ;;
+              skipped)
+                line="SKIP  $name: $outcome"
                 echo "$line"
                 ;;
               *)
@@ -343,11 +344,11 @@ jobs:
   test-gate:
     # Required-check aggregate for the `test` go-version matrix. Branch
     # protection matches required checks by literal name, and the matrix
-    # legs are named `test (1.25.0)` / `test (1.26.6)`, so bumping either
-    # version renames the leg and the old required name stops reporting
-    # forever. This job's name never changes, so it is what branch
-    # protection requires instead of the two version-specific names; bump
-    # the matrix without touching branch protection.
+    # leg is named `test (1.26.6)`, so bumping the version renames the leg
+    # and the old required name stops reporting forever. This job's name
+    # never changes, so it is what branch protection requires instead of
+    # the version-specific name; bump the matrix without touching branch
+    # protection.
     runs-on: ubuntu-latest
     needs: [test]
     # `needs: [test]` alone runs this job only if `test` succeeded (an
@@ -417,7 +418,7 @@ jobs:
             -w "$GITHUB_WORKSPACE" \
             -e TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
             -e HOME=/tmp \
-            golang:1.25.0-trixie \
+            golang:1.26.6-trixie \
             bash -euxo pipefail -c '
               apt-get update -o Acquire::Retries=2
               apt-get install -y --no-install-recommends \
@@ -543,7 +544,7 @@ jobs:
           # Version pinned so lint results don't drift with an unrelated
           # golangci-lint release; bump deliberately alongside .golangci.yml.
           # Matches GOLANGCI_LINT_VERSION in the Makefile's lint fallback.
-          version: v2.6.2
+          version: v2.9.0
           # The action's own `config verify` step fetches its JSON schema
           # over the public internet before linting even starts, so a
           # required check can fail on a website instead of on our code.
@@ -653,7 +654,7 @@ jobs:
       # vulnerabilities against whichever toolchain runs it, and the stdlib
       # is linked into the shipped binary, so the only version whose stdlib
       # findings describe the released artifact is the one the Dockerfile
-      # builds with. Scanning under go.mod's 1.25.0 minimum-support floor
+      # builds with. Scanning under go.mod's 1.26.0 minimum-support floor
       # would report a different set that nothing this project publishes
       # actually contains. Keep this in step with the Dockerfile.
       - uses: actions/setup-go@v7

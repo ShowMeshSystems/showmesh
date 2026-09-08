@@ -58,7 +58,7 @@ cross-build deliberately.
 ```
 bench/node-install/
   Dockerfile               Debian 13 + the build/runtime package set +
-                           pinned Go 1.25.0 (matched to TARGETARCH) +
+                           pinned Go 1.26.0 (matched to TARGETARCH) +
                            systemd-analyze
   run_install_proof.sh     Builds the agent, runs install.sh twice
                            (idempotency + sentinel check), preflight.sh in

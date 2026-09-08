@@ -14,4 +14,4 @@
 // 7: the Operator UI is TypeScript, full stop).
 module github.com/showmeshsystems/showmesh/ui/_unused
 
-go 1.25
+go 1.26.0
