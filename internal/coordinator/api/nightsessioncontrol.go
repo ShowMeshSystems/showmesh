@@ -1606,7 +1606,6 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, payload config.NightSessionPayload, interlockChecks []nightReadinessCheck) ([]nightReadinessCheck, string) {
 	instanceIDs := map[string]bool{payload.ShowPlaylist.FPPInstanceID: true, payload.Resting.FPPInstanceID: true}
 	var checks []nightReadinessCheck
-	worst := nightHealthHealthy()
 	for id := range instanceIDs {
 		if id == "" {
 			continue
@@ -1673,6 +1672,21 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, nightCheckAnnouncementAssets(allCues))
 	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))
 
+	return checks, nightOutcomeFromChecks(checks)
+}
+
+// nightOutcomeFromChecks maps a computed checks list to the aggregate
+// NightReadiness.outcome string: the worst health among checks that
+// participate in the aggregate (nightHealthSeverity's own ranking; a
+// not_verifiable or not_configured check never participates, matching
+// nightComputeReadinessChecks' own prior behaviour before this was pulled
+// out as its own function), then straight to the wire vocabulary.
+// ready_with_warnings is degraded's own wire name: the night can still
+// start (only the epoch/freshness gate in nightStartNightCommand withholds
+// start-night, never outcome itself), but a real, non-blocking condition
+// wants an operator's eye rather than reading as fully healthy.
+func nightOutcomeFromChecks(checks []nightReadinessCheck) string {
+	worst := nightHealthHealthy()
 	for _, c := range checks {
 		if c.health == nightCheckStateNotVerifiable || c.health == nightCheckStateNotConfigured {
 			continue
@@ -1681,16 +1695,16 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 			worst = c.health
 		}
 	}
-	var outcome string
 	switch worst {
 	case nightHealthHealthy():
-		outcome = "ready"
+		return "ready"
 	case nightHealthUnknown():
-		outcome = "unknown"
+		return "unknown"
+	case nightHealthDegraded():
+		return "ready_with_warnings"
 	default:
-		outcome = "not_ready"
+		return "not_ready"
 	}
-	return checks, outcome
 }
 
 func nightHealthSeverity(h nightCheckState) int {

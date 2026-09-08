@@ -8,6 +8,21 @@ import (
 // This file renders types_night_lifecycle.go's wire types as text,
 // following night_print.go's own established conventions one file over.
 
+// nightReadinessOutcomeGlyph renders NightReadiness.outcome so
+// ready_with_warnings reads as visually distinct from a plain "ready" in a
+// skimmed terminal line, the same shout-case convention stateGlyph and
+// healthGlyph use elsewhere in this program for a non-default state (no
+// colour: this tool is run over SSH, piped, and redirected to a file).
+// Every other value renders verbatim, including "ready" itself: the point
+// is to make the new value loud, never to make it read as a refusal like
+// "not_ready" does.
+func nightReadinessOutcomeGlyph(outcome string) string {
+	if outcome == "ready_with_warnings" {
+		return "READY-WITH-WARNINGS"
+	}
+	return outcome
+}
+
 func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	_, _ = fmt.Fprintf(w, "State:       %s\n", s.State)
 	if s.ID == "" {
@@ -56,7 +71,7 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 
 	_, _ = fmt.Fprintf(w, "\nReadiness:   %s", s.Readiness.State)
 	if s.Readiness.Outcome != "" {
-		_, _ = fmt.Fprintf(w, " (outcome=%s sameEpoch=%v fresh=%v)", s.Readiness.Outcome, s.Readiness.SameEpoch, s.Readiness.Fresh)
+		_, _ = fmt.Fprintf(w, " (outcome=%s sameEpoch=%v fresh=%v)", nightReadinessOutcomeGlyph(s.Readiness.Outcome), s.Readiness.SameEpoch, s.Readiness.Fresh)
 	}
 	_, _ = fmt.Fprintln(w)
 	if s.Readiness.Reason != "" {

@@ -16792,7 +16792,11 @@ components:
         compare `completedAt` against the envelope's own `serverTime`.
         `outcome`/`epochId`/`completedAt` are present only when `state` is
         `"recorded"`. `outcome` never withholds `start-night` by itself in
-        this build; only the epoch/freshness gate does.
+        this build; only the epoch/freshness gate does. `ready_with_warnings`
+        answers "can the night start" with yes: it names a real, non-blocking
+        condition a worst check reported as degraded, distinct from `ready`
+        so it is not silently invisible and distinct from `not_ready` so a
+        client does not mistake it for a refusal.
       required: [state, reason, sameEpoch, fresh, checks]
       properties:
         state:
@@ -16807,7 +16811,7 @@ components:
             three.
         outcome:
           type: string
-          enum: [ready, not_ready, unknown]
+          enum: [ready, ready_with_warnings, not_ready, unknown]
         epochId:
           type: string
         completedAt:

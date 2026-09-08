@@ -151,12 +151,13 @@ func TestNightCheckCatalogCurrent_HealthyWhenAcknowledged(t *testing.T) {
 	}
 }
 
-// TestNightCheckCatalogCurrent_HeldDeployReportsHealthyWithHoldReason is
+// TestNightCheckCatalogCurrent_HeldDeployReportsDegradedWithHoldReason is
 // acceptance criterion 2's own readiness half: a stale node with a
-// currently playing FPP run warns rather than fails, and the aggregate
-// outcome stays ready: a held deploy is expected to apply on its own,
-// not to block the night from starting.
-func TestNightCheckCatalogCurrent_HeldDeployReportsHealthyWithHoldReason(t *testing.T) {
+// currently playing FPP run degrades rather than fails, and the aggregate
+// outcome becomes ready_with_warnings, not not_ready: a held deploy is
+// expected to apply on its own, not to block the night from starting, but
+// is real enough to want an operator's eye.
+func TestNightCheckCatalogCurrent_HeldDeployReportsDegradedWithHoldReason(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
 		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
 			Playback: currentrun.Playback{State: "playing"}, Freshness: currentrun.Freshness{State: "current"}},
@@ -168,16 +169,8 @@ func TestNightCheckCatalogCurrent_HeldDeployReportsHealthyWithHoldReason(t *test
 	}
 
 	check := nightCatalogCurrentCheck(t, api)
-	// health stays [nightHealthHealthy] deliberately (see
-	// nightCheckNodeCatalogCurrent's own doc comment): nightReadinessCheck
-	// has no separate "warning, still ready" outcome bucket, so a held,
-	// pending-safe deploy is reported healthy with an explanatory reason
-	// rather than any state that would flip the aggregate outcome away
-	// from ready. [nightHealthSeverity]/nightComputeReadinessChecks'
-	// aggregation is pre-existing, unchanged code this test does not
-	// re-verify.
-	if check.health != nightHealthHealthy() {
-		t.Fatalf("health = %q, want healthy (warned, not failed); reason: %s", check.health, check.reason)
+	if check.health != nightHealthDegraded() {
+		t.Fatalf("health = %q, want degraded (warned, not failed); reason: %s", check.health, check.reason)
 	}
 	if !strings.Contains(check.reason, "held") {
 		t.Fatalf("reason does not explain the hold: %s", check.reason)
@@ -187,12 +180,12 @@ func TestNightCheckCatalogCurrent_HeldDeployReportsHealthyWithHoldReason(t *test
 	}
 }
 
-// TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsHealthyWithUncertainReason
+// TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsDegradedWithUncertainReason
 // proves the owner's own distinction: a hold caused by evidence this
 // coordinator cannot currently confirm is worded differently from a hold
 // caused by a genuinely running Cue, so an operator knows whether there
 // is anything to go look at.
-func TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsHealthyWithUncertainReason(t *testing.T) {
+func TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsDegradedWithUncertainReason(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
 		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
 			Playback: currentrun.Playback{State: "unavailable"}, Freshness: currentrun.Freshness{State: "current"}},
@@ -204,21 +197,21 @@ func TestNightCheckCatalogCurrent_UnrecognizedPlaybackStateHoldReportsHealthyWit
 	}
 
 	check := nightCatalogCurrentCheck(t, api)
-	if check.health != nightHealthHealthy() {
-		t.Fatalf("health = %q, want healthy (warned, not failed); reason: %s", check.health, check.reason)
+	if check.health != nightHealthDegraded() {
+		t.Fatalf("health = %q, want degraded (warned, not failed); reason: %s", check.health, check.reason)
 	}
 	if !strings.Contains(check.reason, "stale or unreadable") {
 		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)
 	}
 }
 
-// TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsHealthyWithUncertainReason
+// TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsDegradedWithUncertainReason
 // is a regression test for a real reviewed defect: a run whose last
 // reported state reads idle must still warn as held, uncertain evidence,
 // not read as confirmed idle, when that evidence itself is stale (a stale
 // idle reading can predate a Cue that started after the reporting source
 // went quiet).
-func TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsHealthyWithUncertainReason(t *testing.T) {
+func TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsDegradedWithUncertainReason(t *testing.T) {
 	api, st, _ := newNightCatalogReadinessFixture(t, []currentrun.Run{
 		{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
 			Playback: currentrun.Playback{State: "idle"}, Freshness: currentrun.Freshness{State: "stale"}},
@@ -230,8 +223,8 @@ func TestNightCheckCatalogCurrent_StalePlaybackEvidenceHoldReportsHealthyWithUnc
 	}
 
 	check := nightCatalogCurrentCheck(t, api)
-	if check.health != nightHealthHealthy() {
-		t.Fatalf("health = %q, want healthy (warned, not failed): stale evidence must hold, not be read as confirmed idle; reason: %s", check.health, check.reason)
+	if check.health != nightHealthDegraded() {
+		t.Fatalf("health = %q, want degraded (warned, not failed): stale evidence must hold, not be read as confirmed idle; reason: %s", check.health, check.reason)
 	}
 	if !strings.Contains(check.reason, "stale or unreadable") {
 		t.Fatalf("reason does not name uncertain evidence as the reason for the hold: %s", check.reason)

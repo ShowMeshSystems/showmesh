@@ -5845,14 +5845,14 @@ export interface components {
             state: "healthy" | "degraded" | "failed" | "unknown" | "not_verifiable" | "not_configured";
             reason: string;
         };
-        /** @description The current session's most recent run-readiness result, or its explicit absence, stated with a state and a reason rather than omitted (ADR-020). No precomputed age field (ADR-020 decision 6): compare `completedAt` against the envelope's own `serverTime`. `outcome`/`epochId`/`completedAt` are present only when `state` is `"recorded"`. `outcome` never withholds `start-night` by itself in this build; only the epoch/freshness gate does. */
+        /** @description The current session's most recent run-readiness result, or its explicit absence, stated with a state and a reason rather than omitted (ADR-020). No precomputed age field (ADR-020 decision 6): compare `completedAt` against the envelope's own `serverTime`. `outcome`/`epochId`/`completedAt` are present only when `state` is `"recorded"`. `outcome` never withholds `start-night` by itself in this build; only the epoch/freshness gate does. `ready_with_warnings` answers "can the night start" with yes: it names a real, non-blocking condition a worst check reported as degraded, distinct from `ready` so it is not silently invisible and distinct from `not_ready` so a client does not mistake it for a refusal. */
         NightReadiness: {
             /** @enum {string} */
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             /** @description Distinguishes "no result recorded yet" from "the store could not be read" from "the result exists but its checks payload failed to decode" - never a single collapsed reason for all three. */
             reason: string;
             /** @enum {string} */
-            outcome?: "ready" | "not_ready" | "unknown";
+            outcome?: "ready" | "ready_with_warnings" | "not_ready" | "unknown";
             epochId?: string;
             /** Format: date-time */
             completedAt?: string;

@@ -192,6 +192,16 @@ describe('Show Night', () => {
     expect(readiness?.fact).toContain('no longer fresh')
   })
 
+  it('renders a real word for ready_with_warnings, never the literal string "undefined"', () => {
+    const readouts = evidenceReadouts(
+      session({ readiness: { state: 'recorded', reason: '', outcome: 'ready_with_warnings', completedAt: '2026-08-28T16:28:00Z', sameEpoch: true, fresh: true, checks: [] } }),
+      '2026-08-28T21:07:00Z',
+    )
+    const readiness = readouts.find((entry) => entry.key === 'readiness')
+    expect(readiness?.fact).not.toContain('undefined')
+    expect(readiness?.fact).toMatch(/warning/i)
+  })
+
   it('says a degraded attribution never clears', () => {
     const readouts = evidenceReadouts(session({ attributionDegraded: true }), '2026-08-28T21:07:00Z')
     const attribution = readouts.find((entry) => entry.key === 'attribution')
