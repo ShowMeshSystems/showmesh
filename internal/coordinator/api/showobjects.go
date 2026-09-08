@@ -419,6 +419,14 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if problem, err := h.refuseShowChange(r.Context(), config.ShowSurfaceConfigKind, id, payload.Show); err != nil {
+		h.writeInternalError(w, now, "check stored show.surface show before write", err)
+		return
+	} else if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
 	payloadJSON, err := config.EncodeShowSurfacePayload(payload)
 	if err != nil {
 		h.writeInternalError(w, now, "encode show.surface config payload", err)

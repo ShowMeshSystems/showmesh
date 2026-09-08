@@ -197,9 +197,9 @@ func (h *handlers) getActiveShowConfigRevision(ctx context.Context, kind, id str
 // revision yet has no stored show to compare against, so a first-time PUT
 // is never refused here: (nil, nil) means "nothing stored, proceed", a
 // non-nil *v1.Problem means "refuse this write", and a non-nil error means
-// the store lookup itself failed. Shared by handlePutShowCue and
-// handlePutShowPlaylist rather than duplicated: both kinds carry "show" at
-// the same JSON path and refuse the same way.
+// the store lookup itself failed. Shared by every show-scoped kind's PUT
+// handler rather than duplicated: each carries "show" at the same JSON
+// path and refuses the same way.
 func (h *handlers) refuseShowChange(ctx context.Context, kind, id, incomingShow string) (*v1.Problem, error) {
 	obj, err := h.deps.Config.GetConfigObject(ctx, kind, id)
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
@@ -537,6 +537,14 @@ func (h *handlers) handlePutShowAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if problem, err := h.refuseShowChange(r.Context(), config.ShowActionConfigKind, id, payload.Show); err != nil {
+		h.writeInternalError(w, now, "check stored show.action show before write", err)
+		return
+	} else if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
 	if payload.Target.Integration == config.ShowActionIntegrationResolume {
 		macroID, stepID, blocked, err := h.findMacroStepBlockingResolumeIntegration(r.Context(), id)
 		if err != nil {
@@ -596,6 +604,14 @@ func (h *handlers) handlePutShowMacro(w http.ResponseWriter, r *http.Request) {
 	payload, verr := config.DecodeShowMacroPayload(string(raw), h.showActionLookup(r.Context()), h.showExists(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
+		return
+	}
+
+	if problem, err := h.refuseShowChange(r.Context(), config.ShowMacroConfigKind, id, payload.Show); err != nil {
+		h.writeInternalError(w, now, "check stored show.macro show before write", err)
+		return
+	} else if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
 		return
 	}
 
