@@ -202,6 +202,25 @@ func TestBoundedCallReturnsOnContextDeadline(t *testing.T) {
 	}
 }
 
+// TestBoundedCallReportsDeadlineEvenWhenFnAlsoSucceeds exercises the
+// deterministic path added to boundedCall's done case: with ctx already
+// expired before fn ever runs, and fn itself fast enough to have no
+// blocking work of its own, the done and ctx.Done() cases are both ready
+// by the time select evaluates. This only proves the added re-check makes
+// that case deterministic (fn's nil is discarded in favour of ctx.Err());
+// it does not, and cannot, demonstrate that the prior code picked between
+// them at random, since a single run is one sample of that coin flip.
+func TestBoundedCallReportsDeadlineEvenWhenFnAlsoSucceeds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+
+	err := boundedCall(ctx, func() error { return nil })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("boundedCall returned %v, want context.DeadlineExceeded even though fn returned nil", err)
+	}
+}
+
 // exhaustedLoadDeadline is deliberately not a small positive duration
 // like a millisecond: Load was measured at 1.5-2.7ms on this
 // environment, so a 1ms budget is genuinely marginal rather than
