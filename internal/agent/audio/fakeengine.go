@@ -9,10 +9,10 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
-// FakeEngineUnavailableReason is [FakeEngine.Available]'s constant reason.
-// It names the open owner decision this engine stands in for, so anything
-// that surfaces the reason to an operator points at the actual blocker
-// rather than an unexplained "false".
+// FakeEngineUnavailableReason is [FakeEngine.Available]'s constant
+// reason. FakeEngine itself never implements a pipeline; production
+// wires the real backend (internal/agent/audio/gstengine, ADR-007)
+// instead, so this reason should never reach an operator outside a test.
 const FakeEngineUnavailableReason = "no pipeline backend is implemented; nothing plays audio"
 
 // FakeEngine is a deterministic, in-memory [Engine] with no real playback:

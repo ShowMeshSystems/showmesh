@@ -434,8 +434,8 @@ function findAudioSessionSignal(
 const AUDIO_SESSION_GOOD_OUTCOMES = new Set(['started', 'position', 'stopped', 'completed'])
 
 /**
- * `outcome: "unconfirmable"` is a real, expected outcome while the
- * shipped agent's session engine has no working pipeline backend — warn,
+ * `outcome: "unconfirmable"` is a real, expected outcome whenever the
+ * node's own evidence does not corroborate a dispatched command, warn,
  * never bad, per the API's own AudioSessionCommandResult description.
  */
 export function describeAudioSessionOutcome(result: AudioSessionCommandResult, action: string): CommandOutcome {

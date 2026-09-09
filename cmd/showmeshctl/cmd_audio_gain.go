@@ -56,9 +56,9 @@ field when it changes the requested value.
 (pkg/audio.RevisionState); a stale or replayed value is reported as
 "refused", not treated as a transport error.
 
-The pipeline backend behind these operations is an open owner decision;
-every dispatch against the shipped agent reports "unconfirmable" — this
-is expected and does not mean the request failed to reach the node.
+"unconfirmable" remains a real, expected outcome whenever the node's own
+evidence does not corroborate a dispatched command; it does not mean the
+request failed to reach the node.
 
 `)
 }
@@ -98,9 +98,9 @@ success rather than a refusal.
 (pkg/audio.RevisionState); a stale or replayed value is reported as
 "refused", not treated as a transport error.
 
-The pipeline backend behind these operations is an open owner decision;
-every dispatch against the shipped agent reports "unconfirmable" — this
-is expected and does not mean the request failed to reach the node.
+"unconfirmable" remains a real, expected outcome whenever the node's own
+evidence does not corroborate a dispatched command; it does not mean the
+request failed to reach the node.
 
 `)
 }

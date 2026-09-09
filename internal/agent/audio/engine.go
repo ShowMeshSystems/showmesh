@@ -69,12 +69,11 @@ type EngineObservation struct {
 // item is currently loaded on a given handle.
 //
 // This interface is deliberately the smallest set of verbs the session
-// state machine needs, so either candidate pipeline backend (Go GStreamer
-// bindings, or a supervised host process speaking some IPC) can implement
-// it without the session layer changing shape. The pipeline backend
-// itself is an open owner decision; [FakeEngine] is the only
-// implementation in this repository and exists to prove the session layer
-// against, never to play audio — see that type's doc comment.
+// state machine needs, so any pipeline backend can implement it without
+// the session layer changing shape. [internal/agent/audio/gstengine] is
+// the one production implementation (ADR-007); [FakeEngine] implements
+// the same interface only to prove the session layer against, never to
+// play audio, see that type's doc comment.
 //
 // Every method here must give up when ctx's deadline expires, not merely
 // accept ctx as a parameter: callers bound these calls (see

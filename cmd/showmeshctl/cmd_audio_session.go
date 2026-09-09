@@ -85,9 +85,9 @@ as it always has and starts on arrival.
 to this session's current observed revision plus one, or 1 for a session
 this coordinator has never observed.
 
-The pipeline backend behind these operations is an open owner decision;
-every dispatch against the shipped agent reports "unconfirmable" — this
-is expected and does not mean the request failed to reach the node. See
+"unconfirmable" remains a real, expected outcome whenever the node's own
+evidence does not corroborate a dispatched command; it does not mean the
+request failed to reach the node. See
 "showmeshctl audio session <op> --help".
 
 "aligned-start" is not one of the nine either: it takes a session id and
