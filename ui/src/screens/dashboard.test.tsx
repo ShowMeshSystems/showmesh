@@ -145,18 +145,28 @@ describe('Dashboard', () => {
   })
 
   it.each([
-    ['participating', 'participating'],
-    ['not_participating', 'not participating'],
-    ['unknown', 'unknown'],
-    ['not_configured', 'not configured'],
-  ] as const)('renders the coordinator’s own %s word on the row', (state, label) => {
+    ['participating', "Participating in tonight's show."],
+    ['not_participating', "Not participating in tonight's show."],
+    ['unknown', 'Participation unknown.'],
+    ['not_configured', 'No active show.'],
+  ] as const)('renders the operator-facing sentence for %s on the row', (state, sentence) => {
     renderDashboard({ nodes: [node('media-garage', 'offline', [], { state, show: 'halloween-2026', reason: null })] })
-    expect(screen.getByText(`Participation: ${label}.`)).toBeInTheDocument()
+    expect(screen.getByText(sentence)).toBeInTheDocument()
+  })
+
+  it('puts the participation sentence before the action link, not after', () => {
+    renderDashboard({
+      nodes: [node('media-garage', 'offline', [], { state: 'participating', show: 'halloween-2026', reason: null })],
+    })
+    const detail = screen.getByText(/Participating in tonight's show\./).closest('p')
+    expect(detail).not.toBeNull()
+    const text = detail!.textContent ?? ''
+    expect(text.indexOf("Participating in tonight's show.")).toBeLessThan(text.indexOf('Open'))
   })
 
   it('says nothing about participation for an older coordinator that never sent the field', () => {
     renderDashboard({ nodes: [node('media-garage', 'offline')] })
-    expect(screen.queryByText(/Participation:/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Participating in|Not participating in|Participation unknown|No active show/)).not.toBeInTheDocument()
   })
 
   it('counts an unknown node as neither online nor offline', () => {

@@ -30,7 +30,15 @@ import {
   type Model,
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { attentionItems, fleetCounts, fppDetail, nodesDetail, participationLabel } from './dashboardModel'
+import { attentionItems, fleetCounts, fppDetail, nodesDetail, type ParticipationState } from './dashboardModel'
+
+/** The operator-facing sentence for each participation state but "absent", which says nothing. */
+const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
+  participating: "Participating in tonight's show.",
+  not_participating: "Not participating in tonight's show.",
+  unknown: 'Participation unknown.',
+  not_configured: 'No active show.',
+}
 import { NodeDetail, NODE_DRAWER_TITLE_ID } from './NodeDetail'
 import {
   activityRows,
@@ -184,7 +192,8 @@ export function Monitor() {
               />
             ) : (
               items.map((item) => {
-                const participation = participationLabel(item.participation)
+                const participationSentence =
+                  item.participation === 'absent' ? null : PARTICIPATION_SENTENCE[item.participation]
                 return (
                   <AttentionRow
                     key={item.key}
@@ -196,11 +205,11 @@ export function Monitor() {
                       </>
                     }
                     detail={
-                      participation === null ? (
+                      participationSentence === null ? (
                         item.detail
                       ) : (
                         <>
-                          {item.detail} <span className="sm-small sm-muted">Participation: {participation}.</span>
+                          <span className="sm-small sm-muted">{participationSentence}</span> {item.detail}
                         </>
                       )
                     }
