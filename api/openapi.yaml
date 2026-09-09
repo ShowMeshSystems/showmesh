@@ -4461,13 +4461,18 @@ paths:
         providers this node runs (`managed`, `external`, or `fpp`);
         `fppBaseUrl` is required exactly when `provider` is `fpp`. A node
         with no node.clock object reports `unsynchronized` and behaves
-        exactly as a node before this seam existed (RES-019).
+        exactly as a node before this seam existed (RES-019). Optionally
+        carries `If-Match`/`If-None-Match` (opt-in; see those parameters):
+        refused with `409` when the precondition names a revision that is
+        no longer current.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/ConfigRevisionIfMatch"
+        - $ref: "#/components/parameters/ConfigRevisionIfNoneMatch"
       requestBody:
         required: true
         content:
@@ -4485,7 +4490,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/NodeClockConfigResponse"
         "400":
-          description: An ordinary payload validation refusal.
+          description: >-
+            Either an ordinary payload validation refusal, or a malformed
+            `If-Match`/`If-None-Match` value, or both of those headers
+            sent on the same request.
           headers:
             ShowMesh-API-Version:
               $ref: "#/components/headers/ShowMesh-API-Version"
@@ -4499,6 +4507,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
   /config/node.clock/{id}/revisions:
