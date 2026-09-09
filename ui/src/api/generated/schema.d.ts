@@ -5433,6 +5433,8 @@ export interface components {
             playlistHash: string;
             stored: boolean;
             idempotent: boolean;
+            /** @description The sorted names of top-level members of the submitted body this coordinator does not know, absent when there were none and capped at 8. They did not stop the definition being accepted: an unknown member is ignored, because refusing it would make a plugin newer than its coordinator lose every definition. Present so a misspelled member is visible to whoever sent it rather than silently dropped. */
+            ignoredFields?: string[];
             /** Format: date-time */
             serverTime: string;
         };
@@ -5491,15 +5493,23 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container - this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. */
+        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container - this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. fppInstances and resolumeInstances are the exception to the sentence about notes: each is OMITTED here when no participation selection has ever been recorded for this show, and that absence is the fact, not a stand-in for an empty list. */
         ConfigShow: {
             name: string;
             notes: string;
+            /** @description The FPP instance ids selected to take part in this show, or ABSENT when no selection has ever been recorded. Participation is chosen by hand and never detected, so these three states are distinct and a client must not collapse them: the key absent means nobody has configured this show yet, a present empty array means the operator chose that no FPP instance takes part, and a populated array is the selection. Reading absent as "no instance takes part" would report an unconfigured show as correctly configured. */
+            fppInstances?: string[];
+            /** @description The Resolume instance ids selected to take part in this show, with the identical absent / empty / populated meaning fppInstances carries. An empty array is an ordinary night with no projection, not a misconfiguration. */
+            resolumeInstances?: string[];
         };
-        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required - an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
+        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required - an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward, and neither is a participation selection: a write that omits fppInstances or resolumeInstances records that show as having no selection for that integration, which is not the same as choosing an empty one. Send an empty array to state "no instance of this integration takes part". A present `null` is rejected for both. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
         ConfigShowWrite: {
             name: string;
             notes?: string;
+            /** @description The FPP instance ids selected to take part in this show, or ABSENT when no selection has ever been recorded. Participation is chosen by hand and never detected, so these three states are distinct and a client must not collapse them: the key absent means nobody has configured this show yet, a present empty array means the operator chose that no FPP instance takes part, and a populated array is the selection. Reading absent as "no instance takes part" would report an unconfigured show as correctly configured. */
+            fppInstances?: string[];
+            /** @description The Resolume instance ids selected to take part in this show, with the identical absent / empty / populated meaning fppInstances carries. An empty array is an ordinary night with no projection, not a misconfiguration. */
+            resolumeInstances?: string[];
         };
         /** @description The body of GET and PUT /config/show/{id}. */
         ShowConfigResponse: {
@@ -11967,7 +11977,7 @@ export interface operations {
                     "application/json": components["schemas"]["FPPPlaylistDefinitionPublishResponse"];
                 };
             };
-            /** @description Malformed body, unknown field, trailing content, or a duplicate member name (`invalid-parameter`), a missing or malformed identity field (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-definition-schema-version`), or a definition whose canonicalized SHA-256 disagrees with the declared `playlistHash` (`definition-hash-mismatch`). */
+            /** @description Malformed body, trailing content, or a duplicate member name (`invalid-parameter`), a missing or malformed identity field (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-definition-schema-version`), or a definition whose canonicalized SHA-256 disagrees with the declared `playlistHash` (`definition-hash-mismatch`). */
             400: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
