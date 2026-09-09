@@ -3,6 +3,12 @@ import type { Tone } from '../kit'
 import { countSignals, type SignalCounts } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 
+/**
+ * showParticipation.state, plus "absent" for an older coordinator that
+ * never sent the field: a fifth value, never folded into "unknown".
+ */
+export type ParticipationState = Node['showParticipation']['state'] | 'absent'
+
 export type AttentionItem = {
   key: string
   tone: Tone
@@ -11,6 +17,11 @@ export type AttentionItem = {
   subject: string
   to: string
   detail: string
+  participation: ParticipationState
+}
+
+function participationOf(showParticipation: Node['showParticipation'] | undefined): ParticipationState {
+  return showParticipation?.state ?? 'absent'
 }
 
 /**
@@ -24,6 +35,7 @@ export function nodeAttention(nodes: readonly Node[], nowIso: string | null): At
     const to = `/monitor/fleet/node/${node.nodeId}`
     const lastHeard = node.evidence.heartbeat.observedAt ?? node.evidence.hello.observedAt
     const age = ageMs(lastHeard, nowIso)
+    const participation = participationOf(node.showParticipation)
     if (node.controlPlane.state === 'offline') {
       items.push({
         key: `node:${node.nodeId}`,
@@ -33,6 +45,7 @@ export function nodeAttention(nodes: readonly Node[], nowIso: string | null): At
         fact: lastHeard === null ? 'stopped reporting' : `stopped reporting at ${formatClock(lastHeard) ?? 'an unknown time'}`,
         to,
         detail: node.controlPlane.reason ?? 'The coordinator has heard nothing from this node since.',
+        participation,
       })
     } else if (node.controlPlane.state === 'unknown') {
       items.push({
@@ -45,6 +58,7 @@ export function nodeAttention(nodes: readonly Node[], nowIso: string | null): At
         detail:
           node.controlPlane.reason ??
           'The coordinator cannot currently say whether this node is reporting. Unknown is not a soft online.',
+        participation,
       })
     }
   }
@@ -68,6 +82,7 @@ export function fppAttention(instances: readonly FPPInstance[]): AttentionItem[]
         fact: `is reporting ${instance.health}`,
         to,
         detail: instance.lastPollError ?? 'This is the FPP instance’s own health, as the coordinator last read it.',
+        participation: 'absent',
       })
     }
     if (instance.instanceUuidChange !== null) {
@@ -80,6 +95,7 @@ export function fppAttention(instances: readonly FPPInstance[]): AttentionItem[]
         to,
         detail:
           'Bindings that name this instance are held rather than guessed until the change is acknowledged. FPP itself may be healthy.',
+        participation: 'absent',
       })
     }
   }
@@ -99,6 +115,7 @@ export function resolumeAttention(instances: readonly ResolumeInstance[]): Atten
       fact: `is reporting ${instance.health}`,
       to: '/monitor/fleet/resolume',
       detail: 'This is what Arena reports about itself, not a ShowMesh-side verdict.',
+      participation: 'absent',
     })
   }
   return items
