@@ -47,6 +47,11 @@
     "instanceUuid": null,
     "instanceUuidFirstObservedAt": null,
     "instanceUuidChange": null,
+    "showParticipation": {
+      "state": "not_configured",
+      "show": "",
+      "reason": "no show is currently active"
+    },
     "duplicateInstanceUuidEndpointIds": []
   }
 }

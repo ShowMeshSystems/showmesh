@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -393,7 +394,7 @@ func TestMapFPPInstanceResolvesMultiSourceObservations(t *testing.T) {
 		Endpoint:     "http://10.0.1.20",
 		Observations: []observation.Observation{rest, mqtt},
 	}
-	inst := mapFPPInstance(fv, now)
+	inst := mapFPPInstance(fv, v1.InstanceShowParticipation{}, now)
 
 	count := 0
 	for _, ev := range inst.Observations {
@@ -564,7 +565,7 @@ func TestMapResolumeInstanceResolvesMultiSourceObservations(t *testing.T) {
 	b := healthMustObs(observation.Measured(resolumeHealthRes, "resolume.product", "Arena 7.23.2", now.Add(-time.Second), observation.WithSource("resolume-rest")))
 
 	rv := ResolumeInstanceView{InstanceID: "resolume", Observations: []observation.Observation{a, b}}
-	inst := mapResolumeInstance(rv, nil, now)
+	inst := mapResolumeInstance(rv, nil, v1.InstanceShowParticipation{}, now)
 
 	count := 0
 	for _, ev := range inst.Observations {

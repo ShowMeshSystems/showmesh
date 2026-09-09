@@ -134,6 +134,50 @@ type NodeShowParticipation struct {
 	Reason *string `json:"reason"`
 }
 
+// InstanceShowParticipation is the coordinator's own answer to whether a
+// configured FPP or Resolume instance takes part in the show currently
+// active. It reuses [NodeShowParticipation]'s vocabulary deliberately:
+// same field names, same "never infer participation from any other field"
+// rule, same "unknown is never not_participating" rule.
+//
+// It carries ONE state the node version does not, and the difference is
+// not an oversight. A node's participation is DERIVED from the active
+// show's cue catalog, so there are only two ways it can be undetermined:
+// no show is active, or this coordinator has no cue-catalog source. Both
+// are "not_configured". An instance's participation is instead SELECTED by
+// hand on the show object, which admits a third case the node version
+// cannot reach: a show IS active and its selection has simply never been
+// recorded. That is every show written before participation existed. The
+// remedies differ - "activate a show" against "choose which instances take
+// part" - so the two states stay apart, and "not_participating" stays
+// reserved for a real answer to a question somebody was actually asked.
+//
+// State is one of five values:
+//   - "participating": the active show's selection names this instance,
+//     or no selection has been recorded and this instance is therefore
+//     treated as taking part (see "selection_unrecorded").
+//   - "not_participating": a selection WAS recorded for this integration
+//     and it does not name this instance.
+//   - "selection_unrecorded": a show is active but nobody has ever chosen
+//     which instances of this integration take part. Every configured
+//     instance is treated as taking part until somebody does, so that an
+//     upgrade cannot turn a readiness check green by silence. Reason is
+//     always populated.
+//   - "not_configured": no show is currently active. The ordinary state
+//     before an operator has activated a show, never a determination
+//     failure. Reason is always populated.
+//   - "unknown": participation could not be determined. Reason is always
+//     populated, and a client must never render this as
+//     "not participating".
+//
+// Show names the active show this value was computed against, empty when
+// none could be identified.
+type InstanceShowParticipation struct {
+	State  string  `json:"state"`
+	Show   string  `json:"show"`
+	Reason *string `json:"reason"`
+}
+
 // Node is one node's current representation: an element of
 // GET /api/v1/nodes, of the /api/v1/snapshot nodes list, and the payload of
 // a node.changed stream event. All three render identically, per contract
@@ -445,6 +489,11 @@ type FPPInstance struct {
 	// POST /fpp/{instanceId}/instance-uuid/acknowledge.
 	InstanceUUIDChange *FPPInstanceUUIDChange `json:"instanceUuidChange"`
 
+	// ShowParticipation is whether this instance takes part in the show
+	// currently active; see [InstanceShowParticipation] for its five
+	// states and why it has one the node version does not.
+	ShowParticipation InstanceShowParticipation `json:"showParticipation"`
+
 	// DuplicateInstanceUUIDEndpointIDs lists every OTHER currently
 	// configured FPP instance reporting the SAME instanceUuid as this one
 	//, a stated finding, never a silently overwritten row. Empty, never
@@ -499,6 +548,10 @@ type ResolumeInstance struct {
 	Health       string                       `json:"health"`
 	Observations []Evidence                   `json:"observations"`
 	Composition  *ResolumeInstanceComposition `json:"composition"`
+
+	// ShowParticipation is whether this instance takes part in the show
+	// currently active; see [InstanceShowParticipation].
+	ShowParticipation InstanceShowParticipation `json:"showParticipation"`
 }
 
 // ResolumeInstancesResponse is the body of GET /resolume/instances.

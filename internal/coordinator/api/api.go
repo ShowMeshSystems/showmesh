@@ -1590,6 +1590,9 @@ func New(deps Dependencies, opts Options) *API {
 		emergencyStopArms:         newEmergencyStopArmStore(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
+	// A write whose result is visible in a streamed resource has to say so
+	// here; nothing else connects a handler to the hub.
+	h.notifyStream = hub.Notify
 
 	mux := http.NewServeMux()
 	// "{$}" matches only the exact path "/api/v1/", not every path under
