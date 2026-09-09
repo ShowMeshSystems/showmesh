@@ -215,7 +215,7 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // "cue.activate" (Track H seam H4: a runner-neutral Cue activation,
 // authorized against the held catalog and applied to rendering, audio, and
 // LTC, see cueactivationops.go), and "node.clock.configure" (Track I seam
-// I1: the coordinator pushing this node's node.clock binding — see
+// I1: the coordinator pushing this node's node.clock binding, see
 // clockconfigops.go). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
 // this map itself IS the enforcement mechanism: [CommandHandler.
