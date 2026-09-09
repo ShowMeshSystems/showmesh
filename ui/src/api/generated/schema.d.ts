@@ -1456,7 +1456,7 @@ export interface paths {
         get: operations["getNodeClock"];
         /**
          * Write a new node.clock revision (Track I seam I1)
-         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: `provider`, `interface`, and `domain` are required on every write. `provider` selects which of the three concrete PTP providers this node runs (`managed`, `external`, or `fpp`); `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as a node before this seam existed (RES-019).
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: `provider`, `interface`, and `domain` are required on every write. `provider` selects which of the three concrete PTP providers this node runs (`managed`, `external`, or `fpp`); `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as a node before this seam existed (RES-019). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
          */
         put: operations["putNodeClock"];
         post?: never;
@@ -9540,7 +9540,12 @@ export interface operations {
     putNodeClock: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
             path: {
                 id: string;
             };
@@ -9562,7 +9567,7 @@ export interface operations {
                     "application/json": components["schemas"]["NodeClockConfigResponse"];
                 };
             };
-            /** @description An ordinary payload validation refusal. */
+            /** @description Either an ordinary payload validation refusal, or a malformed `If-Match`/`If-None-Match` value, or both of those headers sent on the same request. */
             400: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -9575,6 +9580,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
