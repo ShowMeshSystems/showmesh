@@ -462,7 +462,8 @@ func (h *handlers) nightRunAnnouncementApply(ctx context.Context, now time.Time,
 		return err
 	}
 	idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cueName)
-	_, err = h.nightDispatchAndPersistCue(ctx, now, rec, phase, cueName, target, idemKey, issuer, revision)
+	// nil fade: this step is an announcement audio apply, not a lighting cue.
+	_, err = h.nightDispatchAndPersistCue(ctx, now, rec, phase, cueName, target, idemKey, issuer, revision, nil)
 	return err
 }
 

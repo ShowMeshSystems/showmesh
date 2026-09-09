@@ -123,28 +123,54 @@ func TestNightCheckFirstOutwardCueConfirmableIdempotentDeclaration(t *testing.T)
 	})
 }
 
-// TestNightCheckNoUnbuiltBrightnessComposition defends RES-018's own
-// standing rejection: a lighting cue with a fade duration fails; a
-// lighting cue with no fade, or a non-lighting cue with a fade, does not.
-// Mutation-checked: dropping the Role comparison would fail an audio fade
-// too, which the second case below catches.
-func TestNightCheckNoUnbuiltBrightnessComposition(t *testing.T) {
+// TestNightCheckBrightnessCompositionUnverified: a lighting cue with a
+// fade duration WARNS; a lighting cue with no fade, or a non-lighting cue
+// with a fade, does not.
+//
+// The first case used to expect a failure, when the provider was
+// specified and unbuilt. It is now built, so refusing would make it
+// unreachable, while reporting healthy would claim what RESTING-MODE.md
+// line 228 forbids claiming until the real-host acceptance matrix passes.
+// Degraded is the third answer and the scenario under test is unchanged.
+//
+// Mutation-checked: dropping the Role comparison would warn on an audio
+// fade too, which the third case below catches.
+func TestNightCheckBrightnessCompositionUnverified(t *testing.T) {
 	fade := 2000
 	cases := []struct {
 		name string
 		cue  config.NightSessionCue
 		want nightCheckState
 	}{
-		{"lighting with fade rejected", config.NightSessionCue{Name: "c1", Role: config.NightSessionCueRoleLighting, FadeDurationMs: &fade}, nightHealthFailed()},
+		{"lighting with fade warns rather than blocking", config.NightSessionCue{Name: "c1", Role: config.NightSessionCueRoleLighting, FadeDurationMs: &fade}, nightHealthDegraded()},
 		{"lighting with no fade is fine", config.NightSessionCue{Name: "c2", Role: config.NightSessionCueRoleLighting}, nightHealthHealthy()},
 		{"audio fade is unaffected", config.NightSessionCue{Name: "c3", Role: config.NightSessionCueRoleAudio, FadeDurationMs: &fade}, nightHealthHealthy()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := nightCheckNoUnbuiltBrightnessComposition("enterShow", []config.NightSessionCue{tc.cue})
+			got := nightCheckBrightnessCompositionUnverified("enterShow", []config.NightSessionCue{tc.cue})
 			if got.health != tc.want {
 				t.Errorf("health = %v, want %v (reason: %s)", got.health, tc.want, got.reason)
 			}
 		})
+	}
+}
+
+// TestBrightnessCompositionWarningDoesNotBlockTheNight is the property
+// the change turns on and the reason degraded was chosen over healthy or
+// failed: a warning must let the night start. If this ever reads
+// "not_ready", a built feature is unreachable again.
+func TestBrightnessCompositionWarningDoesNotBlockTheNight(t *testing.T) {
+	fade := 2000
+	warned := nightCheckBrightnessCompositionUnverified("enterShow", []config.NightSessionCue{
+		{Name: "c1", Role: config.NightSessionCueRoleLighting, FadeDurationMs: &fade},
+	})
+	if got := nightOutcomeFromChecks([]nightReadinessCheck{warned}); got != "ready_with_warnings" {
+		t.Fatalf("outcome = %q, want ready_with_warnings", got)
+	}
+	// And it is genuinely a warning rather than silence: an operator has
+	// to be able to see the one thing still outstanding before showtime.
+	if warned.reason == "" {
+		t.Error("the warning carries no reason, so nothing tells an operator what is unverified")
 	}
 }
