@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -94,6 +95,11 @@ func (h *handlers) handlePutNodeClock(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxNodeClockConfigRequestBodyBytes+1))
 	if err != nil {
@@ -117,9 +123,14 @@ func (h *handlers) handlePutNodeClock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NodeClockConfigKind, id, payloadJSON, revisionPrecondition{},
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NodeClockConfigKind, id, payloadJSON, precondition,
 		map[string]any{"provider": payload.Provider, "interface": payload.Interface})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write node.clock config revision", writeErr)
 		return
 	}

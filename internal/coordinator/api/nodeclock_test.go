@@ -130,3 +130,41 @@ func TestGetNodeClockRevisions(t *testing.T) {
 		t.Fatalf("revisions missing revision 1; body: %s", body)
 	}
 }
+
+// TestPutNodeClockRevisionPreconditionWiring is a smoke test proving
+// handlePutNodeClock threads the shared precondition check (showconfig.go's
+// parseRevisionPrecondition/writeShowConfigRevision) through to its own
+// call site, matching TestPutAudioNodeRevisionPreconditionWiring one kind
+// over. The full behavioural matrix lives once, on kind "show" in
+// showobjects_test.go's own precondition tests.
+func TestPutNodeClockRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	putClock := func(headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + token}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/node.clock/render-01", validNodeClockBody, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := putClock(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional create: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putClock(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putClock(map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putClock(nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("neither header after a conflict: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := putClock(map[string]string{"If-None-Match": "*"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("If-None-Match against an already-created node: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+}
