@@ -11,6 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file is the resync route's own test suite (noderesync.go):
@@ -173,6 +174,24 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 		t.Fatalf("resync.inventoryRequestCommandId = %q, want %q", decoded.Resync.InventoryRequestCommandID, "cmd-render-01")
 	}
 
+	// The returned id must name a real commands row - the acceptance
+	// criterion this file's own header comment now closes: a caller-
+	// visible commandID that names nothing is the same silent no-op as
+	// never recording anything at all.
+	cmdRec, err := st.GetCommand(context.Background(), decoded.Resync.InventoryRequestCommandID)
+	if err != nil {
+		t.Fatalf("GetCommand(%q): %v, want the dispatched command to exist", decoded.Resync.InventoryRequestCommandID, err)
+	}
+	if cmdRec.Action != "asset.inventory.request" || cmdRec.TargetKind != "node" || cmdRec.TargetID != "render-01" {
+		t.Fatalf("command = %+v, want action asset.inventory.request against node render-01", cmdRec)
+	}
+	if cmdRec.IssuerPrincipalID != admin.ID || cmdRec.IssuerPrincipalName != admin.Name {
+		t.Fatalf("command issuer = %s/%s, want the authenticated caller %s/%s", cmdRec.IssuerPrincipalID, cmdRec.IssuerPrincipalName, admin.ID, admin.Name)
+	}
+	if cmdRec.State != "dispatched" || cmdRec.DispatchedAt == nil {
+		t.Fatalf("command state = %q, dispatchedAt = %v, want state dispatched with a dispatch time", cmdRec.State, cmdRec.DispatchedAt)
+	}
+
 	// The acceptance claims nothing: the manifest, read right after, still
 	// reflects the node's own (unchanged) evidence.
 	_, manifestAfterAccept, manifestBody := getNodeAssetManifest(t, api, auth, "render-01")
@@ -233,6 +252,52 @@ func TestPostResyncNodeAssetsAcceptsEvenWhenInventoryRequestFails(t *testing.T) 
 	}
 	if len(spy.recordedIntent) != 1 || spy.recordedIntent[0].nodeID != "render-01" {
 		t.Fatalf("recordedIntent = %+v, want the intent recorded even though the push failed", spy.recordedIntent)
+	}
+
+	// A publish failure must not be a silent no-op one step earlier than
+	// the manifest-driven repair: a commands row exists, unconfirmed, with
+	// an outcome_reason naming exactly why - the vocabulary this system
+	// already uses for this ("collection_failed": nothing reached the
+	// wire), never a null that renders as blank.
+	commands, err := st.ListUnresolvedCommands(context.Background())
+	if err != nil {
+		t.Fatalf("ListUnresolvedCommands: %v", err)
+	}
+	var found *store.CommandRecord
+	for i := range commands {
+		if commands[i].Action == "asset.inventory.request" && commands[i].TargetID == "render-01" {
+			found = &commands[i]
+		}
+	}
+	if found != nil {
+		t.Fatalf("command = %+v is still unresolved, want the publish failure to resolve it immediately", *found)
+	}
+	// A failed command resolves immediately, so it will not show up as
+	// "unresolved" - list every command this store holds instead.
+	all, err := st.ListCommands(context.Background(), store.MaxCommandPageSize)
+	if err != nil {
+		t.Fatalf("ListCommands: %v", err)
+	}
+	found = nil
+	for i := range all {
+		if all[i].Action == "asset.inventory.request" && all[i].TargetID == "render-01" {
+			found = &all[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no asset.inventory.request command recorded for render-01 among %+v, want the failed attempt recorded", all)
+	}
+	if found.State != "failed" {
+		t.Fatalf("command state = %q, want %q", found.State, "failed")
+	}
+	if found.OutcomeState != string(observation.StateCollectionFailed) {
+		t.Fatalf("command outcomeState = %q, want %q", found.OutcomeState, observation.StateCollectionFailed)
+	}
+	if found.OutcomeReason != "simulated publish failure" {
+		t.Fatalf("command outcomeReason = %q, want it to name the publish error", found.OutcomeReason)
+	}
+	if found.IssuerPrincipalID != admin.ID {
+		t.Fatalf("command issuer = %q, want the authenticated caller %q", found.IssuerPrincipalID, admin.ID)
 	}
 }
 
