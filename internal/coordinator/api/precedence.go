@@ -48,9 +48,18 @@ func resolutionKeyOf(o observation.Observation) resolutionKey {
 // any future source) ranks 0 — below every explicitly-ranked source — as
 // an arbitrary but deterministic last resort; nothing in this codebase
 // currently relies on that fallback actually being reached.
+// "fpp-plugin" ranks above both (owner ruling 2026-09-09): the
+// ShowMesh FPP plugin is now the PRIMARY source for FPP playback state.
+// This tie-break only matters when two sources land in tier 1 with the
+// identical ObservedAt (vanishingly rare, since ObservedAt is a wall-clock
+// stamp), because [preferObservation]'s tier-1 branch already prefers the
+// later ObservedAt regardless of source — the mechanism that lets a fresh
+// REST poll outrank a plugin that stopped ticking without ever reporting
+// "stop" once its evidence ages past its own ValidFor.
 var sourcePrecedenceRank = map[string]int{
-	"fpp-mqtt": 1,
-	"fpp-rest": 2,
+	"fpp-mqtt":   1,
+	"fpp-rest":   2,
+	"fpp-plugin": 3,
 }
 
 func sourcePrecedence(source string) int { return sourcePrecedenceRank[source] }

@@ -410,6 +410,49 @@ func (l fppInstanceLister) duplicateInstanceUUIDsByEndpoint(ctx context.Context,
 	return out, nil
 }
 
+// fppPluginEndpointResolver adapts the coordinator's configured FPP
+// endpoints plus the store's own reverse instance-uuid lookup into
+// fppplugin.EndpointResolver, the identical correlation
+// fppEndpointIDsByInstanceUUID (internal/coordinator/api/fppobservations.go)
+// performs for the GET surface, reimplemented here rather than shared
+// because that function lives in api, which fppplugin must not import
+// (see fppplugin.EndpointResolver's own doc comment for why).
+type fppPluginEndpointResolver struct {
+	st        *store.Store
+	endpoints fppEndpointProvider
+}
+
+// ResolveEndpointID implements fppplugin.EndpointResolver.
+func (r fppPluginEndpointResolver) ResolveEndpointID(ctx context.Context, instanceUUID string) (string, bool) {
+	recs, err := r.st.GetFPPInstanceUUIDByUUID(ctx, instanceUUID)
+	if err != nil || len(recs) == 0 {
+		return "", false
+	}
+
+	var configured map[string]bool
+	if r.endpoints != nil {
+		eps := r.endpoints.Current(ctx)
+		configured = make(map[string]bool, len(eps))
+		for _, ep := range eps {
+			configured[ep.ID] = true
+		}
+	}
+
+	var owner string
+	claimants := 0
+	for _, rec := range recs {
+		if configured != nil && !configured[rec.EndpointID] {
+			continue
+		}
+		claimants++
+		owner = rec.EndpointID
+	}
+	if claimants != 1 {
+		return "", false
+	}
+	return owner, true
+}
+
 // fppSignals is the STATIC subset of signals
 // internal/coordinator/collector/fpp.Collector can produce, used only to
 // synthesize [notYetPolledObservations]' not-yet-polled placeholders for a

@@ -662,6 +662,30 @@ type CueActivationNudger interface {
 	Nudge()
 }
 
+// FPPPlaylistEntryObserver is the FPP plugin push path: the ingest handler
+// (fppobservations.go) calls Observe once for every newly ACCEPTED (never
+// replayed, never refused) plugin playlist-entry observation, so a
+// dedicated push-fed collector.Collector can derive current FPP playback
+// state without waiting on any poll — the owner's ruling that the
+// ShowMesh FPP plugin becomes the primary source for FPP playback state,
+// with the REST collector as its fallback. Declared here, at the
+// consumer, for the identical reason [FPPPollNudger] is: this package
+// does not import internal/coordinator/collector/..., and the real
+// implementation (internal/coordinator/collector/fppplugin.Collector) is
+// wired in by coordinator.go and already satisfies this interface with no
+// adapter needed.
+type FPPPlaylistEntryObserver interface {
+	// Observe records instanceUUID's derived playback state from one
+	// accepted observation's action, playlistName, and unavailable
+	// fields. now is the coordinator's OWN clock at acceptance — never
+	// the plugin's own observedAtMillis, which this method is
+	// deliberately not given: see
+	// fppplugin.Collector.Observe's own doc comment for why a foreign
+	// clock here would corrupt every later freshness decision this
+	// evidence feeds.
+	Observe(instanceUUID, action, playlistName, unavailable string, now time.Time)
+}
+
 // CueActivationPinStatus is the operator-visibility surface for
 // ADR-033 show mode: whatever GET /api/v1/config/show.mode already shows
 // the operator (ADR-033 decision 3's persistent, always-visible mode

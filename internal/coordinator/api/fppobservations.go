@@ -449,6 +449,11 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 	// out its own periodic tick to notice fresh evidence exists.
 	if !replay {
 		h.deps.CueActivationNudger.Nudge()
+		// The same "genuinely new, never a replay" guard as the
+		// nudge above, so a replayed or out-of-order observation (already
+		// refused before this point) never produces a second, spurious
+		// push into the push-fed collector's own state.
+		h.deps.FPPPlaylistEntryObserver.Observe(rec.InstanceUUID, string(action), rec.PlaylistName, rec.Unavailable, now)
 	}
 
 	// Resolve the SAME reconciliation verdict GET .../reconciliation

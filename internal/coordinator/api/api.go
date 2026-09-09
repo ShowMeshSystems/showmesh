@@ -422,6 +422,17 @@ type Dependencies struct {
 	// "an unwired dependency is not this API failing" posture.
 	CueActivationNudger CueActivationNudger
 
+	// FPPPlaylistEntryObserver is the FPP plugin push path — see
+	// [FPPPlaylistEntryObserver]'s own doc comment. In practice the real
+	// value is *internal/coordinator/collector/fppplugin.Collector, wired
+	// by coordinator.go, which already satisfies this one-method
+	// interface with no adapter needed. A nil field is replaced by
+	// [noFPPPlaylistEntryObserver], under which Observe is a no-op: a
+	// coordinator that has not wired this in simply never gets plugin
+	// evidence into the observation store, matching this struct's
+	// standing "an unwired dependency is not this API failing" posture.
+	FPPPlaylistEntryObserver FPPPlaylistEntryObserver
+
 	// CueActivationPinStatus is ADR-033 show-mode's own pin
 	// visibility: see [CueActivationPinStatus]'s own doc comment. In
 	// practice the real value is the same *CueActivationLoop
@@ -693,6 +704,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.CueActivationNudger == nil {
 		d.CueActivationNudger = noCueActivationNudger{}
 	}
+	if d.FPPPlaylistEntryObserver == nil {
+		d.FPPPlaylistEntryObserver = noFPPPlaylistEntryObserver{}
+	}
 	if d.CueActivationPinStatus == nil {
 		d.CueActivationPinStatus = noCueActivationPinStatus{}
 	}
@@ -900,6 +914,14 @@ func (noAssetFetchFailureSource) LastFetchFailure(string, string) (string, time.
 type noCueActivationNudger struct{}
 
 func (noCueActivationNudger) Nudge() {}
+
+// noFPPPlaylistEntryObserver is [Dependencies.FPPPlaylistEntryObserver]'s
+// nil-safe default: Observe does nothing, so an unwired coordinator simply
+// never gets plugin evidence into the observation store and this signal
+// stays exactly as it behaved with only the REST/MQTT collectors.
+type noFPPPlaylistEntryObserver struct{}
+
+func (noFPPPlaylistEntryObserver) Observe(string, string, string, string, time.Time) {}
 
 // noCueActivationPinStatus is [Dependencies.CueActivationPinStatus]'s
 // nil-safe default: always reports unpinned, matching
