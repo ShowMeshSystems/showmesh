@@ -27,6 +27,14 @@ type audioSessionSnapshotter interface {
 	// applyEngineRestoreStatus, which this report loop calls fresh on
 	// every tick, matching Snapshot's own live-not-cached rule.
 	NodeRestoreRetryStatus(now time.Time) (state audio.EngineRestoreState, attempts int, nextAttempt time.Duration, lastReason string)
+
+	// SettingsSubstitution is [audio.Manager.SettingsSubstitution]'s own
+	// signature: whether this node's most recently applied
+	// audio.settings.configure revision landed as given or substituted at
+	// least one field's package default, live on every call -- see
+	// applySettingsStatus, which this report loop calls fresh on every
+	// tick, matching Snapshot's own live-not-cached rule.
+	SettingsSubstitution() (state audio.SettingsState, fields []string, reason string)
 }
 
 // ltcObserver is the read side of this node's LTC generation — fresh
@@ -119,6 +127,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			applyEngineAvailability(&payload, engine)
 			applyEngineGlitchCounts(&payload, engine)
 			applyEngineRestoreStatus(&payload, mgr, tickAt)
+			applySettingsStatus(&payload, mgr)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
 	}
@@ -196,6 +205,26 @@ func applyEngineRestoreStatus(payload *mqttproto.AudioPayload, mgr audioSessionS
 	payload.EngineRestoreAttempts = int64(attempts)
 	payload.EngineRestoreNextAttemptMs = nextAttempt.Milliseconds()
 	payload.EngineRestoreLastReason = lastReason
+}
+
+// applySettingsStatus writes mgr's current settings-substitution status
+// onto payload's three Settings* fields, fresh on every call -- the same
+// "live, never cached" rule [applyEngineRestoreStatus] follows, for the
+// identical reason: whether the most recently applied audio.settings.
+// configure revision substituted a field is a live fact about this node's
+// CURRENT settings, not the revision that arrived. A nil mgr (no asset
+// directory configured on this node, matching this loop's other nil-safe
+// optional sources) leaves every field at its zero value, which reads as
+// [audio.SettingsAccepted] on the wire -- never a fabricated
+// "substituted".
+func applySettingsStatus(payload *mqttproto.AudioPayload, mgr audioSessionSnapshotter) {
+	if mgr == nil {
+		return
+	}
+	state, fields, reason := mgr.SettingsSubstitution()
+	payload.SettingsState = string(state)
+	payload.SettingsSubstitutedFields = fields
+	payload.SettingsReason = reason
 }
 
 // applyLTCObservation writes ltc's current evidence onto payload's four

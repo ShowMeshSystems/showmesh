@@ -184,6 +184,44 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
 	obs = append(obs, engineRestoreObservations(nodeID, p, observedAt, rep)...)
+	obs = append(obs, settingsObservations(nodeID, p, observedAt, rep)...)
+
+	return obs
+}
+
+// settingsObservations renders the three node.audio.settings.* signals
+// (see signals.go). State is always collected -- "accepted" is a real
+// fact about a node that has never substituted a field, never "not
+// collected" -- following [AudioPayload.SettingsState]'s own "\"\" reads
+// as accepted" rule for a report from an agent built before this field
+// existed. SubstitutedFields and Reason are collected only while State is
+// "substituted": an accepted revision has nothing to name and no
+// substitution to explain.
+func settingsObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+
+	state := p.SettingsState
+	if state == "" {
+		state = "accepted"
+	}
+
+	obs := []observation.Observation{
+		buildValue(nodeID, SignalSettingsState, state, observedAt, rep),
+	}
+
+	if state == "substituted" {
+		obs = append(obs,
+			buildValue(nodeID, SignalSettingsSubstitutedFields, strings.Join(p.SettingsSubstitutedFields, "; "), observedAt, rep),
+			buildValue(nodeID, SignalSettingsReason, p.SettingsReason, observedAt, rep),
+		)
+	} else {
+		reason := "this node applied its most recent audio.settings.configure revision as written; no field was substituted"
+		obs = append(obs,
+			notCollected(res, SignalSettingsSubstitutedFields, source, reason, rep.receivedAt),
+			notCollected(res, SignalSettingsReason, source, reason, rep.receivedAt),
+		)
+	}
 
 	return obs
 }

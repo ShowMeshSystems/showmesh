@@ -432,6 +432,13 @@ type stubSnapshotter struct {
 	nodeRestoreAttempts      int
 	nodeRestoreNextAttemptAt time.Time
 	nodeRestoreLastReason    string
+
+	// settingsState and its companions script SettingsSubstitution's
+	// return; left zero, it reports SettingsAccepted with no fields,
+	// matching audio.Manager's own zero-value convention.
+	settingsState  audio.SettingsState
+	settingsFields []string
+	settingsReason string
 }
 
 func (s *stubSnapshotter) Snapshot(context.Context) []audio.SessionSnapshot {
@@ -457,6 +464,16 @@ func (s *stubSnapshotter) NodeRestoreRetryStatus(now time.Time) (audio.EngineRes
 		}
 	}
 	return s.nodeRestoreState, s.nodeRestoreAttempts, next, s.nodeRestoreLastReason
+}
+
+// SettingsSubstitution reports SettingsAccepted/no fields unless a test
+// overrides settingsState, matching a stubSnapshotter's default
+// zero-value convention for everything it does not script.
+func (s *stubSnapshotter) SettingsSubstitution() (audio.SettingsState, []string, string) {
+	if s.settingsState == "" {
+		return audio.SettingsAccepted, nil, ""
+	}
+	return s.settingsState, s.settingsFields, s.settingsReason
 }
 
 // TestRunAudioReportRebuildsSessionsEveryTick proves the report's session half of
@@ -889,6 +906,99 @@ func TestRunAudioReportNilSnapshotterReportsIdleRestoreStatus(t *testing.T) {
 	}
 	if err := got.Validate(); err != nil {
 		t.Errorf("Validate() with all engineRestore* fields omitted = %v, want nil", err)
+	}
+}
+
+// TestRunAudioReportPublishesSettingsSubstitutionStatus proves
+// applySettingsStatus carries mgr's live settings-substitution status onto
+// the published report's three Settings* fields, naming the substituted
+// field and stating the reason -- the wire evidence this whole issue
+// exists to add.
+func TestRunAudioReportPublishesSettingsSubstitutionStatus(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	mgr := &stubSnapshotter{
+		results:        [][]audio.SessionSnapshot{{}},
+		settingsState:  audio.SettingsSubstituted,
+		settingsFields: []string{"DefaultFadeDurationMs"},
+		settingsReason: "DefaultFadeDurationMs 0 is not positive",
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, time.Now, ticks, discardLogger())
+	}()
+
+	ticks <- time.Now()
+	<-pub.notify
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(calls))
+	}
+	got := decodeAudioReport(t, calls[0].payload)
+	if got.SettingsState != "substituted" {
+		t.Errorf("SettingsState = %q, want %q", got.SettingsState, "substituted")
+	}
+	if len(got.SettingsSubstitutedFields) != 1 || got.SettingsSubstitutedFields[0] != "DefaultFadeDurationMs" {
+		t.Errorf("SettingsSubstitutedFields = %v, want exactly [DefaultFadeDurationMs]", got.SettingsSubstitutedFields)
+	}
+	if got.SettingsReason != "DefaultFadeDurationMs 0 is not positive" {
+		t.Errorf("SettingsReason = %q, want the scripted reason preserved", got.SettingsReason)
+	}
+}
+
+// TestRunAudioReportNilSnapshotterReportsAcceptedSettingsStatus proves a
+// node with no asset directory configured (mgr nil, matching this loop's
+// other nil-safe optional sources) still publishes a valid report: every
+// Settings* field at its zero value, which reads as [audio.
+// SettingsAccepted] on the wire -- never omitted, never a fabricated
+// "substituted".
+func TestRunAudioReportNilSnapshotterReportsAcceptedSettingsStatus(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
+	}()
+
+	ticks <- time.Now()
+	<-pub.notify
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(calls))
+	}
+	got := decodeAudioReport(t, calls[0].payload)
+	if got.SettingsState != "" {
+		t.Errorf("SettingsState with a nil snapshotter = %q, want \"\" (reads as accepted on the wire)", got.SettingsState)
+	}
+	if len(got.SettingsSubstitutedFields) != 0 || got.SettingsReason != "" {
+		t.Errorf("SettingsSubstitutedFields/SettingsReason with a nil snapshotter = %v/%q, want none/\"\"",
+			got.SettingsSubstitutedFields, got.SettingsReason)
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("Validate() with all settings* fields omitted = %v, want nil", err)
 	}
 }
 
