@@ -24,6 +24,15 @@ import (
 type configShow struct {
 	Name  string `json:"name"`
 	Notes string `json:"notes"`
+
+	// FPPInstances and ResolumeInstances are the show's participation
+	// selection. Pointers, not plain slices, because the wire keeps three
+	// states apart and so must this program: nil is "no selection has ever
+	// been recorded for this show" (the key is omitted), a pointer to an
+	// empty slice is the operator's explicit "no instance of this
+	// integration takes part", and a populated slice is the selection.
+	FPPInstances      *[]string `json:"fppInstances,omitempty"`
+	ResolumeInstances *[]string `json:"resolumeInstances,omitempty"`
 }
 
 // showConfigResponse is the body of GET and PUT /config/show/{id}. See
@@ -78,6 +87,8 @@ func cmdShow(args []string, stdout, stderr io.Writer, clock func() time.Time) in
 		return cmdShowSet(rest, stdout, stderr, clock)
 	case "revisions":
 		return cmdShowRevisions(rest, stdout, stderr, clock)
+	case "participation":
+		return cmdShowParticipation(rest, stdout, stderr, clock)
 	case "active":
 		return cmdShowActive(rest, stdout, stderr, clock)
 	case "activate":
@@ -106,6 +117,9 @@ Subcommands:
   get <id>         show one show's full definition
   set <id>         write a new show revision (write, full replacement)
   revisions <id>   list revision history, newest first
+  participation    read or change which FPP and which Resolume instances
+                   take part in a show, without restating its name and
+                   notes: "participation get <id>", "participation set <id>"
   active           print the currently active show (404 if none has ever
                    been activated)
   activate <id>    make <id> the active show (write, full replacement of
@@ -221,6 +235,7 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	var name, notes string
 	fs.StringVar(&name, "name", "", "the show's name (required)")
 	fs.StringVar(&notes, "notes", "", "the show's notes")
+	participation := registerParticipationFlags(fs, false)
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show set [flags] <show-id>")
@@ -230,6 +245,11 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		_, _ = fmt.Fprintln(stderr, "are sent on every call regardless of whether either flag is given, and an")
 		_, _ = fmt.Fprintln(stderr, "omitted --notes becomes empty on the coordinator, never \"left as it was\".")
 		_, _ = fmt.Fprintln(stderr, "This command never reads the current value first (except for If-Match, below).")
+		_, _ = fmt.Fprintln(stderr, "\nParticipation works the same way: with neither --fpp nor --fpp-none given,")
+		_, _ = fmt.Fprintln(stderr, "this write records the show as having NO FPP selection at all, which is a")
+		_, _ = fmt.Fprintln(stderr, "different state from an empty selection and is what an unconfigured show")
+		_, _ = fmt.Fprintln(stderr, "reads as. Use \"show participation set\" to change the selection without")
+		_, _ = fmt.Fprintln(stderr, "restating the rest of the show.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
 		_, _ = fmt.Fprintln(stderr, "show changed since it was read.")
 		fs.PrintDefaults()
@@ -248,6 +268,11 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	id := rest[0]
 	if name == "" {
 		_, _ = fmt.Fprintln(stderr, "showmeshctl show set: --name is required")
+		return exitUsage
+	}
+	fppSel, resolumeSel, selErr := participation.resolve(nil, nil)
+	if selErr != nil {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl show set: %v\n", selErr)
 		return exitUsage
 	}
 
@@ -271,7 +296,7 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		return reportError(stderr, "show set", err)
 	}
 
-	body := configShow{Name: name, Notes: notes}
+	body := configShow{Name: name, Notes: notes, FPPInstances: fppSel, ResolumeInstances: resolumeSel}
 	var resp showConfigResponse
 	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "show set", err)
@@ -443,6 +468,8 @@ func printShowDetail(w io.Writer, resp showConfigResponse) {
 	if resp.Payload.Notes != "" {
 		_, _ = fmt.Fprintf(w, "Notes:     %s\n", resp.Payload.Notes)
 	}
+	printParticipationLine(w, "FPP", resp.Payload.FPPInstances)
+	printParticipationLine(w, "Resolume", resp.Payload.ResolumeInstances)
 	_, _ = fmt.Fprintf(w, "Revision:  %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:   %s\n", resp.UpdatedAt.Format(time.RFC3339))
 	if resp.CreatedByPrincipalName != nil {

@@ -15668,7 +15668,10 @@ components:
         the resolved value here (empty string if none was ever set), never
         absent - a stored revision states its own content outright. To
         submit a show, use ConfigShowWrite instead, which allows notes to
-        be absent.
+        be absent. fppInstances and resolumeInstances are the exception to
+        the sentence about notes: each is OMITTED here when no
+        participation selection has ever been recorded for this show, and
+        that absence is the fact, not a stand-in for an empty list.
       required: [name, notes]
       properties:
         name:
@@ -15678,6 +15681,33 @@ components:
         notes:
           type: string
           maxLength: 4000
+        fppInstances:
+          description: >-
+            The FPP instance ids selected to take part in this show, or
+            ABSENT when no selection has ever been recorded. Participation
+            is chosen by hand and never detected, so these three states are
+            distinct and a client must not collapse them: the key absent
+            means nobody has configured this show yet, a present empty
+            array means the operator chose that no FPP instance takes part,
+            and a populated array is the selection. Reading absent as "no
+            instance takes part" would report an unconfigured show as
+            correctly configured.
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        resolumeInstances:
+          description: >-
+            The Resolume instance ids selected to take part in this show,
+            with the identical absent / empty / populated meaning
+            fppInstances carries. An empty array is an ordinary night with
+            no projection, not a misconfiguration.
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
     ConfigShowWrite:
       type: object
       description: >-
@@ -15687,7 +15717,12 @@ components:
         default of empty (i.e. no notes), and a present `null` is rejected
         as invalid, the same absent-defaults rule ConfigShowActionWrite's
         own description field uses. This is still a FULL REPLACEMENT: a
-        `notes` value from a previous revision is never carried forward.
+        `notes` value from a previous revision is never carried forward,
+        and neither is a participation selection: a write that omits
+        fppInstances or resolumeInstances records that show as having no
+        selection for that integration, which is not the same as choosing
+        an empty one. Send an empty array to state "no instance of this
+        integration takes part". A present `null` is rejected for both.
         The response to a successful write stores and returns the
         resolved ConfigShow shape, never this one.
       required: [name]
@@ -15699,6 +15734,33 @@ components:
         notes:
           type: string
           maxLength: 4000
+        fppInstances:
+          description: >-
+            The FPP instance ids selected to take part in this show, or
+            ABSENT when no selection has ever been recorded. Participation
+            is chosen by hand and never detected, so these three states are
+            distinct and a client must not collapse them: the key absent
+            means nobody has configured this show yet, a present empty
+            array means the operator chose that no FPP instance takes part,
+            and a populated array is the selection. Reading absent as "no
+            instance takes part" would report an unconfigured show as
+            correctly configured.
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        resolumeInstances:
+          description: >-
+            The Resolume instance ids selected to take part in this show,
+            with the identical absent / empty / populated meaning
+            fppInstances carries. An empty array is an ordinary night with
+            no projection, not a misconfiguration.
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
     ShowConfigResponse:
       type: object
       description: The body of GET and PUT /config/show/{id}.
