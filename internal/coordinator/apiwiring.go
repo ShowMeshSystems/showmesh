@@ -597,23 +597,24 @@ func (l fppCollectorStatusLister) CollectorStatuses(ctx context.Context) ([]api.
 // not a considered choice.
 const fppMQTTCollectorSourceID = "fpp-mqtt"
 
-// fppMQTTSecretAdapter implements [api.FPPMQTTSecretStore] over the fpp.mqtt
-// secret file (Track G seam G-3, ADR-039 decision 7) — see
-// internal/coordinator/config/fppmqttsecret.go.
+// fppMQTTSecretAdapter implements [api.FPPMQTTSecretStore] over the
+// credentials table (Track G seam G-3, ADR-039 decision 7; owner ruling
+// 2026-09-08 moved the backing store from a file to SQLite). See
+// internal/coordinator/store/credentials.go.
 type fppMQTTSecretAdapter struct {
-	dataDir string
+	st *store.Store
 }
 
-func (a fppMQTTSecretAdapter) HasFPPMQTTPassword(context.Context) (bool, error) {
-	return config.HasFPPMQTTPassword(a.dataDir)
+func (a fppMQTTSecretAdapter) HasFPPMQTTPassword(ctx context.Context) (bool, error) {
+	return a.st.HasCredential(ctx, config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField)
 }
 
-func (a fppMQTTSecretAdapter) SetFPPMQTTPassword(_ context.Context, password string) error {
-	return config.WriteFPPMQTTPassword(a.dataDir, password)
+func (a fppMQTTSecretAdapter) SetFPPMQTTPassword(ctx context.Context, password string) error {
+	return a.st.SetCredential(ctx, config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField, password)
 }
 
-func (a fppMQTTSecretAdapter) ClearFPPMQTTPassword(context.Context) error {
-	return config.ClearFPPMQTTPassword(a.dataDir)
+func (a fppMQTTSecretAdapter) ClearFPPMQTTPassword(ctx context.Context) error {
+	return a.st.ClearCredential(ctx, config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField)
 }
 
 // fppMQTTCollectorStatusLister (Step 5) reported this collector's status

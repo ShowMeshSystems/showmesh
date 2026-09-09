@@ -5,7 +5,7 @@ import {
   listConfigObjects,
   putAudioNode,
   type AudioNodeConfigResponse,
-  type ConfigObjectSummary,
+  type AudioNodeSummary,
 } from '../api'
 import { Button, ButtonRow, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
 import type { ConfigAudioNode } from '../api'
@@ -24,7 +24,7 @@ const ROLE_OPTIONS: readonly { value: AudioNodeRole; label: string }[] = [
   { value: 'zone', label: 'Zone' },
 ]
 
-type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
+type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 type NodeState =
   | { kind: 'loading' }
   | { kind: 'loaded'; response: AudioNodeConfigResponse }
@@ -313,6 +313,9 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         </div>
 
         <div className="sm-panel sm-stack-4">
+          {/* Stays NotWired: the agent's only per-route channel signal is a probe
+              negotiation outcome, not a channel inventory (audiocapabilities.go's
+              routeAttributes), so a picker built from it could hide real channels. */}
           <NotWiredBanner
             what="Output groups"
             missing={

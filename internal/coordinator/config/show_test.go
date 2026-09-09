@@ -135,3 +135,147 @@ func TestValidateShowObjectIDMatchesTheReferenceRule(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeShowPayloadParticipationAbsentIsNotEmpty is this field pair's
+// load-bearing test, and the exact opposite of
+// TestDecodeShowPayloadNotesAbsentMeansEmpty above. A show that has never
+// had participation recorded must decode to a nil selection, NOT to an
+// empty one: every show written before this field existed lands here, and
+// a consumer that reads "absent" as "no instance takes part" would report
+// a show with nothing in it as correctly configured.
+func TestDecodeShowPayloadParticipationAbsentIsNotEmpty(t *testing.T) {
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026"}`)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if p.FPPInstances != nil || p.ResolumeInstances != nil {
+		t.Fatalf("absent participation must decode to nil, got fpp=%v resolume=%v", p.FPPInstances, p.ResolumeInstances)
+	}
+	if !p.ParticipationUnconfigured() {
+		t.Fatal("a show with no selection recorded must report ParticipationUnconfigured")
+	}
+	if ids, selected := p.FPPParticipation(); selected || ids != nil {
+		t.Fatalf("absent FPP selection must report selected=false, got ids=%v selected=%v", ids, selected)
+	}
+	if ids, selected := p.ResolumeParticipation(); selected || ids != nil {
+		t.Fatalf("absent Resolume selection must report selected=false, got ids=%v selected=%v", ids, selected)
+	}
+}
+
+// TestDecodeShowPayloadParticipationExplicitlyEmptyIsRecorded is the other
+// half of the same rule: the owner's own example is a night with FPP hosts
+// and no Resolume, so "no Resolume takes part" has to be expressible and
+// has to be a different decoded value from never having chosen.
+func TestDecodeShowPayloadParticipationExplicitlyEmptyIsRecorded(t *testing.T) {
+	p, verr := DecodeShowPayload(`{"name": "Halloween 2026", "fppInstances": ["fpp-a", "fpp-b"], "resolumeInstances": []}`)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if p.ParticipationUnconfigured() {
+		t.Fatal("a show with a recorded selection must not report ParticipationUnconfigured")
+	}
+	ids, selected := p.ResolumeParticipation()
+	if !selected {
+		t.Fatal("an explicitly empty resolumeInstances must decode as SELECTED, not as absent")
+	}
+	if len(ids) != 0 {
+		t.Fatalf("expected an empty Resolume selection, got %v", ids)
+	}
+	fppIDs, fppSelected := p.FPPParticipation()
+	if !fppSelected || len(fppIDs) != 2 || fppIDs[0] != "fpp-a" || fppIDs[1] != "fpp-b" {
+		t.Fatalf("unexpected FPP selection: ids=%v selected=%v", fppIDs, fppSelected)
+	}
+}
+
+// TestEncodeShowPayloadParticipationRoundTripsAllThreeStates proves the
+// distinction survives the store: payload_json is what a later read
+// decodes, so a representation that flattened absent and empty on the way
+// out would lose the fact no matter how carefully the decoder kept it.
+func TestEncodeShowPayloadParticipationRoundTripsAllThreeStates(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		raw           string
+		wantKeyAbsent bool
+		wantSelected  bool
+		wantLen       int
+	}{
+		{"absent", `{"name": "s"}`, true, false, 0},
+		{"explicitly empty", `{"name": "s", "resolumeInstances": []}`, false, true, 0},
+		{"populated", `{"name": "s", "resolumeInstances": ["arena-01"]}`, false, true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, verr := DecodeShowPayload(tc.raw)
+			if verr != nil {
+				t.Fatalf("decode: %+v", verr)
+			}
+			encoded, err := EncodeShowPayload(p)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			var top map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(encoded), &top); err != nil {
+				t.Fatalf("re-decode: %v", err)
+			}
+			if _, present := top["resolumeInstances"]; present == tc.wantKeyAbsent {
+				t.Fatalf("resolumeInstances key present=%v in %s, want absent=%v", present, encoded, tc.wantKeyAbsent)
+			}
+			back, verr := DecodeShowPayload(encoded)
+			if verr != nil {
+				t.Fatalf("decode of encoded payload: %+v", verr)
+			}
+			ids, selected := back.ResolumeParticipation()
+			if selected != tc.wantSelected || len(ids) != tc.wantLen {
+				t.Fatalf("round trip lost the state: ids=%v selected=%v, want selected=%v len=%d", ids, selected, tc.wantSelected, tc.wantLen)
+			}
+		})
+	}
+}
+
+func TestDecodeShowPayloadParticipationNullRejected(t *testing.T) {
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": null}`)
+	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "fppInstances" {
+		t.Fatalf("expected field-null on fppInstances, got %+v", verr)
+	}
+}
+
+func TestDecodeShowPayloadParticipationNotAnArrayRejected(t *testing.T) {
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": "fpp-a"}`)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "fppInstances" {
+		t.Fatalf("expected field-invalid on fppInstances, got %+v", verr)
+	}
+}
+
+func TestDecodeShowPayloadParticipationEmptyEntryRejected(t *testing.T) {
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": ["fpp-a", ""]}`)
+	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "fppInstances[1]" {
+		t.Fatalf("expected field-empty on fppInstances[1], got %+v", verr)
+	}
+}
+
+func TestDecodeShowPayloadParticipationBadInstanceIDRejected(t *testing.T) {
+	_, verr := DecodeShowPayload(`{"name": "s", "resolumeInstances": ["Arena 01"]}`)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resolumeInstances[0]" {
+		t.Fatalf("expected field-invalid on resolumeInstances[0], got %+v", verr)
+	}
+}
+
+// TestDecodeShowPayloadParticipationDuplicateRejected: a repeated id is
+// refused rather than silently deduplicated, so the operator sees the typo
+// instead of the coordinator storing a list nobody typed.
+func TestDecodeShowPayloadParticipationDuplicateRejected(t *testing.T) {
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstances": ["fpp-a", "fpp-b", "fpp-a"]}`)
+	if verr == nil || verr.Code != ValidationCodeInstanceIDDuplicate || verr.Field != "fppInstances[2]" {
+		t.Fatalf("expected instance-id-duplicate on fppInstances[2], got %+v", verr)
+	}
+}
+
+// TestDecodeShowPayloadParticipationUnknownKeyRejected: a misspelled key
+// would otherwise be dropped by the decoder and leave the show reading as
+// unconfigured, which is exactly the failure this field pair exists to
+// make visible.
+func TestDecodeShowPayloadParticipationUnknownKeyRejected(t *testing.T) {
+	_, verr := DecodeShowPayload(`{"name": "s", "fppInstance": ["fpp-a"]}`)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
+		t.Fatalf("expected field-unknown-key, got %+v", verr)
+	}
+}

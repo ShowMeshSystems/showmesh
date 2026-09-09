@@ -13,8 +13,9 @@ import (
 // Step 5 FPP MQTT collector, replacing SHOWMESH_FPP_MQTT_BROKER_URL/
 // USERNAME/PASSWORD/TOPIC_PREFIX/HOSTS. Mirrors fppendpoints.go's shape.
 // The broker password is deliberately absent from this file's payload
-// (ADR-039 decision 7): it lives in a separate mutable file, never in an
-// immutable config_revisions row — see fppmqttsecret.go.
+// (ADR-039 decision 7): it lives in the mutable credentials table,
+// referenced from but never embedded in an immutable config_revisions row.
+// See internal/coordinator/store/credentials.go.
 
 const (
 	// FPPMQTTConfigKind is config_objects.kind/config_revisions.kind and
@@ -27,6 +28,12 @@ const (
 
 	FPPMQTTSourceAPI          = "api"
 	FPPMQTTSourceEnvMigration = "env_migration"
+
+	// FPPMQTTPasswordCredentialField is this kind's broker password key in
+	// the credentials table (kind=FPPMQTTConfigKind,
+	// objectID=FPPMQTTConfigObjectID, field=FPPMQTTPasswordCredentialField).
+	// See internal/coordinator/store/credentials.go.
+	FPPMQTTPasswordCredentialField = "password"
 )
 
 // FPPMQTTConfig is fpp.mqtt's non-secret shape: everything

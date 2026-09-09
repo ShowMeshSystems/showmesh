@@ -30,7 +30,15 @@ import {
   type Model,
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
+import { attentionItems, fleetCounts, fppDetail, nodesDetail, type ParticipationState } from './dashboardModel'
+
+/** The operator-facing sentence for each participation state but "absent", which says nothing. */
+const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
+  participating: "Participating in tonight's show.",
+  not_participating: "Not participating in tonight's show.",
+  unknown: 'Participation unknown.',
+  not_configured: 'No active show.',
+}
 import { NodeDetail, NODE_DRAWER_TITLE_ID } from './NodeDetail'
 import {
   activityRows,
@@ -183,19 +191,31 @@ export function Monitor() {
                 detail="That is not proof the show looks right, only that nothing has asked for you."
               />
             ) : (
-              items.map((item) => (
-                <AttentionRow
-                  key={item.key}
-                  tone={item.tone}
-                  state={item.state}
-                  fact={
-                    <>
-                      <Link to={item.to}>{item.subject}</Link> {item.fact}
-                    </>
-                  }
-                  detail={item.detail}
-                />
-              ))
+              items.map((item) => {
+                const participationSentence =
+                  item.participation === 'absent' ? null : PARTICIPATION_SENTENCE[item.participation]
+                return (
+                  <AttentionRow
+                    key={item.key}
+                    tone={item.tone}
+                    state={item.state}
+                    fact={
+                      <>
+                        <Link to={item.to}>{item.subject}</Link> {item.fact}
+                      </>
+                    }
+                    detail={
+                      participationSentence === null ? (
+                        item.detail
+                      ) : (
+                        <>
+                          <span className="sm-small sm-muted">{participationSentence}</span> {item.detail}
+                        </>
+                      )
+                    }
+                  />
+                )
+              })
             )}
           </Section>
 

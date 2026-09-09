@@ -1,75 +1,63 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
-func TestFPPMQTTPasswordFileRoundTrip(t *testing.T) {
+func TestReadFPPMQTTPasswordAbsentFileIsNotAnError(t *testing.T) {
 	dir := t.TempDir()
-
-	present, err := HasFPPMQTTPassword(dir)
-	if err != nil {
-		t.Fatalf("HasFPPMQTTPassword: %v", err)
-	}
-	if present {
-		t.Fatalf("HasFPPMQTTPassword = true before anything was written, want false")
-	}
-	if _, present, err := ReadFPPMQTTPassword(dir); err != nil || present {
-		t.Fatalf("ReadFPPMQTTPassword = (_, %v, %v), want (_, false, nil) before anything was written", present, err)
-	}
-
-	if err := WriteFPPMQTTPassword(dir, "s3cret"); err != nil {
-		t.Fatalf("WriteFPPMQTTPassword: %v", err)
-	}
-	present, err = HasFPPMQTTPassword(dir)
-	if err != nil {
-		t.Fatalf("HasFPPMQTTPassword: %v", err)
-	}
-	if !present {
-		t.Fatalf("HasFPPMQTTPassword = false after writing, want true")
-	}
-	got, present, err := ReadFPPMQTTPassword(dir)
+	password, present, err := ReadFPPMQTTPassword(dir)
 	if err != nil {
 		t.Fatalf("ReadFPPMQTTPassword: %v", err)
 	}
-	if !present || got != "s3cret" {
-		t.Fatalf("ReadFPPMQTTPassword = (%q, %v), want (\"s3cret\", true)", got, present)
-	}
-
-	// Overwrite with a new value.
-	if err := WriteFPPMQTTPassword(dir, "rotated"); err != nil {
-		t.Fatalf("WriteFPPMQTTPassword (rotate): %v", err)
-	}
-	got, present, err = ReadFPPMQTTPassword(dir)
-	if err != nil || !present || got != "rotated" {
-		t.Fatalf("ReadFPPMQTTPassword after rotation = (%q, %v, %v), want (\"rotated\", true, nil)", got, present, err)
-	}
-
-	if err := ClearFPPMQTTPassword(dir); err != nil {
-		t.Fatalf("ClearFPPMQTTPassword: %v", err)
-	}
-	present, err = HasFPPMQTTPassword(dir)
-	if err != nil {
-		t.Fatalf("HasFPPMQTTPassword after clear: %v", err)
-	}
-	if present {
-		t.Fatalf("HasFPPMQTTPassword = true after clear, want false")
-	}
-
-	// Clearing an already-clear password is not an error.
-	if err := ClearFPPMQTTPassword(dir); err != nil {
-		t.Fatalf("ClearFPPMQTTPassword (already clear): %v", err)
+	if present || password != "" {
+		t.Fatalf(`ReadFPPMQTTPassword = (%q, %v), want ("", false) when the legacy file was never written`, password, present)
 	}
 }
 
-func TestFPPMQTTPasswordFileNoTrailingNewline(t *testing.T) {
+func TestReadFPPMQTTPasswordReturnsExactBytes(t *testing.T) {
 	dir := t.TempDir()
-	if err := WriteFPPMQTTPassword(dir, "exact-bytes"); err != nil {
-		t.Fatalf("WriteFPPMQTTPassword: %v", err)
+	if err := os.WriteFile(fppMQTTSecretFilePath(dir), []byte("exact-bytes"), 0o600); err != nil {
+		t.Fatalf("seed legacy file: %v", err)
 	}
-	got, _, err := ReadFPPMQTTPassword(dir)
+	password, present, err := ReadFPPMQTTPassword(dir)
 	if err != nil {
 		t.Fatalf("ReadFPPMQTTPassword: %v", err)
 	}
-	if got != "exact-bytes" {
-		t.Fatalf("ReadFPPMQTTPassword = %q, want exactly \"exact-bytes\" with no added newline", got)
+	if !present || password != "exact-bytes" {
+		t.Fatalf(`ReadFPPMQTTPassword = (%q, %v), want ("exact-bytes", true)`, password, present)
+	}
+}
+
+func TestReadFPPMQTTPasswordEmptyFileIsPresentWithEmptyValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(fppMQTTSecretFilePath(dir), []byte(""), 0o600); err != nil {
+		t.Fatalf("seed empty legacy file: %v", err)
+	}
+	password, present, err := ReadFPPMQTTPassword(dir)
+	if err != nil {
+		t.Fatalf("ReadFPPMQTTPassword: %v", err)
+	}
+	if !present || password != "" {
+		t.Fatalf(`ReadFPPMQTTPassword = (%q, %v), want ("", true): an empty file is present but has nothing to move`, password, present)
+	}
+}
+
+func TestClearFPPMQTTPasswordRemovesFileAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(fppMQTTSecretFilePath(dir), []byte("s3cret"), 0o600); err != nil {
+		t.Fatalf("seed legacy file: %v", err)
+	}
+	if err := ClearFPPMQTTPassword(dir); err != nil {
+		t.Fatalf("ClearFPPMQTTPassword: %v", err)
+	}
+	if _, present, err := ReadFPPMQTTPassword(dir); err != nil || present {
+		t.Fatalf("ReadFPPMQTTPassword after clear = (_, %v, %v), want (_, false, nil)", present, err)
+	}
+
+	// Clearing an already-clear file is not an error.
+	if err := ClearFPPMQTTPassword(dir); err != nil {
+		t.Fatalf("ClearFPPMQTTPassword (already clear): %v", err)
 	}
 }

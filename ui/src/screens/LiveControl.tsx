@@ -40,6 +40,7 @@ import {
   stopFPPPlaylistGracefully,
   submitMacroRun,
   unmuteAudioSessionOutput,
+  type AudioNodeSummary,
   type AudioSessionCommandResult,
   type ConfigObjectSummary,
   type CueActivationNodeOutcome,
@@ -1034,7 +1035,7 @@ function Announcements({ show }: { show: string | null }) {
 
 type AudioNodesState =
   | { kind: 'loading' }
-  | { kind: 'loaded'; nodes: ConfigObjectSummary[] }
+  | { kind: 'loaded'; nodes: AudioNodeSummary[] }
   | { kind: 'failed'; reason: string }
 
 function useAudioNodes(): AudioNodesState {

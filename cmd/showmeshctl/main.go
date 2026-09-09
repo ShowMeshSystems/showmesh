@@ -161,6 +161,13 @@ Commands:
   fpp acknowledge-instance-uuid-change --confirm <id>
                                        clear a pending, unacknowledged FPP instance uuid change
                                        (write, requires config:write)
+  fpp set-transition-gain <id> <percent 0-100>
+                                       write the brightness transition gain, a multiplier over FPP's
+                                       own scheduled ceiling (write, requires fpp:command)
+  fpp republish-playlist-definitions <id>
+                                       ask that host's plugin to resend its playlist definitions;
+                                       reports an accepted request, never an import (write,
+                                       requires fpp:command)
   fpp playlist-definitions list        metadata for every stored playlist definition (read,
                                        requires observation:read)
   fpp playlist-definitions get <id> <hash>
@@ -206,8 +213,16 @@ Commands:
                                        server-side
   show list                           enumerate show objects
   show get <id>                       show one show's full definition
-  show set <id>                       write a new show revision (write, full replacement)
+  show set <id>                       write a new show revision (write, full replacement, except
+                                       that an instance selection you do not name is carried
+                                       forward rather than cleared)
   show revisions <id>                 list show revision history, newest first
+  show participation                  read or change which FPP and which Resolume instances
+                                       take part in a show
+  show participation get <id>         print one show's selected instances, including whether
+                                       a selection has ever been recorded
+  show participation set <id>         change the selection alone, carrying the rest of the
+                                       show forward (write, requires config:write)
   show delete --confirm <id>          tombstone this show (write); refused 409 while "show
                                        active" names it; never cascades to objects still
                                        naming this show id

@@ -229,6 +229,9 @@ func TestListAudioNodesReturnsConfiguredObjects(t *testing.T) {
 	if !containsAll(string(listBody1), `"id":"render-01"`) || !containsAll(string(listBody1), `"label":"hw:0,0"`) {
 		t.Fatalf("list missing render-01/hw:0,0; body: %s", listBody1)
 	}
+	if !containsAll(string(listBody1), `"programChannels":[1,2]`) || !containsAll(string(listBody1), `"ltcChannel":3`) {
+		t.Fatalf("list missing programChannels/ltcChannel from validAudioNodeBody; body: %s", listBody1)
+	}
 }
 
 // TestPutAudioNodeRevisionPreconditionWiring is a smoke test proving

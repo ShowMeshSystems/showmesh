@@ -257,7 +257,10 @@ func (h *handlers) handleDeleteShow(w http.ResponseWriter, r *http.Request) {
 func mapShowConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, p config.ShowPayload) v1.ShowConfigResponse {
 	return v1.ShowConfigResponse{
 		ServerTime: formatTime(now), Kind: config.ShowConfigKind, ID: obj.ID, Revision: rev.Revision,
-		Payload:                v1.ConfigShow{Name: p.Name, Notes: p.Notes},
+		Payload: v1.ConfigShow{
+			Name: p.Name, Notes: p.Notes,
+			FPPInstances: p.FPPInstances, ResolumeInstances: p.ResolumeInstances,
+		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
@@ -587,6 +590,11 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 	// ADR-044 decision 5: the active show is part of every node's pushed
 	// fppconnect.configure state.
 	h.pushFPPConnectToAllNodes(r.Context(), now)
+
+	// Every show-dependent stream payload just changed. Connected clients
+	// must be refreshed by the activation itself, not by whatever the
+	// hub's next render pass happens to recompute.
+	h.notifyStreamHub()
 
 	jsonWrite(w, mapShowActiveConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowActiveConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,

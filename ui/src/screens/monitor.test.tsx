@@ -49,7 +49,13 @@ const observation = (signal: string, state = 'current', kind = 'surface', id = '
     quality: 'reported',
   }) as unknown as Node['render'][number]
 
-function node(nodeId: string, state: 'online' | 'offline' | 'unknown', render: Node['render'] = [], audio: Node['audio'] = []): Node {
+function node(
+  nodeId: string,
+  state: 'online' | 'offline' | 'unknown',
+  render: Node['render'] = [],
+  audio: Node['audio'] = [],
+  showParticipation?: Node['showParticipation'],
+): Node {
   return {
     nodeId,
     label: nodeId,
@@ -58,6 +64,7 @@ function node(nodeId: string, state: 'online' | 'offline' | 'unknown', render: N
     controlPlane: { state, reason: state === 'offline' ? 'Last will received.' : null },
     evidence: { hello: observation('node.hello'), lastWill: observation('node.last_will'), heartbeat: observation('node.heartbeat') },
     declaration: {},
+    showParticipation,
     render,
     audio,
     clock: [],
@@ -106,6 +113,44 @@ describe('Monitor · Fleet', () => {
       'Fleet',
       'Activity',
     ])
+  })
+
+  it('sorts a participating node above a non-participating node whose tone would otherwise put it first', () => {
+    renderScreen({
+      nodes: [
+        node('offline-node', 'offline', [], [], { state: 'not_participating', show: 'halloween-2026', reason: null }),
+        node('unknown-node', 'unknown', [], [], { state: 'participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    const section = screen.getByRole('region', { name: 'Needs an operator' })
+    const rows = within(section).getAllByText(/-node$/).map((el) => el.textContent)
+    expect(rows).toEqual(['unknown-node', 'offline-node'])
+  })
+
+  it.each([
+    ['participating', "Participating in tonight's show."],
+    ['not_participating', "Not participating in tonight's show."],
+    ['unknown', 'Participation unknown.'],
+    ['not_configured', 'No active show.'],
+  ] as const)('renders the operator-facing sentence for %s on the row', (state, sentence) => {
+    renderScreen({ nodes: [node('media-garage', 'offline', [], [], { state, show: 'halloween-2026', reason: null })] })
+    expect(screen.getByText(sentence)).toBeInTheDocument()
+  })
+
+  it('puts the participation sentence before the consequence sentence, not after', () => {
+    renderScreen({
+      nodes: [node('media-garage', 'offline', [], [], { state: 'participating', show: 'halloween-2026', reason: null })],
+    })
+    const section = screen.getByRole('region', { name: 'Needs an operator' })
+    const detail = within(section).getByText(/Participating in tonight's show\./).closest('p')
+    expect(detail).not.toBeNull()
+    const text = detail!.textContent ?? ''
+    expect(text.indexOf("Participating in tonight's show.")).toBeLessThan(text.indexOf('Last will received.'))
+  })
+
+  it('says nothing about participation for an older coordinator that never sent the field', () => {
+    renderScreen({ nodes: [node('media-garage', 'offline')] })
+    expect(screen.queryByText(/Participating in|Not participating in|Participation unknown|No active show/)).not.toBeInTheDocument()
   })
 
   it('puts nodes, FPP and Resolume in one table with kind as a column', () => {

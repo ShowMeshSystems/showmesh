@@ -21,6 +21,7 @@ func TestOpenAPIAudioDocumentIsWellFormed(t *testing.T) {
 	for _, name := range []string{
 		"ConfigAudioSettingsPayload", "AudioSettingsConfigResponse",
 		"ConfigAudioNode", "AudioNodeConfigResponse",
+		"AudioNodeSummary", "AudioNodeListResponse",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -69,7 +70,7 @@ func TestOpenAPIAudioNodeConfigResponsesMatchRealResponses(t *testing.T) {
 	authHeader := map[string]string{"Authorization": "Bearer " + token}
 
 	_, listBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node", authHeader)
-	assertMatchesSchema(t, c, "ConfigObjectsListResponse", listBody)
+	assertMatchesSchema(t, c, "AudioNodeListResponse", listBody)
 
 	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/audio.node/render-01", validAudioNodeBody, authHeader)
 	putResp, putBody := doRawRequest(t, api.Handler, putReq)
@@ -85,6 +86,12 @@ func TestOpenAPIAudioNodeConfigResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "AudioNodeConfigResponse", getBody)
 	if !containsAll(string(getBody), `"programChannels":[1,2]`) || !containsAll(string(getBody), `"ltcChannel":3`) {
 		t.Fatalf("GET response missing programChannels/ltcChannel; body: %s", getBody)
+	}
+
+	_, listBody2 := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node", authHeader)
+	assertMatchesSchema(t, c, "AudioNodeListResponse", listBody2)
+	if !containsAll(string(listBody2), `"programChannels":[1,2]`) || !containsAll(string(listBody2), `"ltcChannel":3`) {
+		t.Fatalf("list response missing programChannels/ltcChannel; body: %s", listBody2)
 	}
 
 	_, revBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01/revisions", authHeader)

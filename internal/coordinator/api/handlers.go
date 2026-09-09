@@ -95,11 +95,34 @@ type handlers struct {
 	// more.
 	fppUnknownMembers unknownMemberLog
 
+	// fppDefinitionUnknownMembers is fppUnknownMembers' own counterpart
+	// for fppplaylistdefinitions.go, kept as a SEPARATE instance rather
+	// than shared with it: both are keyed only by instanceUUID, and one
+	// route's warning would otherwise silently suppress the other's for
+	// an instance that happens to report the same field name on both
+	// routes.
+	fppDefinitionUnknownMembers unknownMemberLog
+
 	// nightCueHooks is Track F seam F4's own crash-injection seam for
 	// RESTING-MODE.md §7.1.1's commit/dispatch boundary — see
 	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
+
+	// nightGainWriter substitutes the night lighting cue's transition-gain
+	// write - see [nightTransitionGainWriter] (nightlightinggain.go). Nil
+	// in production; only a test ever sets it.
+	nightGainWriter nightTransitionGainWriter
+
+	// fppGainWriter substitutes the operator transition-gain write - see
+	// [fppTransitionGainWriter] (fpptransitiongain.go). Nil in production;
+	// only a test ever sets it.
+	fppGainWriter fppTransitionGainWriter
+
+	// fppDefinitionRepublisher substitutes the operator playlist
+	// definition republish - see fppDefinitionRepublisher's own doc
+	// comment. Nil in production.
+	fppDefinitionRepublisher fppDefinitionRepublisher
 
 	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
 	// intent gate state. See [emergencyStopArmStore]'s own doc comment
@@ -132,9 +155,22 @@ type handlers struct {
 	// to produce the identical NodeOutcome string) logs again.
 	cueActivationRefusalLogMu sync.Mutex
 	cueActivationRefusalLog   map[string]string
+
+	// hub is the SSE hub [New] builds alongside this value, so a write
+	// handler can invalidate stream state at the moment it changes rather
+	// than leaving clients to wait for the hub's next render pass.
+	hub *Hub
 }
 
 func (h *handlers) now() time.Time { return h.clock() }
+
+// notifyStreamHub pokes the SSE hub when one is wired, and does nothing
+// when a test builds a *handlers without one.
+func (h *handlers) notifyStreamHub() {
+	if h.hub != nil {
+		h.hub.Notify()
+	}
+}
 
 // handleServiceDescriptor serves GET /api/v1/.
 func (h *handlers) handleServiceDescriptor(w http.ResponseWriter, _ *http.Request) {
@@ -172,10 +208,12 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	// hello) must still appear here — see mergeDeclaredOnlyNodes' own doc
 	// comment.
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
+	active, activeErr := resolveActiveShowForParticipation(r.Context(), h.deps.AssetManifests)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
+		participation := nodeShowParticipation(r.Context(), h.deps.AssetManifests, active, activeErr, nv.NodeID)
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation))
 	}
 	jsonWrite(w, v1.NodesResponse{ServerTime: formatTime(now), Nodes: nodes})
 }
@@ -206,10 +244,12 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 	}
 	// DEFECT 4: see handleNodes' identical call for why.
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
+	active, activeErr := resolveActiveShowForParticipation(r.Context(), h.deps.AssetManifests)
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
 			render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID))})
+			participation := nodeShowParticipation(r.Context(), h.deps.AssetManifests, active, activeErr, nv.NodeID)
+			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation)})
 			return
 		}
 	}
@@ -490,10 +530,12 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	// DEFECT 4: see handleNodes' identical call for why.
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
+	active, activeErr := resolveActiveShowForParticipation(ctx, h.deps.AssetManifests)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
+		participation := nodeShowParticipation(ctx, h.deps.AssetManifests, active, activeErr, nv.NodeID)
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation))
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)

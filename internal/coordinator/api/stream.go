@@ -481,12 +481,14 @@ func (h *Hub) render(ctx context.Context) {
 		// evicted the first time this hub ticks, because evictRendered
 		// below removes any "node:"+id key not present in views.
 		views = mergeDeclaredOnlyNodes(views, declByNodeID)
+		active, activeErr := resolveActiveShowForParticipation(ctx, h.deps.AssetManifests)
 		present := make(map[string]struct{}, len(views))
 		for _, nv := range views {
 			key := "node:" + nv.NodeID
 			present[key] = struct{}{}
 			render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID))
+			participation := nodeShowParticipation(ctx, h.deps.AssetManifests, active, activeErr, nv.NodeID)
+			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation)
 			if h.updateRendered(key, node) {
 				n := node
 				pending = append(pending, pendingFrame{event: "node.changed", serverTime: formatTime(now), node: &n})

@@ -1,4 +1,4 @@
-import type { CSSProperties, KeyboardEvent, MouseEvent, ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react'
 
 /**
  * Wide tables scroll inside this wrapper; the page never gains horizontal
@@ -12,9 +12,37 @@ export function TableWrap({ label, children }: { label: string; children: ReactN
   )
 }
 
+/**
+ * Below the restack breakpoint each cell needs its column heading to label
+ * its stacked card row (`table.css`'s `content: attr(data-label)`). Call
+ * sites author raw `<thead>`/`<tbody>` markup, so this reads its own
+ * rendered header row after each render and stamps the heading onto the
+ * matching cell in every body row, rather than asking every call site to
+ * repeat the heading on each `<td>`.
+ */
+function useColumnLabels(ref: RefObject<HTMLTableElement | null>) {
+  useEffect(() => {
+    const table = ref.current
+    if (table === null) return
+    const headRow = table.tHead?.rows[0]
+    if (headRow === undefined) return
+    const labels = Array.from(headRow.cells).map((cell) => cell.textContent ?? '')
+    for (const body of Array.from(table.tBodies)) {
+      for (const row of Array.from(body.rows)) {
+        Array.from(row.cells).forEach((cell, index) => {
+          const label = labels[index]
+          if (label !== undefined && label !== '') cell.setAttribute('data-label', label)
+        })
+      }
+    }
+  })
+}
+
 export function Table({ children, minWidth = 520 }: { children: ReactNode; minWidth?: number }) {
+  const ref = useRef<HTMLTableElement>(null)
+  useColumnLabels(ref)
   return (
-    <table className="sm-table" style={{ '--sm-table-min-width': `${minWidth}px` } as CSSProperties}>
+    <table ref={ref} className="sm-table" style={{ '--sm-table-min-width': `${minWidth}px` } as CSSProperties}>
       {children}
     </table>
   )

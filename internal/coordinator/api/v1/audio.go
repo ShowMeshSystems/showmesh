@@ -74,6 +74,31 @@ type ConfigAudioNode struct {
 	Zone *string `json:"zone,omitempty"`
 }
 
+// AudioNodeSummary is one element of [AudioNodeListResponse]: enough to
+// enumerate every audio.node object's routing without fetching each one's
+// full payload. ProgramChannels and LTCChannel reuse [ConfigAudioNode]'s
+// own already-pinned names for the same two facts, rather than a second
+// pair of names for the same meaning. A dedicated type rather than
+// [ConfigObjectSummary]: that shape is shared across kinds that carry a
+// Show reference, which audio.node does not, and bolting kind-specific
+// channel fields onto a kind-agnostic shape would make every other
+// consumer of ConfigObjectSummary carry fields that mean nothing for them.
+type AudioNodeSummary struct {
+	ID              string `json:"id"`
+	Label           string `json:"label"`
+	ProgramChannels []int  `json:"programChannels"`
+	LTCChannel      int    `json:"ltcChannel,omitempty"`
+	CurrentRevision int64  `json:"currentRevision"`
+	UpdatedAt       string `json:"updatedAt"`
+}
+
+// AudioNodeListResponse is the body of GET /config/audio.node.
+type AudioNodeListResponse struct {
+	ServerTime string             `json:"serverTime"`
+	Kind       string             `json:"kind"`
+	Objects    []AudioNodeSummary `json:"objects"`
+}
+
 // AudioNodeConfigResponse is the body of GET and PUT
 // /config/audio.node/{nodeId}.
 type AudioNodeConfigResponse struct {

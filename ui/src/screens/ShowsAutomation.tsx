@@ -16,7 +16,7 @@ import {
   submitMacroRun,
   type ActionBinding,
   type ActionInvocationResult,
-  type ConfigObjectSummary,
+  type AudioNodeSummary,
   type ConfigShowAction,
   type ConfigShowActionMQTTExpect,
   type ConfigShowActionTarget,
@@ -1193,7 +1193,7 @@ function buildMqttTarget(value: MqttTargetValue): TargetBuild {
 }
 
 type ResolumeActionsState = { kind: 'loading' } | { kind: 'loaded'; actions: ResolumeAction[] } | { kind: 'failed'; reason: string }
-type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
+type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 
 function buildResolumeTarget(value: ResolumeTargetValue, actionsState: ResolumeActionsState): TargetBuild {
   const base: ConfigShowActionTarget = { integration: 'resolume', action: value.action, ref: {} }

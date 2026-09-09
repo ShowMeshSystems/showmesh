@@ -115,6 +115,25 @@ const (
 	SignalTimelineLastResyncReason observation.SignalID = "node.audio.timeline.last_resync_reason"
 )
 
+// SignalSettingsState, SignalSettingsSubstitutedFields, and
+// SignalSettingsReason report internal/agent/audio.Manager's own
+// settings-substitution status for this node
+// (mqttproto.AudioPayload.SettingsState/SettingsSubstitutedFields/
+// SettingsReason) -- the state/reason pairing already used on
+// node.audio.engine.* and node.audio.ltc.generator.* signals, applied to
+// audio.settings.configure. State is "accepted" (the node's most recent
+// revision landed as given) or "substituted" (at least one field failed
+// its own wire-boundary validation and was replaced by its package
+// default). SubstitutedFields names every refused field, joined with
+// "; " (matching fpp.warnings.summary's identical list-as-string
+// convention); Reason is present only while State is "substituted".
+// Minted identifiers, docs/build/IDENTIFIER-REGISTER.md.
+const (
+	SignalSettingsState             observation.SignalID = "node.audio.settings.state"
+	SignalSettingsSubstitutedFields observation.SignalID = "node.audio.settings.substituted_fields"
+	SignalSettingsReason            observation.SignalID = "node.audio.settings.reason"
+)
+
 // AllSignalIDs is every signal this package ever emits, in the order
 // [Collector.Poll] builds them for one node.
 var AllSignalIDs = []observation.SignalID{
@@ -149,6 +168,9 @@ var AllSignalIDs = []observation.SignalID{
 	SignalTimelineExpectedMs,
 	SignalTimelineActualMs,
 	SignalTimelineErrorMs,
+	SignalSettingsState,
+	SignalSettingsSubstitutedFields,
+	SignalSettingsReason,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one

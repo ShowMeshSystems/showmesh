@@ -8,7 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"slices"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
@@ -92,16 +97,23 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Step 4: decode strictly. Malformed JSON, an unknown field, trailing
-	// content, or a duplicate member name anywhere in the document
-	// (including inside "definition") is refused but NOT audited
-	// (contract §3.4: only step 5 onward is audited), mirroring
-	// fppobservations.go's identical reasoning for why a canonicalizing
-	// pass — not encoding/json.Decoder alone — is what catches a
-	// duplicate member name.
+	// Step 4: decode. Malformed JSON, trailing content, or a duplicate
+	// member name anywhere in the document (including inside
+	// "definition") is refused but NOT audited (contract §3.4: only step
+	// 5 onward is audited), mirroring fppobservations.go's identical
+	// reasoning for why the canonicalize pass below, not
+	// encoding/json.Decoder alone, is what catches a duplicate member
+	// name.
+	//
+	// A top-level member this coordinator does not know is IGNORED, not
+	// refused, and is reported back in ignoredFields, mirroring
+	// fppobservations.go's identical fix for the identical hazard:
+	// refusing it made upgrade order fatal, since a plugin sending a new
+	// field to a coordinator that predates it would have every
+	// definition rejected, and the coordinator would then see
+	// observations referencing definitions that never landed.
 	var req v1.FPPPlaylistDefinitionPublishRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: "+err.Error()))
 		return
@@ -110,6 +122,7 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: trailing content after the JSON value"))
 		return
 	}
+	ignoredFields := unknownFPPPlaylistDefinitionMembers(raw)
 
 	auditRefusal := func(reason string) {
 		entry := identity.AuditEntry{
@@ -291,8 +304,16 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 		PlaylistHash:  computedHash,
 		Stored:        stored,
 		Idempotent:    !stored,
+		IgnoredFields: ignoredFields,
 		ServerTime:    formatTime(now),
 	})
+	// Logged here, on the way out of a 200, and not at the decode above:
+	// the warning says the members "were ignored", which is only true of
+	// a definition that was actually accepted. A body refused for a
+	// duplicate member name or a missing identity field had nothing
+	// ignored, it had everything refused, and saying otherwise would be
+	// an operator reading a warning about the wrong problem.
+	h.logNewUnknownFPPPlaylistDefinitionMembers(req.InstanceUUID, ignoredFields)
 }
 
 // errIdempotentDefinitionRepeat is handlePostFPPPlaylistDefinition's own
@@ -329,13 +350,32 @@ func referencedFPPPlaylistHashesForInstance(ctx context.Context, r configReferen
 	if err != nil {
 		return nil, err
 	}
-	return all[instanceUUID], nil
+	byHash := all[instanceUUID]
+	out := make(map[string]bool, len(byHash))
+	for hash := range byHash {
+		out[hash] = true
+	}
+	return out, nil
+}
+
+// fppPlaylistReference names one show.playlist object that binds a given
+// (instanceUUID, playlistHash) FPP playlist: [referencedFPPPlaylistHashesByInstance]'s
+// per-hash element, carrying the playlist's own object id and its
+// operator-facing name.
+type fppPlaylistReference struct {
+	ID   string
+	Name string
 }
 
 // referencedFPPPlaylistHashesByInstance is
 // [referencedFPPPlaylistHashesForInstance]'s all-instances form, shared
-// with the list handler's own "referenced" column so both read the same
-// show.playlist objects once per call rather than once per row.
+// with the list handler's own "referenced"/"referencedByPlaylists" columns
+// so both read the same show.playlist objects once per call rather than
+// once per row. A hash can be named by more than one show.playlist object;
+// every one of them is kept, in ascending order of the playlist's own
+// object id, so a caller reading the list gets a deterministic order
+// regardless of the order [configReferenceReader.ListConfigObjects] itself
+// returns objects in.
 //
 // strict controls what happens when one show.playlist object's active
 // revision cannot be read or decoded:
@@ -358,12 +398,12 @@ func referencedFPPPlaylistHashesForInstance(ctx context.Context, r configReferen
 // live, at which point this function (not the prune query itself) is
 // where a fix belongs: reading every stored revision, not just the
 // active one.
-func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenceReader, strict bool) (map[string]map[string]bool, error) {
+func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenceReader, strict bool) (map[string]map[string][]fppPlaylistReference, error) {
 	objs, err := r.ListConfigObjects(ctx, config.ShowPlaylistConfigKind)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]map[string]bool{}
+	out := map[string]map[string][]fppPlaylistReference{}
 	for _, obj := range objs {
 		if obj.CurrentRevision == 0 {
 			continue
@@ -389,9 +429,16 @@ func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenc
 			continue
 		}
 		if out[payload.FPP.InstanceUUID] == nil {
-			out[payload.FPP.InstanceUUID] = map[string]bool{}
+			out[payload.FPP.InstanceUUID] = map[string][]fppPlaylistReference{}
 		}
-		out[payload.FPP.InstanceUUID][payload.FPP.PlaylistHash] = true
+		hash := payload.FPP.PlaylistHash
+		out[payload.FPP.InstanceUUID][hash] = append(out[payload.FPP.InstanceUUID][hash], fppPlaylistReference{ID: obj.ID, Name: payload.Name})
+	}
+	for _, byHash := range out {
+		for hash, refs := range byHash {
+			sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
+			byHash[hash] = refs
+		}
 	}
 	return out, nil
 }
@@ -424,6 +471,7 @@ func (h *handlers) handleListFPPPlaylistDefinitions(w http.ResponseWriter, r *ht
 			// list for every other instance's rows.
 			entries = nil
 		}
+		refs := referenced[rec.InstanceUUID][rec.PlaylistHash]
 		out = append(out, v1.FPPPlaylistDefinitionMetadata{
 			InstanceUUID: rec.InstanceUUID,
 			PlaylistName: rec.PlaylistName,
@@ -431,13 +479,27 @@ func (h *handlers) handleListFPPPlaylistDefinitions(w http.ResponseWriter, r *ht
 			CapturedAt:   formatTime(rec.CapturedAt),
 			ReceivedAt:   formatTime(rec.ReceivedAt),
 			EntryCount:   len(entries),
-			Referenced:   referenced[rec.InstanceUUID][rec.PlaylistHash],
+			// Both derived from refs in this one pass, never a second
+			// walk, so they cannot disagree: Referenced is exactly
+			// ReferencedByPlaylists being non-empty.
+			Referenced:            len(refs) > 0,
+			ReferencedByPlaylists: mapFPPPlaylistReferences(refs),
 		})
 	}
 	jsonWrite(w, v1.FPPPlaylistDefinitionsListResponse{
 		Definitions: out,
 		ServerTime:  formatTime(now),
 	})
+}
+
+// mapFPPPlaylistReferences carries refs' already-sorted order onto the wire
+// type verbatim, empty-but-non-nil rather than null when refs is empty.
+func mapFPPPlaylistReferences(refs []fppPlaylistReference) []v1.FPPPlaylistReference {
+	out := make([]v1.FPPPlaylistReference, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, v1.FPPPlaylistReference{ID: ref.ID, Name: ref.Name})
+	}
+	return out
 }
 
 // handleGetFPPPlaylistDefinition serves
@@ -522,4 +584,81 @@ func parseFPPPlaylistDefinitionEntries(definitionJSON string) ([]v1.FPPPlaylistD
 		})
 	}
 	return out, nil
+}
+
+// maxReportedUnknownFPPPlaylistDefinitionMembers mirrors
+// [maxReportedUnknownFPPObservationMembers]'s identical bound and
+// reasoning for this route: the body is already bounded at 1048576 bytes,
+// so this is not the only bound, but a caller should not be able to
+// choose how large the coordinator's reply and log line are by sending a
+// hundred junk members.
+const maxReportedUnknownFPPPlaylistDefinitionMembers = 8
+
+// fppPlaylistDefinitionKnownMembers is every JSON member name
+// [v1.FPPPlaylistDefinitionPublishRequest] declares, read from the struct
+// tags rather than listed here, mirroring
+// [fppObservationKnownMembers]'s identical reasoning: adding a field to
+// that type cannot leave this behind reporting the new field as unknown.
+var fppPlaylistDefinitionKnownMembers = sync.OnceValue(func() map[string]struct{} {
+	t := reflect.TypeOf(v1.FPPPlaylistDefinitionPublishRequest{})
+	known := make(map[string]struct{}, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			known[name] = struct{}{}
+		}
+	}
+	return known
+})
+
+// unknownFPPPlaylistDefinitionMembers returns the sorted names of raw's
+// top-level members that [v1.FPPPlaylistDefinitionPublishRequest] does
+// not declare, capped at [maxReportedUnknownFPPPlaylistDefinitionMembers].
+// Nil when there are none, which is the ordinary case, so the response
+// omits the field entirely for every well-formed definition. Mirrors
+// [unknownFPPObservationMembers]'s identical reasoning, including that raw
+// has already decoded into the request struct by the time this runs, so
+// an error here is reported as "no unknown members" rather than turning a
+// request that already parsed into a refusal.
+func unknownFPPPlaylistDefinitionMembers(raw []byte) []string {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil
+	}
+	known := fppPlaylistDefinitionKnownMembers()
+	var unknown []string
+	for name := range members {
+		if _, ok := known[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if unknown == nil {
+		return nil
+	}
+	slices.Sort(unknown)
+	if len(unknown) > maxReportedUnknownFPPPlaylistDefinitionMembers {
+		unknown = unknown[:maxReportedUnknownFPPPlaylistDefinitionMembers]
+	}
+	return unknown
+}
+
+// logNewUnknownFPPPlaylistDefinitionMembers writes one warning the first
+// time an instance's set of unknown member names appears, and nothing on
+// the repeats, mirroring
+// [handlers.logNewUnknownFPPObservationMembers]'s identical dedupe against
+// its own [handlers.fppDefinitionUnknownMembers] instance. Warning rather
+// than error: the definition was accepted, and a coordinator running in
+// front of a newer plugin is an ordinary upgrade state, not a fault.
+func (h *handlers) logNewUnknownFPPPlaylistDefinitionMembers(instanceUUID string, names []string) {
+	if len(names) == 0 {
+		// Still recorded, so an instance that stops sending them and
+		// starts again logs the second time too.
+		h.fppDefinitionUnknownMembers.shouldLog(instanceUUID, names)
+		return
+	}
+	if !h.fppDefinitionUnknownMembers.shouldLog(instanceUUID, names) {
+		return
+	}
+	h.logWarn("fpp playlist definition carried members this coordinator does not know; they were ignored",
+		"instanceUuid", instanceUUID, "ignoredFields", strings.Join(names, ","))
 }

@@ -301,6 +301,9 @@ func splitUsableRoutes(routes []audio.RouteEvidence) (usable, ltc []audio.RouteE
 	return usable, ltc
 }
 
+// routeAttributes reports outputCount and routes only: RouteEvidence.Channels
+// is one probe's negotiated outcome, never proof of a route's full channel
+// inventory, so it cannot honestly bound the Node routing channel picker.
 func routeAttributes(routes []audio.RouteEvidence) map[string]any {
 	names := make([]string, 0, len(routes))
 	for _, r := range routes {

@@ -471,13 +471,23 @@ func Run() int {
 
 	// Audio report: hardware discovery evidence (cached) plus a fresh
 	// audioMgr session snapshot, on its own cadence — see audioreport.go.
-	// No trigger channel: nothing here needs an out-of-cadence publish.
+	// The cadence itself is not fixed: runAudioReportTicker elevates it
+	// while audioMgr reports a fade in flight and returns it to
+	// cfg.AudioReportInterval the moment none do (see that function's own
+	// doc comment for the bounded worst case when a fade ends abnormally).
+	// No trigger channel: nothing here needs an out-of-cadence publish
+	// beyond that.
+	audioReportTicks := make(chan time.Time)
+	audioReportTickerDone := make(chan struct{})
+	go func() {
+		defer close(audioReportTickerDone)
+		runAudioReportTicker(sigCtx, audioMgr, cfg.AudioReportInterval, elevatedAudioReportInterval, audioReportFadeElevationCap, time.Now, audioReportTicks)
+	}()
+
 	audioReportDone := make(chan struct{})
 	go func() {
 		defer close(audioReportDone)
-		ticker := time.NewTicker(cfg.AudioReportInterval)
-		defer ticker.Stop()
-		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, audioEngine, time.Now, ticker.C, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, audioEngine, time.Now, audioReportTicks, logger)
 	}()
 
 	// Clock report: this node's current PTP status on its own cadence —
@@ -512,15 +522,16 @@ func Run() int {
 	// remains as a harmless, idempotent safety net.
 	stopSignal()
 
-	// The heartbeat, asset inventory, render report, audio report, clock
-	// report, audio session watcher, audio restore retry, MultiSync
-	// listener, FPP Connect HTTP listener, and show mode watch loops also
-	// select on sigCtx.Done() and exit on their own; wait for all ten so
-	// none can race the final offline publish below with a publish still
-	// in flight.
+	// The heartbeat, asset inventory, render report, audio report cadence
+	// ticker, audio report, clock report, audio session watcher, audio
+	// restore retry, MultiSync listener, FPP Connect HTTP listener, and
+	// show mode watch loops also select on sigCtx.Done() and exit on their
+	// own; wait for all eleven so none can race the final offline publish
+	// below with a publish still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
+	<-audioReportTickerDone
 	<-audioReportDone
 	<-clockReportDone
 	<-audioWatchDone

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -978,5 +979,92 @@ func TestPutShowSurfaceAcceptsFirstTimePut(t *testing.T) {
 	put := decodeMap(t, body)
 	if put["revision"] != float64(1) {
 		t.Errorf("revision = %v, want 1", put["revision"])
+	}
+}
+
+// TestPutShowParticipationKeepsAbsentDistinctFromExplicitlyEmpty is the
+// end-to-end form of the show payload's participation rule: through the
+// HTTP handler and back out of the config object store, a show with no
+// selection recorded must NOT come back looking like a show whose operator
+// chose that nothing takes part. The two are different operational facts,
+// and a consumer that cannot tell them apart reports an unconfigured show
+// as ready.
+func TestPutShowParticipationKeepsAbsentDistinctFromExplicitlyEmpty(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	// A show with no selection at all: the two keys must be absent from
+	// the read shape, not present as empty arrays.
+	mustPutShow(t, api, token, "unconfigured", `{"name":"Unconfigured"}`)
+	_, unconfiguredBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/unconfigured", auth)
+	var unconfigured struct {
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal(unconfiguredBody, &unconfigured); err != nil {
+		t.Fatalf("decode GET body: %v; body: %s", err, unconfiguredBody)
+	}
+	if _, present := unconfigured.Payload["fppInstances"]; present {
+		t.Fatalf("a show with no selection must omit fppInstances, not state it; body: %s", unconfiguredBody)
+	}
+	if _, present := unconfigured.Payload["resolumeInstances"]; present {
+		t.Fatalf("a show with no selection must omit resolumeInstances, not state it; body: %s", unconfiguredBody)
+	}
+
+	// The owner's own example: FPP hosts chosen by hand, Resolume
+	// deliberately not taking part on this night.
+	mustPutShow(t, api, token, "quiet-night",
+		`{"name":"Quiet Night","fppInstances":["fpp-a","fpp-b"],"resolumeInstances":[]}`)
+	_, quietBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/quiet-night", auth)
+	var quiet struct {
+		Payload struct {
+			FPPInstances      *[]string `json:"fppInstances"`
+			ResolumeInstances *[]string `json:"resolumeInstances"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(quietBody, &quiet); err != nil {
+		t.Fatalf("decode GET body: %v; body: %s", err, quietBody)
+	}
+	if quiet.Payload.ResolumeInstances == nil {
+		t.Fatalf("an explicitly empty Resolume selection must survive the store as [], not become absent; body: %s", quietBody)
+	}
+	if len(*quiet.Payload.ResolumeInstances) != 0 {
+		t.Fatalf("expected an empty Resolume selection, got %v", *quiet.Payload.ResolumeInstances)
+	}
+	if quiet.Payload.FPPInstances == nil || len(*quiet.Payload.FPPInstances) != 2 {
+		t.Fatalf("FPP selection did not survive the round trip; body: %s", quietBody)
+	}
+
+	// A full replacement clears the selection back to absent, exactly as
+	// it clears notes: this write records "no selection", not "empty".
+	mustPutShow(t, api, token, "quiet-night", `{"name":"Quiet Night"}`)
+	_, clearedBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/quiet-night", auth)
+	var cleared struct {
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal(clearedBody, &cleared); err != nil {
+		t.Fatalf("decode GET body: %v; body: %s", err, clearedBody)
+	}
+	if _, present := cleared.Payload["resolumeInstances"]; present {
+		t.Fatalf("a full replacement that omits the selection must record absent, not an empty list; body: %s", clearedBody)
+	}
+}
+
+// TestPutShowParticipationDuplicateIsRefused proves the refusal reaches
+// the operator as a Problem rather than being silently deduplicated.
+func TestPutShowParticipationDuplicateIsRefused(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show/dupes",
+		`{"name":"Dupes","fppInstances":["fpp-a","fpp-a"]}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT with a duplicate instance id: status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
 }

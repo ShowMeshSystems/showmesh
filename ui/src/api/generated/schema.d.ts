@@ -207,6 +207,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fpp/{instanceId}/brightness/transition-gain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write one FPP host's brightness transition gain
+         * @description Behind `fpp:command`, the same scope dispatching an FPP command needs: this is an operator writing a live output value to one FPP host, the blast radius that scope already governs. Writes the brightness transition gain, a 0-100 multiplier that composes with FPP's own scheduled brightness ceiling as `effective output = round(ceiling * gain / 100)`. ShowMesh owns the gain and never the ceiling, so this write can never overwrite a limit FPP's own schedule set.
+         *     The `200` body is the applied state the FPP plugin returned, never a bare success: `gainStart`, `gainTarget`, `fadeSeconds`, `ceiling` and `effectiveOutput` are what the host is now doing. `applied: false` is part of that success, not an error - it is what a repeated `requestId` returns, the idempotency key working, with the gain unchanged and the current state reported.
+         *     An out-of-range `targetPercent` or `fadeSeconds` is refused with `400`, never clamped, so a mistyped value stays visible. An instance id that names no configured `fpp.endpoints` entry is `404`. A write that reaches a configured host but does not take is `502`, carrying the host's own refusal text verbatim.
+         */
+        post: operations["setFPPTransitionGain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fpp/{instanceId}/playlist-definitions/republish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask one FPP host to resend its playlist definitions
+         * @description Behind `fpp:command`, the scope an operator write to one FPP host already needs. Asks the resident ShowMesh plugin to drop its record of which playlist definitions it has already published, and to sweep now rather than at the end of its own re-scan interval (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9). It writes nothing to FPP, alters no definition, and cannot make the plugin send anything it did not read from the host itself.
+         *     This repairs the one case that does not self-heal: a definition the coordinator lost or never durably stored, whose content has not changed, and which the plugin therefore suppresses on every later sweep of its own.
+         *     **A `200` means the plugin agreed to resend. It does not mean any definition arrived.** The plugin answers before it has attempted a single post, so the body reports what the plugin cleared, what it still holds, what it deliberately kept back, and that the sweep is OWED (`sweepPending: true`), and it carries no count of definitions the coordinator accepted, because no such count exists yet. To see what actually arrived, read `GET /integrations/fpp/playlist-definitions`, which is authoritative because the coordinator computed those hashes for itself.
+         *     `applied: false` is part of a success, not an error: it is what a repeated `requestId` returns, having cleared nothing a second time. Sending the same `requestId` again later is also how a caller learns the sweep finished, when `sweepPending` comes back `false`.
+         *     An instance id that names no configured `fpp.endpoints` entry is `404`. A request that reaches a configured host but produces no usable result is `502`, carrying the host's own text verbatim.
+         */
+        post: operations["republishFPPPlaylistDefinitions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/render/surfaces/{surfaceId}/apply": {
         parameters: {
             query?: never;
@@ -1383,7 +1435,7 @@ export interface paths {
         };
         /**
          * Enumerate audio.node objects (ADR-018/ADR-039)
-         * @description Requires `config:write`. Object ids (the node id) with label (the configured programRoute) and current revision number, NOT the full payloads - `show` is always empty, since audio.node carries no show reference.
+         * @description Requires `config:write`. Object ids (the node id) with label (the configured programRoute), program/LTC channel placement, and current revision number, NOT the full payloads.
          */
         get: operations["listAudioNodes"];
         put?: never;
@@ -2956,10 +3008,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Ask the existing asset-sync service to re-check this node now
-         * @description Behind `asset:write`, the same write-authority scope as `POST .../assets/remove`. Dispatches no command of its own: it nudges the existing asset-sync service (Track E seam E6, `assetsync.Service`) to run its own gap-driven tick now, for every declared node including this one, instead of waiting out its own sync interval - the identical hook `POST /assets` (upload) already uses.
+         * Ask this node for a fresh inventory report and repair against it
+         * @description Behind `asset:write`, the same write-authority scope as `POST .../assets/remove`. Asks nodeId for a fresh asset inventory report now, stamped with the authenticated caller as issuer, and records that this node has an outstanding re-sync intent. Neither of those waits for the node. The repair itself (the existing asset-sync service's gap-driven dispatch, the same mechanism `POST /assets` upload already nudges) runs later, triggered by the node's own next live asset inventory report once that report is fresher than this intent - never on a wall-clock timer, and never against a report already on hand when this request was accepted.
          *
-         *     Answers `202`, never `200`: accepted, and never confirmed by anything downstream at this layer - this route holds no confirmation loop of its own. Whether anything was actually missing, and whether a dispatched `asset.fetch` succeeded, is never claimed here; that evidence surfaces later, from the node's own next asset report, on `GET /nodes/{nodeId}/assets`.
+         *     Answers `202`, never `200`: accepted, and never confirmed by anything downstream at this layer - this route holds no confirmation loop of its own. Whether anything was actually missing, and whether a dispatched `asset.fetch` succeeded, is never claimed here; that evidence surfaces later, from the node's own next asset report, on `GET /nodes/{nodeId}/assets`. A node that never answers simply leaves the intent outstanding.
          *
          *     `400` when `assets.settings`' `contentBaseUrl` is not set: with sync disabled, dispatching an `asset.fetch` command would be accepted but never actually deliver anything, so this route refuses before accepting rather than promising a re-sync it cannot perform. `404` when `nodeId` does not name a declared node.
          */
@@ -3088,6 +3140,14 @@ export interface components {
             lastWill: components["schemas"]["Evidence"];
             heartbeat: components["schemas"]["Evidence"];
         };
+        /** @description The coordinator's own answer to whether this node participates in the show currently active. The UI renders this value directly and must never infer participation from any other field. "not_configured" is the ordinary state before an operator has activated a show, never a determination failure; "unknown" means participation could not be determined and must never be treated as "not_participating". show names the active show this was computed against, empty when none could be identified. reason is always populated for "unknown" and "not_configured", optional otherwise. */
+        NodeShowParticipation: {
+            /** @enum {string} */
+            state: "participating" | "not_participating" | "unknown" | "not_configured";
+            /** @description Empty only for "not_configured" and for "unknown" when no show could even be identified before catalog resolution was attempted - honest absence, never a bug: a real show id is never empty. */
+            show: string;
+            reason: string | null;
+        };
         /** @description One node's current representation: an element of GET /nodes, of the snapshot's nodes list, and the payload of a node.changed stream event - all three render identically. */
         Node: {
             nodeId: string;
@@ -3105,6 +3165,7 @@ export interface components {
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
             declaration: components["schemas"]["NodeDeclaration"];
+            showParticipation: components["schemas"]["NodeShowParticipation"];
             /**
              * @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent.
              *
@@ -3327,6 +3388,66 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             instance: components["schemas"]["ResolumeInstance"];
+        };
+        /** @description The body of POST /fpp/{instanceId}/brightness/transition-gain (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2). Out of range is refused, never clamped. */
+        FPPTransitionGainRequest: {
+            /** @description The gain, a multiplier over FPP's own scheduled brightness ceiling - never the ceiling itself. Required; an explicit `null` is a `400`, distinct from omitting it, and `0` is a real value (blackout) rather than a missing one. */
+            targetPercent: number;
+            /** @description Fade duration; `0` applies immediately. Required, with the same absent/null/zero distinction `targetPercent` documents. */
+            fadeSeconds: number;
+            /** @description Caller-minted idempotency key. Optional: supply one and a retry of an unanswered request is safe, because a repeat of an id already applied changes nothing and comes back with `applied: false` and the gain as it stands. Omit it and the coordinator mints one, which makes the request a new fade rather than a retry of any earlier one; the minted value is echoed on the response. Present but empty is a `400`. */
+            requestId?: string;
+        };
+        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/brightness/transition-gain. */
+        FPPTransitionGainResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            transitionGain: components["schemas"]["FPPTransitionGainResult"];
+        };
+        /** @description The applied state the FPP plugin returned, carried through unchanged so a caller has evidence of what the host is now doing rather than only "the request did not error". */
+        FPPTransitionGainResult: {
+            instanceId: string;
+            /** @description The idempotency key this write actually carried, whether the caller supplied it or the coordinator minted it. */
+            requestId: string;
+            /** @description `false` is a SUCCESS, not a failure: an idempotent repeat of a `requestId` already applied, with nothing changed and the fields below reporting the gain as it stands. A client that treats `false` as an error will retry a write that already took. */
+            applied: boolean;
+            /** @description The gain the fade now running started from. */
+            gainStart: number;
+            /** @description The gain the fade now running is heading to. */
+            gainTarget: number;
+            /** @description The fade duration the plugin is actually running. */
+            fadeSeconds: number;
+            /** @description FPP's own scheduled brightness ceiling, as the plugin sees it. */
+            ceiling: number;
+            /** @description `round(ceiling * gain / 100)`, the value actually reaching the channels. Carried because the gain alone does not say what the audience sees. */
+            effectiveOutput: number;
+        };
+        /** @description The body of POST /fpp/{instanceId}/playlist-definitions/republish (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9). Every field is optional, so the body itself may be omitted entirely: a republish is all of that host's definitions or none, and has no parameters. */
+        FPPDefinitionRepublishRequest: {
+            /** @description Caller-minted idempotency key. Optional: supply one and a retry of an unanswered request is safe, because a repeat of an id the plugin already applied clears nothing and comes back with `applied: false` and the state as it stands. Sending the same id again later is also how a caller learns the sweep finished. Omit it and the coordinator mints one, which is echoed on the response. Present but empty is a `400`. */
+            requestId?: string;
+        };
+        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/playlist-definitions/republish. */
+        FPPDefinitionRepublishResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            republish: components["schemas"]["FPPDefinitionRepublishResult"];
+        };
+        /** @description The plugin's own evidence, carried through unchanged. Read what it says and not more: the plugin agreed to resend, and these counts describe the plugin's own state at the moment it answered. There is deliberately no count of definitions the coordinator accepted, because when the plugin answers, not one post of the sweep has been attempted. Read `GET /integrations/fpp/playlist-definitions` to see what arrived. */
+        FPPDefinitionRepublishResult: {
+            instanceId: string;
+            /** @description The idempotency key this request actually carried, whether the caller supplied it or the coordinator minted it. Send it again later to read `sweepPending` as it stands. */
+            requestId: string;
+            /** @description `false` is a SUCCESS, not a failure: a repeat of a `requestId` the plugin already applied, which cleared nothing a second time and reports the state as it stands. */
+            applied: boolean;
+            /** @description How many stored definitions the plugin dropped from its published-set, so it will send them again even though their content, and therefore their hash, has not changed. `0` on a repeat. This is a count of definitions the plugin will resend, never a count of definitions the coordinator received. */
+            definitionsCleared: number;
+            /** @description How many the plugin still records as published as it answered: `0` immediately after an applied clear, and on a repeat how many the sweep has already re-sent and had accepted, so a repeat reports progress rather than an echo. */
+            definitionsHeld: number;
+            /** @description How many the plugin holds as terminally refused and deliberately did not clear, because re-sending those bytes gets the identical refusal until the plugin restarts. This republish will not re-send them, which is what an operator needs when the playlist they were chasing is still missing afterwards. */
+            definitionsRefusedTerminally: number;
+            /** @description Whether the resend is still owed. `true` on an applied answer, always: the plugin performs the sweep on its own worker, and no post of it has been attempted when this answers. It goes `false` only on a later repeat of the same `requestId`, which is how a caller learns the sweep finished. It reports that the sending finished, never that the coordinator accepted what was sent. */
+            sweepPending: boolean;
         };
         /**
          * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) - a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies - the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape - required fields, enums, numeric bounds - as real JSON Schema, not as prose a generator cannot see.
@@ -4858,7 +4979,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
             title: string;
             status: number;
             detail: string;
@@ -4931,13 +5052,34 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, GET /config/audio.node, GET /config/media.playlist, and GET /config/node.clock (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference; node.clock's own list summary reports its configured provider as label and leaves show empty, for the identical reason). */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, GET /config/media.playlist, and GET /config/node.clock. GET /config/audio.node has its own dedicated AudioNodeListResponse instead, since its list carries channel placement that this shared, kind-agnostic shape has no field for. node.clock's own list summary reports its configured provider as label and leaves show empty, since node.clock carries no show reference. */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "audio.node" | "media.playlist" | "node.clock";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist" | "node.clock";
             objects: components["schemas"]["ConfigObjectSummary"][];
+        };
+        /** @description One element of AudioNodeListResponse.objects: enough to enumerate every audio.node object's routing, including its program and LTC channel placement, without fetching each one's full payload. programChannels and ltcChannel carry the same meaning here as on ConfigAudioNode. */
+        AudioNodeSummary: {
+            id: string;
+            /** @description The configured programRoute. */
+            label: string;
+            /** @description The ordered, 1-based channel indices on the configured programRoute carrying program audio. */
+            programChannels: number[];
+            /** @description The 1-based channel index on the configured ltcRoute carrying LTC, or absent on a program-only node that emits no LTC. */
+            ltcChannel?: number;
+            currentRevision: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description The body of GET /config/audio.node. */
+        AudioNodeListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "audio.node";
+            objects: components["schemas"]["AudioNodeSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
         ConfigShowActionMQTTPublish: {
@@ -5484,10 +5626,17 @@ export interface components {
             playlistHash: string;
             stored: boolean;
             idempotent: boolean;
+            /** @description The sorted names of top-level members of the submitted body this coordinator does not know, absent when there were none and capped at 8. They did not stop the definition being accepted: an unknown member is ignored, because refusing it would make a plugin newer than its coordinator lose every definition. Present so a misspelled member is visible to whoever sent it rather than silently dropped. */
+            ignoredFields?: string[];
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description One row of GET /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no definition payload. referenced is true when some stored show.playlist object's active revision names this (instanceUuid, playlistHash). */
+        /** @description One show.playlist object that names an FPP playlist definition's (instanceUuid, playlistHash): FPPPlaylistDefinitionMetadata.referencedByPlaylists' own element, the playlist's own object id plus its operator-facing name. */
+        FPPPlaylistReference: {
+            id: string;
+            name: string;
+        };
+        /** @description One row of GET /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no definition payload. referenced is true when some stored show.playlist object's active revision names this (instanceUuid, playlistHash); referencedByPlaylists names every one of them, since more than one show.playlist object can name the same definition. Both are computed from the same pass over show.playlist objects, so referenced is exactly referencedByPlaylists being non-empty and the two cannot disagree. */
         FPPPlaylistDefinitionMetadata: {
             instanceUuid: string;
             playlistName: string;
@@ -5498,6 +5647,7 @@ export interface components {
             receivedAt: string;
             entryCount: number;
             referenced: boolean;
+            referencedByPlaylists: components["schemas"]["FPPPlaylistReference"][];
         };
         /** @description The body of GET /integrations/fpp/playlist-definitions: every stored definition's metadata, newest received first. */
         FPPPlaylistDefinitionsListResponse: {
@@ -5536,15 +5686,23 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container - this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. */
+        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container - this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. fppInstances and resolumeInstances are the exception to the sentence about notes: each is OMITTED here when no participation selection has ever been recorded for this show, and that absence is the fact, not a stand-in for an empty list. */
         ConfigShow: {
             name: string;
             notes: string;
+            /** @description The FPP instance ids selected to take part in this show, or ABSENT when no selection has ever been recorded. Participation is chosen by hand and never detected, so these three states are distinct and a client must not collapse them: the key absent means nobody has configured this show yet, a present empty array means the operator chose that no FPP instance takes part, and a populated array is the selection. Reading absent as "no instance takes part" would report an unconfigured show as correctly configured. */
+            fppInstances?: string[];
+            /** @description The Resolume instance ids selected to take part in this show, with the identical absent / empty / populated meaning fppInstances carries. An empty array is an ordinary night with no projection, not a misconfiguration. */
+            resolumeInstances?: string[];
         };
-        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required - an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
+        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required - an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward, and neither is a participation selection: a write that omits fppInstances or resolumeInstances records that show as having no selection for that integration, which is not the same as choosing an empty one. Send an empty array to state "no instance of this integration takes part". A present `null` is rejected for both. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
         ConfigShowWrite: {
             name: string;
             notes?: string;
+            /** @description The FPP instance ids selected to take part in this show, or ABSENT when no selection has ever been recorded. Participation is chosen by hand and never detected, so these three states are distinct and a client must not collapse them: the key absent means nobody has configured this show yet, a present empty array means the operator chose that no FPP instance takes part, and a populated array is the selection. Reading absent as "no instance takes part" would report an unconfigured show as correctly configured. */
+            fppInstances?: string[];
+            /** @description The Resolume instance ids selected to take part in this show, with the identical absent / empty / populated meaning fppInstances carries. An empty array is an ordinary night with no projection, not a misconfiguration. */
+            resolumeInstances?: string[];
         };
         /** @description The body of GET and PUT /config/show/{id}. */
         ShowConfigResponse: {
@@ -6482,7 +6640,7 @@ export interface components {
             /** Format: date-time */
             resolvedAt?: string | null;
         };
-        /** @description The 202 body of POST /nodes/{nodeId}/assets/resync: acceptance only, never an outcome (this route holds no confirmation loop of its own - see that operation's own description). The re-sync itself runs on the existing asset-sync service's own gap-driven dispatch; its result surfaces later on GET /nodes/{nodeId}/assets. */
+        /** @description The 202 body of POST /nodes/{nodeId}/assets/resync: acceptance only, never an outcome (this route holds no confirmation loop of its own - see that operation's own description). The re-sync itself runs later, triggered by this node's own next live asset inventory report; its result surfaces later on GET /nodes/{nodeId}/assets. */
         ResyncNodeAssetsResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -6493,6 +6651,8 @@ export interface components {
             node: string;
             /** Format: date-time */
             acceptedAt: string;
+            /** @description The commandId of the asset.inventory.request this route published to node, naming the outstanding request the repair is waiting on. Omitted when publishing it failed; the node's outstanding re-sync intent still stands and still runs off its own next ordinary report. */
+            inventoryRequestCommandId?: string;
         };
         /** @description One node target's render activation within a fallback program (ADR-048, Track J's J1). filename is the runtime filename a node must open (and verify against assetHashes) to render it; sequence is a logical identity only. */
         FallbackProgramRenderActivation: {
@@ -7081,6 +7241,112 @@ export interface operations {
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    setFPPTransitionGain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPTransitionGainRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPTransitionGainResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            /** @description The request was valid and the instance is configured, but the write to the FPP host's plugin did not take. `type` is `https://showmesh.dev/problems/fpp-transition-gain-write-failed` and `detail` carries the host's own error text verbatim. */
+            502: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    republishFPPPlaylistDefinitions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FPPDefinitionRepublishRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPDefinitionRepublishResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            /** @description The request was valid and the instance is configured, but the republish produced no usable result: the host was unreachable, the plugin refused, or the plugin answered something the coordinator will not relay (an undecodable body, an unsupported `schemaVersion`, or an `applied` answer claiming no sweep is owed). `type` is `https://showmesh.dev/problems/fpp-definition-republish-failed` and `detail` carries the host's own error text verbatim. */
+            502: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     dispatchRenderSurfaceApply: {
@@ -9470,7 +9736,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                    "application/json": components["schemas"]["AudioNodeListResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -12063,7 +12329,7 @@ export interface operations {
                     "application/json": components["schemas"]["FPPPlaylistDefinitionPublishResponse"];
                 };
             };
-            /** @description Malformed body, unknown field, trailing content, or a duplicate member name (`invalid-parameter`), a missing or malformed identity field (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-definition-schema-version`), or a definition whose canonicalized SHA-256 disagrees with the declared `playlistHash` (`definition-hash-mismatch`). */
+            /** @description Malformed body, trailing content, or a duplicate member name (`invalid-parameter`), a missing or malformed identity field (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-definition-schema-version`), or a definition whose canonicalized SHA-256 disagrees with the declared `playlistHash` (`definition-hash-mismatch`). */
             400: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

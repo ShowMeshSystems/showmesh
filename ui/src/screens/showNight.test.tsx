@@ -1106,6 +1106,44 @@ describe('Show Night', () => {
     expect(await screen.findByLabelText('Audio asset')).toHaveValue('')
   })
 
+  it('explains on the resting sequence field, not the target field, that the file sets the resting cycle length', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    const helpText = "This file's own duration is how long the resting cycle runs; nothing else sets that length."
+    const sequenceSelect = await screen.findByLabelText('Resting sequence')
+    const describedBy = sequenceSelect.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy!)).toHaveTextContent(helpText)
+    // A second copy on Resting target would still pass a plain text-presence assertion.
+    expect(screen.getAllByText(helpText)).toHaveLength(1)
+    expect(screen.getByLabelText('Resting target').getAttribute('aria-describedby')).toBeNull()
+  })
+
+  it('explains the audio asset picker lists store-registered assets by name and node', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    expect(
+      await screen.findByText('Audio assets already registered in the store, listed by name and the node they play on.'),
+    ).toBeInTheDocument()
+  })
+
+  it('explains each cue phase\'s offset reference with a different sentence', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    // Enter resting starts with no cues in this fixture; add one so both phases render an Offset field.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add step' })[1]!)
+    const help = screen.getAllByText(/a negative value fires before it\.$/)
+    expect(help).toHaveLength(2)
+    expect(help[0]).toHaveTextContent('Milliseconds from the end of the resting sequence; a negative value fires before it.')
+    expect(help[1]).toHaveTextContent("Milliseconds from the show's observed completion; a negative value fires before it.")
+  })
+
   it('sends the site control subsection with its authored bindings', async () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
