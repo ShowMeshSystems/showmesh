@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // This file is the resync route's own test suite (noderesync.go):
@@ -29,9 +31,32 @@ func TestOpenAPINodeResyncDocumentIsWellFormed(t *testing.T) {
 type v1ResyncNodeAssetsResponseForTest struct {
 	ServerTime string `json:"serverTime"`
 	Resync     struct {
-		Node       string `json:"node"`
-		AcceptedAt string `json:"acceptedAt"`
+		Node                      string `json:"node"`
+		AcceptedAt                string `json:"acceptedAt"`
+		InventoryRequestCommandID string `json:"inventoryRequestCommandId"`
 	} `json:"resync"`
+}
+
+// spyInventoryRequester records every RequestNodeInventory call this
+// route makes, so a test can prove the issuer it stamps is the
+// authenticated caller, never a package constant - InventoryRequester's
+// own doc comment (noderesync.go).
+type spyInventoryRequester struct {
+	calls []inventoryRequestCall
+	err   error
+}
+
+type inventoryRequestCall struct {
+	nodeID string
+	issuer mqttproto.CmdIssuer
+}
+
+func (s *spyInventoryRequester) RequestNodeInventory(_ context.Context, nodeID string, issuer mqttproto.CmdIssuer) (string, error) {
+	s.calls = append(s.calls, inventoryRequestCall{nodeID: nodeID, issuer: issuer})
+	if s.err != nil {
+		return "", s.err
+	}
+	return "cmd-" + nodeID, nil
 }
 
 func TestPostResyncNodeAssetsUndeclaredNodeIs404(t *testing.T) {
@@ -93,9 +118,11 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 	auth := map[string]string{"Authorization": "Bearer " + token}
 
 	spy := &spyAssetSyncNudger{}
+	invReq := &spyInventoryRequester{}
 	deps := assetManifestTestDeps(t, svc, st)
 	deps.AssetSettings.(*fakeAssetSettingsSource).contentBaseURL = "https://coordinator.example"
 	deps.AssetSyncNudger = spy
+	deps.InventoryRequester = invReq
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	mustDeclareNode(t, st, "render-01")
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
@@ -129,8 +156,21 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 	if !containsAll(string(body), `"acceptedAt"`) || containsAll(string(body), `"outcome"`) {
 		t.Errorf("body must carry acceptance only, never an outcome field; body: %s", body)
 	}
-	if len(spy.requestedNode) != 1 || spy.requestedNode[0] != "render-01" {
-		t.Fatalf("requestedNode = %v, want exactly [render-01]: this route must request the ONE named node, never every declared node", spy.requestedNode)
+	if len(spy.requestedNode) != 0 {
+		t.Fatalf("requestedNode = %v, want none: the route must no longer call RequestNode directly against a possibly-stale report, only RecordResyncIntent", spy.requestedNode)
+	}
+	if len(spy.recordedIntent) != 1 || spy.recordedIntent[0].nodeID != "render-01" || !spy.recordedIntent[0].issuedAt.Equal(testNow) {
+		t.Fatalf("recordedIntent = %+v, want exactly one intent for render-01 issued at %v", spy.recordedIntent, testNow)
+	}
+	if len(invReq.calls) != 1 || invReq.calls[0].nodeID != "render-01" {
+		t.Fatalf("inventory request calls = %+v, want exactly one for render-01", invReq.calls)
+	}
+	if invReq.calls[0].issuer.PrincipalID != admin.ID || invReq.calls[0].issuer.PrincipalName != admin.Name {
+		t.Fatalf("inventory request issuer = %+v, want the authenticated caller (%s/%s), never a package constant",
+			invReq.calls[0].issuer, admin.ID, admin.Name)
+	}
+	if decoded.Resync.InventoryRequestCommandID != "cmd-render-01" {
+		t.Fatalf("resync.inventoryRequestCommandId = %q, want %q", decoded.Resync.InventoryRequestCommandID, "cmd-render-01")
 	}
 
 	// The acceptance claims nothing: the manifest, read right after, still
@@ -158,6 +198,44 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 	}
 }
 
+// TestPostResyncNodeAssetsAcceptsEvenWhenInventoryRequestFails proves the
+// inventory push is best-effort, matching dispatchReconnectInventoryRequests'
+// own "log and drop" posture one caller over (broker.go): a node the
+// broker cannot currently reach must not turn an operator's press into a
+// failed request. The intent is still recorded - that node's own next
+// ordinary report still carries evidence fresh enough to trigger the
+// repair, just later than a delivered push would have.
+func TestPostResyncNodeAssetsAcceptsEvenWhenInventoryRequestFails(t *testing.T) {
+	spy := &spyAssetSyncNudger{}
+	invReq := &spyInventoryRequester{err: errors.New("simulated publish failure")}
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AssetSettings.(*fakeAssetSettingsSource).contentBaseURL = "https://coordinator.example"
+	deps.AssetSyncNudger = spy
+	deps.InventoryRequester = invReq
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/assets/resync", "",
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 even when the inventory push fails; body: %s", resp.StatusCode, body)
+	}
+	var decoded v1ResyncNodeAssetsResponseForTest
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode: %v\nbody: %s", err, body)
+	}
+	if decoded.Resync.InventoryRequestCommandID != "" {
+		t.Errorf("resync.inventoryRequestCommandId = %q, want empty: nothing was actually published", decoded.Resync.InventoryRequestCommandID)
+	}
+	if len(spy.recordedIntent) != 1 || spy.recordedIntent[0].nodeID != "render-01" {
+		t.Fatalf("recordedIntent = %+v, want the intent recorded even though the push failed", spy.recordedIntent)
+	}
+}
+
 // TestPostResyncNodeAssetsRequestsOnlyTheNamedNode proves two operators
 // resyncing two different nodes are distinguishable: each POST must name
 // only its own node, never leak into the other's request.
@@ -179,7 +257,7 @@ func TestPostResyncNodeAssetsRequestsOnlyTheNamedNode(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body: %s", resp.StatusCode, body)
 	}
-	if len(spy.requestedNode) != 1 || spy.requestedNode[0] != "render-02" {
-		t.Fatalf("requestedNode = %v, want exactly [render-02]", spy.requestedNode)
+	if len(spy.recordedIntent) != 1 || spy.recordedIntent[0].nodeID != "render-02" {
+		t.Fatalf("recordedIntent = %+v, want exactly one intent for render-02", spy.recordedIntent)
 	}
 }

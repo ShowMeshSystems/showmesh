@@ -19,6 +19,80 @@ func assetsTopic(t *testing.T, nodeID string) string {
 	return topic
 }
 
+// fakeResyncIntentTrigger is a minimal [ResyncIntentTrigger] a test can
+// inspect, so this file's tests prove exactly what handleAssetInventory
+// hands it without depending on assetsync.Service's own real
+// implementation - [fakeRenderSink]'s identical role, one interface over.
+type fakeResyncIntentTrigger struct {
+	calls []resyncTriggerCall
+}
+
+type resyncTriggerCall struct {
+	nodeID     string
+	reportedAt time.Time
+}
+
+func (f *fakeResyncIntentTrigger) TriggerIfResyncIntentPrecedes(nodeID string, reportedAt time.Time) {
+	f.calls = append(f.calls, resyncTriggerCall{nodeID: nodeID, reportedAt: reportedAt})
+}
+
+func newTestManagerWithResyncIntentTrigger(t *testing.T, clock *fakeClock, trigger ResyncIntentTrigger) *Manager {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), dir, testLogger())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	m := New(st, testLogger(), WithResyncIntentTrigger(trigger))
+	if clock != nil {
+		m.now = clock.now
+	}
+	return m
+}
+
+// TestHandleAssetInventoryNotifiesResyncIntentTriggerOnFreshReport proves
+// handleAssetInventory calls [ResyncIntentTrigger.TriggerIfResyncIntentPrecedes]
+// with the just-stored report's own ReportedAt after every live report -
+// noderesync.go's deferred repair has nowhere else to run from.
+func TestHandleAssetInventoryNotifiesResyncIntentTriggerOnFreshReport(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
+	trigger := &fakeResyncIntentTrigger{}
+	m := newTestManagerWithResyncIntentTrigger(t, clock, trigger)
+
+	env, err := mqttproto.NewAssetInventoryEnvelope(nil, "render-01", mqttproto.AssetInventoryPayload{Complete: true})
+	if err != nil {
+		t.Fatalf("build asset inventory envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: assetsTopic(t, "render-01"), Payload: mustEnvelopeBytes(t, env), Retained: false})
+
+	if len(trigger.calls) != 1 || trigger.calls[0].nodeID != "render-01" || !trigger.calls[0].reportedAt.Equal(clock.now()) {
+		t.Fatalf("trigger calls = %+v, want exactly one for render-01 at %v", trigger.calls, clock.now())
+	}
+}
+
+// TestHandleAssetInventoryDoesNotNotifyResyncIntentTriggerOnRetainedReplay
+// proves the retained early-out (handleAssetInventory's own
+// msg.Retained check, above) runs before this notification: a subscribe-
+// time replay must never be mistaken for the fresh evidence noderesync.go's
+// deferred repair is waiting on.
+func TestHandleAssetInventoryDoesNotNotifyResyncIntentTriggerOnRetainedReplay(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
+	trigger := &fakeResyncIntentTrigger{}
+	m := newTestManagerWithResyncIntentTrigger(t, clock, trigger)
+
+	env, err := mqttproto.NewAssetInventoryEnvelope(nil, "render-01", mqttproto.AssetInventoryPayload{Complete: true})
+	if err != nil {
+		t.Fatalf("build asset inventory envelope: %v", err)
+	}
+	m.HandleMessage(broker.Message{Topic: assetsTopic(t, "render-01"), Payload: mustEnvelopeBytes(t, env), Retained: true})
+
+	if len(trigger.calls) != 0 {
+		t.Fatalf("trigger calls = %+v, want none: a retained replay must not notify the resync intent trigger", trigger.calls)
+	}
+}
+
 // TestHandleMessageLiveAssetInventoryIsStored proves a live (non-retained)
 // asset inventory report reaches store.ReplaceNodeAssetInventory,
 // stamped with the coordinator's OWN receipt time — never the envelope's

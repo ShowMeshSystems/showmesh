@@ -123,6 +123,43 @@ type Manager struct {
 	// an "audio" observed subpath is then dropped exactly like any other
 	// subpath this step does not understand (the default case below).
 	audioSink AudioSink
+
+	// resyncIntentTrigger is notified after every fresh (non-retained)
+	// asset inventory report handleAssetInventory stores, see
+	// [WithResyncIntentTrigger]. nil (the default) means no notification:
+	// an operator's re-sync-all press has nowhere to trigger from, and
+	// the route it backs stays unwired.
+	resyncIntentTrigger ResyncIntentTrigger
+}
+
+// ResyncIntentTrigger lets an operator's previously issued re-sync
+// intent, recorded when they pressed the button before this node's next
+// report existed, run against a report as soon as it is genuinely fresh
+// evidence, instead of running immediately against whatever was already
+// stored. See POST .../assets/resync (internal/coordinator/api's
+// noderesync.go) and [Manager.handleAssetInventory], this interface's
+// one caller. The real implementation is *assetsync.Service's own
+// TriggerIfResyncIntentPrecedes method, which already satisfies this
+// one-method interface with no adapter needed.
+type ResyncIntentTrigger interface {
+	// TriggerIfResyncIntentPrecedes is called with nodeID and reportedAt,
+	// the coordinator's own receipt time for the report just stored,
+	// immediately after every fresh report commits. Implementations must
+	// not block: this runs on HandleMessage's own goroutine, the same
+	// constraint [RenderSink.Put] and [AudioSink.Put] already carry.
+	TriggerIfResyncIntentPrecedes(nodeID string, reportedAt time.Time)
+}
+
+// ResyncIntentTriggerFunc adapts a plain func to [ResyncIntentTrigger],
+// http.HandlerFunc's identical shape, for a caller with no separate type
+// of its own to hang the method on: coordinator.go's forward-reference
+// wiring, where the real *assetsync.Service does not exist yet when this
+// Manager is constructed.
+type ResyncIntentTriggerFunc func(nodeID string, reportedAt time.Time)
+
+// TriggerIfResyncIntentPrecedes calls f.
+func (f ResyncIntentTriggerFunc) TriggerIfResyncIntentPrecedes(nodeID string, reportedAt time.Time) {
+	f(nodeID, reportedAt)
 }
 
 // RenderSink receives a node's decoded render report as it arrives, so
@@ -190,6 +227,15 @@ func WithRenderSink(sink RenderSink) Option {
 // exactly like any other subpath this step does not model.
 func WithAudioSink(sink AudioSink) Option {
 	return func(m *Manager) { m.audioSink = sink }
+}
+
+// WithResyncIntentTrigger registers t to be notified after every fresh
+// asset inventory report handleAssetInventory stores, see
+// [Manager.resyncIntentTrigger] and [Manager.handleAssetInventory].
+// Optional: the default (no trigger registered) leaves a report's storage
+// exactly as before this option existed.
+func WithResyncIntentTrigger(t ResyncIntentTrigger) Option {
+	return func(m *Manager) { m.resyncIntentTrigger = t }
 }
 
 // New builds a Manager backed by st. logger may be nil, in which case
@@ -626,6 +672,16 @@ func (m *Manager) handleAssetInventory(ctx context.Context, nodeID string, msg b
 		return
 	}
 	m.notify()
+
+	// This report is now the freshest evidence this coordinator holds for
+	// nodeID. If an operator's re-sync intent was issued before
+	// report.ReportedAt, it runs the repair now, against this report,
+	// rather than the one that was stored when they pressed the button.
+	// See [ResyncIntentTrigger]'s own doc comment for why this is the
+	// trigger and not a wait of any kind.
+	if m.resyncIntentTrigger != nil {
+		m.resyncIntentTrigger.TriggerIfResyncIntentPrecedes(nodeID, report.ReportedAt)
+	}
 }
 
 // handleRender ingests a node's render pipeline health report (Track B seam

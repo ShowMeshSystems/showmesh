@@ -133,6 +133,136 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 	}
 }
 
+// elevatedAudioReportInterval is the cadence [runAudioReportTicker]
+// switches audio reports to while any session has a fade in flight. It
+// reuses audioSessionWatchInterval (500ms), the cadence
+// audio.Manager.RunWatcher already polls fades at, rather than a second
+// invented number: the issue's own acceptance fade is two seconds, and
+// 500ms lands at least three samples inside even that shortest fade,
+// with one comfortably clear of each edge.
+const elevatedAudioReportInterval = audioSessionWatchInterval
+
+// audioReportFadeElevationCap bounds how long [runAudioReportTicker]
+// stays on the elevated cadence after entering it, independent of
+// whether any session's own FadeState ever reports back to none or
+// complete. This is the backstop for a fade that ends abnormally (a
+// stop that interrupts it, or a FadeState left stuck by a defect
+// elsewhere), never for a fade that finishes cleanly, which drops the
+// cadence back to normal the moment FadeState clears on its own well
+// inside this bound. Ten seconds is five times the acceptance's own
+// two-second fade and comfortably above every fade this repository
+// dispatches by default (DefaultFadeDurationMs 1000ms,
+// DuckFadeDurationMs 200ms, DuckRestoreFadeDurationMs 800ms, see
+// settings.go), so it is never reached by a genuine fade and only ever
+// recovers a stuck one.
+const audioReportFadeElevationCap = 10 * time.Second
+
+// audioReportCadenceState is [runAudioReportTicker]'s own decision state
+// carried from one tick to the next, kept outside
+// [decideAudioReportInterval] so that function stays a pure rule over
+// one tick's inputs, provable without a real ticker or a real fade.
+type audioReportCadenceState struct {
+	elevated      bool
+	elevatedSince time.Time
+
+	// capped latches once audioReportFadeElevationCap ends an elevation
+	// early, and holds the cadence at normal until fadeActive next
+	// reports false: it never re-elevates on the very next tick merely
+	// because the same (possibly stuck) fade is still reported active.
+	// Without this latch a permanently stuck FadeState would elevate for
+	// the cap, drop for one tick, and elevate again forever instead of
+	// settling at normal.
+	capped bool
+}
+
+// decideAudioReportInterval is runAudioReportTicker's cadence rule: stay
+// at normal whenever fadeActive is false (clearing any latched state so
+// the next genuine fade elevates normally), switch to elevated the tick
+// fadeActive first reports true, and fall back to normal once elevated
+// has run for cap even if fadeActive is still (or again) true: the
+// bounded-worst-case path for a fade that never reports its own
+// completion. now is the ticker fire this decision is being made for.
+func decideAudioReportInterval(state *audioReportCadenceState, fadeActive bool, now time.Time, normal, elevated, cap time.Duration) time.Duration {
+	if !fadeActive {
+		state.elevated = false
+		state.capped = false
+		return normal
+	}
+	if state.capped {
+		return normal
+	}
+	if !state.elevated {
+		state.elevated = true
+		state.elevatedSince = now
+	}
+	if now.Sub(state.elevatedSince) >= cap {
+		state.elevated = false
+		state.capped = true
+		return normal
+	}
+	return elevated
+}
+
+// anyFadeInProgress reports whether any of snaps has a fade currently
+// ramping, the same [audio.FadeState] a caller reads over the API,
+// consulted here only to decide this node's own report cadence.
+func anyFadeInProgress(snaps []audio.SessionSnapshot) bool {
+	for _, s := range snaps {
+		if s.FadeState == audio.FadeStateInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+// runAudioReportTicker feeds out at normalInterval, elevating to
+// elevatedInterval while mgr reports any session's fade in flight and
+// back the moment none do or audioReportFadeElevationCap elapses,
+// whichever comes first: see [decideAudioReportInterval]. mgr is asked
+// fresh on every real tick, matching every other live-evidence source
+// [runAudioReport] itself already reads on its own cadence, never cached
+// across ticks.
+//
+// A degenerate elevatedInterval that could not actually speed anything
+// up (zero, negative, or not faster than normalInterval) is never
+// applied: this loop stays at normalInterval forever rather than handing
+// [time.Ticker.Reset] a duration it would panic on, or slowing a node
+// down when the request was to observe more, not less. A nil mgr (no
+// asset directory configured on this node, matching
+// audioSessionSnapshotter's identical nil convention elsewhere in this
+// file) degrades the same way, for the same reason: nothing to elevate
+// for.
+func runAudioReportTicker(ctx context.Context, mgr audioSessionSnapshotter, normalInterval, elevatedInterval, elevationCap time.Duration, now func() time.Time, out chan<- time.Time) {
+	ticker := time.NewTicker(normalInterval)
+	defer ticker.Stop()
+	usableElevated := mgr != nil && elevatedInterval > 0 && elevatedInterval < normalInterval
+	var state audioReportCadenceState
+	current := normalInterval
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t, ok := <-ticker.C:
+			if !ok {
+				return
+			}
+			select {
+			case out <- t:
+			case <-ctx.Done():
+				return
+			}
+			if !usableElevated {
+				continue
+			}
+			want := decideAudioReportInterval(&state, anyFadeInProgress(mgr.Snapshot(ctx)), now(), normalInterval, elevatedInterval, elevationCap)
+			if want != current {
+				current = want
+				ticker.Reset(current)
+			}
+		}
+	}
+}
+
 // applyEngineAvailability overwrites payload's EngineAvailable/
 // EngineReason with engine's live evidence, fresh on every call — the
 // startup discovery cache buildAudioPayload seeded them from otherwise
