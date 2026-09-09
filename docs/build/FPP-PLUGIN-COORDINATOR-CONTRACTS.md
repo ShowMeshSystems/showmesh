@@ -618,8 +618,9 @@ is not a claim that either exists.
 
 ## 3. Playlist definition publication
 
-**Status: SHIPPED,** except §3.9, which carries its own status: both sides are
-built for everything else in this section.
+**Status: SHIPPED,** except §3.9. That subsection is built on both sides as
+well, but not on the same evidence, so it carries its own status line. Read
+that line for §3.9 rather than inferring anything about it from this one.
 
 Frozen 2026-08-22 for Track H seam H2. Section 1 gives the coordinator a
 playlist hash and an entry key. Neither says what the playlist contains, so
@@ -835,9 +836,14 @@ thread.
 
 ### 3.9 The coordinator-triggered republish
 
-**Status: DESIGNED, NOT BUILT.** Neither side serves or calls this. Everything
-else in section 3 is shipped; this subsection is a frozen shape, and no
-sentence in it reports deployed behavior.
+**Status: BUILT ON BOTH SIDES, NOT PROVEN ON HARDWARE.** The plugin serves
+this route and the coordinator calls it: a client for the plugin address
+below, an operator route
+(`POST /api/v1/fpp/{instanceId}/playlist-definitions/republish`, behind
+`fpp:command`), its OpenAPI entry, and a `showmeshctl` verb. Built is not
+proven: the evidence on both sides is bench evidence, unit tests against HTTP
+fakes, and neither half has run against a real FPP host. Read the prose below
+as the contract it has always been, not as a report of observed behavior.
 
 Be precise about the size of the win, because it is bounded. Section 3.7's
 re-scan already recovers an edited playlist by itself: the sweep re-reads the
