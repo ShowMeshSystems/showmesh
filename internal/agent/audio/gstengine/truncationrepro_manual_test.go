@@ -88,6 +88,7 @@ const truncationReproSettle = 5 * time.Second
 // the returned element satisfies newSinkFactoryElement's gst.Element
 // contract exactly as a plain alsasink would.
 func buildTruncationCaptureSink(device, capturePath string) (gst.Element, error) {
+	gst.Init() // ParseBinFromDescription below needs GStreamer initialized before New would otherwise do it
 	desc := fmt.Sprintf(
 		`tee name=t ! queue ! alsasink device=%q `+
 			`t. ! queue ! wavenc ! filesink location=%q sync=false async=false`,

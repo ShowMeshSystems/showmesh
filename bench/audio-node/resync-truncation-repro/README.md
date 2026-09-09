@@ -75,10 +75,35 @@ This build machine (`dev-02` / this worktree) has no real sound hardware
 -- `aplay` is not even installed, and `/proc/asound/cards` shows only a
 software `Dummy` card -- consistent with prior memory that this class of
 build VM carries no show hardware. **Nothing in this repro was run
-end-to-end here.** Everything below that requires a real card 1 is
-verified only up to "builds, links, and structurally runs to a clean
-skip" on this box; the actual live/non-live/truncation measurement can
+end-to-end here.** The actual live/non-live/truncation measurement can
 only happen on node-01.
+
+**What "verified on dev-02" actually means, precisely, after one real bug
+was found in that verification itself:** the first version handed off
+here only ran `runTruncationArm` up to its own environment-variable skip
+check, which sits above every line that does real work -- so "builds and
+runs to a clean skip" certified nothing past that check, and a real
+ordering bug downstream of it went uncaught. The bug: `buildTruncation
+CaptureSink` calls `gst.ParseBinFromDescription` before `New` (which is
+what calls `gst.Init`) ever runs, so GStreamer's element registry does
+not exist yet and `tee` fails to resolve -- exactly the same hazard this
+package's own `enginefdleak_test.go`, `ltclag_real_integration_test.go`,
+and `sinkformat_real_integration_test.go` each already guard against with
+an explicit `gst.Init()` call and comment, one this file simply didn't
+follow. Fixed by adding the same call, in the same place, with the same
+comment. Proof it's fixed, run on dev-02 with no real card needed: both
+arms, run with `SHOWMESH_TRUNC_DEVICE=plughw:CARD=NOSUCHCARD` (env vars
+now genuinely set, so every line executes, including the one that used to
+fail before reaching this point) now build the tee/alsasink/wavenc/
+filesink bin successfully (confirmed via `GST_DEBUG=alsa:5,GST_ELEMENT_
+FACTORY:5`: `creating element "tee"` / `"alsasink"` / `"wavenc"` /
+`"filesink"` each followed by `created element ...`) and fail only once
+they reach the real ALSA open call: `alsalib error: Cannot get card index
+for NOSUCHCARD` / `gst_alsasink_open: Error -19 (No such device) calling
+snd_pcm_open` / `Playback open error on device 'plughw:CARD=NOSUCHCARD':
+No such device`. That is a genuine device-open failure, not a registry
+failure -- confirming the initialization-order bug is gone without
+needing a real card to prove it.
 
 ## What's in this directory
 
