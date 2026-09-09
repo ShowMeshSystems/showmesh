@@ -635,14 +635,19 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// separate moment and is not re-checked a second time before it - see
 	// [handlers.nightShowLaunchIfBusy]'s own doc comment for why that is
 	// safe only because replace is granted solely on positive identity.
-	ifBusy := h.nightShowLaunchIfBusy(ctx, now, payload)
+	ifBusy, staleEvidenceReason := h.nightShowLaunchIfBusy(ctx, now, payload)
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeShow, payload.ShowPlaylist.FPPInstanceID, payload.ShowPlaylist.Playlist, false, 0, ifBusy)
 	if !changed {
 		return
 	}
 	if !ready {
-		// anchor.Source carries the primitive's own refusal detail. The
-		// session stays in transition-to-show; live is never entered.
+		// anchor.Source carries the primitive's own refusal detail; when
+		// this coordinator's own stale evidence is why ifBusy was refuse
+		// at all, that is prepended so the record does not read as FPP
+		// having refused a busy host it was never actually asked about.
+		if staleEvidenceReason != "" {
+			anchor.Source = staleEvidenceReason + ". " + anchor.Source
+		}
 		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: anchor.Source})
 		return
 	}
@@ -673,32 +678,45 @@ const nightShowLaunchEvidenceMaxAge = 5 * time.Second
 // this function is the ONLY guard against replacing an unrelated running
 // playlist. Refuse, not replace, gets a backstop (PreDispatchCheck
 // re-evaluates fresh evidence at dispatch time).
-func (h *handlers) nightShowLaunchIfBusy(ctx context.Context, now time.Time, payload config.NightSessionPayload) string {
+//
+// staleEvidenceReason is set only for the one refuse case this
+// coordinator's own bookkeeping caused rather than FPP's real state: the
+// resting playlist evidence matched, but was older than
+// nightShowLaunchEvidenceMaxAge. It is empty for every other refuse case
+// (no resting configured, no current status, idle, unknown, no current
+// name, or a genuinely different playlist), where a later busy refusal
+// already names what FPP itself reports.
+func (h *handlers) nightShowLaunchIfBusy(ctx context.Context, now time.Time, payload config.NightSessionPayload) (ifBusy, staleEvidenceReason string) {
 	if payload.Resting.Playlist == "" || payload.Resting.FPPInstanceID == "" ||
 		payload.Resting.FPPInstanceID != payload.ShowPlaylist.FPPInstanceID {
-		return fppIfBusyRefuse
+		return fppIfBusyRefuse, ""
 	}
 	instanceID := payload.ShowPlaylist.FPPInstanceID
 
 	statusVal, _, statusCurrent, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, instanceID, fppStatusSignal, time.Time{}, now)
 	statusStr, _ := statusVal.(string)
 	if !statusCurrent || statusStr == fppStatusValueIdle || statusStr == fppStatusValueUnknown {
-		return fppIfBusyRefuse
+		return fppIfBusyRefuse, ""
 	}
 
 	nameVal, _, nameCurrent, _, _ := resolveConfirmationEvidence(ctx, h.deps.Observations, instanceID, fppPlaylistNameSignal, time.Time{}, now)
 	if !nameCurrent {
-		return fppIfBusyRefuse
+		return fppIfBusyRefuse, ""
 	}
 	nameStr, ok := nameVal.(string)
 	if !ok || nameStr != payload.Resting.Playlist {
-		return fppIfBusyRefuse
+		return fppIfBusyRefuse, ""
 	}
 	collectedAt, ok := nightResolveCollectedAt(ctx, h.deps.Observations, instanceID, fppPlaylistNameSignal, time.Time{}, now)
-	if !ok || now.Sub(collectedAt) > nightShowLaunchEvidenceMaxAge {
-		return fppIfBusyRefuse
+	if !ok {
+		return fppIfBusyRefuse, ""
 	}
-	return fppIfBusyReplace
+	if age := now.Sub(collectedAt); age > nightShowLaunchEvidenceMaxAge {
+		return fppIfBusyRefuse, fmt.Sprintf(
+			"the coordinator's own evidence that %q was still playing on %q is %s old, past this decision's %s freshness window; FPP itself was never asked whether it is genuinely busy",
+			payload.Resting.Playlist, instanceID, age.Round(time.Second), nightShowLaunchEvidenceMaxAge)
+	}
+	return fppIfBusyReplace, ""
 }
 
 // nightAdvanceLiveDeadline bounds how long nightAdvanceLive may wait, from
