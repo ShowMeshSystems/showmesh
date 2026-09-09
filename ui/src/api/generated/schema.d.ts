@@ -5433,6 +5433,8 @@ export interface components {
             playlistHash: string;
             stored: boolean;
             idempotent: boolean;
+            /** @description The sorted names of top-level members of the submitted body this coordinator does not know, absent when there were none and capped at 8. They did not stop the definition being accepted: an unknown member is ignored, because refusing it would make a plugin newer than its coordinator lose every definition. Present so a misspelled member is visible to whoever sent it rather than silently dropped. */
+            ignoredFields?: string[];
             /** Format: date-time */
             serverTime: string;
         };
@@ -11975,7 +11977,7 @@ export interface operations {
                     "application/json": components["schemas"]["FPPPlaylistDefinitionPublishResponse"];
                 };
             };
-            /** @description Malformed body, unknown field, trailing content, or a duplicate member name (`invalid-parameter`), a missing or malformed identity field (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-definition-schema-version`), or a definition whose canonicalized SHA-256 disagrees with the declared `playlistHash` (`definition-hash-mismatch`). */
+            /** @description Malformed body, trailing content, or a duplicate member name (`invalid-parameter`), a missing or malformed identity field (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-definition-schema-version`), or a definition whose canonicalized SHA-256 disagrees with the declared `playlistHash` (`definition-hash-mismatch`). */
             400: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
