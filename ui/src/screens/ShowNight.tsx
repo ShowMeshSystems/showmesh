@@ -56,7 +56,7 @@ import { guardedSave, type SaveOutcome } from '../domain/save'
 import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import { formatPosition, nightLifecycleGroups, type CommandOutcome } from './liveControlModel'
 import { AudioAssetPicker } from './audioAssetPicker'
-import { audioAssetOptions } from './showsModel'
+import { audioAssetOptions, type AudioAssetOption } from './showsModel'
 import { StaleWriteStrip } from './StaleWrite'
 import {
   backgroundAudioSteps,
@@ -947,7 +947,7 @@ type BackgroundAudioWrite = NonNullable<ConfigNightSessionWrite['resting']['back
 type SiteControlWrite = NonNullable<ConfigNightSessionWrite['siteControl']>
 type InterlockWrite = NonNullable<ConfigNightSessionWrite['interlocks']>[number]
 
-function buildBackgroundAudio(audio: BackgroundAudioDraft): { ok: true; value: BackgroundAudioWrite | undefined } | { ok: false; error: string } {
+function buildBackgroundAudio(audio: BackgroundAudioDraft, audioAssets: readonly AudioAssetOption[]): { ok: true; value: BackgroundAudioWrite | undefined } | { ok: false; error: string } {
   if (!audio.enabled) return { ok: true, value: audio.mediaPlaylist === '' ? undefined : { mediaPlaylist: audio.mediaPlaylist } }
   if (audio.items.length === 0) return { ok: false, error: 'Background audio needs at least one item, or disable it.' }
   const items: ConfigNightSessionBackgroundAudioInlineWrite['items'] = []
@@ -955,7 +955,13 @@ function buildBackgroundAudio(audio: BackgroundAudioDraft): { ok: true; value: B
     if (item.itemId.trim() === '' || item.show.trim() === '' || item.sequence.trim() === '' || item.target.trim() === '') {
       return { ok: false, error: `Background audio item ${index + 1} needs an item id, show, sequence, and target node.` }
     }
-    items.push({ itemId: item.itemId.trim(), show: item.show.trim(), sequence: item.sequence.trim(), target: item.target.trim() })
+    const sequence = item.sequence.trim()
+    const target = item.target.trim()
+    // A stored (sequence, target) that no longer matches a current asset must not be persisted silently.
+    if (!audioAssets.some((asset) => asset.sequence === sequence && asset.target === target)) {
+      return { ok: false, error: `Background audio item ${index + 1}'s audio asset no longer exists in the current asset list. Pick a different asset or remove the item.` }
+    }
+    items.push({ itemId: item.itemId.trim(), show: item.show.trim(), sequence, target })
   }
   const maxGainDb = Number(audio.maxGainDb)
   if (audio.maxGainDb.trim() === '' || Number.isNaN(maxGainDb) || maxGainDb > 0) {
@@ -1044,7 +1050,7 @@ function buildInterlocks(items: InterlockDraft[]): { ok: true; value: InterlockW
   return { ok: true, value: built }
 }
 
-function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { error: string } {
+function definitionPayload(draft: DefinitionDraft, audioAssets: readonly AudioAssetOption[]): ConfigNightSessionWrite | { error: string } {
   const required: readonly [string, string][] = [
     ['Definition id', draft.id], ['Show', draft.show], ['Label', draft.label], ['Show playlist FPP instance', draft.showFpp], ['Show playlist', draft.showPlaylist],
     ['Resting FPP instance', draft.restingFpp], ['Resting playlist', draft.restingPlaylist], ['Resting timeline show', draft.timelineShow], ['Resting timeline sequence', draft.timelineSequence], ['Resting timeline target', draft.timelineTarget],
@@ -1074,7 +1080,7 @@ function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { 
   if (!enteringShow.ok) return { error: enteringShow.error }
   const enteringResting = buildCues(draft.enterResting, 'Enter-resting')
   if (!enteringResting.ok) return { error: enteringResting.error }
-  const backgroundAudio = buildBackgroundAudio(draft.backgroundAudio)
+  const backgroundAudio = buildBackgroundAudio(draft.backgroundAudio, audioAssets)
   if (!backgroundAudio.ok) return { error: backgroundAudio.error }
   const siteControl = buildSiteControl(draft.siteControl)
   if (!siteControl.ok) return { error: siteControl.error }
@@ -1162,7 +1168,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   }
   const updateCues = (which: 'enterShow' | 'enterResting', index: number, patch: Partial<CueDraft>) => setDraft((current) => ({ ...current, [which]: current[which].map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
   const save = () => {
-    const payload = definitionPayload(draft)
+    const payload = definitionPayload(draft, audioAssets)
     if ('error' in payload) { setError(payload.error); return }
     setSaving(true); setError(null)
     putNightSessionConfig(draft.id.trim(), payload)
@@ -1200,6 +1206,11 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   }
   const timelineAssets = assets.filter((asset) => asset.current && asset.mediaType === 'fseq' && asset.targetKind === 'node')
   const audioAssets = audioAssetOptions(assets)
+  // A non-blank stored (sequence, target) that matches no current asset is a dead reference, not "unset".
+  const deadAudioAssetError = (item: BackgroundAudioItemDraft): string | undefined =>
+    item.sequence === '' || item.target === '' || audioAssets.some((asset) => asset.sequence === item.sequence && asset.target === item.target)
+      ? undefined
+      : 'This audio asset no longer exists in the current asset list. Pick a different asset or remove the item.'
   const timelineSequences = Array.from(new Set([...(draft.timelineSequence === '' ? [] : [draft.timelineSequence]), ...timelineAssets.map((asset) => asset.sequence)])).sort()
   const timelineTargets = Array.from(new Set([
     ...(draft.timelineTarget === '' ? [] : [draft.timelineTarget]),
@@ -1289,7 +1300,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
                 {draft.backgroundAudio.items.map((item, index) => (
                   <div className="sm-night-session-item" key={`bg-item-${index}`}>
                     <Field label="Item id">{(p) => <Input {...p} value={item.itemId} onChange={(e) => updateBackgroundAudioItem(index, { itemId: e.target.value })} />}</Field>
-                    <Field label="Audio asset" help="Audio assets already registered in the store, listed by name and the node they play on.">
+                    <Field label="Audio asset" help="Audio assets already registered in the store, listed by name and the node they play on." error={deadAudioAssetError(item)}>
                       {(p) => (
                         <AudioAssetPicker
                           {...p}

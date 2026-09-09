@@ -923,6 +923,7 @@ describe('Show Night', () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
     stubs.putNightSessionConfig = (...args: unknown[]) => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge Updated'))
@@ -951,6 +952,7 @@ describe('Show Night', () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
     stubs.putNightSessionConfig = (...args: unknown[]) => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
@@ -976,6 +978,7 @@ describe('Show Night', () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
     stubs.putNightSessionConfig = (...args: unknown[]) => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
@@ -1097,13 +1100,30 @@ describe('Show Night', () => {
     expect(screen.getByLabelText('Item id')).toHaveValue('')
   })
 
-  it('shows nothing selected when the stored sequence and target match no current asset', async () => {
+  it('shows nothing selected but marks the field invalid when the stored sequence and target match no current asset', async () => {
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'a-different-seq', 'audio-01')] })
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    expect(await screen.findByLabelText('Audio asset')).toHaveValue('')
+    const select = await screen.findByLabelText('Audio asset')
+    expect(select).toHaveValue('')
+    expect(select).toHaveAttribute('aria-invalid', 'true')
+    expect(await screen.findByText('This audio asset no longer exists in the current asset list. Pick a different asset or remove the item.')).toBeInTheDocument()
+  })
+
+  it('refuses to save a background audio item whose stored asset no longer exists', async () => {
+    mockListConfigObjects()
+    stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'a-different-seq', 'audio-01')] })
+    const putSpy = vi.fn(() => Promise.resolve(fullDefinitionResponse('Winter Ridge')))
+    stubs.putNightSessionConfig = putSpy
+    renderDefinitions({ session: configWriteSession })
+    await openWinterRidgeDefinition()
+    await screen.findByLabelText('Audio asset')
+    fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+    expect(await screen.findByText("Background audio item 1's audio asset no longer exists in the current asset list. Pick a different asset or remove the item.")).toBeInTheDocument()
+    expect(putSpy).not.toHaveBeenCalled()
   })
 
   it('explains on the resting sequence field, not the target field, that the file sets the resting cycle length', async () => {
@@ -1148,6 +1168,7 @@ describe('Show Night', () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
     stubs.putNightSessionConfig = (...args: unknown[]) => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
@@ -1167,6 +1188,7 @@ describe('Show Night', () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
     stubs.putNightSessionConfig = (...args: unknown[]) => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
@@ -1184,6 +1206,7 @@ describe('Show Night', () => {
   it('blocks save when only one side of the background audio fade pair is set', async () => {
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
     const putSpy = vi.fn(() => Promise.resolve(fullDefinitionResponse('Winter Ridge')))
     stubs.putNightSessionConfig = putSpy
     renderDefinitions({ session: configWriteSession })
@@ -1230,6 +1253,7 @@ describe('Show Night', () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
     stubs.putNightSessionConfig = (...args: unknown[]) => {
       captured.body = args[1] as Record<string, unknown>
       return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
