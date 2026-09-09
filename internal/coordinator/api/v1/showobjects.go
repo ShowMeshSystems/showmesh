@@ -8,9 +8,19 @@ package v1
 // ConfigShow is the "show" kind's decoded payload: the body PUT
 // /config/show/{id} accepts and GET returns. A PUT is a full replacement
 // — an absent "notes" means notes becomes empty, never "leave it as is".
+//
+// FPPInstances and ResolumeInstances are the show's participation
+// selection and do NOT follow that sentence: participation is chosen by
+// hand, so an absent key means no selection has ever been recorded, which
+// is a different fact from a present empty array (this show deliberately
+// uses no instance of that integration). The key is omitted, not sent as
+// null, when no selection exists, so a client tells the three states apart
+// as absent / [] / populated.
 type ConfigShow struct {
-	Name  string `json:"name"`
-	Notes string `json:"notes"`
+	Name              string    `json:"name"`
+	Notes             string    `json:"notes"`
+	FPPInstances      *[]string `json:"fppInstances,omitempty"`
+	ResolumeInstances *[]string `json:"resolumeInstances,omitempty"`
 }
 
 // ShowConfigResponse is the body of GET and PUT /config/show/{id}.

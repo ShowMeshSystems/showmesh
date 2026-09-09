@@ -360,6 +360,14 @@ const (
 	// rather than reusing either directly.
 	ValidationCodeEntriesEmpty = "entries-empty"
 
+	// ValidationCodeInstanceIDDuplicate means a show's participation
+	// selection (show's fppInstances or resolumeInstances) listed the same
+	// instance id twice. Its own code rather than a generic bad value: the
+	// refusal an operator has to act on is "you typed this host twice",
+	// and the alternative to refusing is deduplicating, which would store
+	// a selection nobody typed.
+	ValidationCodeInstanceIDDuplicate = "instance-id-duplicate"
+
 	// ValidationCodeEntryPositionDuplicate means two show.playlist entries
 	// declared the same (fpp.section, fpp.position) pair. TRACK-H-H1-SPEC.md
 	// section 3.1: two entries at the same section and position derive the
@@ -1793,6 +1801,43 @@ func decodeOptionalString(top map[string]json.RawMessage, key, field string) (st
 		return "", &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a string", field)}
 	}
 	return s, nil
+}
+
+// decodeOptionalStringList reads key from top as an optional JSON array of
+// non-empty strings, and is the ONE helper in this package whose absent
+// return is distinguishable from its empty one: absent returns a nil
+// pointer, a present [] returns a non-nil pointer to a zero-length slice.
+// Every other optional helper here folds the two together because nothing
+// downstream needed them apart; a caller that reaches for this one does.
+// A present null is refused: omit the key to record nothing.
+func decodeOptionalStringList(top map[string]json.RawMessage, key, field string) (*[]string, *ValidationError) {
+	raw, present := top[key]
+	if !present {
+		return nil, nil
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null; omit it to record no selection at all", field)}
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be an array of strings", field)}
+	}
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		entry := fmt.Sprintf("%s[%d]", field, i)
+		if isJSONNull(item) {
+			return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: entry, Detail: fmt.Sprintf("%s must not be null", entry)}
+		}
+		var s string
+		if err := json.Unmarshal(item, &s); err != nil {
+			return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: entry, Detail: fmt.Sprintf("%s must be a string", entry)}
+		}
+		if s == "" {
+			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: entry, Detail: fmt.Sprintf("%s must not be empty", entry)}
+		}
+		out = append(out, s)
+	}
+	return &out, nil
 }
 
 // decodeRequiredInt reads key from top as a required, non-null whole

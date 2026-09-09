@@ -50,6 +50,21 @@ func TestOpenAPIShowObjectsResponsesMatchRealResponses(t *testing.T) {
 	_, getShowBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/halloween-2026", auth)
 	assertMatchesSchema(t, c, "ShowConfigResponse", getShowBody)
 
+	// A show carrying a participation selection, including the explicitly
+	// empty Resolume list the owner's "no projection tonight" example
+	// requires: the schema has to accept a present empty array as a real
+	// value, not only an absent key.
+	putSelectedReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show/quiet-night",
+		`{"name":"Quiet Night","fppInstances":["fpp-a","fpp-b"],"resolumeInstances":[]}`, auth)
+	putSelectedResp, putSelectedBody := doRawRequest(t, api.Handler, putSelectedReq)
+	if putSelectedResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show with participation: status = %d, want 200; body: %s", putSelectedResp.StatusCode, putSelectedBody)
+	}
+	assertMatchesSchema(t, c, "ShowConfigResponse", putSelectedBody)
+
+	_, getSelectedBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show/quiet-night", auth)
+	assertMatchesSchema(t, c, "ShowConfigResponse", getSelectedBody)
+
 	_, listShowBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show", auth)
 	assertMatchesSchema(t, c, "ConfigObjectsListResponse", listShowBody)
 
