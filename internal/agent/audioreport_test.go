@@ -161,7 +161,7 @@ func TestRunAudioReportPublishesOnEachTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -224,7 +224,7 @@ func TestRunAudioReportNilLTCObserverReportsUnsupportedWithReason(t *testing.T) 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -266,7 +266,7 @@ func TestRunAudioReportRebuildsLTCStateEveryTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, gen, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, gen, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	for i := 0; i < 2; i++ {
@@ -323,7 +323,7 @@ func TestRunAudioReportProbesOnceAcrossMultipleTicks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	for i := 0; i < 3; i++ {
@@ -376,7 +376,7 @@ func TestRunAudioReportObservedAtAdvancesWhileDiscoveredAtStaysPinned(t *testing
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, now, ticks, nil, discardLogger())
 	}()
 
 	const numTicks = 3
@@ -517,7 +517,7 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	for i := 0; i < 2; i++ {
@@ -593,7 +593,7 @@ func TestRunAudioReportPublishesFreshLTCFromRealManager(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", mgr, mgr, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", mgr, mgr, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	if _, err := engine.StartLTC(ctx, audio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate30, StartTimecode: "01:00:00:00"}); err != nil {
@@ -683,7 +683,7 @@ func TestRunAudioReportEngineAvailableReflectsLiveEngineNotStartupDiscovery(t *t
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -746,7 +746,7 @@ func TestRunAudioReportPublishesGlitchCountsWhenEngineCollectsThem(t *testing.T)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -797,7 +797,7 @@ func TestRunAudioReportLeavesGlitchCountsUnknownWhenEngineCannotCollectThem(t *t
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -850,7 +850,7 @@ func TestRunAudioReportPublishesNodeLevelRestoreStatus(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, func() time.Time { return time.Unix(1_700_000_000, 0) }, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, func() time.Time { return time.Unix(1_700_000_000, 0) }, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Unix(1_700_000_000, 0)
@@ -896,7 +896,7 @@ func TestRunAudioReportNilSnapshotterReportsIdleRestoreStatus(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -946,7 +946,7 @@ func TestRunAudioReportPublishesSettingsSubstitutionStatus(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -989,7 +989,7 @@ func TestRunAudioReportNilSnapshotterReportsAcceptedSettingsStatus(t *testing.T)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, nil, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -1092,7 +1092,7 @@ func TestRunAudioReportWedgedEngineAvailableFreezesTheTickInsteadOfPublishingFal
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, nil, discardLogger())
 	}()
 
 	// First tick: engine responsive, publishes normally.
@@ -1305,4 +1305,221 @@ func TestRunAudioReportTickerToleratesNilSnapshotter(t *testing.T) {
 	<-out
 	cancel()
 	<-done
+}
+
+// TestRunAudioReportPublishesOnTriggerOutOfCadence proves a signal on
+// triggered produces an immediate publish without waiting for ticks --
+// the audio-report counterpart to runRenderReport's identical trigger
+// behaviour, and the mechanism command.go's audio.gain.fade dispatch
+// relies on.
+func TestRunAudioReportPublishesOnTriggerOutOfCadence(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	triggered := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, triggered, discardLogger())
+	}()
+
+	select {
+	case triggered <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending trigger")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish")
+	}
+
+	cancel()
+	<-done
+
+	if len(pub.snapshot()) != 1 {
+		t.Fatalf("publish calls = %d, want 1 (the trigger alone, no tick was ever sent)", len(pub.snapshot()))
+	}
+}
+
+// TestHandleMessageAudioReportTriggerSignalsOnlyForGainFade proves
+// command.go's own gate: an unrelated allowlisted action (agent.echo)
+// must not fire audioReportTrigger, and a genuinely-dispatched
+// audio.gain.fade must -- the wiring that makes a fade's very first
+// report immediate rather than waiting for whichever resting tick
+// happens to land inside a two-second fade.
+func TestHandleMessageAudioReportTriggerSignalsOnlyForGainFade(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeAudioClaimTestAsset(t, dir, "a.wav", "asset-1", []byte("pretend this is wav audio"))
+	if r := mgr.Apply(ctx, id, "apply-1", 1, pkgaudio.ApplyRequest{
+		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleBackground),
+		Media:      pkgaudio.SetField(ref),
+	}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply refused: %+v", r)
+	}
+	if r := mgr.Start(ctx, id, "start-1", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start refused: %+v", r)
+	}
+
+	trigger := make(chan struct{}, 1)
+	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, mgr, trigger, nil, nil, nil, nil, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	echoCmd := baseEchoCmd("cmd-1", "idem-1")
+	topic, payload := buildCmdMessage(t, clock, echoCmd)
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	select {
+	case <-trigger:
+		t.Fatal("audioReportTrigger fired for a non-fade action")
+	default:
+	}
+
+	fadeCmd := mqttproto.CmdPayload{
+		CommandID:      "cmd-2",
+		IdempotencyKey: "idem-2",
+		Action:         string(pkgaudio.OperationGainFade),
+		Target:         mqttproto.CmdTarget{Kind: "node", ID: testNodeID},
+		Params: map[string]any{
+			"sessionId": string(id), "invocationId": "inv-fade", "revision": 3,
+			"targetGain": 0.4, "durationMs": 2000,
+		},
+		Issuer:             mqttproto.CmdIssuer{PrincipalID: "principal-1"},
+		ConfirmationMethod: confirmationMethodEvidence,
+	}
+	topic2, payload2 := buildCmdMessage(t, clock, fadeCmd)
+	beforeFade := len(pub.snapshot())
+	h.HandleMessage(context.Background(), pub, topic2, payload2)
+
+	calls := pub.snapshot()
+	if len(calls) != beforeFade+1 {
+		t.Fatalf("publish calls after the fade dispatch = %d, want %d (exactly one more, the fade's own result)", len(calls), beforeFade+1)
+	}
+	result := decodeResultFromCall(t, calls[beforeFade])
+	if result.Outcome == mqttproto.OutcomeRefused {
+		t.Fatalf("audio.gain.fade refused: %+v", result)
+	}
+
+	select {
+	case <-trigger:
+	default:
+		t.Fatal("audioReportTrigger did not fire for a dispatched audio.gain.fade")
+	}
+}
+
+// TestRunAudioReportReportsIntermediateGainAcrossADispatchedFade is this
+// change's acceptance test: dispatching a fade produces a report without
+// waiting for the resting tick (the trigger fires immediately on
+// dispatch, before any tick is ever sent), and the gain values a two-
+// second fade reports across that report plus two later ticks are
+// intermediate, never a single step straight to the target.
+//
+// This drives a real [*audio.Manager] against [audio.FakeEngine], whose
+// Observe ramps gain by linear interpolation over elapsed clock time --
+// a deterministic stand-in proven against mix_test.go's own fade
+// coverage, not a real playback engine. It demonstrates that THIS
+// report path surfaces an in-flight ramp already computed elsewhere; it
+// does not, and cannot, demonstrate a real engine's own fade completing
+// early or drifting from the requested curve.
+func TestRunAudioReportReportsIntermediateGainAcrossADispatchedFade(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeAudioClaimTestAsset(t, dir, "a.wav", "asset-1", []byte("pretend this is wav audio"))
+	if r := mgr.Apply(ctx, id, "apply-1", 1, pkgaudio.ApplyRequest{
+		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleBackground),
+		Media:      pkgaudio.SetField(ref),
+	}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply refused: %+v", r)
+	}
+	if r := mgr.Start(ctx, id, "start-1", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start refused: %+v", r)
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	triggered := make(chan struct{})
+	ctx2, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx2, pub, testNodeID, mgr, nil, nil, clock.now, ticks, triggered, discardLogger())
+	}()
+
+	const target = pkgaudio.Gain(0.4)
+	if r := mgr.GainFade(ctx, id, "inv-fade", 3, pkgaudio.FadeCurveLinear, 2*time.Second, target); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain fade refused: %+v", r)
+	}
+
+	// Simulate command.go's own non-blocking send immediately after
+	// dispatch -- see HandleMessage's audioReportTrigger case.
+	select {
+	case triggered <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending trigger")
+	}
+	<-pub.notify
+
+	clock.advance(time.Second)
+	ticks <- clock.now()
+	<-pub.notify
+
+	clock.advance(1100 * time.Millisecond)
+	ticks <- clock.now()
+	<-pub.notify
+
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 3 {
+		t.Fatalf("publish calls = %d, want 3 (one from the trigger, two from ticks)", len(calls))
+	}
+
+	session := func(i int) mqttproto.AudioSessionReport {
+		r := decodeAudioReport(t, calls[i].payload)
+		if len(r.Sessions) != 1 {
+			t.Fatalf("report %d sessions = %+v, want exactly 1", i, r.Sessions)
+		}
+		return r.Sessions[0]
+	}
+
+	immediately := session(0)
+	if immediately.FadeState != string(audio.FadeStateInProgress) {
+		t.Fatalf("report from the trigger alone: FadeState = %q, want %q -- the fade must be visible on the very first out-of-cadence report",
+			immediately.FadeState, audio.FadeStateInProgress)
+	}
+	if immediately.Gain == float64(target) {
+		t.Fatalf("report from the trigger alone: Gain already = %v, the dispatched target -- the engine has not ramped anywhere yet", immediately.Gain)
+	}
+
+	halfway := session(1)
+	if halfway.Gain == float64(target) || halfway.Gain == 1 {
+		t.Fatalf("halfway through the fade: Gain = %v, want a value strictly between the starting gain (1) and the target (%v)", halfway.Gain, target)
+	}
+
+	after := session(2)
+	if after.Gain != float64(target) {
+		t.Fatalf("once the 2s fade's duration has elapsed: Gain = %v, want the dispatched target %v", after.Gain, target)
+	}
 }

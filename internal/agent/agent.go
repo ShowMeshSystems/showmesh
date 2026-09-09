@@ -163,6 +163,12 @@ func Run() int {
 	// operations; see command.go's identical non-blocking-send reasoning.
 	renderTrigger := make(chan struct{}, 1)
 
+	// audioReportTrigger is assetFetchTrigger's counterpart for a
+	// dispatched "audio.gain.fade": command.go signals it so the audio
+	// report loop below can publish the fade in flight immediately rather
+	// than waiting for its next resting tick.
+	audioReportTrigger := make(chan struct{}, 1)
+
 	// sup owns every supervised render pipeline for this node's whole
 	// process life — constructed here, outside newMQTTConn, for the same
 	// reason cmdHandler is: it must survive a broker reconnect, since a
@@ -425,7 +431,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, clockBind, fppConnect, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioReportTrigger, audioBind, catalogStore, clockBind, fppConnect, time.Now, logger)
 
 	// connectAndInstallCapabilityRepublish is the single call site for
 	// both constructing this node's MQTT connection and wiring
@@ -475,8 +481,9 @@ func Run() int {
 	// while audioMgr reports a fade in flight and returns it to
 	// cfg.AudioReportInterval the moment none do (see that function's own
 	// doc comment for the bounded worst case when a fade ends abnormally).
-	// No trigger channel: nothing here needs an out-of-cadence publish
-	// beyond that.
+	// audioReportTrigger, signalled by command.go the moment a fade
+	// dispatches, is the out-of-cadence publish that makes the very first
+	// sample of that fade visible without waiting on the ticker at all.
 	audioReportTicks := make(chan time.Time)
 	audioReportTickerDone := make(chan struct{})
 	go func() {
@@ -487,7 +494,7 @@ func Run() int {
 	audioReportDone := make(chan struct{})
 	go func() {
 		defer close(audioReportDone)
-		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, audioEngine, time.Now, audioReportTicks, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, audioEngine, time.Now, audioReportTicks, audioReportTrigger, logger)
 	}()
 
 	// Clock report: this node's current PTP status on its own cadence —
