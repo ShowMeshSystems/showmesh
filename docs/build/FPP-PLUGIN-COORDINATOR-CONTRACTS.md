@@ -907,18 +907,37 @@ a malformed body carrying an already-seen id is still malformed.
 **What an applied request does.** Exactly three things, and the third is a
 prohibition.
 
-1. **It clears the re-scan cadence,** so the sweep runs on the worker's next
-   pass instead of waiting out `kDefinitionRescanIntervalMillis`. The route
-   does not run the sweep on the HTTP thread: the sweep reads the playlist
-   directory, hashes every definition, and posts each one with the retry
-   policy's full backoff budget, which is unbounded work to hold an inbound
-   request open across, and it must not run twice concurrently. The route
-   makes a sweep due; the worker performs it.
-2. **It clears `heldDefinitions_`,** so a definition the coordinator lost is
-   sent again even though its hash has not changed. This is the whole of the
-   repair. Without it the route would accelerate only the case that already
-   recovers on its own, and would leave the case that cannot recover exactly
-   where it was. Any other suppression the sweep carries is cleared with it:
+1. **It records that a sweep is owed,** and that record is the whole of its
+   effect on the sweep. The worker observes it on its next pass and sweeps
+   regardless of how recently it last swept, so the definitions go out now
+   rather than at the end of `kDefinitionRescanIntervalMillis`. **The route
+   writes no cadence state of its own.** The cadence variables belong to the
+   worker thread, which is the only thread that has ever written or read
+   them, and the inbound handler does not touch them: an HTTP handler that
+   reaches in to reset the last-sweep time is a data race on state that has
+   never needed a lock, in a plugin whose route-safety argument rests on the
+   handler being synchronous and self-contained. The owed-sweep record is the
+   one piece of state the two threads share for this, it is the same record
+   `sweepPending` reports, and it is the worker that clears it when the sweep
+   it caused has completed.
+
+   The route does not run the sweep on the HTTP thread either: the sweep
+   reads the playlist directory, hashes every definition, and posts each one
+   with the retry policy's full backoff budget, which is unbounded work to
+   hold an inbound request open across, and it must not run twice
+   concurrently. The route makes a sweep due; the worker performs it.
+2. **It clears `heldDefinitions_`,** synchronously, on the HTTP thread, under
+   the lock that set already has. This is the deliberate difference from item
+   1, and the line between them is which state is already guarded: the held
+   set is shared state with a mutex around every read and write of it, so one
+   more writer is a use of that lock rather than a new hazard, and clearing it
+   in place is what lets the response count what it dropped. The cadence is
+   unguarded worker-thread state, so it is reached only through the owed-sweep
+   record. Clearing the held set sends a definition the coordinator lost again
+   even though its hash has not changed. This is the whole of the repair.
+   Without it the route would accelerate only the case that already recovers
+   on its own, and would leave the case that cannot recover exactly where it
+   was. Any other suppression the sweep carries is cleared with it:
    if an implementation takes section 3.7's option to skip a file whose size
    and modification time are unchanged, a republish must clear that too, or
    the definition the coordinator lost is skipped before its hash is ever
