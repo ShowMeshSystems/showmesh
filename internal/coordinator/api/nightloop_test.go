@@ -742,8 +742,10 @@ func TestNightShowLaunchIfBusy_DifferentInstanceSameNameRefuses(t *testing.T) {
 		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "player-02", Playlist: "halloween-show"},
 		Resting:      config.NightSessionResting{FPPInstanceID: "player-01", Playlist: "halloween-resting"},
 	}
-	if got := h.nightShowLaunchIfBusy(context.Background(), now, payload); got != fppIfBusyRefuse {
+	if got, reason := h.nightShowLaunchIfBusy(context.Background(), now, payload); got != fppIfBusyRefuse {
 		t.Fatalf("ifBusy = %q, want %q (resting and show run on different FPP instances)", got, fppIfBusyRefuse)
+	} else if reason != "" {
+		t.Fatalf("reason = %q, want empty (this refusal is a config mismatch, not stale evidence)", reason)
 	}
 }
 
@@ -760,8 +762,15 @@ func TestNightShowLaunchIfBusy_StaleEvidenceRefuses(t *testing.T) {
 		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "player-01", Playlist: "halloween-show"},
 		Resting:      config.NightSessionResting{FPPInstanceID: "player-01", Playlist: "halloween-resting"},
 	}
-	if got := h.nightShowLaunchIfBusy(context.Background(), now, payload); got != fppIfBusyRefuse {
+	got, reason := h.nightShowLaunchIfBusy(context.Background(), now, payload)
+	if got != fppIfBusyRefuse {
 		t.Fatalf("ifBusy = %q, want %q (44s-old identity evidence must not license replace)", got, fppIfBusyRefuse)
+	}
+	// This refusal is the coordinator's own stale bookkeeping, not FPP
+	// genuinely reporting busy - the reason must say so, not merely say
+	// "refuse".
+	if reason == "" {
+		t.Fatal("reason = \"\", want an explanation naming stale coordinator evidence, not FPP's own state")
 	}
 }
 
