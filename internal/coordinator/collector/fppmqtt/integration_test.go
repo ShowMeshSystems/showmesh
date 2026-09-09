@@ -30,15 +30,18 @@ package fppmqtt
 
 import (
 	"context"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -380,5 +383,125 @@ func TestIntegrationSubscriptionSurvivesUnrelatedHostPublish(t *testing.T) {
 	}
 	if got.Value != "playing" {
 		t.Errorf("observation value = %#v, want %q (the unrelated host's message must never be attributed here)", got.Value, "playing")
+	}
+}
+
+// capturingSink is a minimal [collector.Sink] that records the wall-clock
+// time each delivery arrives, so this test can measure end-to-end push
+// latency without going through a real store.Store — this package
+// deliberately does not depend on internal/coordinator/store (doc.go), so
+// this is the closest an in-package test can get to the production
+// Runner->Sink wiring internal/coordinator/fppmqttmanager.go actually
+// builds.
+type capturingSink struct {
+	mu        sync.Mutex
+	deliverAt []time.Time
+	obs       [][]observation.Observation
+}
+
+func (s *capturingSink) RecordObservations(_ context.Context, observations []observation.Observation, _ bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deliverAt = append(s.deliverAt, time.Now())
+	s.obs = append(s.obs, observations)
+}
+
+// findSince returns the first recorded delivery, at or after searchFrom,
+// whose observations include one matching sig/value with no Absence — and
+// the moment that delivery was recorded.
+func (s *capturingSink) findSince(searchFrom int, sig observation.SignalID, value any) (at time.Time, deliveryIndex int, found bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := searchFrom; i < len(s.obs); i++ {
+		for _, o := range s.obs[i] {
+			if o.Signal == sig && o.Absence == "" && o.Value == value {
+				return s.deliverAt[i], i, true
+			}
+		}
+	}
+	return time.Time{}, len(s.obs), false
+}
+
+func (s *capturingSink) deliveryCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.obs)
+}
+
+// TestIntegrationPushSignalDeliversWithinOneSecondWithoutPolling is this
+// package's proof of the owner's ruling (2026-09-09): the coordinator's
+// own push latency, end to end from a real MQTT publish through
+// [Collector.Run]'s real subscription, its real publish handler, and a
+// real [collector.Runner] nudged by Options.PushSignal, must land the
+// resulting observation in the Sink within about one second — NOT the
+// 5s [DefaultPollInterval] this Collector's own poll cadence would
+// otherwise wait out.
+//
+// PollInterval is deliberately set to 30s here — far longer than this
+// test's own deadline — specifically so a pass proves the PUSH path
+// delivered the observation, not a lucky ordinary poll tick landing
+// inside the assertion window.
+func TestIntegrationPushSignalDeliversWithinOneSecondWithoutPolling(t *testing.T) {
+	broker := requireTestBroker(t)
+
+	pub := newTestPublisher(t, broker)
+	defer pub.disconnect(t)
+
+	sink := &capturingSink{}
+	runner := collector.NewRunner(sink, slog.Default(), collector.WithNudgeMinInterval(50*time.Millisecond))
+
+	c, err := New(Options{
+		BrokerURL:    broker.url,
+		Username:     broker.collectorUsername,
+		Password:     broker.collectorPassword,
+		Hosts:        map[string]string{"push-it": "FPP-Push-IT"},
+		PollInterval: 30 * time.Second,
+		PushSignal:   func() { runner.Nudge(sourceName) },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	runner.Add(c, c.PollInterval())
+
+	runnerCtx, runnerCancel := context.WithCancel(context.Background())
+	defer runnerCancel()
+	go runner.Run(runnerCtx)
+
+	collectorCtx, collectorCancel := context.WithCancel(context.Background())
+	defer collectorCancel()
+	go func() { _ = c.Run(collectorCtx) }()
+
+	// Give the connection a moment to come up, subscribe, and deliver its
+	// (empty-topic, so no-op) initial render, exactly like the other
+	// integration tests in this file.
+	time.Sleep(1 * time.Second)
+	baseline := sink.deliveryCount()
+
+	publishedAt := time.Now()
+	pub.publish(t, "falcon/player/FPP-Push-IT/status", []byte("playing"), false)
+
+	deadline := time.Now().Add(5 * time.Second)
+	var (
+		deliveredAt time.Time
+		found       bool
+	)
+	for time.Now().Before(deadline) {
+		if at, _, ok := sink.findSince(baseline, SignalStatus, "playing"); ok {
+			deliveredAt, found = at, true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !found {
+		t.Fatalf("fpp.status=%q was never delivered to the sink within %s of publish", "playing", 5*time.Second)
+	}
+
+	latency := deliveredAt.Sub(publishedAt)
+	t.Logf("measured push latency (publish to sink delivery): %s", latency)
+	if latency > time.Second {
+		t.Errorf("push latency = %s, want under 1s (this Collector's own PollInterval was set to 30s, so this cannot have been an ordinary poll tick)", latency)
+	}
+	if latency < 0 {
+		t.Errorf("push latency = %s, negative — publishedAt/deliveredAt clocks disagree", latency)
 	}
 }

@@ -290,6 +290,16 @@ func (r *Runner) Remove(id string) bool {
 	return true
 }
 
+// Sink returns the Sink this Runner delivers every Poll's observations
+// to, so a caller that already holds a *Runner (rather than constructing
+// its own Sink) can hand the identical destination to a second delivery
+// path without duplicating how that destination was built — see
+// internal/coordinator/fppmqttmanager.go's push wiring for the one
+// caller today.
+func (r *Runner) Sink() Sink {
+	return r.sink
+}
+
 // IDs returns the registered collector ids, so a reconcile loop can
 // compare what is running against what is configured without keeping its
 // own shadow copy of this registry.
