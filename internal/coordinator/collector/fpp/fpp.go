@@ -74,6 +74,13 @@ const (
 	SignalMediaFilename          observation.SignalID = "fpp.media.filename"
 	SignalPositionElapsedSeconds observation.SignalID = "fpp.position.elapsed.seconds"
 
+	// SignalPositionDuration is the coordinator-computed total: FPP's
+	// /api/fppd/status never reports a track's length directly (RES-002),
+	// so this is "seconds_played" plus "seconds_remaining", computed once
+	// here rather than left for a client to sum two observations into a
+	// third fact itself.
+	SignalPositionDuration observation.SignalID = "fpp.position.duration.seconds"
+
 	// SignalPositionElapsedMS is Track F seam F3's own addition, reserved
 	// on main at 3538439 (docs/build/IDENTIFIER-REGISTER.md): the raw
 	// "milliseconds_elapsed" field, which F0's capture measured advancing
@@ -158,6 +165,7 @@ var allStatusSignals = []observation.SignalID{
 	SignalPlaylistCount, SignalPlaylistType, SignalSchedulerEnabled,
 	SignalSchedulerNextPlaylist, SignalSchedulerNextStartTime,
 	SignalMediaFilename, SignalPositionElapsedSeconds, SignalPositionElapsedMS,
+	SignalPositionDuration,
 	SignalFPPDState, SignalPowerBad, SignalBridging,
 	SignalChannelInputsEnabled, SignalChannelOutputsEnabled,
 	SignalBranch, SignalUUID, SignalHostName, SignalVolume,

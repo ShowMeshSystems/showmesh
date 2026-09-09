@@ -222,6 +222,37 @@ describe('Show Night', () => {
     if (!next.known) expect(next.reason).toContain('unknown rather than assumed')
   })
 
+  it('computes the progress bar percent from the coordinator-reported duration signal', () => {
+    const instance = {
+      instanceId: 'main',
+      observations: [
+        { signal: 'fpp.position.elapsed.seconds', value: 90, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.duration.seconds', value: 180, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+      ],
+    } as unknown as FPPInstance
+    renderScreen({ nightSession: session(), fpp: [instance] })
+    expect(screen.getByText('1:30')).toBeInTheDocument()
+    expect(screen.getByText('3:00')).toBeInTheDocument()
+    const position = screen.getByText('1:30').closest('.sm-nownext__position') as HTMLElement
+    const fill = position.querySelector('.sm-nownext__track span')
+    expect(fill).not.toBeNull()
+    expect(fill).toHaveStyle({ width: '50%' })
+  })
+
+  it('renders no bar and an honest "not reported" total when duration is unsupported, even though elapsed is reported', () => {
+    const instance = {
+      instanceId: 'main',
+      observations: [
+        { signal: 'fpp.position.elapsed.seconds', value: 90, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+      ],
+    } as unknown as FPPInstance
+    renderScreen({ nightSession: session(), fpp: [instance] })
+    expect(screen.getByText('1:30')).toBeInTheDocument()
+    const position = screen.getByText('1:30').closest('.sm-nownext__position') as HTMLElement
+    expect(position.querySelector('.sm-nownext__track span')).toBeNull()
+    expect(within(position).getByText('not reported')).toBeInTheDocument()
+  })
+
   it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {
     const rail = nightRail(session({ cycle: 3, state: 'live' }))
     const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))

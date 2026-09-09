@@ -140,7 +140,11 @@ export function transportState(instance: FPPInstance): TransportState {
     media: stringValue(obs, 'fpp.media.filename') ?? stringValue(obs, 'fpp.sequence.name'),
     playerState: stringValue(obs, 'fpp.status.player_state'),
     elapsedSeconds: numberValue(obs, 'fpp.position.elapsed.seconds'),
-    totalSeconds: numberValue(obs, 'fpp.position.seconds'),
+    // fpp.position.seconds is FPP's "seconds_played" -- elapsed time, not a
+    // duration. fpp.position.duration.seconds is the coordinator's own
+    // computed total (seconds_played + seconds_remaining); this is the
+    // only signal that answers "how long is this item."
+    totalSeconds: numberValue(obs, 'fpp.position.duration.seconds'),
     volume: numberValue(obs, 'fpp.volume'),
   }
 }

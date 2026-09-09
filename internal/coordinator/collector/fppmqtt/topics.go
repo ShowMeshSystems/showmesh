@@ -101,6 +101,7 @@ var statusStaticSignals = []observation.SignalID{
 	SignalMediaFilename,
 	SignalPositionElapsedSeconds,
 	SignalPositionElapsedMS,
+	SignalPositionDuration,
 }
 
 // portStaticSignals is the enumerable subset of fpp.PortSignals' output:

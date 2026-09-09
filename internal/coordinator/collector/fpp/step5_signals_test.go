@@ -184,6 +184,63 @@ func TestPlayerModeRemoteOnlyFieldsAreUnsupported(t *testing.T) {
 	}
 }
 
+// --- fpp.position.duration.seconds (coordinator-computed total) ------------
+
+// TestPositionDurationSignalIsARealNumberOnPlayerModeCaptures proves
+// fpp.position.duration.seconds decodes as a real value, never an absence,
+// on every player-mode capture this package holds: "seconds_played" and
+// "seconds_remaining" are both unconditional (not mode-governed) on
+// fpp-player and both bench captures, so their sum always exists here. All
+// three are idle (0 played, 0 remaining), so the value is 0 -- a real
+// measured duration for an idle player, not a fabricated placeholder.
+func TestPositionDurationSignalIsARealNumberOnPlayerModeCaptures(t *testing.T) {
+	for _, name := range []string{
+		"live_main_fppd_status.json",
+		"status_multisync_enabled.json",
+		"status_multisync_disabled.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			sigs, err := StatusSignals(loadTestdata(t, name))
+			if err != nil {
+				t.Fatalf("StatusSignals(%s) error = %v", name, err)
+			}
+			got := findSignalValue(t, sigs, SignalPositionDuration)
+			if got.Absence != "" {
+				t.Fatalf("%s: signal %q Absence = %q (reason %q), want a real value", name, SignalPositionDuration, got.Absence, got.Reason)
+			}
+			if got.Value != float64(0) {
+				t.Errorf("%s: signal %q value = %v, want 0 (this capture's seconds_played and seconds_remaining are both \"0\")", name, SignalPositionDuration, got.Value)
+			}
+			if got.Unit != "seconds" {
+				t.Errorf("%s: signal %q unit = %q, want %q", name, SignalPositionDuration, got.Unit, "seconds")
+			}
+		})
+	}
+}
+
+// TestPositionDurationSignalSumsPlayedAndRemaining proves the value is a
+// genuine sum, not merely present: every real capture this package holds is
+// idle (0 played, 0 remaining), which cannot distinguish a correct sum from
+// a bug that always reports one of the two inputs verbatim. Mutating a real
+// capture's two inputs to distinct, non-zero numbers closes that gap.
+func TestPositionDurationSignalSumsPlayedAndRemaining(t *testing.T) {
+	body := loadTestdata(t, "live_main_fppd_status.json")
+	body = mutateJSONField(t, body, "seconds_played", "120")
+	body = mutateJSONField(t, body, "seconds_remaining", "45")
+
+	sigs, err := StatusSignals(body)
+	if err != nil {
+		t.Fatalf("StatusSignals() error = %v", err)
+	}
+	got := findSignalValue(t, sigs, SignalPositionDuration)
+	if got.Absence != "" {
+		t.Fatalf("signal %q Absence = %q (reason %q), want a value", SignalPositionDuration, got.Absence, got.Reason)
+	}
+	if got.Value != float64(165) {
+		t.Errorf("signal %q value = %v, want 165 (120 played + 45 remaining)", SignalPositionDuration, got.Value)
+	}
+}
+
 // TestSchedulerNextPlaylistIsMeasuredSentenceNotInterpreted verifies
 // contract section 3.3's specific instruction: FPP's "No playlist
 // scheduled." string is reported as-is, a Measured value, never

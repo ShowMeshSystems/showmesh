@@ -189,6 +189,7 @@ func TestPollHealthyStatusAllSignals(t *testing.T) {
 		SignalSequenceName:      "",
 		SignalPositionSeconds:   float64(0),
 		SignalPositionRemaining: float64(0),
+		SignalPositionDuration:  float64(0),
 		SignalMultiSyncEnabled:  true,
 		SignalMultiSyncSystems:  int64(1),
 		SignalSchedulerStatus:   "idle",

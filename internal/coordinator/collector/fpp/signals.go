@@ -62,6 +62,7 @@ func StatusSignals(body []byte) ([]SignalValue, error) {
 	out = append(out, playlistNameSignal(doc))
 	out = append(out, numberSignalValue(doc, SignalPositionSeconds, "seconds_played", "seconds"))
 	out = append(out, numberSignalValue(doc, SignalPositionRemaining, "seconds_remaining", "seconds"))
+	out = append(out, positionDurationSignal(doc))
 	out = append(out, multiSyncEnabledSignalValue(doc))
 	// "uptimeSeconds" is only the SECONDS component of FPP's
 	// days/hours/minutes/seconds uptime breakdown (0-59, wrapping every
@@ -375,6 +376,40 @@ func intSignalValue(doc rawDoc, sig observation.SignalID, key, unit string) Sign
 		return SignalValue{Signal: sig, Absence: observation.StateCollectionFailed, Reason: err.Error()}
 	}
 	return SignalValue{Signal: sig, Value: v, Unit: unit}
+}
+
+// positionDurationSignal decodes fpp.position.duration.seconds as
+// "seconds_played" plus "seconds_remaining". Neither field is mode-governed
+// (both are present on every real player-mode and remote-mode capture this
+// package holds), so this signal exists to answer "how long is the current
+// item" without ever asking a caller to sum two observations into a third
+// fact itself. An absent or malformed input degrades to Unsupported naming
+// which piece could not be read, never a fabricated zero for either half of
+// the sum.
+func positionDurationSignal(doc rawDoc) SignalValue {
+	played, playedErr := doc.numberField("seconds_played")
+	remaining, remainingErr := doc.numberField("seconds_remaining")
+	switch {
+	case playedErr != nil && remainingErr != nil:
+		return SignalValue{
+			Signal:  SignalPositionDuration,
+			Absence: observation.StateUnsupported,
+			Reason:  fmt.Sprintf(`duration needs both "seconds_played" and "seconds_remaining", neither decoded: %v; %v`, playedErr, remainingErr),
+		}
+	case playedErr != nil:
+		return SignalValue{
+			Signal:  SignalPositionDuration,
+			Absence: observation.StateUnsupported,
+			Reason:  fmt.Sprintf(`duration needs "seconds_played", which did not decode: %v`, playedErr),
+		}
+	case remainingErr != nil:
+		return SignalValue{
+			Signal:  SignalPositionDuration,
+			Absence: observation.StateUnsupported,
+			Reason:  fmt.Sprintf(`duration needs "seconds_remaining", which did not decode: %v`, remainingErr),
+		}
+	}
+	return SignalValue{Signal: SignalPositionDuration, Value: played + remaining, Unit: "seconds"}
 }
 
 // elapsedMSSignal decodes fpp.position.elapsed.ms ("milliseconds_elapsed")

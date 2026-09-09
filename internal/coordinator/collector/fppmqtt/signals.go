@@ -66,6 +66,14 @@ const (
 	// exactly like SignalPositionElapsedSeconds one line up.
 	SignalPositionElapsedMS observation.SignalID = "fpp.position.elapsed.ms"
 
+	// SignalPositionDuration mirrors the fpp REST collector's own
+	// coordinator-computed total (seconds_played plus seconds_remaining).
+	// decodeStatusTopic (topics.go) reuses fpp.StatusSignals verbatim, so
+	// this constant exists only for statusStaticSignals' own enumeration,
+	// exactly like SignalPositionElapsedSeconds/SignalPositionElapsedMS
+	// above.
+	SignalPositionDuration observation.SignalID = "fpp.position.duration.seconds"
+
 	// New Step 5 controller/network health signals (contract section 3.1).
 	SignalFppdState             observation.SignalID = "fpp.fppd.state"
 	SignalPowerBad              observation.SignalID = "fpp.power.bad"
