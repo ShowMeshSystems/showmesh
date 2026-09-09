@@ -162,10 +162,6 @@ Commands:
   fpp set-transition-gain <id> <percent 0-100>
                                        write the brightness transition gain, a multiplier over FPP's
                                        own scheduled ceiling (write, requires fpp:command)
-  fpp republish-playlist-definitions <id>
-                                       ask that host's plugin to resend its playlist definitions;
-                                       reports an accepted request, never an import (write,
-                                       requires fpp:command)
   fpp playlist-definitions list        metadata for every stored playlist definition (read,
                                        requires observation:read)
   fpp playlist-definitions get <id> <hash>

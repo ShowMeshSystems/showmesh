@@ -48,12 +48,6 @@ var fppWriteSubcommands = map[string]func(args []string, stdout, stderr io.Write
 	// map's dispatch shape and its fpp:command scope - see
 	// cmd_fpp_set_transition_gain.go.
 	"set-transition-gain": cmdFPPSetTransitionGain,
-	// republish-playlist-definitions is not an FPP command either: it asks
-	// the resident ShowMesh plugin to resend the playlist definitions it
-	// read from the host, and writes nothing to FPP. It shares this map's
-	// dispatch shape and its fpp:command scope - see
-	// cmd_fpp_republish_playlist_definitions.go.
-	"republish-playlist-definitions": cmdFPPRepublishPlaylistDefinitions,
 }
 
 func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -106,7 +100,6 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "  reset-observation-sequence --confirm <instance-id>  (TRACK-H-H2-SPEC.md §5.1)")
 		_, _ = fmt.Fprintln(stderr, "  acknowledge-instance-uuid-change --confirm <instance-id> ")
 		_, _ = fmt.Fprintln(stderr, "  set-transition-gain        <instance-id> <percent 0-100> [--fade-seconds N] [--request-id KEY]")
-		_, _ = fmt.Fprintln(stderr, "  republish-playlist-definitions <instance-id> [--request-id KEY]")
 		_, _ = fmt.Fprintln(stderr, "\n<verb> playlist-definitions dispatches FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3's")
 		_, _ = fmt.Fprintln(stderr, "read-only playlist definition surface:")
 		_, _ = fmt.Fprintln(stderr, "  playlist-definitions list")

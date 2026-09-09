@@ -1640,14 +1640,6 @@ func New(deps Dependencies, opts Options) *API {
 	// everything past authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/transition-gain", h.writeGuard(&scopeFPPTransitionGain, h.handleFPPTransitionGain))
 
-	// POST /api/v1/fpp/{instanceId}/playlist-definitions/republish: ask
-	// one FPP host's plugin to resend its playlist definitions
-	// (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9), behind the same
-	// fpp:command scope. It accepts a request rather than importing
-	// anything; fppdefinitionrepublish.go owns everything past
-	// authorization.
-	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/playlist-definitions/republish", h.writeGuard(&scopeFPPDefinitionRepublish, h.handleFPPDefinitionRepublish))
-
 	// Track B seam B2b-front: dispatch the three agent render.* operations
 	// (renderdispatch.go). Guarded by render:command, matching
 	// fpp:command/resolume:action's identical "reads open, this write
