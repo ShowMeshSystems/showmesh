@@ -211,6 +211,13 @@ func Run() int {
 		resolumeConfiguredID = resolumeInstances[0].ID
 	}
 
+	// Owner ruling 2026-09-08 ("credentials into SQLite"): move the fpp.mqtt
+	// broker password out of its legacy file and into the credentials
+	// table, once, before anything below reads it. See
+	// migrateFPPMQTTSecretFileToStore's own doc comment for why this must
+	// run first and why it never refuses to start.
+	migrateFPPMQTTSecretFileToStore(ctx, st, identitySvc, cfg.DataDir, time.Now, logger)
+
 	// Track G seam G-3 (ADR-039): the SHOWMESH_FPP_MQTT_* -> store
 	// migration and disagreement rule, mirroring resolume.instances above
 	// — see fppmqttsync.go. From this point on, envFPPMQTT/envFPPMQTTPassword
@@ -219,7 +226,7 @@ func Run() int {
 		BrokerURL: cfg.FPPMQTTBrokerURL, Username: cfg.FPPMQTTUsername,
 		TopicPrefix: cfg.FPPMQTTTopicPrefix, Hosts: cfg.FPPMQTTHosts,
 	}
-	fppMQTTCfg, fppMQTTPassword, fppMQTTMigrationDeferred, err := resolveAuthoritativeFPPMQTT(ctx, st, identitySvc, cfg.DataDir, envFPPMQTT, cfg.FPPMQTTPassword, time.Now, logger)
+	fppMQTTCfg, fppMQTTPassword, fppMQTTMigrationDeferred, err := resolveAuthoritativeFPPMQTT(ctx, st, identitySvc, envFPPMQTT, cfg.FPPMQTTPassword, time.Now, logger)
 	if err != nil {
 		logger.Error("failed to resolve the authoritative fpp.mqtt configuration", "error", err)
 		_ = st.Close()
@@ -551,7 +558,7 @@ func Run() int {
 	// Resolume source above is; the manager also answers CurrentHosts from
 	// this source, so the fpp.endpoints collision check sees the stored
 	// hosts even when no collector bundle is running.
-	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, cfg.DataDir, logger, fppMQTTCfg, fppMQTTPassword)
+	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, logger, fppMQTTCfg, fppMQTTPassword)
 	fppMQTTMgr := newFPPMQTTManager(fppRunner, fppMQTTConfigSrc, logger)
 	// The FIRST reconcile runs synchronously, here, for the identical
 	// "no request may observe a partially-wired dependency" reason
@@ -785,9 +792,9 @@ func Run() int {
 		// startup snapshot — see api.FPPMQTTHostLister's own doc comment.
 		FPPMQTT: fppMQTTMgr,
 		// FPPMQTTSecret is Track G seam G-3's write-only credential surface
-		// (ADR-039 decision 7), backed by the secret file under cfg.DataDir
-		// — see fppMQTTSecretAdapter (apiwiring.go).
-		FPPMQTTSecret: fppMQTTSecretAdapter{dataDir: cfg.DataDir},
+		// (ADR-039 decision 7), backed by the credentials table. See
+		// fppMQTTSecretAdapter (apiwiring.go).
+		FPPMQTTSecret: fppMQTTSecretAdapter{st: st},
 		// FPPMQTTEnvVarSet/FPPMQTTMigrationDeferred are
 		// FPPEndpointsEnvVarSet/FPPEndpointsMigrationDeferred's mirror for
 		// Track G seam G-3 — see those two fields' own doc comments.
