@@ -22,7 +22,8 @@ func TestCmdFPPPlaylistDefinitionsList(t *testing.T) {
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-16T21:00:00Z","definitions":[
 			{"instanceUuid":"u1","playlistName":"Halloween Main","playlistHash":"`+strings.Repeat("a", 64)+`",
-			 "capturedAt":"2026-08-16T20:00:00Z","receivedAt":"2026-08-16T20:00:01Z","entryCount":3,"referenced":true}
+			 "capturedAt":"2026-08-16T20:00:00Z","receivedAt":"2026-08-16T20:00:01Z","entryCount":3,"referenced":true,
+			 "referencedByPlaylists":[{"id":"playlist-apple","name":"Apple Night"},{"id":"playlist-zebra","name":"Zebra Night"}]}
 		]}`)
 	}))
 	defer ts.Close()
@@ -40,6 +41,9 @@ func TestCmdFPPPlaylistDefinitionsList(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "true") {
 		t.Errorf("stdout = %q, want it to show referenced=true", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Apple Night,Zebra Night") {
+		t.Errorf("stdout = %q, want it to list both referencing playlists by name, in the order the response carries them", stdout.String())
 	}
 }
 

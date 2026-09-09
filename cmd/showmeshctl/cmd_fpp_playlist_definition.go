@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"text/tabwriter"
 	"time"
 )
@@ -19,14 +20,21 @@ import (
 // cmd_playlist.go's own reasoning and shape: declares its own wire types
 // rather than importing the coordinator's v1 package.
 
+// fppPlaylistReference mirrors v1.FPPPlaylistReference.
+type fppPlaylistReference struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type fppPlaylistDefinitionMetadata struct {
-	InstanceUUID string    `json:"instanceUuid"`
-	PlaylistName string    `json:"playlistName"`
-	PlaylistHash string    `json:"playlistHash"`
-	CapturedAt   time.Time `json:"capturedAt"`
-	ReceivedAt   time.Time `json:"receivedAt"`
-	EntryCount   int       `json:"entryCount"`
-	Referenced   bool      `json:"referenced"`
+	InstanceUUID          string                 `json:"instanceUuid"`
+	PlaylistName          string                 `json:"playlistName"`
+	PlaylistHash          string                 `json:"playlistHash"`
+	CapturedAt            time.Time              `json:"capturedAt"`
+	ReceivedAt            time.Time              `json:"receivedAt"`
+	EntryCount            int                    `json:"entryCount"`
+	Referenced            bool                   `json:"referenced"`
+	ReferencedByPlaylists []fppPlaylistReference `json:"referencedByPlaylists"`
 }
 
 type fppPlaylistDefinitionsListResponse struct {
@@ -242,10 +250,18 @@ func cmdFPPPlaylistDefinitionEntries(args []string, stdout, stderr io.Writer, cl
 
 func printFPPPlaylistDefinitionsTable(w io.Writer, resp fppPlaylistDefinitionsListResponse) {
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "INSTANCE\tPLAYLIST\tHASH\tENTRIES\tREFERENCED\tRECEIVED")
+	_, _ = fmt.Fprintln(tw, "INSTANCE\tPLAYLIST\tHASH\tENTRIES\tREFERENCED\tREFERENCED BY\tRECEIVED")
 	for _, d := range resp.Definitions {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%t\t%s\n",
-			d.InstanceUUID, d.PlaylistName, d.PlaylistHash, d.EntryCount, d.Referenced, d.ReceivedAt.Format(time.RFC3339))
+		names := make([]string, 0, len(d.ReferencedByPlaylists))
+		for _, ref := range d.ReferencedByPlaylists {
+			names = append(names, ref.Name)
+		}
+		referencedBy := strings.Join(names, ",")
+		if referencedBy == "" {
+			referencedBy = "-"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%t\t%s\t%s\n",
+			d.InstanceUUID, d.PlaylistName, d.PlaylistHash, d.EntryCount, d.Referenced, referencedBy, d.ReceivedAt.Format(time.RFC3339))
 	}
 	_ = tw.Flush()
 }

@@ -5436,7 +5436,12 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description One row of GET /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no definition payload. referenced is true when some stored show.playlist object's active revision names this (instanceUuid, playlistHash). */
+        /** @description One show.playlist object that names an FPP playlist definition's (instanceUuid, playlistHash): FPPPlaylistDefinitionMetadata.referencedByPlaylists' own element, the playlist's own object id plus its operator-facing name. */
+        FPPPlaylistReference: {
+            id: string;
+            name: string;
+        };
+        /** @description One row of GET /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no definition payload. referenced is true when some stored show.playlist object's active revision names this (instanceUuid, playlistHash); referencedByPlaylists names every one of them, since more than one show.playlist object can name the same definition. Both are computed from the same pass over show.playlist objects, so referenced is exactly referencedByPlaylists being non-empty and the two cannot disagree. */
         FPPPlaylistDefinitionMetadata: {
             instanceUuid: string;
             playlistName: string;
@@ -5447,6 +5452,7 @@ export interface components {
             receivedAt: string;
             entryCount: number;
             referenced: boolean;
+            referencedByPlaylists: components["schemas"]["FPPPlaylistReference"][];
         };
         /** @description The body of GET /integrations/fpp/playlist-definitions: every stored definition's metadata, newest received first. */
         FPPPlaylistDefinitionsListResponse: {
