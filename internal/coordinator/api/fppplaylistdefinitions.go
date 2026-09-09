@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -349,13 +350,32 @@ func referencedFPPPlaylistHashesForInstance(ctx context.Context, r configReferen
 	if err != nil {
 		return nil, err
 	}
-	return all[instanceUUID], nil
+	byHash := all[instanceUUID]
+	out := make(map[string]bool, len(byHash))
+	for hash := range byHash {
+		out[hash] = true
+	}
+	return out, nil
+}
+
+// fppPlaylistReference names one show.playlist object that binds a given
+// (instanceUUID, playlistHash) FPP playlist: [referencedFPPPlaylistHashesByInstance]'s
+// per-hash element, carrying the playlist's own object id and its
+// operator-facing name.
+type fppPlaylistReference struct {
+	ID   string
+	Name string
 }
 
 // referencedFPPPlaylistHashesByInstance is
 // [referencedFPPPlaylistHashesForInstance]'s all-instances form, shared
-// with the list handler's own "referenced" column so both read the same
-// show.playlist objects once per call rather than once per row.
+// with the list handler's own "referenced"/"referencedByPlaylists" columns
+// so both read the same show.playlist objects once per call rather than
+// once per row. A hash can be named by more than one show.playlist object;
+// every one of them is kept, in ascending order of the playlist's own
+// object id, so a caller reading the list gets a deterministic order
+// regardless of the order [configReferenceReader.ListConfigObjects] itself
+// returns objects in.
 //
 // strict controls what happens when one show.playlist object's active
 // revision cannot be read or decoded:
@@ -378,12 +398,12 @@ func referencedFPPPlaylistHashesForInstance(ctx context.Context, r configReferen
 // live, at which point this function (not the prune query itself) is
 // where a fix belongs: reading every stored revision, not just the
 // active one.
-func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenceReader, strict bool) (map[string]map[string]bool, error) {
+func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenceReader, strict bool) (map[string]map[string][]fppPlaylistReference, error) {
 	objs, err := r.ListConfigObjects(ctx, config.ShowPlaylistConfigKind)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]map[string]bool{}
+	out := map[string]map[string][]fppPlaylistReference{}
 	for _, obj := range objs {
 		if obj.CurrentRevision == 0 {
 			continue
@@ -409,9 +429,16 @@ func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenc
 			continue
 		}
 		if out[payload.FPP.InstanceUUID] == nil {
-			out[payload.FPP.InstanceUUID] = map[string]bool{}
+			out[payload.FPP.InstanceUUID] = map[string][]fppPlaylistReference{}
 		}
-		out[payload.FPP.InstanceUUID][payload.FPP.PlaylistHash] = true
+		hash := payload.FPP.PlaylistHash
+		out[payload.FPP.InstanceUUID][hash] = append(out[payload.FPP.InstanceUUID][hash], fppPlaylistReference{ID: obj.ID, Name: payload.Name})
+	}
+	for _, byHash := range out {
+		for hash, refs := range byHash {
+			sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
+			byHash[hash] = refs
+		}
 	}
 	return out, nil
 }
@@ -444,6 +471,7 @@ func (h *handlers) handleListFPPPlaylistDefinitions(w http.ResponseWriter, r *ht
 			// list for every other instance's rows.
 			entries = nil
 		}
+		refs := referenced[rec.InstanceUUID][rec.PlaylistHash]
 		out = append(out, v1.FPPPlaylistDefinitionMetadata{
 			InstanceUUID: rec.InstanceUUID,
 			PlaylistName: rec.PlaylistName,
@@ -451,13 +479,27 @@ func (h *handlers) handleListFPPPlaylistDefinitions(w http.ResponseWriter, r *ht
 			CapturedAt:   formatTime(rec.CapturedAt),
 			ReceivedAt:   formatTime(rec.ReceivedAt),
 			EntryCount:   len(entries),
-			Referenced:   referenced[rec.InstanceUUID][rec.PlaylistHash],
+			// Both derived from refs in this one pass, never a second
+			// walk, so they cannot disagree: Referenced is exactly
+			// ReferencedByPlaylists being non-empty.
+			Referenced:            len(refs) > 0,
+			ReferencedByPlaylists: mapFPPPlaylistReferences(refs),
 		})
 	}
 	jsonWrite(w, v1.FPPPlaylistDefinitionsListResponse{
 		Definitions: out,
 		ServerTime:  formatTime(now),
 	})
+}
+
+// mapFPPPlaylistReferences carries refs' already-sorted order onto the wire
+// type verbatim, empty-but-non-nil rather than null when refs is empty.
+func mapFPPPlaylistReferences(refs []fppPlaylistReference) []v1.FPPPlaylistReference {
+	out := make([]v1.FPPPlaylistReference, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, v1.FPPPlaylistReference{ID: ref.ID, Name: ref.Name})
+	}
+	return out
 }
 
 // handleGetFPPPlaylistDefinition serves

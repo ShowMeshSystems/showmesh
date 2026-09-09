@@ -232,6 +232,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fpp/{instanceId}/playlist-definitions/republish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask one FPP host to resend its playlist definitions
+         * @description Behind `fpp:command`, the scope an operator write to one FPP host already needs. Asks the resident ShowMesh plugin to drop its record of which playlist definitions it has already published, and to sweep now rather than at the end of its own re-scan interval (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9). It writes nothing to FPP, alters no definition, and cannot make the plugin send anything it did not read from the host itself.
+         *     This repairs the one case that does not self-heal: a definition the coordinator lost or never durably stored, whose content has not changed, and which the plugin therefore suppresses on every later sweep of its own.
+         *     **A `200` means the plugin agreed to resend. It does not mean any definition arrived.** The plugin answers before it has attempted a single post, so the body reports what the plugin cleared, what it still holds, what it deliberately kept back, and that the sweep is OWED (`sweepPending: true`), and it carries no count of definitions the coordinator accepted, because no such count exists yet. To see what actually arrived, read `GET /integrations/fpp/playlist-definitions`, which is authoritative because the coordinator computed those hashes for itself.
+         *     `applied: false` is part of a success, not an error: it is what a repeated `requestId` returns, having cleared nothing a second time. Sending the same `requestId` again later is also how a caller learns the sweep finished, when `sweepPending` comes back `false`.
+         *     An instance id that names no configured `fpp.endpoints` entry is `404`. A request that reaches a configured host but produces no usable result is `502`, carrying the host's own text verbatim.
+         */
+        post: operations["republishFPPPlaylistDefinitions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/render/surfaces/{surfaceId}/apply": {
         parameters: {
             query?: never;
@@ -3309,6 +3336,33 @@ export interface components {
             /** @description `round(ceiling * gain / 100)`, the value actually reaching the channels. Carried because the gain alone does not say what the audience sees. */
             effectiveOutput: number;
         };
+        /** @description The body of POST /fpp/{instanceId}/playlist-definitions/republish (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9). Every field is optional, so the body itself may be omitted entirely: a republish is all of that host's definitions or none, and has no parameters. */
+        FPPDefinitionRepublishRequest: {
+            /** @description Caller-minted idempotency key. Optional: supply one and a retry of an unanswered request is safe, because a repeat of an id the plugin already applied clears nothing and comes back with `applied: false` and the state as it stands. Sending the same id again later is also how a caller learns the sweep finished. Omit it and the coordinator mints one, which is echoed on the response. Present but empty is a `400`. */
+            requestId?: string;
+        };
+        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/playlist-definitions/republish. */
+        FPPDefinitionRepublishResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            republish: components["schemas"]["FPPDefinitionRepublishResult"];
+        };
+        /** @description The plugin's own evidence, carried through unchanged. Read what it says and not more: the plugin agreed to resend, and these counts describe the plugin's own state at the moment it answered. There is deliberately no count of definitions the coordinator accepted, because when the plugin answers, not one post of the sweep has been attempted. Read `GET /integrations/fpp/playlist-definitions` to see what arrived. */
+        FPPDefinitionRepublishResult: {
+            instanceId: string;
+            /** @description The idempotency key this request actually carried, whether the caller supplied it or the coordinator minted it. Send it again later to read `sweepPending` as it stands. */
+            requestId: string;
+            /** @description `false` is a SUCCESS, not a failure: a repeat of a `requestId` the plugin already applied, which cleared nothing a second time and reports the state as it stands. */
+            applied: boolean;
+            /** @description How many stored definitions the plugin dropped from its published-set, so it will send them again even though their content, and therefore their hash, has not changed. `0` on a repeat. This is a count of definitions the plugin will resend, never a count of definitions the coordinator received. */
+            definitionsCleared: number;
+            /** @description How many the plugin still records as published as it answered: `0` immediately after an applied clear, and on a repeat how many the sweep has already re-sent and had accepted, so a repeat reports progress rather than an echo. */
+            definitionsHeld: number;
+            /** @description How many the plugin holds as terminally refused and deliberately did not clear, because re-sending those bytes gets the identical refusal until the plugin restarts. This republish will not re-send them, which is what an operator needs when the playlist they were chasing is still missing afterwards. */
+            definitionsRefusedTerminally: number;
+            /** @description Whether the resend is still owed. `true` on an applied answer, always: the plugin performs the sweep on its own worker, and no post of it has been attempted when this answers. It goes `false` only on a later repeat of the same `requestId`, which is how a caller learns the sweep finished. It reports that the sending finished, never that the coordinator accepted what was sent. */
+            sweepPending: boolean;
+        };
         /**
          * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) - a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies - the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape - required fields, enums, numeric bounds - as real JSON Schema, not as prose a generator cannot see.
          *     `idempotencyKey` is required on every variant (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. Its scoping rule (replay vs. `409` conflict) is identical on every variant - see any one variant's own `idempotencyKey` description below; the text is not repeated here a ninth time.
@@ -4732,7 +4786,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
             title: string;
             status: number;
             detail: string;
@@ -5384,7 +5438,12 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description One row of GET /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no definition payload. referenced is true when some stored show.playlist object's active revision names this (instanceUuid, playlistHash). */
+        /** @description One show.playlist object that names an FPP playlist definition's (instanceUuid, playlistHash): FPPPlaylistDefinitionMetadata.referencedByPlaylists' own element, the playlist's own object id plus its operator-facing name. */
+        FPPPlaylistReference: {
+            id: string;
+            name: string;
+        };
+        /** @description One row of GET /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no definition payload. referenced is true when some stored show.playlist object's active revision names this (instanceUuid, playlistHash); referencedByPlaylists names every one of them, since more than one show.playlist object can name the same definition. Both are computed from the same pass over show.playlist objects, so referenced is exactly referencedByPlaylists being non-empty and the two cannot disagree. */
         FPPPlaylistDefinitionMetadata: {
             instanceUuid: string;
             playlistName: string;
@@ -5395,6 +5454,7 @@ export interface components {
             receivedAt: string;
             entryCount: number;
             referenced: boolean;
+            referencedByPlaylists: components["schemas"]["FPPPlaylistReference"][];
         };
         /** @description The body of GET /integrations/fpp/playlist-definitions: every stored definition's metadata, newest received first. */
         FPPPlaylistDefinitionsListResponse: {
@@ -7024,6 +7084,59 @@ export interface operations {
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
             /** @description The request was valid and the instance is configured, but the write to the FPP host's plugin did not take. `type` is `https://showmesh.dev/problems/fpp-transition-gain-write-failed` and `detail` carries the host's own error text verbatim. */
+            502: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    republishFPPPlaylistDefinitions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FPPDefinitionRepublishRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPDefinitionRepublishResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            /** @description The request was valid and the instance is configured, but the republish produced no usable result: the host was unreachable, the plugin refused, or the plugin answered something the coordinator will not relay (an undecodable body, an unsupported `schemaVersion`, or an `applied` answer claiming no sweep is owed). `type` is `https://showmesh.dev/problems/fpp-definition-republish-failed` and `detail` carries the host's own error text verbatim. */
             502: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

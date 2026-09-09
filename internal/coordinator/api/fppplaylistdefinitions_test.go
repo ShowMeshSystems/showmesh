@@ -871,6 +871,64 @@ func TestFPPPlaylistDefinitionListReportsMetadataNewestFirstAndReferenced(t *tes
 	}
 }
 
+// TestFPPPlaylistDefinitionListReportsReferencedByPlaylistsForMultipleBindings
+// proves the case a single boolean could never express: a definition named
+// by more than one show.playlist object. The two are bound out of id order
+// (zebra, then apple) so a passing assertion proves the response is sorted
+// by playlist object id, not merely stable under this store's own
+// insertion/iteration order.
+func TestFPPPlaylistDefinitionListReportsReferencedByPlaylistsForMultipleBindings(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	def, hash := simpleDefinitionAndHash(t, "shared")
+	if resp, m := mustPostPlaylistDefinition(t, api, fppPlaylistDefinitionPublishBody(t, "instance-1", "shared", def, hash, 1), token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("post: status = %d; body %v", resp.StatusCode, m)
+	}
+	mustBindShowPlaylist(t, setup.st, "playlist-zebra", "instance-1", hash)
+	mustBindShowPlaylist(t, setup.st, "playlist-apple", "instance-1", hash)
+
+	req := newJSONRequest(t, http.MethodGet, "/api/v1/integrations/fpp/playlist-definitions", "", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, raw := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, raw)
+	}
+	assertMatchesSchema(t, c, "FPPPlaylistDefinitionsListResponse", raw)
+	var listResp struct {
+		Definitions []struct {
+			PlaylistHash          string `json:"playlistHash"`
+			Referenced            bool   `json:"referenced"`
+			ReferencedByPlaylists []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"referencedByPlaylists"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(raw, &listResp); err != nil {
+		t.Fatalf("decode: %v; body: %s", err, raw)
+	}
+	if len(listResp.Definitions) != 1 {
+		t.Fatalf("len(Definitions) = %d, want 1", len(listResp.Definitions))
+	}
+	d := listResp.Definitions[0]
+	if !d.Referenced {
+		t.Error("Referenced = false, want true (bound by two playlists)")
+	}
+	if len(d.ReferencedByPlaylists) != 2 {
+		t.Fatalf("len(ReferencedByPlaylists) = %d, want 2; body: %s", len(d.ReferencedByPlaylists), raw)
+	}
+	if d.ReferencedByPlaylists[0].ID != "playlist-apple" || d.ReferencedByPlaylists[0].Name != "playlist-apple" {
+		t.Errorf("ReferencedByPlaylists[0] = %+v, want id/name playlist-apple (ascending object id order)", d.ReferencedByPlaylists[0])
+	}
+	if d.ReferencedByPlaylists[1].ID != "playlist-zebra" || d.ReferencedByPlaylists[1].Name != "playlist-zebra" {
+		t.Errorf("ReferencedByPlaylists[1] = %+v, want id/name playlist-zebra (ascending object id order)", d.ReferencedByPlaylists[1])
+	}
+}
+
 func TestFPPPlaylistDefinitionGetReturns404ForUnknownKey(t *testing.T) {
 	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})

@@ -119,6 +119,11 @@ type handlers struct {
 	// only a test ever sets it.
 	fppGainWriter fppTransitionGainWriter
 
+	// fppDefinitionRepublisher substitutes the operator playlist
+	// definition republish - see fppDefinitionRepublisher's own doc
+	// comment. Nil in production.
+	fppDefinitionRepublisher fppDefinitionRepublisher
+
 	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
 	// intent gate state. See [emergencyStopArmStore]'s own doc comment
 	// for why this is in-memory, unpersisted, and a single-process
