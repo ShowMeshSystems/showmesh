@@ -63,6 +63,7 @@ import type {
   ObservationsResponse,
   PrincipalResponse,
   PrincipalsResponse,
+  AlignedAudioStartResult,
   AudioSessionCommandResult,
   RenderCommandResult,
   RenderSettingsConfigResponse,
@@ -518,6 +519,14 @@ export function startAudioSession(
   scheduledAtNs?: bigint,
 ): Promise<AudioSessionCommandResult> {
   return store.startAudioSession(nodeId, sessionId, revision, scheduledAtNs)
+}
+
+export function alignedStartAudioSession(
+  sessionId: string,
+  revision: bigint,
+  nodeIds: readonly string[],
+): Promise<AlignedAudioStartResult> {
+  return store.alignedStartAudioSession(sessionId, revision, nodeIds)
 }
 
 export function advanceAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {

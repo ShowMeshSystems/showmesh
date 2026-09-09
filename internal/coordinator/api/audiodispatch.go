@@ -417,6 +417,18 @@ type AudioDispatchInput struct {
 	IssuerForm         identity.CredentialForm
 	IssuerCredentialID string
 	ClientAddr         string
+
+	// OnEvidence, when set, receives the node's own result evidence map
+	// exactly as it decoded, before this dispatch reduces it to an
+	// outcome/reason pair. It exists for audio.session.prepare's
+	// media-clock readiness fields (pkg/audio's Result* constants),
+	// which an aligned start needs and which the outcome/reason pair
+	// necessarily discards. Never called when no result arrived.
+	//
+	// The map's numbers are NOT uniformly float64: mqttproto decodes the
+	// nanosecond-scale fields as json.Number so they are not rounded, so
+	// a reader must handle both (see alignedstart.go's own accessors).
+	OnEvidence func(map[string]any)
 }
 
 // executeAudioSessionDispatch records the command and its ADR-024
@@ -609,6 +621,12 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 	if err != nil {
 		markDispatched("dispatched", "collection_failed", "result payload did not decode", "{}")
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("decode result payload: %w", err)
+	}
+
+	if in.OnEvidence != nil && res.Evidence != nil {
+		if v, ok := res.Evidence.Value.(map[string]any); ok {
+			in.OnEvidence(v)
+		}
 	}
 
 	outcome, reason := mapResultOutcome(res)

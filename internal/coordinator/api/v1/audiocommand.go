@@ -50,3 +50,53 @@ type AudioSessionCommandResponse struct {
 	ServerTime string                    `json:"serverTime"`
 	Command    AudioSessionCommandResult `json:"command"`
 }
+
+// AlignedAudioStartRequest is the body of
+// POST /audio/sessions/{sessionId}/aligned-start: start one session on
+// several nodes at ONE instant on the shared media clock.
+type AlignedAudioStartRequest struct {
+	Revision       uint64   `json:"revision"`
+	IdempotencyKey string   `json:"idempotencyKey"`
+	NodeIDs        []string `json:"nodeIds"`
+}
+
+// AlignedAudioStartSelection is the chosen start instant and the evidence
+// behind it, absent when no instant could be chosen.
+//
+// ScheduledAtNs is a JSON int64 around 1.79e18, past IEEE-754 double's
+// exact integer range: a client that parses this body with a stock JSON
+// parser rounds it.
+type AlignedAudioStartSelection struct {
+	ScheduledAtNs int64  `json:"scheduledAtNs"`
+	ClockNodeID   string `json:"clockNodeId"`
+	LeadNs        int64  `json:"leadNs"`
+
+	PrerollNs         int64 `json:"prerollNs"`
+	PrerollReportedBy int   `json:"prerollReportedBy"`
+	DeliveryBoundNs   int64 `json:"deliveryBoundNs"`
+	MarginNs          int64 `json:"marginNs"`
+
+	// ClockErrorBoundKnown false means the clock's error bound was
+	// UNKNOWN and no allowance for it is included, NOT that it was zero.
+	ClockErrorBoundKnown bool  `json:"clockErrorBoundKnown"`
+	ClockErrorBoundNs    int64 `json:"clockErrorBoundNs"`
+}
+
+// AlignedAudioStartResponse reports the prepare and start results per
+// node alongside the selection.
+//
+// Aligned is false when no start instant could be chosen. Every node was
+// then started UNSCHEDULED, on arrival, exactly as before this endpoint
+// existed, and UnalignedReason says why. A caller must not read
+// aligned=false as a failure, nor as an aligned start.
+type AlignedAudioStartResponse struct {
+	ServerTime string `json:"serverTime"`
+	SessionID  string `json:"sessionId"`
+
+	Aligned         bool                        `json:"aligned"`
+	UnalignedReason string                      `json:"unalignedReason"`
+	Selection       *AlignedAudioStartSelection `json:"selection"`
+
+	Prepares []AudioSessionCommandResult `json:"prepares"`
+	Starts   []AudioSessionCommandResult `json:"starts"`
+}

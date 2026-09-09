@@ -347,6 +347,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/audio/sessions/{sessionId}/aligned-start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start one session on several nodes at ONE instant on the shared media clock
+         * @description Behind `audio:command`. RES-019 section 6's scheduled start across a group: this prepares every node in `nodeIds`, takes the media-clock reading those prepare results carry, picks ONE start instant, and starts every node at that identical instant. The instant is chosen here rather than per node on purpose - one instant on one shared clock is the point, and a per-node value would produce a set of different times by construction. The reading is taken from the node carrying the program plus LTC role (the one that declares an `ltcRoute` in its `audio.node` configuration), because the coordinator holds no media clock of its own. A reading from any other node is never substituted: the readings are on different nodes' clocks, and borrowing one would hide the misconfiguration this endpoint exists to expose. `T0 = reading + slowest reported preroll + scheduledStartDeliveryBoundMs + scheduledStartMarginMs`, plus the clock's stated error bound when it has one. A `200` is never itself success. When no usable reading exists - no target holds the role, or the holder's clock is not locked - `aligned` is `false`, `unalignedReason` says why, and every node is started UNSCHEDULED, on arrival, exactly as before this endpoint existed. That is the documented behaviour for a node without a locked clock, not a failure, and it is reported rather than hidden so an operator is never told an unaligned start was aligned. Each node's own prepare and start outcome is reported separately in `prepares` and `starts`.
+         */
+        post: operations["dispatchAlignedAudioStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/audio/sessions/{sessionId}/pause": {
         parameters: {
             query?: never;
@@ -1271,7 +1291,7 @@ export interface paths {
         };
         /**
          * The audio.settings engine-wide singleton (ADR-039)
-         * @description Requires `config:write`, mirroring `GET /config/render.settings`'s own always-sensitive, never-404 posture: the payload has a well-defined default, so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written. `driftIgnoreThresholdMs`'s default has never been measured against real playback and is a starting point, not a tuned value.
+         * @description Requires `config:write`, mirroring `GET /config/render.settings`'s own always-sensitive, never-404 posture: the payload has a well-defined default, so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written. `driftIgnoreThresholdMs`'s default is derived from a measurement: a real sink was observed making routine skew corrections of exactly 20.0 ms (960 samples at 48 kHz) about 21 minutes apart, so a threshold of 20 was the same number as the correction it had to be told apart from. The default is 40, that sink's own documented drift tolerance.
          */
         get: operations["getAudioSettingsConfig"];
         /**
@@ -3454,6 +3474,66 @@ export interface components {
              */
             scheduledAtNs?: number;
         };
+        /** @description The body of POST /audio/sessions/{sessionId}/aligned-start. `nodeIds` is the aligned group: every node named is prepared, then started at one instant. A node named twice is refused rather than deduplicated, since that would dispatch two starts and report two results for one node. `revision` goes through each node's own per-session revision ledger, exactly as a single-node start does. */
+        AlignedAudioStartRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. Each per-node prepare and start derives its own key from it, so one aligned start is one replayable unit rather than 2N unrelated commands. */
+            idempotencyKey?: string;
+            nodeIds: string[];
+        };
+        /** @description The chosen start instant and the evidence behind it. */
+        AlignedAudioStartSelection: {
+            /**
+             * Format: int64
+             * @description The instant every node was started at, on the media clock of `clockNodeId`. Around 1.79e18, past IEEE-754 double's exact integer range (9.007e15), so a client parsing this body with a stock JSON parser ROUNDS it. Parse it as an exact integer.
+             */
+            scheduledAtNs: number;
+            /** @description The node whose media-clock reading this instant came from. */
+            clockNodeId: string;
+            /**
+             * Format: int64
+             * @description How far scheduledAtNs sits past that reading; the sum of the four terms below.
+             */
+            leadNs: number;
+            /**
+             * Format: int64
+             * @description The largest preroll any target actually reported. Zero with prerollReportedBy zero means NOBODY reported one, which is not the same as everybody reporting zero.
+             */
+            prerollNs: number;
+            /** @description How many targets reported a preroll latency. */
+            prerollReportedBy: number;
+            /**
+             * Format: int64
+             * @description audio.settings' scheduledStartDeliveryBoundMs, in nanoseconds.
+             */
+            deliveryBoundNs: number;
+            /**
+             * Format: int64
+             * @description audio.settings' scheduledStartMarginMs, in nanoseconds.
+             */
+            marginNs: number;
+            /** @description False means the clock's error bound was UNKNOWN and no allowance for it is included in leadNs - NOT that the bound was zero. A zero bound is a claim of exactness no source here can make, so an unknown one contributes nothing and says so. */
+            clockErrorBoundKnown: boolean;
+            /**
+             * Format: int64
+             * @description The allowance folded into leadNs; 0 whenever clockErrorBoundKnown is false.
+             */
+            clockErrorBoundNs: number;
+        };
+        /** @description Per-node prepare and start results plus the selection. `aligned` false means no instant could be chosen and every node started unscheduled, on arrival; it is neither a failure nor an aligned start, and `unalignedReason` says which node's clock was the reason. */
+        AlignedAudioStartResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            sessionId: string;
+            aligned: boolean;
+            /** @description Empty exactly when aligned is true. */
+            unalignedReason: string;
+            /** @description Null exactly when aligned is false. */
+            selection: components["schemas"]["AlignedAudioStartSelection"] | null;
+            prepares: components["schemas"]["AudioSessionCommandResult"][];
+            starts: components["schemas"]["AudioSessionCommandResult"][];
+        };
         /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/seek. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
         AudioSessionSeekRequest: {
             /** Format: int64 */
@@ -4646,7 +4726,7 @@ export interface components {
             idempotencyKey: string;
             armToken: string;
         };
-        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. `scheduledStartDeliveryBoundMs` and `scheduledStartMarginMs` are the only two fields in this object the COORDINATOR reads rather than a node: every other field is a default a node applies to its own playback. They are the two terms added to a scheduled start's `T0`, which the coordinator computes as max(node ready times) plus the bound plus the margin and sends identically to every target. The bound is how long a start command is assumed to take to reach the slowest target and finish its preroll, and is a property of the path a bench can eventually measure. The margin is deliberate slack and stays a judgement even after the bound is measured, which is why these are two fields and not one sum. BOTH SHIPPED DEFAULTS ARE GUESSES: nothing has timed a command from dispatch to a node's completed preroll. Together they place a start three seconds after the last target reports ready. */
+        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs`'s default is measurement-derived: a real sink makes routine 20.0 ms skew corrections, so the default is 40, that sink's own documented drift tolerance, rather than the 20 that collided with the correction magnitude. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. `scheduledStartDeliveryBoundMs` and `scheduledStartMarginMs` are the only two fields in this object the COORDINATOR reads rather than a node: every other field is a default a node applies to its own playback. They are the two terms added to a scheduled start's `T0`, which the coordinator computes as max(node ready times) plus the bound plus the margin and sends identically to every target. The bound is how long a start command is assumed to take to reach the slowest target and finish its preroll, and is a property of the path a bench can eventually measure. The margin is deliberate slack and stays a judgement even after the bound is measured, which is why these are two fields and not one sum. BOTH SHIPPED DEFAULTS ARE GUESSES: nothing has timed a command from dispatch to a node's completed preroll. Together they place a start three seconds after the last target reports ready. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
             /** @enum {string} */
@@ -7266,6 +7346,38 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAlignedAudioStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlignedAudioStartRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlignedAudioStartResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

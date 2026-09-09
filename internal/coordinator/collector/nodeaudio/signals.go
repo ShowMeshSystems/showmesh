@@ -144,11 +144,11 @@ var AllSignalIDs = []observation.SignalID{
 	SignalEngineRestoreNextAttemptMs,
 	SignalEngineRestoreLastReason,
 	SignalTimelineScheduledAt,
+	SignalTimelineResyncs,
+	SignalTimelineLastResyncReason,
 	SignalTimelineExpectedMs,
 	SignalTimelineActualMs,
 	SignalTimelineErrorMs,
-	SignalTimelineResyncs,
-	SignalTimelineLastResyncReason,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one

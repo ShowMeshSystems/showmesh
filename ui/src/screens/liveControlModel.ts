@@ -1,5 +1,6 @@
 import { PROBLEM_TYPE } from '../api'
 import type {
+  AlignedAudioStartResult,
   AudioSessionCommandResult,
   CurrentRun,
   Evidence,
@@ -541,4 +542,45 @@ export function audioTimelineRows(observations: ObservationEntry[], nodeId: stri
       state: entry.state,
     }
   })
+}
+
+/**
+ * The outcome line for an aligned multi-node start.
+ *
+ * `aligned` false is deliberately NOT reported as good and NOT as a
+ * failure. No usable media-clock reading existed, so every node started on
+ * arrival exactly as it always has, which is the documented behaviour for
+ * a node without a locked clock. An operator who asked for an aligned
+ * start and was shown a plain success would have been told something
+ * false, so it reads as a warning carrying the coordinator's own reason.
+ */
+export function describeAlignedStart(result: AlignedAudioStartResult): CommandOutcome {
+  const worst = [...result.prepares, ...result.starts].find(
+    (r) => !AUDIO_SESSION_GOOD_OUTCOMES.has(r.outcome) && r.outcome !== 'unconfirmable',
+  )
+  if (worst !== undefined) {
+    return {
+      tone: 'bad',
+      label: 'Refused',
+      detail: `Aligned start: ${worst.nodeId} reported ${worst.outcome}${worst.reason === '' ? '' : ` (${worst.reason})`}.`,
+    }
+  }
+  if (!result.aligned || result.selection === null) {
+    return {
+      tone: 'warn',
+      label: 'Not aligned',
+      detail: `Aligned start: ${result.unalignedReason}`,
+    }
+  }
+  const nodes = result.starts.length
+  return {
+    tone: 'good',
+    label: 'Aligned',
+    detail:
+      `Aligned start: ${nodes} node${nodes === 1 ? '' : 's'} scheduled at ${String(result.selection.scheduledAtNs)} ns ` +
+      `on ${result.selection.clockNodeId}'s media clock` +
+      (result.selection.clockErrorBoundKnown
+        ? '.'
+        : '. The clock stated no error bound, so the lead carries no allowance for clock uncertainty.'),
+  }
 }

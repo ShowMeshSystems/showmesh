@@ -22,34 +22,72 @@ import (
 // from anything else this package already reports.
 const noAlignmentMeasurementReason = "no program-to-LTC alignment measurement is implemented; nothing in this seam can measure it"
 
-// noTimelineReportReason is the standing reason behind all six
-// node.audio.timeline.* signals. The agent's own report
-// ([mqttproto.AudioPayload]) carries no timeline fields yet, so this
-// collector has nothing to read and says so, rather than reporting a
-// fabricated zero timeline for a node that is not running a scheduled
-// session at all — the same posture [SignalClockAlignment] takes for the
-// measurement it also cannot make.
-const noTimelineReportReason = "this node's audio report carries no scheduled-playback timeline; nothing on the wire reports one yet"
+// timelineAbsentReason states why a timeline signal carries no value.
+// The node's own [mqttproto.AudioPayload.TimelineReason] is preferred
+// whenever it supplied one; the fallbacks cover an agent built before
+// these fields existed, which omits the whole block rather than
+// explaining its absence.
+func timelineAbsentReason(p mqttproto.AudioPayload, scheduled bool) string {
+	if p.TimelineReason != "" {
+		return p.TimelineReason
+	}
+	if !scheduled {
+		return "this node is running no session against a scheduled start instant"
+	}
+	return "this node could not read both its media clock and its sink clock on this report tick"
+}
 
 // timelineObservations renders the six node.audio.timeline.* signals
-// (signals.go). All six are [observation.StateNotCollected] with a
-// stated reason for now: see noTimelineReportReason. They report real
-// values once the agent's report carries a timeline, and reporting them
-// as absent-with-a-reason keeps the shape of the answer visible to an
-// operator instead of leaving six minted identifiers with nothing behind
-// them.
-func timelineObservations(res observation.ResourceRef, source string, at time.Time) []observation.Observation {
-	signals := []observation.SignalID{
-		SignalTimelineScheduledAt,
-		SignalTimelineExpectedMs,
-		SignalTimelineActualMs,
-		SignalTimelineErrorMs,
-		SignalTimelineResyncs,
-		SignalTimelineLastResyncReason,
+// (signals.go) from the node's own report.
+//
+// The payload carries TWO flags and they are not interchangeable.
+// Scheduled makes ScheduledAt, Resyncs and LastResyncReason real;
+// Measured makes ExpectedMs, ActualMs and ErrorMs real. A scheduled
+// session whose media clock could not be read this tick therefore
+// reports the first three and leaves the last three
+// [observation.StateNotCollected] with the node's stated reason, rather
+// than a zero error that would read as perfectly on time.
+//
+// LastResyncReason is only real once a resync has actually happened: on a
+// scheduled session that has never resynced there is no reason to report,
+// and an empty string would read as one.
+func timelineObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+	reason := timelineAbsentReason(p, p.TimelineScheduled)
+
+	var obs []observation.Observation
+	if p.TimelineScheduled {
+		obs = append(obs,
+			buildValue(nodeID, SignalTimelineScheduledAt, p.TimelineScheduledAtNs, observedAt, rep),
+			buildValue(nodeID, SignalTimelineResyncs, p.TimelineResyncs, observedAt, rep),
+		)
+		if p.TimelineLastResyncReason != "" {
+			obs = append(obs, buildValue(nodeID, SignalTimelineLastResyncReason, p.TimelineLastResyncReason, observedAt, rep))
+		} else {
+			obs = append(obs, notCollected(res, SignalTimelineLastResyncReason, source,
+				"this scheduled session has not resynced, so no resync reason is in effect", rep.receivedAt))
+		}
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalTimelineScheduledAt, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineResyncs, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineLastResyncReason, source, reason, rep.receivedAt),
+		)
 	}
-	obs := make([]observation.Observation, 0, len(signals))
-	for _, sig := range signals {
-		obs = append(obs, notCollected(res, sig, source, noTimelineReportReason, at))
+
+	if p.TimelineScheduled && p.TimelineMeasured {
+		obs = append(obs,
+			buildValue(nodeID, SignalTimelineExpectedMs, p.TimelineExpectedMs, observedAt, rep),
+			buildValue(nodeID, SignalTimelineActualMs, p.TimelineActualMs, observedAt, rep),
+			buildValue(nodeID, SignalTimelineErrorMs, p.TimelineErrorMs, observedAt, rep),
+		)
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalTimelineExpectedMs, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineActualMs, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineErrorMs, source, reason, rep.receivedAt),
+		)
 	}
 	return obs
 }
@@ -216,7 +254,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
 	obs = append(obs, engineRestoreObservations(nodeID, p, observedAt, rep)...)
-	obs = append(obs, timelineObservations(res, source, rep.receivedAt)...)
+	obs = append(obs, timelineObservations(nodeID, p, observedAt, rep)...)
 
 	return obs
 }

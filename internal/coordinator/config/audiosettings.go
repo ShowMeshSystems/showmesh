@@ -99,8 +99,9 @@ type AudioSettingsPayload struct {
 	// DriftIgnoreThresholdMs is how far a node's audio playback may drift
 	// from its track-boundary correction point before ShowMesh treats it
 	// as a problem (ADR-017: audio corrects discretely at track
-	// boundaries, never by continuous rate manipulation). HYPOTHESIS, NOT
-	// MEASURED — see AudioSettingsDefaultPayload.
+	// boundaries, never by continuous rate manipulation). Its default is
+	// now derived from a measurement rather than guessed: see
+	// AudioSettingsDefaultPayload.
 	DriftIgnoreThresholdMs int `json:"driftIgnoreThresholdMs"`
 
 	// DefaultFadeCurve is the fade shape a session uses when a macro step
@@ -184,10 +185,29 @@ type AudioSettingsPayload struct {
 }
 
 // AudioSettingsDefaultPayload is the value reported when nothing has ever
-// been written. Every number here is a starting point, not a tuned value:
-// the drift ignore threshold in particular has never been measured against
-// real playback (RES-007 is the work queue), so 20ms is a guess labelled
-// as one, not a result.
+// been written. Most numbers here are starting points, not tuned values.
+//
+// DriftIgnoreThresholdMs is the exception: it is now derived from a
+// measurement. A real sink was observed making two routine skew
+// corrections of exactly 960 samples, 20.0 ms at 48 kHz, about 21 minutes
+// apart, each landing within 0.3 microseconds of 20 ms. The previous
+// default of 20 was therefore the SAME NUMBER as the ordinary correction
+// it had to be distinguished from, with no margin for the jitter two
+// samples cannot characterise. 40 is that sink's own documented
+// drift-tolerance, twice the correction it actually makes: an error above
+// it is one the sink's own policy says should already have been handled,
+// so it is genuinely anomalous rather than routine.
+//
+// This does not by itself fix a spurious resync, and is not claimed to:
+// internal/agent/audio/timeline.go consults this threshold only INSIDE an
+// established discontinuity, and a sink skew correction is none of the
+// three causes that establish one. What it fixes is the case where a
+// genuine cause (a PTP step) coincides with a routine correction, where a
+// threshold of 20 decided "seek or do not seek" on 0.3 microseconds of
+// noise.
+//
+// An operator whose stored revision carries an explicit 20 keeps 20: this
+// default governs only a coordinator that has never written the object.
 //
 // The two scheduled-start numbers are guesses of the same kind. Together
 // they put a scheduled start three seconds after the last target reports
@@ -197,7 +217,7 @@ type AudioSettingsPayload struct {
 // margin is deliberate slack, and the bound is a placeholder standing in
 // for a measurement nobody has taken.
 var AudioSettingsDefaultPayload = AudioSettingsPayload{
-	DriftIgnoreThresholdMs:     20,
+	DriftIgnoreThresholdMs:     40,
 	DefaultFadeCurve:           string(audio.FadeCurveLinear),
 	DefaultFadeDurationMs:      1000,
 	DefaultMaxBackgroundGainDb: -4.44,

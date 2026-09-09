@@ -1642,6 +1642,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/apply", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionApply))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/prepare", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPrepare))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/start", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStart))
+	mux.HandleFunc("POST /api/v1/audio/sessions/{sessionId}/aligned-start", h.writeGuard(&scopeAudioCommand, h.handleAlignedAudioStart))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/pause", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPause))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/resume", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionResume))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/seek", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionSeek))

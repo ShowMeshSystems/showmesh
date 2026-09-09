@@ -49,6 +49,8 @@ func cmdAudioSession(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitOK
 	case "show":
 		return cmdAudioSessionShow(rest, stdout, stderr, clock)
+	case "aligned-start":
+		return cmdAudioSessionAlignedStart(rest, stdout, stderr, clock)
 	}
 	for _, op := range audioSessionOps {
 		if sub == op {
@@ -62,6 +64,7 @@ func cmdAudioSession(args []string, stdout, stderr io.Writer, clock func() time.
 
 func printAudioSessionUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio session <op> [flags] <node-id> <session-id> [params-json]
+       showmeshctl audio session aligned-start [flags] <session-id> <node-id>...
        showmeshctl audio session show [flags] [<session-id>]
 
 Dispatch one of the nine audio.session.* operations (requires
@@ -86,6 +89,13 @@ The pipeline backend behind these operations is an open owner decision;
 every dispatch against the shipped agent reports "unconfirmable" — this
 is expected and does not mean the request failed to reach the node. See
 "showmeshctl audio session <op> --help".
+
+"aligned-start" is not one of the nine either: it takes a session id and
+a LIST of node ids, prepares every one of them, and starts them all at
+ONE instant on the shared media clock, which the coordinator picks from
+the node carrying the program plus LTC role. When no usable reading
+exists, every node still starts on arrival and the output says the run
+was not aligned. See "showmeshctl audio session aligned-start --help".
 
 "show" is a read, not one of the nine dispatch ops: it displays a
 session's audio_session.* observations (or, with no session id, every

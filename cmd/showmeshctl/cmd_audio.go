@@ -169,8 +169,8 @@ func printAudioSettingsUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio settings <subcommand> [flags]
 
 Read or write the coordinator's audio.settings configuration (ADR-039):
-driftIgnoreThresholdMs (never measured — a starting point, not a tuned
-value), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
+driftIgnoreThresholdMs (default 40, derived from a measured sink whose
+routine skew correction is 20.0 ms), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
 defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB;
 a linear-looking 0.5 here is only half a decibel, not a halving, so enter
 -6.02 if you meant half amplitude),

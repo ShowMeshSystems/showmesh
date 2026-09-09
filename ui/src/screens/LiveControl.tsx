@@ -4,6 +4,7 @@ import {
   ApiError,
   activateCue,
   advanceAudioSession,
+  alignedStartAudioSession,
   applyAudioSession,
   armEmergencyStopHardStop,
   blackoutResolume,
@@ -91,6 +92,7 @@ import {
   parseExactRevisionInput,
   parseScheduledAtNsInput,
   audioTimelineRows,
+  describeAlignedStart,
   reportedPlaylistName,
   transportState,
   type CommandOutcome,
@@ -1219,6 +1221,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   const [fadeTargetDb, setFadeTargetDb] = useState('')
   const [fadeDurationMs, setFadeDurationMs] = useState('')
   const [scheduledAtNs, setScheduledAtNs] = useState('')
+  const [alignedNodeIds, setAlignedNodeIds] = useState('')
   const [clearConfirm, setClearConfirm] = useState('')
   const [applyPayload, setApplyPayload] = useState('')
   const [applyConfirm, setApplyConfirm] = useState('')
@@ -1270,6 +1273,20 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   const canStart = canDispatch && scheduledAtNsError === null
   const startTitle = scheduledAtNsError ?? dispatchTitle
 
+  // The aligned group is the selected node plus any others typed in, in
+  // that order. Duplicates are dropped here rather than sent: the
+  // coordinator refuses a repeated node id outright, and the selected
+  // node being retyped is the obvious way to hit that.
+  const alignedGroup = [nodeId, ...alignedNodeIds.split(',').map((id) => id.trim())].filter(
+    (id, index, all) => id !== '' && all.indexOf(id) === index,
+  )
+  const canAlignedStart = canDispatch && alignedGroup.length > 1
+  const alignedTitle = !canDispatch
+    ? dispatchTitle
+    : alignedGroup.length > 1
+      ? undefined
+      : 'Name at least one more node: an aligned start of a single node is an ordinary start.'
+
   const run = useCallback((action: string, call: () => Promise<AudioSessionCommandResult>) => {
     call()
       .then((result) => {
@@ -1280,6 +1297,24 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   }, [])
 
   const timelineRows = audioTimelineRows(nodeObservations, nodeId)
+
+  // Its own runner, not `run`: an aligned start answers with a selection
+  // and two result lists rather than one command result, and collapsing
+  // that into a single outcome would lose the aligned/not-aligned
+  // distinction this control exists to show.
+  const runAligned = useCallback(
+    (nodeIds: readonly string[]) => {
+      alignedStartAudioSession(trimmedSessionId, effectiveRevision, nodeIds)
+        .then((result) => {
+          setOutcome(describeAlignedStart(result))
+          setReloadKey((n) => n + 1)
+        })
+        .catch((err: unknown) =>
+          setOutcome({ tone: 'bad', label: 'Refused', detail: `Aligned start: ${describeApiError(err)}` }),
+        )
+    },
+    [trimmedSessionId, effectiveRevision],
+  )
 
   const stateEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.state')
   const positionEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.position_ms')
@@ -1542,6 +1577,28 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                     />
                   )}
                 </Field>
+                <div className="sm-volume">
+                  <Field
+                    label="Align with"
+                    help="Other node ids, comma separated. The coordinator prepares every node, picks ONE instant from the node holding program plus LTC, and starts them all at it."
+                  >
+                    {(props) => (
+                      <Input
+                        {...props}
+                        value={alignedNodeIds}
+                        onChange={(event) => setAlignedNodeIds(event.target.value)}
+                        placeholder="node-b, node-c"
+                      />
+                    )}
+                  </Field>
+                  <Button
+                    disabled={!canAlignedStart}
+                    title={alignedTitle}
+                    onClick={() => runAligned(alignedGroup)}
+                  >
+                    Aligned start
+                  </Button>
+                </div>
               </div>
 
               <div className="sm-panel">
