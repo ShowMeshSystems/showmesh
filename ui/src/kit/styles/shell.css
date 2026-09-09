@@ -35,6 +35,31 @@
   }
 }
 
+/*
+ * Below 720px the left group's own show name plus mode badge can already run
+ * past the viewport on its own (up to 475px measured), which would carry the
+ * bar's overflow toggle off-screen with it if the toggle stayed an in-flow
+ * flex child. Bound the show name so the left group is predictable, and
+ * reserve room on the right for the toggle, which is fixed so it is never
+ * subject to the bar's own overflow regardless of what is in the left group.
+ */
+@media (max-width: 720px) {
+  .sm-chrome {
+    padding-right: 54px;
+  }
+
+  .sm-showpicker {
+    max-width: 128px;
+  }
+
+  /* A hard boundary, not just a clip point: overflowing children otherwise
+     paint past the padding above and under the fixed toggle. */
+  .sm-chrome__left {
+    max-width: calc(100vw - 108px);
+    overflow: hidden;
+  }
+}
+
 .sm-chrome__left {
   display: flex;
   align-items: center;
@@ -43,13 +68,16 @@
   min-width: 0;
 }
 
-/* Truncates so the bar keeps its height under a long title. */
+/* Truncates so the bar keeps its height under a long title. `overflow: hidden`
+   matters once this shrinks toward zero: without it, a squeezed-to-nothing
+   flex item's own text still paints past its collapsed box. */
 .sm-chrome__now {
   display: flex;
   align-items: baseline;
   gap: 11px;
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .sm-chrome__now > .sm-meta:first-child {
@@ -74,22 +102,28 @@
   flex: 0 0 auto;
 }
 
-/* The bar's own overflow menu. Below 720px the bar cannot fit the connection
-   pill and principal group; they move here instead of clipping. */
+/*
+ * The bar's own overflow menu. Below 720px the bar cannot fit the connection
+ * pill and principal group; they move here instead of clipping. Fixed, like
+ * the rail opener, so the bar's own nowrap overflow can never carry it
+ * off-screen regardless of how wide the left group's show name runs.
+ */
 .sm-chrome-toggle {
   display: none;
+  position: fixed;
+  top: 6px;
+  right: 12px;
+  z-index: 31;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: var(--ctrl-h-compact);
-  padding: 0 8px;
+  width: 34px;
+  height: 34px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-card);
   background: var(--surface);
   color: var(--text);
-  font: var(--t-body);
+  font-size: 15px;
   cursor: pointer;
-  flex: 0 0 auto;
 }
 
 @media (max-width: 720px) {
