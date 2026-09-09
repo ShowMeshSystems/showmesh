@@ -151,6 +151,100 @@ thing. Control 4 below closes that gap: a synthetic file shaped like a
 real capture (leading silence, then a cut sweep), not like the sweep
 itself.
 
+## Node-01 run 2: the live arm measured, the non-live arm's own control caught a second construction bug
+
+### Live arm: measured
+
+Re-run with the fixed (commit `828410aa`) analyzer against the real live
+capture:
+
+```
+RESULT_ONSET_MS: 330.438
+RESULT_TRUNCATION_MS: 0.021
+```
+
+(0.021ms is 1 sample at 48000Hz, correlation 1.0000 -- effectively exact
+zero, the same floating-point-of-a-sine-starting-at-zero artifact the
+sanity check above documents.) This agrees with an independent hand
+measurement of the same capture -- first sample above 0.005 at 330.44ms,
+last above threshold at 2330.40ms, a span of exactly 2.000s, peak
+0.799988 against the sweep's own configured amplitude 0.8 -- made by a
+completely different method (amplitude threshold against matched filter).
+Two independent measurements agreeing is what makes this evidence rather
+than a plausible-looking number: **the live pipeline renders the whole
+cue, with nothing missing from its front.** This matches the prediction
+(anchor ~18ms in the mixer's *future* for a live pipeline implies no
+truncation) and closes control 1.
+
+The header-size note also fired correctly on this real file: declared
+2147418112 bytes (`0x7FFFF000`) against 1023360 bytes actually present,
+identified by name as `wavenc`'s own unpatchable-header placeholder.
+
+### Non-live arm: voided by its own control, correctly
+
+The non-live arm (the post-hoc `forceNonLive` property-flip version, at
+the time) ran, wrote a capture, and then its own built-in control
+refused to let that capture be treated as data:
+
+```
+CONTROL: pipeline.IsLive() = true (requested forceNonLive=true)
+CONTROL FAILURE: pipeline.IsLive()=true while forceNonLive=true -- the
+toggle did not produce the intended pipeline classification. STOP: any
+truncation reading from this run is void, not a result.
+```
+
+That capture was never analyzed. A file existing is not a result
+existing, and a void arm is not data -- this is the harness behaving
+exactly as designed, and is the reason the live-arm number above can be
+trusted when it agrees independently.
+
+**Diagnosis, confirmed:** GStreamer decides a pipeline's liveness once,
+during its own READY->PAUSED preroll (the LATENCY query every element
+answers at that point). `gst_bin_recalculate_latency`, called afterward
+on an already-PLAYING pipeline, reconfigures timing within that existing
+classification -- it does not reopen the classification itself. No
+settle-time delay could have fixed this; it isn't a timing race. This
+was also independently confirmed on dev-02 with `fakesink` (no card
+needed, since liveness is a source-side property): a pipeline built with
+`is-live=false` on its only source reads `pipeline.IsLive() == false`
+immediately, while the identical graph with a post-hoc flip on an
+already-PLAYING pipeline stayed `true` -- see
+`TestBuildTestPipelineAchievesConstructionTimeLiveness` in
+`truncationreprobuild_test.go`.
+
+**A second, separate finding, worth as much as the measurement:** the
+non-live arm is not reachable through production configuration *at all*
+today. All three `is-live` sites in this package
+(`addMixerKeepAlive`, the silence-channel chain, and the LTC appsrc
+chain, all in files under
+[`internal/agent/audio/gstengine`](../../../internal/agent/audio/gstengine))
+are bare literal `true`, `addMixerKeepAlive` runs unconditionally once
+per program channel, and `Config.Validate` rejects an empty
+`ProgramChannels` -- so every structurally valid `Config` yields at least
+one live source, and production can only ever build a live pipeline.
+That is also why the live arm's measurement above is production's own
+real, unmodified behavior, not a constructed comparison case.
+
+**The fix, test-local only:** `truncationrepro_manual_test.go`'s
+`buildTestPipeline` now constructs the non-live arm's pipeline itself,
+reusing production's own private `linkInterleaveToSink` and
+`probeSinkChannelPositions` helpers verbatim for everything except the
+keep-alive source, whose `is-live` it sets *before* the pipeline's first
+state change rather than after. No production file gained a config
+field, a flag, or an environment variable; `Engine.buildPipeline` is
+untouched and still hardcodes `is-live=true` exactly as shipped -- this
+builder is a wholly separate, test-local construction path that exists
+only so `pipeline.IsLive() == false` becomes reachable to measure at all.
+See that file's own top doc comment for the full design rationale.
+
+**Why this matters beyond this measurement:** the owner has ruled that
+the pipeline must be clocked before playback starts, which requires
+building it non-live from construction -- so the non-live pipeline this
+repro measures is not a hypothetical rejected direction, it is the state
+a future fix would put production in. Measuring whether it truncates the
+front of a cue is measuring the consequence of that future state before
+it ships, not an academic comparison.
+
 ## What's in this directory
 
 - `gensweep/` -- the deterministic sweep generator (below).
