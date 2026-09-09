@@ -4,10 +4,15 @@ import { Drawer } from './Drawer'
 
 export type Connection = 'live' | 'degraded' | 'lost' | 'unknown'
 
-/** True once the viewport is at or below `breakpoint`. False during SSR and the first paint. */
+/**
+ * True once the viewport is at or below `breakpoint`. False during SSR, the
+ * first paint, and in a test environment without `matchMedia` (this repo's
+ * jsdom setup does not stub it).
+ */
 function useNarrow(breakpoint: number): boolean {
   const [narrow, setNarrow] = useState(false)
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
     const query = window.matchMedia(`(max-width: ${breakpoint}px)`)
     setNarrow(query.matches)
     const onChange = () => setNarrow(query.matches)
