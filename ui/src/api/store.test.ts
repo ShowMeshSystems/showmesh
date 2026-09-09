@@ -91,6 +91,9 @@ describe('ApiStore: snapshot-before-delta ordering (case 1)', () => {
     // time strictly between the two — so this test now samples the
     // model mid-flight, while the /snapshot response is still
     // deliberately withheld, and requires "n-delta" to be absent there.
+    // See the `streamRes` comment elsewhere in this file for why `as`
+    // rather than a `: T | null` annotation is needed here.
+    let heldSnapshotRes = null as import('node:http').ServerResponse | null
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
         openSSE(res)
@@ -109,9 +112,12 @@ describe('ApiStore: snapshot-before-delta ordering (case 1)', () => {
         return
       }
       if (req.url === '/snapshot') {
-        setTimeout(() => {
-          respondJson(res, 200, makeSnapshot({ nodes: [makeNode('n0')] }))
-        }, 80) // resolves well after the node.changed frame was written
+        // Withheld until this test releases it, rather than on a timer
+        // of its own: a timer would only be a deadline racing the sleep
+        // below, and the mid-flight sample has to be taken at a moment
+        // when the snapshot response CANNOT have resolved, not merely
+        // one where it usually has not.
+        heldSnapshotRes = res
         return
       }
       if (req.url?.startsWith('/events')) {
@@ -124,14 +130,19 @@ describe('ApiStore: snapshot-before-delta ordering (case 1)', () => {
     const store = makeStore(s.baseUrl)
     store.connect()
 
-    // At 50ms: the node.changed frame (written at 20ms) has certainly
-    // arrived and been parsed; the /snapshot response (withheld until
-    // 80ms) certainly has not resolved. The ordering claim this test is
-    // named for is exactly this: nothing from the delta may be visible
-    // yet.
+    // The node.changed frame (written at 20ms) has arrived and been
+    // parsed by now; the /snapshot response is still held, so it cannot
+    // have resolved. The ordering claim this test is named for is
+    // exactly this: nothing from the delta may be visible yet.
+    await waitFor(() => heldSnapshotRes !== null, {
+      message: 'the store never requested the snapshot',
+    })
     await sleepMs(50)
     expect(store.getSnapshot().connection.kind).not.toBe('live')
     expect(store.getSnapshot().nodes).toEqual([])
+
+    if (heldSnapshotRes === null) throw new Error('no held /snapshot response captured')
+    respondJson(heldSnapshotRes, 200, makeSnapshot({ nodes: [makeNode('n0')] }))
 
     await waitFor(() => store.getSnapshot().connection.kind === 'live', {
       message: 'store never reached live',
@@ -332,8 +343,15 @@ describe('ApiStore: keepalive comments are inert (case 5)', () => {
   // "does not leak comment content as data" case), THEN the store makes
   // no update from it. Narrowed name reflects that split of ownership.
   it('": keepalive" produces no model change and no listener notification at the store level', async () => {
+    let keepalivesWritten = 0
+    let sessionRequests = 0
+    // See the `streamRes` comment elsewhere in this file for why `as`
+    // rather than a `: T | null` annotation is needed here.
+    let streamRes = null as import('node:http').ServerResponse | null
+    let heldSessionRes = null as import('node:http').ServerResponse | null
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
+        streamRes = res
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
@@ -341,7 +359,10 @@ describe('ApiStore: keepalive comments are inert (case 5)', () => {
           serverTime: new Date().toISOString(),
           snapshotRequired: true,
         })
-        const interval = setInterval(() => writeSSEComment(res, 'keepalive'), 15)
+        const interval = setInterval(() => {
+          writeSSEComment(res, 'keepalive')
+          keepalivesWritten += 1
+        }, 15)
         res.on('close', () => clearInterval(interval))
         return
       }
@@ -351,6 +372,27 @@ describe('ApiStore: keepalive comments are inert (case 5)', () => {
       }
       if (req.url?.startsWith('/events')) {
         respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      if (req.url === '/session') {
+        sessionRequests += 1
+        // connect() fires one /session read independently of the read
+        // loop, and reloadSnapshot awaits a second one before going
+        // live. Holding the first (issued first, so it is the
+        // independent one) and releasing it below is what lets the
+        // measured window start with nothing of the connect sequence
+        // still in flight; if the two ever arrived in the other order,
+        // the store could never reach live and this test would say so
+        // instead of miscounting.
+        if (sessionRequests === 1) {
+          heldSessionRes = res
+          return
+        }
+        respondJson(res, 200, makeSessionResponse())
+        return
+      }
+      if (req.url === '/current-runs') {
+        respondJson(res, 200, makeCurrentRuns())
         return
       }
       res.writeHead(404).end()
@@ -364,14 +406,49 @@ describe('ApiStore: keepalive comments are inert (case 5)', () => {
     store.connect()
 
     await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    // Quiesce before the baseline: every read the connect sequence fires
+    // and forgets has to be demonstrably applied first, or one landing
+    // late reads as an update caused by a keepalive.
+    await waitFor(() => store.getSnapshot().currentRuns !== null, {
+      message: 'the connect sequence never applied its /current-runs read',
+    })
+    await waitFor(() => heldSessionRes !== null, {
+      message: 'the connect-time /session read never reached the server',
+    })
+    if (heldSessionRes === null) throw new Error('no held /session response captured')
+    respondJson(heldSessionRes, 200, makeSessionResponse({ bootstrapRequired: true }))
+    await waitFor(() => store.getSnapshot().session?.bootstrapRequired === true, {
+      message: 'the released connect-time /session response was never applied',
+    })
+
     const countAfterLive = notifications
     const modelAfterLive = store.getSnapshot()
 
-    // Let several keepalive comments go by.
-    await sleepMs(80)
-
-    expect(notifications).toBe(countAfterLive)
+    const keepalivesBefore = keepalivesWritten
+    await waitFor(() => keepalivesWritten >= keepalivesBefore + 4, {
+      message: 'the server never wrote its keepalive comments',
+    })
     expect(store.getSnapshot()).toBe(modelAfterLive) // same reference: no update was ever applied
+
+    // A real frame on the same socket, written after those comments.
+    // Bytes arrive in order, so the model showing this node proves every
+    // preceding keepalive was received and parsed -- which turns "no
+    // notification within some sleep" into "exactly one notification for
+    // the whole window, and it was the real frame's".
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'node.changed', {
+      serverTime: new Date().toISOString(),
+      node: makeNode('n-after-keepalives'),
+    })
+    await waitFor(() => store.getSnapshot().nodes.some((n) => n.nodeId === 'n-after-keepalives'), {
+      message: 'the real frame written after the keepalives was never applied',
+    })
+
+    expect(notifications).toBe(countAfterLive + 1)
+    expect(store.getSnapshot().nodes.map((n) => n.nodeId)).toEqual(
+      ['n-after-keepalives', 'n0'].sort((a, b) => a.localeCompare(b)),
+    )
   })
 })
 
@@ -1249,9 +1326,11 @@ describe('ApiStore: malformed JSON in a frame is tolerated, not fatal (no prior 
 describe('ApiStore: dispose() actually stops the loop (no prior test)', () => {
   it('issues no further requests and notifies no more listeners once the connection dies after dispose()', async () => {
     let streamRequests = 0
+    let sessionRequests = 0
     // See the `streamRes` comment elsewhere in this file for why `as`
     // rather than a `: T | null` annotation is needed here.
     let firstStreamReq = null as import('node:http').IncomingMessage | null
+    let heldSessionRes = null as import('node:http').ServerResponse | null
 
     const s = await server((req, res) => {
       if (req.url?.startsWith('/stream')) {
@@ -1260,6 +1339,56 @@ describe('ApiStore: dispose() actually stops the loop (no prior test)', () => {
         openSSE(res)
         writeSSEFrame(res, 'stream.start', {
           streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      if (req.url === '/session') {
+        sessionRequests += 1
+        // Held and released below for the reason the keepalive test's
+        // own /session handler gives: the connect sequence's
+        // fire-and-forget reads must all have landed before anything is
+        // measured, or one of them notifies after dispose() and reads
+        // as a disposed store still working.
+        if (sessionRequests === 1) {
+          heldSessionRes = res
+          return
+        }
+        respondJson(res, 200, makeSessionResponse())
+        return
+      }
+      if (req.url === '/current-runs') {
+        respondJson(res, 200, makeCurrentRuns())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    // A second store, on its own server, whose socket dies in the same
+    // tick as the disposed store's. It is not disposed, so it must
+    // reconnect -- and its reconnect is what proves the process got far
+    // enough for the disposed store's own reconnect to have happened
+    // too, had dispose() not stopped it. A wall-clock sleep proves only
+    // that nothing has happened YET.
+    let controlStreamRequests = 0
+    let controlFirstStreamReq = null as import('node:http').IncomingMessage | null
+    const controlServer = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        controlStreamRequests += 1
+        if (controlStreamRequests === 1) controlFirstStreamReq = req
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 'c1',
           apiVersion: 1,
           serverTime: new Date().toISOString(),
           snapshotRequired: true,
@@ -1283,6 +1412,23 @@ describe('ApiStore: dispose() actually stops the loop (no prior test)', () => {
     const store = new ApiStore({ baseUrl: s.baseUrl, backoff: FAST_BACKOFF })
     store.connect()
     await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().currentRuns !== null, {
+      message: 'the connect sequence never applied its /current-runs read',
+    })
+    await waitFor(() => heldSessionRes !== null, {
+      message: 'the connect-time /session read never reached the server',
+    })
+    if (heldSessionRes === null) throw new Error('no held /session response captured')
+    respondJson(heldSessionRes, 200, makeSessionResponse({ bootstrapRequired: true }))
+    await waitFor(() => store.getSnapshot().session?.bootstrapRequired === true, {
+      message: 'the released connect-time /session response was never applied',
+    })
+
+    const control = makeStore(controlServer.baseUrl)
+    control.connect()
+    await waitFor(() => control.getSnapshot().connection.kind === 'live', {
+      message: 'the control store never reached live',
+    })
 
     let notified = false
     store.subscribe(() => {
@@ -1295,8 +1441,13 @@ describe('ApiStore: dispose() actually stops the loop (no prior test)', () => {
     // loop must not reconnect; a no-op dispose() would retry as usual
     // and streamRequests would climb to 2.
     firstStreamReq?.socket.destroy()
+    controlFirstStreamReq?.socket.destroy()
 
-    await sleepMs(FAST_BACKOFF.baseMs * 6)
+    await waitFor(
+      () => controlStreamRequests >= 2 && control.getSnapshot().connection.kind === 'live',
+      { message: 'the control store never reconnected, so nothing here proves the disposed store had its chance' },
+    )
+
     expect(streamRequests).toBe(1)
     expect(notified).toBe(false)
 
