@@ -199,6 +199,8 @@ export type ConfigAudioSettingsPayload = components['schemas']['ConfigAudioSetti
 export type AudioSettingsConfigResponse = components['schemas']['AudioSettingsConfigResponse']
 export type ConfigAudioNode = components['schemas']['ConfigAudioNode']
 export type AudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
+export type AudioNodeSummary = components['schemas']['AudioNodeSummary']
+export type AudioNodeListResponse = components['schemas']['AudioNodeListResponse']
 
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring. Aliased for the identical reason as every type above

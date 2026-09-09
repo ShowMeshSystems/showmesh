@@ -56,6 +56,8 @@ export type {
   ConfigAudioSettingsPayload,
   AudioNodeConfigResponse,
   ConfigAudioNode,
+  AudioNodeSummary,
+  AudioNodeListResponse,
   FPPInstance,
   // The pending-instanceUuid-change acknowledgement.
   FPPInstanceUUIDChange,

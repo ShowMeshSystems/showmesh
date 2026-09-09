@@ -174,14 +174,16 @@ func capabilityRoutesAttribute(attrs map[string]any) []string {
 // listAudioNodeSummaries lists every "audio.node" config object with an
 // active revision. Label carries the configured programRoute — the one
 // field of the payload most useful to skim in a list without fetching each
-// object's full body. Show is always "" (audio.node carries no show
-// reference; [v1.ConfigObjectSummary] is shared with kinds that do).
-func (h *handlers) listAudioNodeSummaries(ctx context.Context) ([]v1.ConfigObjectSummary, error) {
+// object's full body. ProgramChannels and LTCChannel are decoded alongside
+// it: config.AudioNodePayload already carries both, and a list is exactly
+// where an operator needs to see a node's channel placement without
+// fetching every object individually.
+func (h *handlers) listAudioNodeSummaries(ctx context.Context) ([]v1.AudioNodeSummary, error) {
 	objs, err := h.deps.Config.ListConfigObjects(ctx, config.AudioNodeConfigKind)
 	if err != nil {
 		return nil, fmt.Errorf("list audio.node config objects: %w", err)
 	}
-	out := make([]v1.ConfigObjectSummary, 0, len(objs))
+	out := make([]v1.AudioNodeSummary, 0, len(objs))
 	for _, obj := range objs {
 		if obj.CurrentRevision == 0 {
 			continue
@@ -191,13 +193,16 @@ func (h *handlers) listAudioNodeSummaries(ctx context.Context) ([]v1.ConfigObjec
 			return nil, fmt.Errorf("get active audio.node config revision for %q: %w", obj.ID, err)
 		}
 		var head struct {
-			ProgramRoute string `json:"programRoute"`
+			ProgramRoute    string `json:"programRoute"`
+			ProgramChannels []int  `json:"programChannels"`
+			LTCChannel      int    `json:"ltcChannel,omitempty"`
 		}
 		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
 			return nil, fmt.Errorf("decode audio.node config payload head for %q: %w", obj.ID, err)
 		}
-		out = append(out, v1.ConfigObjectSummary{
-			ID: obj.ID, Label: head.ProgramRoute, Show: "",
+		out = append(out, v1.AudioNodeSummary{
+			ID: obj.ID, Label: head.ProgramRoute,
+			ProgramChannels: head.ProgramChannels, LTCChannel: head.LTCChannel,
 			CurrentRevision: obj.CurrentRevision, UpdatedAt: formatTime(obj.UpdatedAt),
 		})
 	}
@@ -211,7 +216,7 @@ func (h *handlers) handleListAudioNodes(w http.ResponseWriter, r *http.Request) 
 		h.writeInternalError(w, now, "list audio.node config objects", err)
 		return
 	}
-	jsonWrite(w, v1.ConfigObjectsListResponse{ServerTime: formatTime(now), Kind: config.AudioNodeConfigKind, Objects: objs})
+	jsonWrite(w, v1.AudioNodeListResponse{ServerTime: formatTime(now), Kind: config.AudioNodeConfigKind, Objects: objs})
 }
 
 func (h *handlers) handleGetAudioNode(w http.ResponseWriter, r *http.Request) {

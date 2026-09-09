@@ -1388,7 +1388,7 @@ export interface paths {
         };
         /**
          * Enumerate audio.node objects (ADR-018/ADR-039)
-         * @description Requires `config:write`. Object ids (the node id) with label (the configured programRoute) and current revision number, NOT the full payloads - `show` is always empty, since audio.node carries no show reference.
+         * @description Requires `config:write`. Object ids (the node id) with label (the configured programRoute), program/LTC channel placement, and current revision number, NOT the full payloads.
          */
         get: operations["listAudioNodes"];
         put?: never;
@@ -4805,13 +4805,34 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, GET /config/audio.node, and GET /config/media.playlist (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, and GET /config/media.playlist. GET /config/audio.node has its own dedicated AudioNodeListResponse instead, since its list carries channel placement that this shared, kind-agnostic shape has no field for. */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "audio.node" | "media.playlist";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist";
             objects: components["schemas"]["ConfigObjectSummary"][];
+        };
+        /** @description One element of AudioNodeListResponse.objects: enough to enumerate every audio.node object's routing, including its program and LTC channel placement, without fetching each one's full payload. programChannels and ltcChannel carry the same meaning here as on ConfigAudioNode. */
+        AudioNodeSummary: {
+            id: string;
+            /** @description The configured programRoute. */
+            label: string;
+            /** @description The ordered, 1-based channel indices on the configured programRoute carrying program audio. */
+            programChannels: number[];
+            /** @description The 1-based channel index on the configured ltcRoute carrying LTC, or absent on a program-only node that emits no LTC. */
+            ltcChannel?: number;
+            currentRevision: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description The body of GET /config/audio.node. */
+        AudioNodeListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "audio.node";
+            objects: components["schemas"]["AudioNodeSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
         ConfigShowActionMQTTPublish: {
@@ -9367,7 +9388,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                    "application/json": components["schemas"]["AudioNodeListResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];

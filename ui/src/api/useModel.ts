@@ -110,6 +110,7 @@ type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramL
 type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
+type SchemaAudioNodeListResponse = components['schemas']['AudioNodeListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
@@ -595,6 +596,14 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
+  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'media.playlist' | 'night.session',
+  show?: string,
+): Promise<SchemaConfigObjectsListResponse>
+// audio.node's list carries channel placement, a shape
+// SchemaConfigObjectsListResponse has no field for - see store.ts's
+// listConfigObjects' own overloads.
+export function listConfigObjects(kind: 'audio.node'): Promise<SchemaAudioNodeListResponse>
+export function listConfigObjects(
   kind:
     | 'show.action'
     | 'show.macro'
@@ -606,7 +615,8 @@ export function listConfigObjects(
     | 'night.session'
     | 'audio.node',
   show?: string,
-): Promise<SchemaConfigObjectsListResponse> {
+): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {
+  if (kind === 'audio.node') return store.listConfigObjects(kind)
   return store.listConfigObjects(kind, show)
 }
 
