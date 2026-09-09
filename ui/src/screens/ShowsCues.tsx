@@ -7,7 +7,7 @@ import {
   listConfigObjects,
   putShowCue,
   type Asset,
-  type ConfigObjectSummary,
+  type AudioNodeSummary,
   type ConfigShowCue,
   type ConfigShowCueOutputs,
   type ShowCueConfigResponse,
@@ -311,7 +311,7 @@ function CueTable({
   )
 }
 
-type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
+type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 
 function useAudioNodes(): AudioNodesState {
   const [state, setState] = useState<AudioNodesState>({ kind: 'loading' })
