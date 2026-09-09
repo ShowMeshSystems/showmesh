@@ -106,7 +106,18 @@ const noLTCObserverReason = "no LTC source is wired into this node's audio repor
 // runAudioReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runRenderReport's identical
 // contract.
-func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, ltc ltcObserver, engine engineAvailability, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
+//
+// triggered, when a signal arrives on it, causes the same publish as a
+// tick would, out of cadence — matching runRenderReport's own ticks-plus-
+// triggered shape. This is how a dispatched fade becomes visible without
+// waiting for the resting tick that might land inside it (or, for a fade
+// shorter than the resting interval, might never): command.go signals it
+// after "audio.gain.fade" dispatches, and this loop's normal per-tick
+// evidence collection (buildAudioSessionReports et al.) already reports
+// the fade in progress on this first out-of-cadence publish, no different
+// from any other tick. A nil triggered (matching every other optional
+// channel in this file) simply never fires.
+func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, ltc ltcObserver, engine engineAvailability, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "audio")
 	if err != nil {
 		// nodeID is validated at config load, matching runRenderReport's
@@ -118,6 +129,20 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 	d := audioDiscoverer(ctx, audioEnumerator)
 	discovery := buildAudioPayload(d, now())
 
+	publishOne := func() {
+		payload := discovery
+		tickAt := now()
+		payload.ObservedAt = &tickAt
+		payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
+		applyLTCObservation(ctx, &payload, ltc)
+		applyEngineAvailability(&payload, engine)
+		applyEngineGlitchCounts(&payload, engine)
+		applyEngineRestoreStatus(&payload, mgr, tickAt)
+		applyTimeline(ctx, &payload, mgr)
+		applySettingsStatus(&payload, mgr)
+		publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -126,17 +151,13 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			if !ok {
 				return
 			}
-			payload := discovery
-			tickAt := now()
-			payload.ObservedAt = &tickAt
-			payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
-			applyLTCObservation(ctx, &payload, ltc)
-			applyEngineAvailability(&payload, engine)
-			applyEngineGlitchCounts(&payload, engine)
-			applyEngineRestoreStatus(&payload, mgr, tickAt)
-			applyTimeline(ctx, &payload, mgr)
-			applySettingsStatus(&payload, mgr)
-			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
+			publishOne()
+		case _, ok := <-triggered:
+			if !ok {
+				triggered = nil
+				continue
+			}
+			publishOne()
 		}
 	}
 }

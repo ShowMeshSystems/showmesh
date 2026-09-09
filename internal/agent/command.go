@@ -12,6 +12,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -461,6 +462,15 @@ type CommandHandler struct {
 	// republish immediately instead of waiting for its next tick — matching
 	// assetFetchTrigger's identical purpose, one seam over.
 	renderTrigger chan<- struct{}
+
+	// audioReportTrigger, when non-nil, is signalled after any
+	// genuinely-executed "audio.gain.fade" operation reaches a result (a
+	// refused outcome included, matching renderTrigger's own gate one seam
+	// over -- only a malformed command, an unknown action, or a replayed
+	// idempotency key never reaches here), so audioreport.go's publisher
+	// reports the fade in flight immediately instead of only on whichever
+	// resting tick happens to land inside it.
+	audioReportTrigger chan<- struct{}
 }
 
 // newCommandHandler builds a CommandHandler for nodeID, wiring
@@ -475,15 +485,16 @@ type CommandHandler struct {
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding, fppConnect *fppConnectState, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, audioReportTrigger chan<- struct{}, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding, fppConnect *fppConnectState, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
-		nodeID:            nodeID,
-		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore, clockBind, fppConnect, logger),
-		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
-		now:               now,
-		logger:            logger,
-		assetFetchTrigger: assetFetchTrigger,
-		renderTrigger:     renderTrigger,
+		nodeID:             nodeID,
+		ops:                newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore, clockBind, fppConnect, logger),
+		cache:              newIdempotencyCache(agentIdempotencyCacheCapacity),
+		now:                now,
+		logger:             logger,
+		assetFetchTrigger:  assetFetchTrigger,
+		renderTrigger:      renderTrigger,
+		audioReportTrigger: audioReportTrigger,
 	}
 }
 
@@ -722,6 +733,18 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 			// Same non-blocking, drop-duplicate reasoning as
 			// assetFetchTrigger above; the render report publisher only
 			// needs to know "something changed since I last checked."
+		}
+	}
+	// A dispatched fade must be observable without waiting for the audio
+	// report's own resting tick to happen to land inside it (a two-second
+	// fade at a 15s cadence is usually never sampled otherwise); the
+	// elevated-cadence machinery in audioreport.go takes over from there.
+	if cmd.Action == string(pkgaudio.OperationGainFade) && h.audioReportTrigger != nil {
+		select {
+		case h.audioReportTrigger <- struct{}{}:
+		default:
+			// Same non-blocking, drop-duplicate reasoning as
+			// assetFetchTrigger above.
 		}
 	}
 }

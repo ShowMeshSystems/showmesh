@@ -178,7 +178,7 @@ func TestHandleMessageCuecatalogDeployConfirmed(t *testing.T) {
 	store := heldcatalog.NewFileStore(dir)
 	clock := &fakeClock{t: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}
 
-	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, nil, nil, store, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, nil, nil, nil, store, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	entries := sampleEntries()
