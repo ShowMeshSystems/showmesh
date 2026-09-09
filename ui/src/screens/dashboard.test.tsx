@@ -25,7 +25,12 @@ const evidence = (state: string) => ({
   quality: 'reported',
 }) as unknown as Node['render'][number]
 
-function node(nodeId: string, state: 'online' | 'offline' | 'unknown', signals: string[] = []): Node {
+function node(
+  nodeId: string,
+  state: 'online' | 'offline' | 'unknown',
+  signals: string[] = [],
+  showParticipation?: Node['showParticipation'],
+): Node {
   return {
     nodeId,
     label: nodeId,
@@ -43,6 +48,7 @@ function node(nodeId: string, state: 'online' | 'offline' | 'unknown', signals: 
       heartbeat: evidence(state === 'offline' ? 'stale' : 'current'),
     },
     declaration: {} as Node['declaration'],
+    showParticipation,
     render: signals.map(evidence),
     audio: [],
     fppConnect: [],
@@ -125,6 +131,32 @@ describe('Dashboard', () => {
     renderDashboard({ fpp: [fpp('barn-player', 'healthy', true)] })
     expect(screen.getByText(/Bindings held/i)).toBeInTheDocument()
     expect(screen.getByText(/changed its instance identity/)).toBeInTheDocument()
+  })
+
+  it('sorts a participating node above a non-participating node whose tone would otherwise put it first', () => {
+    renderDashboard({
+      nodes: [
+        node('offline-node', 'offline', [], { state: 'not_participating', show: 'halloween-2026', reason: null }),
+        node('unknown-node', 'unknown', [], { state: 'participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    const rows = screen.getAllByText(/-node$/).map((el) => el.textContent)
+    expect(rows).toEqual(['unknown-node', 'offline-node'])
+  })
+
+  it.each([
+    ['participating', 'participating'],
+    ['not_participating', 'not participating'],
+    ['unknown', 'unknown'],
+    ['not_configured', 'not configured'],
+  ] as const)('renders the coordinator’s own %s word on the row', (state, label) => {
+    renderDashboard({ nodes: [node('media-garage', 'offline', [], { state, show: 'halloween-2026', reason: null })] })
+    expect(screen.getByText(`Participation: ${label}.`)).toBeInTheDocument()
+  })
+
+  it('says nothing about participation for an older coordinator that never sent the field', () => {
+    renderDashboard({ nodes: [node('media-garage', 'offline')] })
+    expect(screen.queryByText(/Participation:/)).not.toBeInTheDocument()
   })
 
   it('counts an unknown node as neither online nor offline', () => {

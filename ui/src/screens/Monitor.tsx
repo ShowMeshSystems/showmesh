@@ -30,7 +30,7 @@ import {
   type Model,
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
+import { attentionItems, fleetCounts, fppDetail, nodesDetail, participationLabel } from './dashboardModel'
 import { NodeDetail, NODE_DRAWER_TITLE_ID } from './NodeDetail'
 import {
   activityRows,
@@ -183,19 +183,30 @@ export function Monitor() {
                 detail="That is not proof the show looks right, only that nothing has asked for you."
               />
             ) : (
-              items.map((item) => (
-                <AttentionRow
-                  key={item.key}
-                  tone={item.tone}
-                  state={item.state}
-                  fact={
-                    <>
-                      <Link to={item.to}>{item.subject}</Link> {item.fact}
-                    </>
-                  }
-                  detail={item.detail}
-                />
-              ))
+              items.map((item) => {
+                const participation = participationLabel(item.participation)
+                return (
+                  <AttentionRow
+                    key={item.key}
+                    tone={item.tone}
+                    state={item.state}
+                    fact={
+                      <>
+                        <Link to={item.to}>{item.subject}</Link> {item.fact}
+                      </>
+                    }
+                    detail={
+                      participation === null ? (
+                        item.detail
+                      ) : (
+                        <>
+                          {item.detail} <span className="sm-small sm-muted">Participation: {participation}.</span>
+                        </>
+                      )
+                    }
+                  />
+                )
+              })
             )}
           </Section>
 

@@ -18,6 +18,7 @@ import {
   fleetCounts,
   fppDetail,
   nodesDetail,
+  participationLabel,
   staleSignalLeader,
   nextStartVerdict,
   showInProgress,
@@ -135,24 +136,33 @@ export function Dashboard() {
           />
         ) : (
           <div className="sm-dashboard__attention">
-            {items.map((item) => (
-              <AttentionRow
-                key={item.key}
-                tone={item.tone}
-                state={item.state}
-                appearance="word"
-                fact={
-                  <>
-                    <Link to={item.to}>{item.subject}</Link> {item.fact}
-                  </>
-                }
-                detail={
-                  <>
-                    {item.detail} <Link to={item.to}>Open</Link>
-                  </>
-                }
-              />
-            ))}
+            {items.map((item) => {
+              const participation = participationLabel(item.participation)
+              return (
+                <AttentionRow
+                  key={item.key}
+                  tone={item.tone}
+                  state={item.state}
+                  appearance="word"
+                  fact={
+                    <>
+                      <Link to={item.to}>{item.subject}</Link> {item.fact}
+                    </>
+                  }
+                  detail={
+                    <>
+                      {item.detail} <Link to={item.to}>Open</Link>
+                      {participation !== null && (
+                        <>
+                          {' '}
+                          <span className="sm-small sm-muted">Participation: {participation}.</span>
+                        </>
+                      )}
+                    </>
+                  }
+                />
+              )
+            })}
           </div>
         )}
       </Section>

@@ -524,10 +524,10 @@ waiting for the owner, and no working file collects them again.
    skew belongs to the chrome, because it invalidates every age on every screen. Data freshness is
    the page lede, not a banner.
 5. **An attention count states the count and nothing more.** "N items" is the whole of it. Saying an
-   item is not stopping tonight's show is a claim about dependency, and the coordinator reports each
-   resource's own health rather than what the running show depends on, so the UI does not get to say
-   it. Deriving the claim client side is refused permanently, not deferred. The same rule governs
-   Monitor's "Needs an operator" aside.
+   item is not stopping tonight's show is a claim about dependency, and the coordinator reports
+   each node's participation in the active show directly, so a row repeating that answer is not
+   deriving it. Deriving the claim client side is refused permanently, not deferred. The same rule
+   governs Monitor's "Needs an operator" aside.
 6. **Night-session commands ship enabled and report the coordinator's own refusal.** Predicting
    validity would mean a second copy of the coordinator's state table in the browser, across
    preparation epochs, monotonic finalization, interlock overrides and degraded-session ambiguity,

@@ -21,7 +21,14 @@ export type AttentionItem = {
 }
 
 function participationOf(showParticipation: Node['showParticipation'] | undefined): ParticipationState {
+  // The optional chain stays even though the schema marks the field required:
+  // an older coordinator serving a newer UI never sends it at all.
   return showParticipation?.state ?? 'absent'
+}
+
+/** The coordinator's own participation word, exactly as reported; absent says nothing. */
+export function participationLabel(participation: ParticipationState): string | null {
+  return participation === 'absent' ? null : participation.replace('_', ' ')
 }
 
 /**
@@ -123,9 +130,19 @@ export function resolumeAttention(instances: readonly ResolumeInstance[]): Atten
 
 const TONE_ORDER: Record<Tone, number> = { bad: 0, warn: 1, unknown: 2, pending: 3, good: 4 }
 
+/** Only `participating` sorts first; every other value, `absent` included, shares the rest. */
+function participationRank(participation: ParticipationState): number {
+  return participation === 'participating' ? 0 : 1
+}
+
+/**
+ * Participation is the primary key so anything the coordinator says
+ * participates in tonight's show sorts above the rest; tone stays the
+ * secondary key, so it still orders both the participants and everyone else.
+ */
 export function attentionItems(model: Model, nowIso: string | null): AttentionItem[] {
   return [...nodeAttention(model.nodes, nowIso), ...fppAttention(model.fpp), ...resolumeAttention(model.resolume)].sort(
-    (a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone],
+    (a, b) => participationRank(a.participation) - participationRank(b.participation) || TONE_ORDER[a.tone] - TONE_ORDER[b.tone],
   )
 }
 

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { FPPInstance, Node, ResolumeInstance } from '../api'
-import { fppAttention, nodeAttention, resolumeAttention, type ParticipationState } from './dashboardModel'
+import { initialModel } from '../api/domain'
+import {
+  attentionItems,
+  fppAttention,
+  nodeAttention,
+  participationLabel,
+  resolumeAttention,
+  type ParticipationState,
+} from './dashboardModel'
 
 const evidence = (state: string) => ({
   signal: 's',
@@ -132,5 +140,34 @@ describe('resolumeAttention participation', () => {
     const items = resolumeAttention([resolumeInstance('res-1', 'failed')])
     expect(items).toHaveLength(1)
     expect(items[0]?.participation).toBe<ParticipationState>('absent')
+  })
+})
+
+describe('attentionItems ordering', () => {
+  it('sorts a participating item above a non-participating item whose tone would otherwise put it first', () => {
+    const participant = node('participant', 'unknown', { state: 'participating', show: 'halloween-2026', reason: null })
+    const nonParticipant = node('offline-node', 'offline', { state: 'not_participating', show: 'halloween-2026', reason: null })
+    const items = attentionItems({ ...initialModel(), nodes: [nonParticipant, participant] }, null)
+    expect(items.map((item) => item.key)).toEqual(['node:participant', 'node:offline-node'])
+  })
+
+  it('keeps the existing tone order within non-participants, absent items included', () => {
+    const bad = node('bad-node', 'offline', undefined)
+    const unknownParticipation = node('unknown-node', 'unknown', { state: 'unknown', show: '', reason: 'store error' })
+    const items = attentionItems({ ...initialModel(), nodes: [unknownParticipation, bad] }, null)
+    expect(items.map((item) => item.key)).toEqual(['node:bad-node', 'node:unknown-node'])
+  })
+})
+
+describe('participationLabel', () => {
+  it('renders the coordinator’s own word, spaced, for each reported state', () => {
+    expect(participationLabel('participating')).toBe('participating')
+    expect(participationLabel('not_participating')).toBe('not participating')
+    expect(participationLabel('unknown')).toBe('unknown')
+    expect(participationLabel('not_configured')).toBe('not configured')
+  })
+
+  it('says nothing for absent, the older-coordinator case', () => {
+    expect(participationLabel('absent')).toBeNull()
   })
 })
