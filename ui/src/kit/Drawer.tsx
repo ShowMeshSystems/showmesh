@@ -3,6 +3,9 @@ import { createPortal } from 'react-dom'
 
 const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
+/** Open drawer instances, outermost first. Escape acts on the last entry only, so a drawer opened over another never closes it too. */
+let openDrawerStack: symbol[] = []
+
 type Width = 'content' | 'wide' | number
 
 type DrawerProps = {
@@ -24,9 +27,14 @@ type DrawerProps = {
 export function Drawer({ open, onClose, labelledBy, width = 'content', children }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<Element | null>(null)
+  const idRef = useRef<symbol | null>(null)
+  if (idRef.current === null) idRef.current = Symbol('drawer')
 
   useEffect(() => {
     if (!open) return
+
+    const id = idRef.current!
+    openDrawerStack.push(id)
 
     openerRef.current = document.activeElement
     const panel = panelRef.current
@@ -34,14 +42,16 @@ export function Drawer({ open, onClose, labelledBy, width = 'content', children 
     focusable?.focus()
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        onClose()
-      }
+      if (event.key !== 'Escape') return
+      // A drawer opened over this one is topmost; only it responds to Escape.
+      if (openDrawerStack[openDrawerStack.length - 1] !== id) return
+      event.stopPropagation()
+      onClose()
     }
     document.addEventListener('keydown', onKeyDown, true)
     return () => {
       document.removeEventListener('keydown', onKeyDown, true)
+      openDrawerStack = openDrawerStack.filter((entry) => entry !== id)
       if (openerRef.current instanceof HTMLElement) openerRef.current.focus()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

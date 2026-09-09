@@ -279,6 +279,7 @@ export function makeMainInstance(overrides: Partial<FPPInstance> = {}): FPPInsta
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }
 }
@@ -356,6 +357,7 @@ export function makeRemote01Instance(overrides: Partial<FPPInstance> = {}): FPPI
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }
 }
@@ -442,6 +444,7 @@ export function makeRemote04Instance(overrides: Partial<FPPInstance> = {}): FPPI
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }
 }
@@ -503,6 +506,7 @@ export function makeGhostFpp01Instance(overrides: Partial<FPPInstance> = {}): FP
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }
 }

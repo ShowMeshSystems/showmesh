@@ -212,6 +212,11 @@
         "instanceUuid": null,
         "instanceUuidFirstObservedAt": null,
         "instanceUuidChange": null,
+        "showParticipation": {
+          "state": "not_configured",
+          "show": "",
+          "reason": "no asset manifest store is configured on this coordinator"
+        },
         "duplicateInstanceUuidEndpointIds": []
       }
     ]
@@ -266,7 +271,12 @@
           "validForSeconds": 30
         }
       ],
-      "composition": null
+      "composition": null,
+      "showParticipation": {
+        "state": "not_configured",
+        "show": "",
+        "reason": "no asset manifest store is configured on this coordinator"
+      }
     }
   ],
   "auditStore": {

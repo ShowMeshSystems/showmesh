@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
 import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { clampPopoverLeft } from './Popover'
 
 afterEach(cleanup)
 
@@ -269,6 +270,14 @@ describe('Popover', () => {
     fireEvent.mouseDown(document.body)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
+
+  it('clampPopoverLeft keeps a fitting anchor position, and pulls a right-overhung one back to the viewport margin', () => {
+    expect(clampPopoverLeft(100, 220, 390)).toBe(100)
+    // Anchor at 249 with a 220-wide panel would run to 469 against a 382-wide viewport.
+    expect(clampPopoverLeft(249, 220, 382)).toBe(382 - 220 - 8)
+    // A panel wider than the viewport still lands no further right than the 8px margin.
+    expect(clampPopoverLeft(200, 300, 200)).toBe(8)
+  })
 })
 
 describe('Drawer', () => {
@@ -325,6 +334,32 @@ describe('Drawer', () => {
     const dialog = screen.getByRole('dialog', { name: 'Node detail' })
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('closes only the topmost of two stacked drawers on Escape, leaving the outer one open', () => {
+    function StackedHarness() {
+      const [outerOpen, setOuterOpen] = useState(true)
+      const [innerOpen, setInnerOpen] = useState(true)
+      return (
+        <>
+          <Drawer open={outerOpen} onClose={() => setOuterOpen(false)} labelledBy="outer-heading">
+            <h2 id="outer-heading">Outer</h2>
+          </Drawer>
+          <Drawer open={innerOpen} onClose={() => setInnerOpen(false)} labelledBy="inner-heading" width="wide">
+            <h2 id="inner-heading">Inner</h2>
+          </Drawer>
+        </>
+      )
+    }
+
+    render(<StackedHarness />)
+    expect(screen.getAllByRole('dialog')).toHaveLength(2)
+
+    const innerDialog = screen.getByRole('dialog', { name: 'Inner' })
+    fireEvent.keyDown(innerDialog, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: 'Inner' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Outer' })).toBeInTheDocument()
   })
 
   it('closes on a scrim click but not on a click inside the panel', () => {

@@ -434,6 +434,16 @@ export function Specimen() {
             <li>Never explain the architecture in a form. <span className="sm-muted">ADR reasoning belongs in docs, not beside an input.</span></li>
             <li>State the reason literally, then the action. <span className="sm-muted">“Agent did not answer in 5 s. Run discovery again.”</span></li>
           </ul>
+          <p className="sm-small sm-muted">
+            <code>sm-grid--wider</code> floors its columns at 520px, for a body with a small number of
+            large field groups (Resolume Config's stored composition and layer map). It still collapses
+            to one column below the shell's narrow-viewport breakpoints, the same as <code>sm-grid--auto</code>
+            and <code>sm-grid--wide</code>.
+          </p>
+          <div className="sm-grid sm-grid--wider">
+            <div className="sm-panel"><p className="sm-body">520px minimum column</p></div>
+            <div className="sm-panel"><p className="sm-body">520px minimum column</p></div>
+          </div>
         </SpecSection>
 
         <SpecSection number="10 · Drawer" id="specimen-drawer" title="The inspector floats, it does not crowd a column" detail="D-021: a right-side drawer over the page, under the chrome bar, sized to its content. The scrim is a click target, not a focus trap; the page behind it stays readable.">

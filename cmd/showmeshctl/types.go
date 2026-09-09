@@ -264,6 +264,19 @@ type configObjectDeleteRequest struct {
 }
 
 // fppInstance is the FPP instance shape from contract §6.10.
+// instanceShowParticipation is fppInstance.ShowParticipation and
+// resolumeInstance.ShowParticipation: whether this instance takes part in
+// the show currently active. It carries one state nodeShowParticipation
+// does not, "selection_unrecorded", for a show that is active but whose
+// selection was never recorded; that is not the same fact as
+// "not_participating" and must not be rendered as it. The others are
+// "participating", "not_participating", "not_configured" and "unknown".
+type instanceShowParticipation struct {
+	State  string  `json:"state"`
+	Show   string  `json:"show"`
+	Reason *string `json:"reason"`
+}
+
 type fppInstance struct {
 	InstanceID    string     `json:"instanceId"`
 	Endpoint      string     `json:"endpoint"`
@@ -281,6 +294,11 @@ type fppInstance struct {
 	InstanceUUIDFirstObservedAt      *time.Time             `json:"instanceUuidFirstObservedAt"`
 	InstanceUUIDChange               *fppInstanceUUIDChange `json:"instanceUuidChange"`
 	DuplicateInstanceUUIDEndpointIDs []string               `json:"duplicateInstanceUuidEndpointIds"`
+
+	// ShowParticipation is decoded unconditionally, like node's own field
+	// above: an older coordinator that predates it leaves it at its zero
+	// value, State "".
+	ShowParticipation instanceShowParticipation `json:"showParticipation"`
 }
 
 // fppInstanceUUIDChange is fppInstance.InstanceUUIDChange's shape.
@@ -476,6 +494,9 @@ type resolumeInstance struct {
 	Health       string                       `json:"health"`
 	Observations []evidence                   `json:"observations"`
 	Composition  *resolumeInstanceComposition `json:"composition"`
+
+	// ShowParticipation: see fppInstance's own field.
+	ShowParticipation instanceShowParticipation `json:"showParticipation"`
 }
 
 // resolumeInstancesResponse is the body of GET /resolume/instances.

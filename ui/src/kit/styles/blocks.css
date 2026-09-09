@@ -194,6 +194,10 @@
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
 
+.sm-grid--wider {
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+}
+
 /* One thing asking for an operator. Used by Dashboard's "Needs you" and
    Monitor's "Needs an operator". */
 .sm-attn {
@@ -456,6 +460,7 @@ a.sm-tile:hover {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--s-5);
 }
 
@@ -911,7 +916,7 @@ a.sm-tile:hover {
    where one asset or one ordered transition group needs containment. */
 .sm-night-definition-editor {
   max-width: 1012px;
-  padding: 22px 28px 0;
+  padding: 22px 0 0;
 }
 
 .sm-night-definition-head {
@@ -1519,7 +1524,8 @@ a.sm-tile:hover {
     border-bottom: 0;
   }
 
-  .sm-grid--auto {
+  .sm-grid--auto,
+  .sm-grid--wider {
     grid-template-columns: minmax(0, 1fr);
   }
 

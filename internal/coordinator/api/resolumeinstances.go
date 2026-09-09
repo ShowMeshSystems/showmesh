@@ -37,9 +37,10 @@ func (h *handlers) handleResolumeInstances(w http.ResponseWriter, r *http.Reques
 		composition = resolumeCompositionDegradeOnError(ctx, h.deps.Config, h.logger, "list resolume instances")
 	}
 
+	participation := h.resolveInstanceParticipation(ctx)
 	instances := make([]v1.ResolumeInstance, 0, len(views))
 	for _, rv := range views {
-		instances = append(instances, mapResolumeInstance(rv, composition, now))
+		instances = append(instances, mapResolumeInstance(rv, composition, participation.forResolume(rv.InstanceID), now))
 	}
 	jsonWrite(w, v1.ResolumeInstancesResponse{ServerTime: formatTime(now), Instances: instances})
 }
@@ -64,7 +65,8 @@ func (h *handlers) handleResolumeInstance(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		composition := resolumeCompositionDegradeOnError(ctx, h.deps.Config, h.logger, "get resolume instance")
-		jsonWrite(w, v1.ResolumeInstanceResponse{ServerTime: formatTime(now), Instance: mapResolumeInstance(rv, composition, now)})
+		participation := h.resolveInstanceParticipation(ctx)
+		jsonWrite(w, v1.ResolumeInstanceResponse{ServerTime: formatTime(now), Instance: mapResolumeInstance(rv, composition, participation.forResolume(rv.InstanceID), now)})
 		return
 	}
 	writeProblem(w, h.logger, now, resourceNotFoundProblem("no Resolume instance with id "+strconv.Quote(instanceID)+" is configured"))

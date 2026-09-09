@@ -1,5 +1,13 @@
-import { useEffect, useId, useReducer, useRef, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
+
+const VIEWPORT_MARGIN = 8
+
+/** Pulls the panel's left edge back inside the viewport, keeping `VIEWPORT_MARGIN` clear on both sides. */
+export function clampPopoverLeft(anchorLeft: number, panelWidth: number, viewportWidth: number): number {
+  const maxLeft = viewportWidth - panelWidth - VIEWPORT_MARGIN
+  return Math.min(anchorLeft, Math.max(VIEWPORT_MARGIN, maxLeft))
+}
 
 type PopoverProps = {
   open: boolean
@@ -26,6 +34,7 @@ export function Popover({ open, title, anchorRef, onClose, children }: PopoverPr
   const panelRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
   const [remeasureTick, remeasure] = useReducer((count: number) => count + 1, 0)
+  const [left, setLeft] = useState<number | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -71,6 +80,20 @@ export function Popover({ open, title, anchorRef, onClose, children }: PopoverPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
+  // The panel's own width is not known until it has rendered, so this
+  // pulls `left` back inside the viewport in a second pass. useLayoutEffect
+  // runs before paint, so there is no visible jump to the unclamped position.
+  useLayoutEffect(() => {
+    if (!open) return
+    const anchor = anchorRef.current
+    const panel = panelRef.current
+    if (anchor === null || panel === null) return
+    const anchorLeft = anchor.getBoundingClientRect().left
+    const panelWidth = panel.getBoundingClientRect().width
+    setLeft(clampPopoverLeft(anchorLeft, panelWidth, window.innerWidth))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, remeasureTick])
+
   if (!open) return null
   const anchor = anchorRef.current
   if (anchor === null) return null
@@ -84,7 +107,7 @@ export function Popover({ open, title, anchorRef, onClose, children }: PopoverPr
       className="sm-popover"
       role="dialog"
       aria-labelledby={titleId}
-      style={{ top: rect.bottom, left: rect.left }}
+      style={{ top: rect.bottom, left: left ?? rect.left }}
     >
       <p id={titleId} className="sm-popover__title">
         {title}
