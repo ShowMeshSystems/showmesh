@@ -1629,6 +1629,40 @@ type AudioPayload struct {
 	EngineRestoreAttempts      int64  `json:"engineRestoreAttempts"`
 	EngineRestoreNextAttemptMs int64  `json:"engineRestoreNextAttemptMs"`
 	EngineRestoreLastReason    string `json:"engineRestoreLastReason"`
+
+	// The Timeline* fields are Track I seam I2's node.audio.timeline.*
+	// evidence for the session this node is currently playing against a
+	// scheduled start instant. All are OPTIONAL: an agent built before
+	// they existed omits them, and an absent TimelineScheduled reads as
+	// "this node is running nothing scheduled".
+	//
+	// TimelineScheduled and TimelineMeasured are two flags rather than
+	// one because they answer two questions. Scheduled says a session
+	// holds a T0, which makes TimelineScheduledAtNs, TimelineResyncs and
+	// TimelineLastResyncReason real. Measured says THIS tick actually
+	// read both the media clock and the sink clock, which is what makes
+	// TimelineExpectedMs, TimelineActualMs and TimelineErrorMs real. A
+	// scheduled session on a tick where the media clock could not be read
+	// reports the first three and not the last three, rather than a zero
+	// error that would read as perfectly on time. TimelineReason states
+	// which of the two is missing and why. It is not REQUIRED by
+	// Validate, for the same reason the EngineRestore* fields are not: an
+	// agent built before any of this existed omits the whole block, and
+	// an omitted block must stay valid.
+	//
+	// TimelineScheduledAtNs is nanoseconds on the REPORTING NODE's own
+	// media clock, an int64 past Number.MAX_SAFE_INTEGER; a consumer that
+	// decodes it through a float64 has already rounded it.
+	TimelineScheduled        bool   `json:"timelineScheduled"`
+	TimelineSessionID        string `json:"timelineSessionId"`
+	TimelineScheduledAtNs    int64  `json:"timelineScheduledAtNs"`
+	TimelineResyncs          int64  `json:"timelineResyncs"`
+	TimelineLastResyncReason string `json:"timelineLastResyncReason"`
+	TimelineMeasured         bool   `json:"timelineMeasured"`
+	TimelineExpectedMs       int64  `json:"timelineExpectedMs"`
+	TimelineActualMs         int64  `json:"timelineActualMs"`
+	TimelineErrorMs          int64  `json:"timelineErrorMs"`
+	TimelineReason           string `json:"timelineReason"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device
@@ -1717,6 +1751,28 @@ func (p AudioPayload) Validate() error {
 	}
 	if p.EngineRestoreAttempts > 0 && p.EngineRestoreLastReason == "" {
 		return fmt.Errorf("%w: engineRestoreLastReason (required whenever engineRestoreAttempts is nonzero)", ErrPayloadMissingField)
+	}
+	if err := p.validateTimeline(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateTimeline enforces that an unscheduled or unmeasured timeline
+// carries no numbers at all. Without this, a node with nothing scheduled
+// and a node running perfectly on time would publish byte-identical
+// timeline fields, and the operator surface could not tell them apart.
+func (p AudioPayload) validateTimeline() error {
+	if !p.TimelineScheduled {
+		if p.TimelineSessionID != "" || p.TimelineScheduledAtNs != 0 || p.TimelineResyncs != 0 ||
+			p.TimelineLastResyncReason != "" || p.TimelineMeasured {
+			return fmt.Errorf("%w: timeline fields must be empty when timelineScheduled is false", ErrPayloadInconsistentField)
+		}
+	} else if p.TimelineSessionID == "" {
+		return fmt.Errorf("%w: timelineSessionId (required whenever timelineScheduled is true)", ErrPayloadMissingField)
+	}
+	if !p.TimelineMeasured && (p.TimelineExpectedMs != 0 || p.TimelineActualMs != 0 || p.TimelineErrorMs != 0) {
+		return fmt.Errorf("%w: timeline expected/actual/error must be zero when timelineMeasured is false", ErrPayloadInconsistentField)
 	}
 	return nil
 }
@@ -1929,21 +1985,36 @@ func DecodeLWTPayload(env Envelope) (LWTPayload, error) {
 	return p, nil
 }
 
-// preserveExactRevision replaces p.Params["revision"] with the exact
-// json.Number decoded from raw, if present and numeric.
-func preserveExactRevision(p *CmdPayload, raw json.RawMessage) {
-	if _, present := p.Params["revision"]; !present {
-		return
-	}
+// exactIntegerParams are the command params whose values legitimately
+// exceed float64's exact integer range, so that encoding/json's default
+// float64 decode would round them: a nanosecond-scale session revision,
+// and audio.session.start's media-clock start instant (pkg/audio's
+// ParamScheduledAtNs, kept in step by this package's own
+// TestExactIntegerParamsMatchTheAudioVocabulary). Every other param
+// decodes as float64 exactly as before.
+var exactIntegerParams = []string{"revision", "scheduledAtNs"}
+
+// preserveExactIntegers replaces each of [exactIntegerParams] present in
+// p.Params with the exact json.Number decoded from raw. A param that is
+// present but not a JSON number is left as encoding/json decoded it, so
+// the ordinary type check at the reading end still reports it.
+func preserveExactIntegers(p *CmdPayload, raw json.RawMessage) {
 	var shell struct {
-		Params struct {
-			Revision json.Number `json:"revision"`
-		} `json:"params"`
+		Params map[string]json.RawMessage `json:"params"`
 	}
 	if err := json.Unmarshal(raw, &shell); err != nil {
 		return
 	}
-	p.Params["revision"] = shell.Params.Revision
+	for _, name := range exactIntegerParams {
+		if _, present := p.Params[name]; !present {
+			continue
+		}
+		var n json.Number
+		if err := json.Unmarshal(shell.Params[name], &n); err != nil {
+			continue
+		}
+		p.Params[name] = n
+	}
 }
 
 // DecodeCmdPayload decodes env.Payload as a [CmdPayload]. It returns an
@@ -1962,14 +2033,58 @@ func DecodeCmdPayload(env Envelope) (CmdPayload, error) {
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
-	// p.Params["revision"] comes out a json.Number here, unlike every
-	// other number in p.Params (float64): nanosecond-scale revisions
-	// exceed float64's exact integer range.
-	preserveExactRevision(&p, env.Payload)
+	// Each of exactIntegerParams comes out a json.Number here, unlike
+	// every other number in p.Params (float64): a nanosecond-scale
+	// revision or media-clock instant exceeds float64's exact integer
+	// range.
+	preserveExactIntegers(&p, env.Payload)
 	if err := p.Validate(); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
 	return p, nil
+}
+
+// exactIntegerEvidenceFields are the keys inside a result's
+// evidence.value object whose values legitimately exceed float64's exact
+// integer range, the mirror of [exactIntegerParams] on the command
+// direction: a node's media-clock reading (pkg/audio's
+// ResultMediaClockNowNs, kept in step by this package's own
+// TestExactIntegerParamsMatchTheAudioVocabulary). Without this the
+// coordinator rounds the very reading it is about to add a margin to and
+// send back as a start instant.
+var exactIntegerEvidenceFields = []string{"mediaClockNowNs", "mediaClockErrorBoundNs"}
+
+// preserveExactEvidenceIntegers replaces each of
+// [exactIntegerEvidenceFields] present in a result's evidence.value
+// object with the exact json.Number decoded from raw. A result whose
+// evidence value is not an object, or which carries none of these keys,
+// is left exactly as encoding/json decoded it.
+func preserveExactEvidenceIntegers(p *ResultPayload, raw json.RawMessage) {
+	if p.Evidence == nil {
+		return
+	}
+	value, ok := p.Evidence.Value.(map[string]any)
+	if !ok {
+		return
+	}
+	var shell struct {
+		Evidence struct {
+			Value map[string]json.RawMessage `json:"value"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(raw, &shell); err != nil {
+		return
+	}
+	for _, name := range exactIntegerEvidenceFields {
+		if _, present := value[name]; !present {
+			continue
+		}
+		var n json.Number
+		if err := json.Unmarshal(shell.Evidence.Value[name], &n); err != nil {
+			continue
+		}
+		value[name] = n
+	}
 }
 
 // DecodeResultPayload decodes env.Payload as a [ResultPayload]. It returns
@@ -1988,6 +2103,10 @@ func DecodeResultPayload(env Envelope) (ResultPayload, error) {
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return ResultPayload{}, fmt.Errorf("mqttproto: decode result payload: %w", err)
 	}
+	// A media-clock reading comes out a json.Number here, unlike every
+	// other number in an evidence value (float64), for exactIntegerParams'
+	// reason in the other direction.
+	preserveExactEvidenceIntegers(&p, env.Payload)
 	if err := p.Validate(); err != nil {
 		return ResultPayload{}, fmt.Errorf("mqttproto: decode result payload: %w", err)
 	}

@@ -11,9 +11,24 @@ import (
 // default fade a gain fade uses when a caller names none, the default
 // ceiling applied to a background session that declares none, how far a
 // ducked session is lowered, and the LTC frame rate and default start
-// offset a show session's LTC run uses absent its own override. The drift threshold has no consumer in this
-// package yet.
+// offset a show session's LTC run uses absent its own override, and the
+// drift threshold a scheduled session's timeline judges a discontinuity
+// against.
 type Settings struct {
+	// DriftIgnoreThresholdMs is how large a scheduled session's timeline
+	// error has to be before a discontinuity is answered with a seek
+	// (RES-019 section 6). It is ONLY ever a magnitude filter on a
+	// discontinuity whose cause has already been established: no value
+	// here can by itself cause a seek. See timeline.go.
+	//
+	// This package picks no value for it. Zero, or any non-positive
+	// value, means no usable threshold has been pushed to this node, and
+	// a timeline with no usable threshold reports its error and never
+	// seeks. [DefaultSettings] therefore leaves it zero rather than
+	// mirroring the coordinator's own stored default the way every other
+	// field here does.
+	DriftIgnoreThresholdMs int
+
 	DefaultFadeCurve         pkgaudio.FadeCurve
 	DefaultFadeDurationMs    int
 	DefaultMaxBackgroundGain pkgaudio.Ceiling

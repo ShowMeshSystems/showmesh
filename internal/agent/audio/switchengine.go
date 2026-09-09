@@ -244,6 +244,22 @@ func (e *SwitchableEngine) ObserveLTC(ctx context.Context) LTCObservation {
 	return ObserveEngineLTC(ctx, cur, time.Now())
 }
 
+// PresentedElapsed forwards to whatever engine is currently bound. A
+// never-bound engine, or a bound one that does not implement
+// [SinkClockObserver], reports not collected with a reason rather than a
+// fabricated zero, matching [SwitchableEngine.GlitchCounts] exactly.
+// Readings are NOT comparable across a rebind: the replacement engine
+// runs a fresh pipeline whose running time restarts, which is why the
+// timeline treats a rebind as a discontinuity cause in its own right
+// rather than differencing across one.
+func (e *SwitchableEngine) PresentedElapsed(ctx context.Context) (time.Duration, bool, string) {
+	cur, ok := e.get()
+	if !ok {
+		return 0, false, SwitchableEngineNoBindingReason
+	}
+	return ObserveEngineSinkClock(ctx, cur)
+}
+
 // GlitchCounts forwards to whatever engine is currently bound. A rebind
 // DOES reset the count: audio.node.configure builds a brand new Engine
 // (audioEngineRebuilder.rebuild), and this simply reports that fresh

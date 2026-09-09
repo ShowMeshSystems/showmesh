@@ -75,6 +75,58 @@ func parseAudioSessionCommon(action string, params map[string]any) (pkgaudio.Ses
 	return pkgaudio.SessionID(sessionID), pkgaudio.InvocationID(invocation), pkgaudio.Revision(rev), nil
 }
 
+// maxExactFloat64Integer is 2^53-1, the largest integer a float64 holds
+// exactly, and the same bound ui/src/api/bigint.ts uses on the operator
+// side for the same reason.
+const maxExactFloat64Integer = 9007199254740991
+
+// parseScheduledAtNs reads audio.session.start's optional media-clock
+// start instant. Absent is not an error: a command without it starts on
+// arrival exactly as every command did before this seam existed.
+//
+// The value arrives as a json.Number, not a float64 like every other
+// param, because mqttproto.DecodeCmdPayload preserves it exactly (see
+// that package's exactIntegerParams). Nanoseconds since an epoch are
+// around 1.79e18 and float64 cannot hold that as an exact integer, so a
+// float64 here would already be a rounded instant by the time this
+// function saw it. A float64 IS still accepted, for a caller building
+// params in process rather than off the wire, but only when it converts
+// back exactly: a rounded literal is refused rather than started
+// against.
+func parseScheduledAtNs(params map[string]any) (int64, bool, error) {
+	raw, ok := params[pkgaudio.ParamScheduledAtNs]
+	if !ok {
+		return 0, false, nil
+	}
+	switch v := raw.(type) {
+	case json.Number:
+		parsed, err := strconv.ParseInt(v.String(), 10, 64)
+		if err != nil {
+			return 0, false, fmt.Errorf("audio.session.start: params.%s must be a whole number of nanoseconds on this node's media clock, got %v", pkgaudio.ParamScheduledAtNs, raw)
+		}
+		return parsed, true, nil
+	case float64:
+		asInt := int64(v)
+		if float64(asInt) != v {
+			return 0, false, fmt.Errorf("audio.session.start: params.%s (%v) is not a whole number of nanoseconds", pkgaudio.ParamScheduledAtNs, raw)
+		}
+		// Above float64's exactly-representable integer range this value
+		// cannot be trusted to be the one that was sent, whether or not
+		// it happens to be integral, so it is refused rather than started
+		// against. A real media-clock reading is around 1.79e18 and is
+		// ALWAYS in this range, which is why the wire form is an exact
+		// integer and this branch exists only for a caller building
+		// params in process.
+		if asInt > maxExactFloat64Integer || asInt < -maxExactFloat64Integer {
+			return 0, false, fmt.Errorf("audio.session.start: params.%s (%v) arrived as a float64 beyond %d, where a float64 has already rounded it; send it as an exact JSON integer",
+				pkgaudio.ParamScheduledAtNs, raw, int64(maxExactFloat64Integer))
+		}
+		return asInt, true, nil
+	default:
+		return 0, false, fmt.Errorf("audio.session.start: params.%s must be a whole number of nanoseconds on this node's media clock, got %T", pkgaudio.ParamScheduledAtNs, raw)
+	}
+}
+
 // audioSessionOperations builds the nine allowlist entries against mgr.
 // mgr is nil-safe at construction (a node with no configured asset
 // directory never wires audio session commands — see agent.go), matching
@@ -94,8 +146,11 @@ func audioSessionOperations(mgr *audio.Manager) map[string]OperationFunc {
 }
 
 // sessionExec is one operation's body once sessionId/invocationId/revision
-// are parsed and any operation-specific params are extracted.
-type sessionExec func(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, error)
+// are parsed and any operation-specific params are extracted. The
+// returned map is this operation's own extra result evidence, merged
+// into [OperationResult.Value] alongside the three fields every session
+// operation reports; nil for the operations that have none.
+type sessionExec func(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error)
 
 // sessionOp is every session OperationFunc's shared shape: parse the
 // common three params, run exec, and turn the resulting
@@ -114,7 +169,7 @@ func sessionOp(mgr *audio.Manager, exec sessionExec) OperationFunc {
 		}
 
 		dispatchedAt := now()
-		outcome, signal, err := exec(ctx, mgr, id, inv, rev, params)
+		outcome, signal, extra, err := exec(ctx, mgr, id, inv, rev, params)
 		if err != nil {
 			return OperationResult{}, err
 		}
@@ -122,14 +177,18 @@ func sessionOp(mgr *audio.Manager, exec sessionExec) OperationFunc {
 			return OperationResult{}, fmt.Errorf("audio session operation produced an invalid outcome: %w", err)
 		}
 
+		value := map[string]any{
+			"sessionId": string(id),
+			"outcome":   string(outcome.Outcome),
+			"reason":    outcome.Reason,
+		}
+		for k, v := range extra {
+			value[k] = v
+		}
 		return OperationResult{
-			Confirmed: outcomeConfirmed(outcome),
-			Signal:    signal,
-			Value: map[string]any{
-				"sessionId": string(id),
-				"outcome":   string(outcome.Outcome),
-				"reason":    outcome.Reason,
-			},
+			Confirmed:  outcomeConfirmed(outcome),
+			Signal:     signal,
+			Value:      value,
 			ExecutedAt: dispatchedAt,
 			ObservedAt: now(),
 		}, nil
@@ -148,53 +207,99 @@ func outcomeConfirmed(outcome pkgaudio.OutcomeResult) bool {
 		outcome.Outcome != pkgaudio.OutcomeUnconfirmable
 }
 
-func applySession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, error) {
+func applySession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
 	req, err := parseApplyRequest("audio.session.apply", params)
 	if err != nil {
-		return pkgaudio.OutcomeResult{}, "", err
+		return pkgaudio.OutcomeResult{}, "", nil, err
 	}
-	return mgr.Apply(ctx, id, inv, rev, req), "node.audio_session.apply", nil
+	return mgr.Apply(ctx, id, inv, rev, req), "node.audio_session.apply", nil, nil
 }
 
-func prepareSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Prepare(ctx, id, inv, rev), "node.audio_session.prepare", nil
+// prepareSession reports its preroll latency alongside readiness: a
+// coordinator picking a start instant needs to know how long this node
+// actually takes to open, decode and preroll the item, and a node that
+// has never prepared reports no value at all rather than a zero.
+func prepareSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	outcome := mgr.Prepare(ctx, id, inv, rev)
+	extra := map[string]any{}
+	if preroll, known := mgr.PrerollLatency(id); known {
+		extra[pkgaudio.ResultPrerollMs] = preroll.Milliseconds()
+	}
+	addMediaClockReadiness(ctx, mgr, extra)
+	return outcome, "node.audio_session.prepare", extra, nil
 }
 
-func startSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Start(ctx, id, inv, rev), "node.audio_session.start", nil
+// addMediaClockReadiness writes this node's own media-clock reading onto
+// a prepare result, sampled here rather than earlier so it accompanies
+// the readiness message it is published with (RES-019 section 6: the node
+// holding the clock reports now() with each readiness message, and the
+// coordinator offsets its start instant from that sample).
+//
+// The validity flag and reason are ALWAYS written, including when the
+// reading is good, so a consumer never has to read an absent field as a
+// claim. The instant and its error bound are written only when they are
+// real: an invalid reading carries no number at all rather than a zero
+// that would read as an epoch.
+func addMediaClockReadiness(ctx context.Context, mgr *audio.Manager, extra map[string]any) {
+	now := mgr.MediaNow(ctx)
+	extra[pkgaudio.ResultMediaClockValid] = now.Valid
+	extra[pkgaudio.ResultMediaClockReason] = now.Reason
+	if !now.Valid {
+		return
+	}
+	extra[pkgaudio.ResultMediaClockNowNs] = now.Time.UnixNano()
+	extra[pkgaudio.ResultMediaClockErrorBoundKnown] = now.ErrorBoundKnown
+	if now.ErrorBoundKnown {
+		extra[pkgaudio.ResultMediaClockErrorBoundNs] = now.ErrorBoundNs
+	}
 }
 
-func pauseSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Pause(ctx, id, inv, rev), "node.audio_session.pause", nil
+// startSession honours pkg/audio's ParamScheduledAtNs when the command
+// carries it: T0 on THIS node's media clock, in nanoseconds. The param is
+// optional, and a command without it starts on arrival exactly as before
+// this seam existed.
+func startSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	atNs, present, err := parseScheduledAtNs(params)
+	if err != nil {
+		return pkgaudio.OutcomeResult{}, "", nil, err
+	}
+	if !present {
+		return mgr.Start(ctx, id, inv, rev), "node.audio_session.start", nil, nil
+	}
+	return mgr.StartAt(ctx, id, inv, rev, atNs), "node.audio_session.start", nil, nil
 }
 
-func resumeSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Resume(ctx, id, inv, rev), "node.audio_session.resume", nil
+func pauseSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	return mgr.Pause(ctx, id, inv, rev), "node.audio_session.pause", nil, nil
 }
 
-func seekSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, error) {
+func resumeSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	return mgr.Resume(ctx, id, inv, rev), "node.audio_session.resume", nil, nil
+}
+
+func seekSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
 	raw, ok := params["positionMs"]
 	if !ok {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.session.seek: params.positionMs is required")
+		return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.session.seek: params.positionMs is required")
 	}
 	f, ok := raw.(float64)
 	if !ok || f < 0 {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.session.seek: params.positionMs must be a non-negative number, got %v", raw)
+		return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.session.seek: params.positionMs must be a non-negative number, got %v", raw)
 	}
 	position := time.Duration(f) * time.Millisecond
-	return mgr.Seek(ctx, id, inv, rev, position), "node.audio_session.seek", nil
+	return mgr.Seek(ctx, id, inv, rev, position), "node.audio_session.seek", nil, nil
 }
 
-func advanceSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Advance(ctx, id, inv, rev), "node.audio_session.advance", nil
+func advanceSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	return mgr.Advance(ctx, id, inv, rev), "node.audio_session.advance", nil, nil
 }
 
-func stopSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Stop(ctx, id, inv, rev), "node.audio_session.stop", nil
+func stopSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	return mgr.Stop(ctx, id, inv, rev), "node.audio_session.stop", nil, nil
 }
 
-func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Clear(ctx, id, inv, rev), "node.audio_session.clear", nil
+func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	return mgr.Clear(ctx, id, inv, rev), "node.audio_session.clear", nil, nil
 }
 
 // parseApplyRequest builds a [pkgaudio.ApplyRequest] from apply's own

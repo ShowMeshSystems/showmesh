@@ -432,6 +432,18 @@ type stubSnapshotter struct {
 	nodeRestoreAttempts      int
 	nodeRestoreNextAttemptAt time.Time
 	nodeRestoreLastReason    string
+
+	// timeline scripts TimelineSnapshot's return; left zero, it reports
+	// a node running nothing scheduled, which is what every test here
+	// that does not care about a schedule should see.
+	timeline audio.TimelineSnapshot
+}
+
+func (s *stubSnapshotter) TimelineSnapshot(context.Context) audio.TimelineSnapshot {
+	if !s.timeline.Scheduled && s.timeline.Reason == "" {
+		return audio.TimelineSnapshot{Reason: "stub: nothing scheduled"}
+	}
+	return s.timeline
 }
 
 func (s *stubSnapshotter) Snapshot(context.Context) []audio.SessionSnapshot {

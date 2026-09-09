@@ -266,6 +266,25 @@ type Session struct {
 	gapReason     string
 	gapObservedAt time.Time
 
+	// prerollLatency is how long this session's most recent successful
+	// [Manager.Prepare] spent opening, decoding and prerolling the
+	// current item, and prerollKnown is false until one has succeeded.
+	// It is measured evidence about THIS node and this asset, so it is
+	// never carried across a media change or reported as a default: a
+	// coordinator choosing a start instant from a fabricated preroll
+	// would schedule a T0 the node cannot meet.
+	prerollLatency time.Duration
+	prerollKnown   bool
+
+	// timeline is this session's scheduled-playback state, non-nil only
+	// while it is running against a T0 an audio.session.start actually
+	// carried and this node's clock provider was locked enough to honour.
+	// Never persisted: a T0 is an instant on a clock this process may not
+	// hold after a restart, and a restored session rejoins at its
+	// bookmark exactly as it does today rather than against a schedule
+	// nothing has re-established. See timeline.go.
+	timeline *timeline
+
 	// lastSnapshot is the most recent [SessionSnapshot] this session
 	// itself successfully built, via [Session.snapshotLocked]. Read
 	// lock-free by [Session.snapshotWithBudget] when it could not
@@ -477,6 +496,12 @@ func (s *Session) engineHandleFor(itemID string) EngineHandle {
 // effort: a release failure is logged, never returned, matching
 // [Engine.Release]'s own idempotent contract.
 func (s *Session) releaseEngineLocked(ctx context.Context) {
+	// Releasing the handle ends whatever run a scheduled timeline was
+	// measuring, so the timeline goes with it rather than outliving the
+	// playback it describes. This is the single choke point for stop,
+	// clear, advance, re-prepare and engine invalidation alike; Pause and
+	// Seek keep their handle and clear it themselves.
+	s.timeline = nil
 	if !s.handleLoaded {
 		return
 	}
