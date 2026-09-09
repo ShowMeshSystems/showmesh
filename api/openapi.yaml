@@ -699,9 +699,8 @@ paths:
         learns the sweep finished, when `sweepPending` comes back `false`.
 
         An instance id that names no configured `fpp.endpoints` entry is
-        `404`. A request that reaches a configured host whose plugin does
-        not agree to resend is `502`, carrying the host's own refusal text
-        verbatim.
+        `404`. A request that reaches a configured host but produces no
+        usable result is `502`, carrying the host's own text verbatim.
       requestBody:
         required: false
         content:
@@ -746,7 +745,11 @@ paths:
         "502":
           description: >-
             The request was valid and the instance is configured, but the
-            plugin did not agree to resend. `type` is
+            republish produced no usable result: the host was unreachable,
+            the plugin refused, or the plugin answered something the
+            coordinator will not relay (an undecodable body, an unsupported
+            `schemaVersion`, or an `applied` answer claiming no sweep is
+            owed). `type` is
             `https://showmesh.dev/problems/fpp-definition-republish-failed`
             and `detail` carries the host's own error text verbatim.
           headers:

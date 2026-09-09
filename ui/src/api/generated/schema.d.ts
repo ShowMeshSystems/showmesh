@@ -250,7 +250,7 @@ export interface paths {
          *     This repairs the one case that does not self-heal: a definition the coordinator lost or never durably stored, whose content has not changed, and which the plugin therefore suppresses on every later sweep of its own.
          *     **A `200` means the plugin agreed to resend. It does not mean any definition arrived.** The plugin answers before it has attempted a single post, so the body reports what the plugin cleared, what it still holds, what it deliberately kept back, and that the sweep is OWED (`sweepPending: true`), and it carries no count of definitions the coordinator accepted, because no such count exists yet. To see what actually arrived, read `GET /integrations/fpp/playlist-definitions`, which is authoritative because the coordinator computed those hashes for itself.
          *     `applied: false` is part of a success, not an error: it is what a repeated `requestId` returns, having cleared nothing a second time. Sending the same `requestId` again later is also how a caller learns the sweep finished, when `sweepPending` comes back `false`.
-         *     An instance id that names no configured `fpp.endpoints` entry is `404`. A request that reaches a configured host whose plugin does not agree to resend is `502`, carrying the host's own refusal text verbatim.
+         *     An instance id that names no configured `fpp.endpoints` entry is `404`. A request that reaches a configured host but produces no usable result is `502`, carrying the host's own text verbatim.
          */
         post: operations["republishFPPPlaylistDefinitions"];
         delete?: never;
@@ -7107,7 +7107,7 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
-            /** @description The request was valid and the instance is configured, but the plugin did not agree to resend. `type` is `https://showmesh.dev/problems/fpp-definition-republish-failed` and `detail` carries the host's own error text verbatim. */
+            /** @description The request was valid and the instance is configured, but the republish produced no usable result: the host was unreachable, the plugin refused, or the plugin answered something the coordinator will not relay (an undecodable body, an unsupported `schemaVersion`, or an `applied` answer claiming no sweep is owed). `type` is `https://showmesh.dev/problems/fpp-definition-republish-failed` and `detail` carries the host's own error text verbatim. */
             502: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

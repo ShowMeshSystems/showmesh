@@ -183,11 +183,16 @@ const (
 	// ProblemTypeFPPDefinitionRepublishFailed is
 	// POST /fpp/{instanceId}/playlist-definitions/republish's own upstream
 	// failure: the request was valid and the instance is configured, but
-	// the plugin did not agree to resend. Its own type, and a 502 rather
-	// than a 500, for [ProblemTypeFPPTransitionGainWriteFailed]'s reason:
-	// the fault is on the far side of a network hop the operator can act
-	// on (is the host up, is the plugin installed and publishing
-	// definitions) rather than a coordinator defect.
+	// the republish produced no usable result. That covers an unreachable
+	// host, a plugin that refused, and a plugin that answered something
+	// the coordinator will not relay: an undecodable body, an unsupported
+	// schemaVersion, or an applied answer claiming no sweep is owed. The
+	// last of those did apply, so nothing here may call this a refusal.
+	// Its own type, and a 502 rather than a 500, for
+	// [ProblemTypeFPPTransitionGainWriteFailed]'s reason: the fault is on
+	// the far side of a network hop the operator can act on (is the host
+	// up, is the plugin installed and publishing definitions) rather than
+	// a coordinator defect.
 	ProblemTypeFPPDefinitionRepublishFailed = problemBaseURI + "fpp-definition-republish-failed"
 )
 
@@ -719,15 +724,19 @@ func fppTransitionGainWriteFailedProblem(instanceID string, err error) v1.Proble
 	}
 }
 
-// fppDefinitionRepublishFailedProblem reports a republish the plugin did
-// not agree to. The underlying error text is carried verbatim: the plugin
-// refuses with its own wording, and paraphrasing it would cost the
-// operator the only description of what the FPP host actually said.
+// fppDefinitionRepublishFailedProblem reports a republish that produced no
+// usable result. The prefix deliberately claims nothing about why: one of
+// the cases it serves is a plugin that DID apply and then contradicted the
+// contract, so a prefix asserting a refusal would contradict its own
+// appended error text, and an operator mid-show acts on the first clause.
+// That error text is carried verbatim: the plugin refuses with its own
+// wording, and paraphrasing it would cost the operator the only
+// description of what the FPP host actually said.
 func fppDefinitionRepublishFailedProblem(instanceID string, err error) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeFPPDefinitionRepublishFailed,
 		Title:  "FPP playlist definition republish failed",
 		Status: http.StatusBadGateway,
-		Detail: fmt.Sprintf("FPP instance %q did not agree to republish its playlist definitions: %v", instanceID, err),
+		Detail: fmt.Sprintf("the playlist definition republish request to FPP instance %q did not produce a usable result: %v", instanceID, err),
 	}
 }

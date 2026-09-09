@@ -618,8 +618,9 @@ is not a claim that either exists.
 
 ## 3. Playlist definition publication
 
-**Status: SHIPPED,** except §3.9, which carries its own status: both sides are
-built for everything else in this section.
+**Status: SHIPPED,** except §3.9. That subsection is built on both sides as
+well, but not on the same evidence, so it carries its own status line. Read
+that line for §3.9 rather than inferring anything about it from this one.
 
 Frozen 2026-08-22 for Track H seam H2. Section 1 gives the coordinator a
 playlist hash and an entry key. Neither says what the playlist contains, so
