@@ -568,15 +568,15 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	return obs
 }
 
-// sessionStateReason states AUDIO-ENGINE section 15's distinction: Playing and Paused
-// are engine-side claims this seam cannot corroborate with anything an
-// audience would experience, because the only Engine this repository
-// ships never plays audio (see internal/agent/audio.FakeEngine). Every
-// other state carries no such ambiguity to flag.
+// sessionStateReason states AUDIO-ENGINE section 15's distinction: Playing
+// and Paused are engine-side claims this seam has not independently
+// corroborated with anything an audience would experience, whether or not
+// the wired engine actually reached an output. Every other state carries
+// no such ambiguity to flag.
 func sessionStateReason(state string) string {
 	switch state {
 	case "playing", "paused":
-		return "the session state machine reports this; no pipeline backend exists yet to confirm audio actually reached an output"
+		return "the session state machine reports this; this seam has not independently confirmed audio actually reached an output"
 	default:
 		return "no playback claim is in effect in this state"
 	}

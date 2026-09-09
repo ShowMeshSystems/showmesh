@@ -14,9 +14,9 @@ import (
 // This file wires the nine audio.session.* operations into the agent's
 // allowlist, against an [audio.Manager]. The Manager's own
 // gateAvailability forces every one of these to report Unconfirmable
-// while the wired Engine is unavailable — true of every Engine this
-// repository ships (see internal/agent/audio.FakeEngine) — so nothing
-// here can report a session command as succeeded playback.
+// while the wired Engine is unavailable, so nothing here can report a
+// session command as succeeded playback unless the wired Engine (in
+// production, internal/agent/audio/gstengine) reports itself available.
 
 // audioSessionCommonKeys are the three params every session operation
 // requires: sessionId names the session, invocationId and revision go
