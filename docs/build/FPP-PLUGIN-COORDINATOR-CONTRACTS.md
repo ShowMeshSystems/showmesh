@@ -739,9 +739,17 @@ In order:
 1. Authenticate; refuse `401` when no credential resolves.
 2. Check `fpp:observe`; refuse `403` naming the scope.
 3. Bound the body at 1048576 bytes; refuse `413` on overflow.
-4. Decode strictly. Refuse `400` on malformed JSON, an unknown field, trailing
-   content after the object, or a duplicate member name, for section 1.6's
-   reasons.
+4. Decode. Refuse `400` on malformed JSON, trailing content after the object,
+   or a duplicate member name, for section 1.6's reasons. A member the
+   coordinator does not know is **ignored**, not refused, mirroring section
+   1.6 step 4's identical fix for the identical hazard: refusing it made
+   upgrade order fatal, since a plugin sending a new field to a coordinator
+   that predates it would have every definition rejected, and the
+   coordinator would then see observations referencing definitions that
+   never landed. Its name is returned in the response's `ignoredFields`
+   array, sorted, capped at eight, and absent when there were none. **A
+   plugin must not treat `ignoredFields` as a failure**: the definition was
+   accepted.
 5. Refuse `400` when `schemaVersion` is not `1`.
 6. Refuse `400` when `instanceUuid` or `playlistName` is absent or empty, when
    `playlistHash` is not 64 lowercase hex characters, when `definition` is
@@ -776,7 +784,7 @@ audited with its reason.
 | No credential | 401 | `unauthorized` |
 | Missing `fpp:observe` | 403 | `forbidden` |
 | Body over 1048576 bytes | 413 | `payload-too-large` |
-| Malformed body, unknown field, duplicate member | 400 | `invalid-parameter` |
+| Malformed body, trailing content, duplicate member | 400 | `invalid-parameter` |
 | Unsupported `schemaVersion` | 400 | `unsupported-definition-schema-version` |
 | Missing or malformed identity field | 400 | `invalid-parameter` |
 | Definition does not hash to `playlistHash` | 400 | `definition-hash-mismatch` |

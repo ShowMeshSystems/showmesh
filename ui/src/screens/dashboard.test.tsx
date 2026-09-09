@@ -25,7 +25,12 @@ const evidence = (state: string) => ({
   quality: 'reported',
 }) as unknown as Node['render'][number]
 
-function node(nodeId: string, state: 'online' | 'offline' | 'unknown', signals: string[] = []): Node {
+function node(
+  nodeId: string,
+  state: 'online' | 'offline' | 'unknown',
+  signals: string[] = [],
+  showParticipation?: Node['showParticipation'],
+): Node {
   return {
     nodeId,
     label: nodeId,
@@ -43,6 +48,7 @@ function node(nodeId: string, state: 'online' | 'offline' | 'unknown', signals: 
       heartbeat: evidence(state === 'offline' ? 'stale' : 'current'),
     },
     declaration: {} as Node['declaration'],
+    showParticipation,
     render: signals.map(evidence),
     audio: [],
     fppConnect: [],
@@ -125,6 +131,42 @@ describe('Dashboard', () => {
     renderDashboard({ fpp: [fpp('barn-player', 'healthy', true)] })
     expect(screen.getByText(/Bindings held/i)).toBeInTheDocument()
     expect(screen.getByText(/changed its instance identity/)).toBeInTheDocument()
+  })
+
+  it('sorts a participating node above a non-participating node whose tone would otherwise put it first', () => {
+    renderDashboard({
+      nodes: [
+        node('offline-node', 'offline', [], { state: 'not_participating', show: 'halloween-2026', reason: null }),
+        node('unknown-node', 'unknown', [], { state: 'participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    const rows = screen.getAllByText(/-node$/).map((el) => el.textContent)
+    expect(rows).toEqual(['unknown-node', 'offline-node'])
+  })
+
+  it.each([
+    ['participating', "Participating in tonight's show."],
+    ['not_participating', "Not participating in tonight's show."],
+    ['unknown', 'Participation unknown.'],
+    ['not_configured', 'No active show.'],
+  ] as const)('renders the operator-facing sentence for %s on the row', (state, sentence) => {
+    renderDashboard({ nodes: [node('media-garage', 'offline', [], { state, show: 'halloween-2026', reason: null })] })
+    expect(screen.getByText(sentence)).toBeInTheDocument()
+  })
+
+  it('puts the participation sentence before the action link, not after', () => {
+    renderDashboard({
+      nodes: [node('media-garage', 'offline', [], { state: 'participating', show: 'halloween-2026', reason: null })],
+    })
+    const detail = screen.getByText(/Participating in tonight's show\./).closest('p')
+    expect(detail).not.toBeNull()
+    const text = detail!.textContent ?? ''
+    expect(text.indexOf("Participating in tonight's show.")).toBeLessThan(text.indexOf('Open'))
+  })
+
+  it('says nothing about participation for an older coordinator that never sent the field', () => {
+    renderDashboard({ nodes: [node('media-garage', 'offline')] })
+    expect(screen.queryByText(/Participating in|Not participating in|Participation unknown|No active show/)).not.toBeInTheDocument()
   })
 
   it('counts an unknown node as neither online nor offline', () => {

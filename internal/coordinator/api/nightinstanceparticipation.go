@@ -58,7 +58,7 @@ func (h *handlers) nightCheckShowInstanceParticipation(ctx context.Context, now 
 		return one(nightCheckStateNotConfigured, fmt.Sprintf(
 			"show.active does not currently name this session's own show %q; instance participation cannot be evaluated until it does", show))
 	}
-	selection := resolveShowInstanceParticipation(ctx, h.deps.Config, active, activeErr)
+	selection := resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 	if selection.unknownReason != "" {
 		return one(nightHealthUnknown(), selection.unknownReason)
 	}

@@ -51,7 +51,7 @@
       "showParticipation": {
         "state": "not_configured",
         "show": "",
-        "reason": "no show is currently active"
+        "reason": "no asset manifest store is configured on this coordinator"
       },
       "duplicateInstanceUuidEndpointIds": []
     }
