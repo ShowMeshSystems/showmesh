@@ -299,6 +299,12 @@ func TestCheckSchemaVersionRowsMigrationWithNoRow(t *testing.T) {
 	}
 }
 
+// TestCheckSchemaVersionRowsRangeRowLowerBoundTooLow defends the assertion
+// that would have caught the state main was in a few hours ago, where the
+// range row read v31+ while migrations.go already carried 31 and 32. It
+// cannot currently fire against the real register, since v34+ is already
+// correct at the shipped maximum plus one; it stays here so nobody deletes
+// it for never having fired.
 func TestCheckSchemaVersionRowsRangeRowLowerBoundTooLow(t *testing.T) {
 	const table = `| Version | Status | Introduced by |
 |---|---|---|
@@ -313,6 +319,31 @@ func TestCheckSchemaVersionRowsRangeRowLowerBoundTooLow(t *testing.T) {
 	got := checkSchemaVersionRows(rows, []int{6, 7}, 6)
 	if !anyContains(got, "the open-ended row reads v7+") {
 		t.Errorf("expected a violation naming the v7+ range row as too low, got: %v", got)
+	}
+}
+
+// TestCheckSchemaVersionRowsIgnoresReservedWordInDescription defends the
+// column-exact status match against a substring search regression. v11, v12
+// and v13 on main all read "released" in the Status column while their
+// description text says when they were "reserved" and why that reservation
+// was let go; a substring search for "reserved" over the whole row would
+// misclassify all three as stale reservations, even though none of them is
+// one.
+func TestCheckSchemaVersionRowsIgnoresReservedWordInDescription(t *testing.T) {
+	const table = `| Version | Status | Introduced by |
+|---|---|---|
+| v6 | shipped | seam 0 |
+| v7 | released | was durable action-invocation attribution, reserved 2026-08-19, released once the maximum passed it |
+| v8 | shipped | seam 2 |
+| v9+ | unallocated | free |
+`
+	rows, err := parseSchemaVersionRows(table)
+	if err != nil {
+		t.Fatalf("parseSchemaVersionRows: %v", err)
+	}
+	got := checkSchemaVersionRows(rows, []int{6, 8}, 6)
+	if len(got) != 0 {
+		t.Errorf("expected no violations for a released row whose description merely mentions being reserved, got: %v", got)
 	}
 }
 
