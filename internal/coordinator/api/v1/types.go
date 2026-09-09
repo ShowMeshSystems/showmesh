@@ -109,6 +109,31 @@ type NodeEvidence struct {
 	Heartbeat Evidence `json:"heartbeat"`
 }
 
+// NodeShowParticipation is the coordinator's own answer to whether a node
+// participates in the show currently active: the operator UI renders this
+// value directly and must never infer participation from any other field.
+//
+// State is one of four values, kept apart deliberately:
+//   - "participating": the node has at least one resolved output in the
+//     active show's cue catalog.
+//   - "not_participating": the catalog resolved, with no output for this
+//     node at all.
+//   - "not_configured": no show is currently active, or this coordinator
+//     has no cue-catalog data source: the ordinary state before an
+//     operator has activated a show, never a determination failure.
+//   - "unknown": participation could not be determined (e.g. a store
+//     error). Reason is always populated, and a client must never render
+//     this as "not participating".
+//
+// Show names the active show this value was computed against, empty when
+// none could be identified. Reason is always populated for "unknown" and
+// "not_configured", and optional otherwise.
+type NodeShowParticipation struct {
+	State  string  `json:"state"`
+	Show   string  `json:"show"`
+	Reason *string `json:"reason"`
+}
+
 // Node is one node's current representation: an element of
 // GET /api/v1/nodes, of the /api/v1/snapshot nodes list, and the payload of
 // a node.changed stream event. All three render identically, per contract
@@ -151,6 +176,11 @@ type Node struct {
 	// — see [NodeDeclaration]'s own doc comment for what "declared: false"
 	// means and why this is never an omitted field.
 	Declaration NodeDeclaration `json:"declaration"`
+
+	// ShowParticipation reports whether this node participates in tonight's
+	// active show; see [NodeShowParticipation]'s own doc comment for its
+	// four states and why the UI must render it as given rather than infer it.
+	ShowParticipation NodeShowParticipation `json:"showParticipation"`
 
 	// Render is Track B seam B2b's addition, additive per ADR-020 decision
 	// 8: whatever surface.* observations this coordinator currently holds
