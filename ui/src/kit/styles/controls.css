@@ -215,6 +215,14 @@
   gap: var(--s-5);
 }
 
+/* A single 240px column overflows the 122px content width available at
+   390px; one column below 720px. */
+@media (max-width: 720px) {
+  .sm-field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .sm-choice {
   display: inline-flex;
   align-items: center;

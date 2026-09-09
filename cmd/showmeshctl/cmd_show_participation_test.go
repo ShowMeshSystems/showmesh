@@ -161,10 +161,100 @@ func TestCmdShowParticipationSetRequiresAtLeastOneFlag(t *testing.T) {
 	}
 }
 
-// TestCmdShowSetOmitsParticipationWhenUnnamed keeps "show set" honest: it
-// is a full replacement, so a write that names no integration records the
-// show as having no selection at all rather than quietly preserving one.
-func TestCmdShowSetOmitsParticipationWhenUnnamed(t *testing.T) {
+// TestCmdShowSetPreservesAnUnnamedSelection is the ruled behaviour: a
+// rename must not cost a show its instance selection. "show set" replaces
+// name and notes outright but reads the show and carries an integration
+// nobody named forward, because that selection decides what gets checked
+// on a show night and is not the same class of field as a free-text note.
+func TestCmdShowSetPreservesAnUnnamedSelection(t *testing.T) {
+	var gotBody []byte
+	ts := showParticipationServer(t,
+		`{"name":"Quiet Night","notes":"barn only","fppInstances":["fpp-a","fpp-b"],"resolumeInstances":[]}`, &gotBody)
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdShow([]string{"set", "--server", ts.URL, "--name", "Quiet Night (renamed)", "quiet-night"},
+		&stdout, &stderr, fixedClock(mustParse(t, "2026-09-08T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &decoded); err != nil {
+		t.Fatalf("decoding request body: %v; body: %s", err, gotBody)
+	}
+	if string(decoded["fppInstances"]) != `["fpp-a","fpp-b"]` {
+		t.Errorf("renaming a show must not clear its FPP selection; sent %s", gotBody)
+	}
+	// The explicitly empty selection is carried forward as [], not lost:
+	// "the operator chose no Resolume" must survive a rename too.
+	if string(decoded["resolumeInstances"]) != `[]` {
+		t.Errorf("an explicitly empty selection must survive a rename as [], sent %s", gotBody)
+	}
+	// Notes keep the old rule: unnamed means empty, never carried forward.
+	if string(decoded["notes"]) != `""` {
+		t.Errorf("notes = %s, want an explicit empty string; only participation is carried forward", decoded["notes"])
+	}
+	if string(decoded["name"]) != `"Quiet Night (renamed)"` {
+		t.Errorf("name = %s, want the new name", decoded["name"])
+	}
+}
+
+// TestCmdShowSetNoneIsNotMistakenForLeaveAlone is the other half of the
+// same rule, and the one carrying forward could quietly break: --fpp-none
+// is an instruction to record an EMPTY selection, and must not be treated
+// as the silence that carries the old one forward.
+func TestCmdShowSetNoneIsNotMistakenForLeaveAlone(t *testing.T) {
+	var gotBody []byte
+	ts := showParticipationServer(t,
+		`{"name":"Quiet Night","notes":"","fppInstances":["fpp-a","fpp-b"]}`, &gotBody)
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdShow([]string{"set", "--server", ts.URL, "--name", "Quiet Night", "--fpp-none", "quiet-night"},
+		&stdout, &stderr, fixedClock(mustParse(t, "2026-09-08T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &decoded); err != nil {
+		t.Fatalf("decoding request body: %v; body: %s", err, gotBody)
+	}
+	if string(decoded["fppInstances"]) != `[]` {
+		t.Errorf("--fpp-none must record an empty selection, not carry the old one forward; sent %s", gotBody)
+	}
+}
+
+// TestCmdShowSetUnsetClearsTheSelection: with silence now meaning "leave
+// it alone", removing a selection through this verb needs a flag that
+// says so, and it must reach the wire as an omitted key rather than [].
+func TestCmdShowSetUnsetClearsTheSelection(t *testing.T) {
+	var gotBody []byte
+	ts := showParticipationServer(t,
+		`{"name":"Quiet Night","notes":"","fppInstances":["fpp-a"],"resolumeInstances":["arena-01"]}`, &gotBody)
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdShow([]string{"set", "--server", ts.URL, "--name", "Quiet Night", "--fpp-unset", "quiet-night"},
+		&stdout, &stderr, fixedClock(mustParse(t, "2026-09-08T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &decoded); err != nil {
+		t.Fatalf("decoding request body: %v; body: %s", err, gotBody)
+	}
+	if _, present := decoded["fppInstances"]; present {
+		t.Fatalf("--fpp-unset must omit the key entirely, sent %s", gotBody)
+	}
+	if string(decoded["resolumeInstances"]) != `["arena-01"]` {
+		t.Errorf("the untouched integration must be carried forward; sent %s", gotBody)
+	}
+}
+
+// TestCmdShowSetOnAShowWithNoSelectionStillSendsNothing: absent carried
+// forward is still absent. Creating or editing a show nobody has
+// configured must not invent an empty selection for it.
+func TestCmdShowSetOnAShowWithNoSelectionStillSendsNothing(t *testing.T) {
 	var gotBody []byte
 	ts := showParticipationServer(t, `{"name":"Quiet Night","notes":""}`, &gotBody)
 	defer ts.Close()
@@ -180,7 +270,10 @@ func TestCmdShowSetOmitsParticipationWhenUnnamed(t *testing.T) {
 		t.Fatalf("decoding request body: %v; body: %s", err, gotBody)
 	}
 	if _, present := decoded["fppInstances"]; present {
-		t.Fatalf("show set with no participation flag must omit the key: %s", gotBody)
+		t.Fatalf("a show with no selection must stay unconfigured, sent %s", gotBody)
+	}
+	if _, present := decoded["resolumeInstances"]; present {
+		t.Fatalf("a show with no selection must stay unconfigured, sent %s", gotBody)
 	}
 }
 
@@ -208,5 +301,53 @@ func TestCmdShowSetSendsNamedParticipation(t *testing.T) {
 	}
 	if string(decoded["resolumeInstances"]) != `[]` {
 		t.Errorf("resolumeInstances = %s, want []", decoded["resolumeInstances"])
+	}
+}
+
+// TestCmdShowSetCreatesAShowThatDoesNotExistYet: now that this verb always
+// reads before writing, a 404 on that read is the first creation of the
+// show, not a failure. The write must still go out, with no participation
+// carried forward and no If-Match precondition to fail against an object
+// that does not exist.
+func TestCmdShowSetCreatesAShowThatDoesNotExistYet(t *testing.T) {
+	var gotBody []byte
+	var putSeen bool
+	var ifMatch string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ShowMesh-API-Version", "1")
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/not-found","title":"Not Found","status":404}`)
+			return
+		}
+		putSeen = true
+		ifMatch = r.Header.Get("If-Match")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-08T21:00:00Z","kind":"show","id":"brand-new","revision":1,
+			"payload":{"name":"Brand New","notes":""},
+			"updatedAt":"2026-09-08T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdShow([]string{"set", "--server", ts.URL, "--name", "Brand New", "brand-new"},
+		&stdout, &stderr, fixedClock(mustParse(t, "2026-09-08T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !putSeen {
+		t.Fatal("a 404 on the pre-read must not stop the write; no PUT was issued")
+	}
+	if ifMatch != "" {
+		t.Errorf("If-Match = %q, want none for a show that does not exist yet", ifMatch)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &decoded); err != nil {
+		t.Fatalf("decoding request body: %v; body: %s", err, gotBody)
+	}
+	if _, present := decoded["fppInstances"]; present {
+		t.Fatalf("a new show must not be given a selection nobody chose, sent %s", gotBody)
 	}
 }

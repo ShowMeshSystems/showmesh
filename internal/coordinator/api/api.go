@@ -1591,8 +1591,11 @@ func New(deps Dependencies, opts Options) *API {
 	}
 	hub := newHub(deps, opts, opts.Logger)
 	// A write whose result is visible in a streamed resource has to say so
-	// here; nothing else connects a handler to the hub.
+	// here; nothing else connects a handler to the hub. Both wirings are
+	// live: they are the same rule reached two ways, and neither is
+	// redundant until one call site moves to the other.
 	h.notifyStream = hub.Notify
+	h.hub = hub
 
 	mux := http.NewServeMux()
 	// "{$}" matches only the exact path "/api/v1/", not every path under

@@ -18,17 +18,17 @@ import (
 //
 // Three states, and this file exists mostly to keep them apart at the
 // command line: a selection that was never recorded, a selection that is
-// deliberately empty, and a populated one. "show set" can express the
-// first and third by omitting or supplying the flags, but it is a full
-// replacement, so changing only the selection through it means restating
-// the show's name and notes. This verb reads the show first and rewrites
-// only the fields the operator named.
+// deliberately empty, and a populated one. Both this verb and "show set"
+// carry an unnamed integration forward rather than clearing it, so
+// "leave it alone" and "record that none take part" can never be confused
+// for each other. This verb is the one that leaves the show's name and
+// notes alone too.
 
 // participationFlags is the flag group both "show set" and
-// "show participation set" register. withUnset adds the --fpp-unset /
-// --resolume-unset pair, which only makes sense where an unnamed field is
-// carried forward: on "show set", where an unnamed field is already
-// recorded as no selection, an unset flag would be a synonym for silence.
+// "show participation set" register. Both carry an unnamed integration
+// forward, so both offer withUnset: with silence meaning "leave it
+// alone", removing a selection needs a flag that says so, and it is a
+// different instruction from --fpp-none.
 type participationFlags struct {
 	fpp, resolume           string
 	fppSet, resolumeSet     bool
@@ -62,9 +62,9 @@ func registerParticipationFlags(fs *flag.FlagSet, withUnset bool) *participation
 
 // resolve turns the flags into the two values to send, given whatever the
 // show currently holds. An integration nobody named keeps currentFPP /
-// currentResolume, which is nil at every "show set" call site: a full
-// replacement carries nothing forward, and this function is not the place
-// that decision gets quietly reversed.
+// currentResolume verbatim, which is how a selection survives a write
+// that was only meant to rename a show. Pass nil for a show that does not
+// exist yet.
 func (p *participationFlags) resolve(currentFPP, currentResolume *[]string) (fpp, resolume *[]string, err error) {
 	fpp, err = resolveOneSelection("fpp", p.fppSet, p.fpp, p.fppNone, p.fppUnset, currentFPP)
 	if err != nil {

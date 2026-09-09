@@ -28,6 +28,15 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* The 158px label column overflows the 122px content width available at
+   390px; every RuledStrip in the app goes to one column below 720px. */
+@media (max-width: 720px) {
+  .sm-strip {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px 0;
+  }
+}
+
 .sm-strip__label {
   font: var(--t-meta);
   letter-spacing: 0.1em;

@@ -153,9 +153,22 @@ type handlers struct {
 	// to produce the identical NodeOutcome string) logs again.
 	cueActivationRefusalLogMu sync.Mutex
 	cueActivationRefusalLog   map[string]string
+
+	// hub is the SSE hub [New] builds alongside this value, so a write
+	// handler can invalidate stream state at the moment it changes rather
+	// than leaving clients to wait for the hub's next render pass.
+	hub *Hub
 }
 
 func (h *handlers) now() time.Time { return h.clock() }
+
+// notifyStreamHub pokes the SSE hub when one is wired, and does nothing
+// when a test builds a *handlers without one.
+func (h *handlers) notifyStreamHub() {
+	if h.hub != nil {
+		h.hub.Notify()
+	}
+}
 
 // handleServiceDescriptor serves GET /api/v1/.
 func (h *handlers) handleServiceDescriptor(w http.ResponseWriter, _ *http.Request) {

@@ -1497,3 +1497,49 @@ a.sm-tile:hover {
   overflow: hidden;
   clip: rect(0 0 0 0);
 }
+
+/*
+ * Every fixed or minmax-floored track in this file overflows the 122px
+ * content width available at 390px (see the kit's shell breakpoint note).
+ * One column below 720px for each; auto-fit tracks already collapse to one
+ * column at that width once the floor is lifted.
+ */
+@media (max-width: 720px) {
+  .sm-defs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sm-defs > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 14px 0;
+  }
+
+  .sm-defs > div:last-child {
+    border-bottom: 0;
+  }
+
+  .sm-grid--auto {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sm-attn,
+  .sm-dashboard__attention > .sm-attn {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px 0;
+  }
+
+  .sm-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sm-readout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px 0;
+  }
+
+  .sm-dashboard__verdicts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px 0;
+  }
+}

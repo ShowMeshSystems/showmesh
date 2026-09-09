@@ -15799,6 +15799,19 @@ components:
         serverTime:
           type: string
           format: date-time
+    FPPPlaylistReference:
+      type: object
+      description: >-
+        One show.playlist object that names an FPP playlist definition's
+        (instanceUuid, playlistHash): FPPPlaylistDefinitionMetadata.referencedByPlaylists'
+        own element, the playlist's own object id plus its operator-facing
+        name.
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
     FPPPlaylistDefinitionMetadata:
       type: object
       description: >-
@@ -15806,8 +15819,12 @@ components:
         (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no
         definition payload. referenced is true when some stored
         show.playlist object's active revision names this
-        (instanceUuid, playlistHash).
-      required: [instanceUuid, playlistName, playlistHash, capturedAt, receivedAt, entryCount, referenced]
+        (instanceUuid, playlistHash); referencedByPlaylists names every one
+        of them, since more than one show.playlist object can name the same
+        definition. Both are computed from the same pass over show.playlist
+        objects, so referenced is exactly referencedByPlaylists being
+        non-empty and the two cannot disagree.
+      required: [instanceUuid, playlistName, playlistHash, capturedAt, receivedAt, entryCount, referenced, referencedByPlaylists]
       properties:
         instanceUuid:
           type: string
@@ -15825,6 +15842,10 @@ components:
           type: integer
         referenced:
           type: boolean
+        referencedByPlaylists:
+          type: array
+          items:
+            $ref: "#/components/schemas/FPPPlaylistReference"
     FPPPlaylistDefinitionsListResponse:
       type: object
       description: >-

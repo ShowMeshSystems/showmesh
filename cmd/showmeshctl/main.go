@@ -211,7 +211,9 @@ Commands:
                                        server-side
   show list                           enumerate show objects
   show get <id>                       show one show's full definition
-  show set <id>                       write a new show revision (write, full replacement)
+  show set <id>                       write a new show revision (write, full replacement, except
+                                       that an instance selection you do not name is carried
+                                       forward rather than cleared)
   show revisions <id>                 list show revision history, newest first
   show participation                  read or change which FPP and which Resolume instances
                                        take part in a show

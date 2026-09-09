@@ -82,8 +82,11 @@ true when either side ships.
 
 ## 1. Playlist-entry observation ingestion
 
-**Status: SHIPPED,** except §1.8, which carries its own status: both sides are
-built for everything else in this section.
+**Status: coordinator BUILT, plugin BUILT,** except §1.8, which carries its own
+status.
+
+Coordinator anchor: `handlePostFPPPlaylistEntryObservation`. The plugin's half is
+that repository's own assertion and is not verified from here.
 
 ### 1.1 Endpoint and authorization
 
@@ -431,10 +434,13 @@ non-active show must never activate anything.
 
 ### 1.8 Entry occurrence and `playlistLoop`
 
-**Status: coordinator SHIPPED, plugin NOT BUILT.** The coordinator accepts
+**Status: coordinator BUILT, plugin NOT BUILT.** The coordinator accepts
 `playlistLoop` and uses it as the third term of the occurrence rule. No plugin
 sends it yet, so §1's blanket "both sides are built" does not cover this
 section.
+
+Coordinator anchor: `playlistLoopChanged`. The plugin's half is that
+repository's own assertion and is not verified from here.
 
 An entry OCCURRENCE is one visit to one playlist entry. Repeat ticks inside a
 visit belong to the same occurrence; a later visit to the same entry is a new
@@ -490,7 +496,12 @@ stands until no coordinator predating that change is left in the fleet.
 
 ## 2. Brightness transition gain
 
-**Status: DESIGNED, NOT BUILT.** Neither side serves this. See 2.4.
+**Status: coordinator BUILT, plugin BUILT.** Both sides serve this. Built is
+not proven: nothing here claims it has run against a real FPP host. See 2.4 for
+what remains.
+
+Coordinator anchor: `handleFPPTransitionGain`. The plugin's half is that
+repository's own assertion and is not verified from here.
 
 ### 2.1 The composition
 
@@ -605,22 +616,26 @@ what this season gives up.
 
 ### 2.4 What remains unbuilt
 
-The plugin does not yet serve this path; `BrightnessEngine::setGain()` has no
-caller, so the gain is pinned at 100 on any real host and the compositional
-seam cannot be exercised end to end. The coordinator does not yet call it
-either: Track F's readiness still rejects any cue that requires compositional
-brightness (`nightCheckNoUnbuiltBrightnessComposition`), and that check stays
-in place until the plugin serves this contract and RES-018 §8's decisive
-mid-fade case is observed on a real host.
+Both sides are built and neither is proven. The coordinator serves
+`POST /fpp/{instanceId}/brightness/transition-gain` (`handleFPPTransitionGain`)
+and reaches it from `showmeshctl fpp set-transition-gain`. Track F's readiness
+check no longer refuses a cue requiring compositional brightness: it warns
+instead, which is why it is now `nightCheckBrightnessCompositionUnverified`
+rather than a name asserting the composition is unbuilt.
 
-This section is the frozen shape that unblocks those two implementations. It
-is not a claim that either exists.
+What remains is evidence, not code. RES-018 §8's decisive mid-fade case has not
+been observed against a real FPP host, so nothing here reports that the
+composition behaves correctly on hardware. The readiness check warns for exactly
+that reason and stays until that observation exists.
 
 ## 3. Playlist definition publication
 
-**Status: SHIPPED,** except §3.9. That subsection is built on both sides as
-well, but not on the same evidence, so it carries its own status line. Read
-that line for §3.9 rather than inferring anything about it from this one.
+**Status: coordinator BUILT, plugin BUILT,** except §3.9, which is built on both
+sides as well but not on the same evidence, so it carries its own status line.
+Read that line for §3.9 rather than inferring anything about it from this one.
+
+Coordinator anchor: `handlePostFPPPlaylistDefinition`. The plugin's half is that
+repository's own assertion and is not verified from here.
 
 Frozen 2026-08-22 for Track H seam H2. Section 1 gives the coordinator a
 playlist hash and an entry key. Neither says what the playlist contains, so
@@ -836,7 +851,7 @@ thread.
 
 ### 3.9 The coordinator-triggered republish
 
-**Status: BUILT ON BOTH SIDES, NOT PROVEN ON HARDWARE.** The plugin serves
+**Status: coordinator BUILT, plugin BUILT, NOT PROVEN ON HARDWARE.** The plugin serves
 this route and the coordinator calls it: a client for the plugin address
 below, an operator route
 (`POST /api/v1/fpp/{instanceId}/playlist-definitions/republish`, behind
@@ -844,6 +859,9 @@ below, an operator route
 proven: the evidence on both sides is bench evidence, unit tests against HTTP
 fakes, and neither half has run against a real FPP host. Read the prose below
 as the contract it has always been, not as a report of observed behavior.
+
+Coordinator anchor: `handleFPPDefinitionRepublish`. The plugin's half is that
+repository's own assertion and is not verified from here.
 
 Be precise about the size of the win, because it is bounded. Section 3.7's
 re-scan already recovers an edited playlist by itself: the sweep re-reads the
@@ -1018,7 +1036,11 @@ did not itself read from the host and hash.
 
 ## 4. Shared fixtures
 
-**Status: SHIPPED.** The files exist and both sides consume them.
+**Status: coordinator BUILT, plugin BUILT.** The files exist and both sides
+consume them.
+
+Coordinator anchor: none. This section names no coordinator symbol; it describes
+files consumed by both repositories.
 
 `test/fixtures/fpp/` holds plain JSON data files, consumable by any language.
 They are deliberately not a Go package and not a shared module: the plugin
