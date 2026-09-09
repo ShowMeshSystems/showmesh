@@ -38,7 +38,25 @@ type FPPPlaylistDefinitionPublishResponse struct {
 	PlaylistHash  string `json:"playlistHash"`
 	Stored        bool   `json:"stored"`
 	Idempotent    bool   `json:"idempotent"`
-	ServerTime    string `json:"serverTime"`
+
+	// IgnoredFields names the top-level members of the submitted body
+	// this coordinator does not know, sorted, absent when there were
+	// none. They did not stop the definition being accepted: an unknown
+	// member is ignored, because refusing it would make a plugin newer
+	// than its coordinator lose every definition. Present so a
+	// misspelled member is visible to whoever sent it instead of
+	// silently dropped, which is what strict decoding used to buy.
+	IgnoredFields []string `json:"ignoredFields,omitempty"`
+
+	ServerTime string `json:"serverTime"`
+}
+
+// FPPPlaylistReference names one show.playlist object that binds an FPP
+// playlist definition: [FPPPlaylistDefinitionMetadata.ReferencedByPlaylists]'s
+// own element, the playlist's object id plus its operator-facing name.
+type FPPPlaylistReference struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // FPPPlaylistDefinitionMetadata is one row of GET
@@ -46,15 +64,20 @@ type FPPPlaylistDefinitionPublishResponse struct {
 // ... instance, playlist name, hash, captured and received times, entry
 // count, and whether a stored show.playlist references it." EntryCount
 // is the number of entries TRACK-H-H2-SPEC.md §4.1's parser finds across
-// leadIn, mainPlaylist, and leadOut combined.
+// leadIn, mainPlaylist, and leadOut combined. Referenced is exactly
+// ReferencedByPlaylists being non-empty, both computed from the same pass
+// over show.playlist objects so they cannot disagree; a definition can be
+// named by more than one show.playlist object, so ReferencedByPlaylists is
+// a list rather than a single name.
 type FPPPlaylistDefinitionMetadata struct {
-	InstanceUUID string `json:"instanceUuid"`
-	PlaylistName string `json:"playlistName"`
-	PlaylistHash string `json:"playlistHash"`
-	CapturedAt   string `json:"capturedAt"`
-	ReceivedAt   string `json:"receivedAt"`
-	EntryCount   int    `json:"entryCount"`
-	Referenced   bool   `json:"referenced"`
+	InstanceUUID          string                 `json:"instanceUuid"`
+	PlaylistName          string                 `json:"playlistName"`
+	PlaylistHash          string                 `json:"playlistHash"`
+	CapturedAt            string                 `json:"capturedAt"`
+	ReceivedAt            string                 `json:"receivedAt"`
+	EntryCount            int                    `json:"entryCount"`
+	Referenced            bool                   `json:"referenced"`
+	ReferencedByPlaylists []FPPPlaylistReference `json:"referencedByPlaylists"`
 }
 
 // FPPPlaylistDefinitionsListResponse is GET

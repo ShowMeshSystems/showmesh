@@ -495,7 +495,7 @@ func TestCmdAudioListNodesTable(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","objects":[
-			{"id":"render-01","label":"hw:0,0","show":"","currentRevision":1,"updatedAt":"2026-08-17T00:00:00Z"}]}`)
+			{"id":"render-01","label":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"currentRevision":1,"updatedAt":"2026-08-17T00:00:00Z"}]}`)
 	}))
 	defer ts.Close()
 
@@ -506,5 +506,8 @@ func TestCmdAudioListNodesTable(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "render-01") {
 		t.Fatalf("output missing render-01:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "[1 2]") || !strings.Contains(stdout.String(), "3") {
+		t.Fatalf("output missing program channels [1 2] or ltc channel 3:\n%s", stdout.String())
 	}
 }

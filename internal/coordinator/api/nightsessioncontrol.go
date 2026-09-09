@@ -1319,17 +1319,10 @@ func (h *handlers) nightFadeOutNightApply(current *store.NightSessionRecord, now
 	return out, nil, nil
 }
 
-// nightPowerPhaseConfiguredNotDispatched is Track F seam F6's own
-// recorded value for the optional presentation-power phase when
-// siteControl.presentationPowerOff IS configured: unlike invariant 6's
-// "not_configured", this build validates that configuration fully
-// (nightsitecontrol.go) but does not yet dispatch it automatically from
-// this shutdown path; reported honestly rather than as "not_configured",
-// which would claim nothing exists to remove power when something does.
-// An operator removes it today either by dispatching the configured
-// action directly (POST /api/v1/actions/{id}/invocations, behind
-// show:action:invoke) or through a separately configured force-power-off
-// action on the identical surface (RESTING-MODE.md §10.4).
+// nightPowerPhaseConfiguredNotDispatched marks a configured
+// presentationPowerOff whose removal sequence (nightpoweroff.go) has not
+// yet reached a terminal outcome; nightAdvancePowerOff overwrites
+// rec.PowerPhase with the final one once it has.
 const nightPowerPhaseConfiguredNotDispatched = "configured_not_dispatched"
 
 // nightPowerDownPresentationCommand is power-down-presentation's own
@@ -1648,8 +1641,8 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	}
 	checks = append(checks, h.nightCheckCatalogCurrent(ctx, now, payload.Show)...)
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
-	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
-	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))
+	checks = append(checks, nightCheckBrightnessCompositionUnverified("enterShow", payload.EnterShow.Cues))
+	checks = append(checks, nightCheckBrightnessCompositionUnverified("enterResting", payload.EnterResting.Cues))
 	// Track F seam F6: every configured interlock, disabled ones included,
 	// gets its own check regardless of which phase this preparation epoch
 	// is actually about to enter, per RESTING-MODE.md §13: "configured
@@ -2154,10 +2147,12 @@ func mapNightPowerPhase(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 	case "not_configured":
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceNotConfigured, Reason: "no site-power configuration is present"}
 	case nightPowerPhaseConfiguredNotDispatched:
+		// nightpoweroff.go's own removal-policy runtime is running: this
+		// value is overwritten with a final, terminal outcome (the default
+		// case below) once it succeeds or a step stops it.
 		return v1.NightPhaseEvidence{
-			State: v1.NightEvidenceUnknown,
-			Reason: "siteControl.presentationPowerOff is configured, but this build does not yet dispatch it automatically; " +
-				"remove power by invoking the configured action directly (POST /api/v1/actions/{id}/invocations) or through a configured force-power-off action",
+			State:  v1.NightEvidenceUnknown,
+			Reason: "siteControl.presentationPowerOff is configured and its removal sequence is running; presentation power has not been confirmed removed yet",
 		}
 	default:
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: rec.PowerPhase}

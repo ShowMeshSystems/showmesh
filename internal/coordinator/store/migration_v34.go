@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// v33AudioSettingsScheduledStartDefaults is the value backfilled into a
+// v34AudioSettingsScheduledStartDefaults is the value backfilled into a
 // stored audio.settings revision for each of the two scheduled-start keys
 // DecodeAudioSettingsPayload requires as of Track I seam I2, when that
 // key is absent from the stored JSON.
@@ -19,12 +19,12 @@ import (
 // moves. These two are guesses, and a later ruling that changes the
 // default must not silently rewrite what an upgraded coordinator already
 // stored.
-var v33AudioSettingsScheduledStartDefaults = map[string]json.RawMessage{
+var v34AudioSettingsScheduledStartDefaults = map[string]json.RawMessage{
 	"scheduledStartDeliveryBoundMs": json.RawMessage(`2000`),
 	"scheduledStartMarginMs":        json.RawMessage(`1000`),
 }
 
-// migrateV33AudioSettingsBackfillScheduledStartFields is
+// migrateV34AudioSettingsBackfillScheduledStartFields is
 // migrateV20AudioSettingsBackfillMissingRequiredFields' successor for the
 // two keys added after it: without it, a coordinator upgraded across this
 // change decodes its own stored audio.settings revision, fails on a
@@ -35,7 +35,7 @@ var v33AudioSettingsScheduledStartDefaults = map[string]json.RawMessage{
 // keeps applying the values it shipped with.
 //
 // A revision that already carries both keys is left byte-for-byte alone.
-func migrateV33AudioSettingsBackfillScheduledStartFields(ctx context.Context, tx *sql.Tx) error {
+func migrateV34AudioSettingsBackfillScheduledStartFields(ctx context.Context, tx *sql.Tx) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT object_id, revision, payload_json FROM config_revisions WHERE kind = ?`, audioSettingsKind)
 	if err != nil {
@@ -54,7 +54,7 @@ func migrateV33AudioSettingsBackfillScheduledStartFields(ctx context.Context, tx
 			_ = rows.Close()
 			return fmt.Errorf("scan audio.settings revision: %w", err)
 		}
-		rewritten, changed, err := v33BackfillAudioSettingsScheduledStart(r.payload)
+		rewritten, changed, err := v34BackfillAudioSettingsScheduledStart(r.payload)
 		if err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("backfill audio.settings revision %d: %w", r.revision, err)
@@ -83,12 +83,12 @@ func migrateV33AudioSettingsBackfillScheduledStartFields(ctx context.Context, tx
 	return nil
 }
 
-// v33BackfillAudioSettingsScheduledStart adds any of
-// [v33AudioSettingsScheduledStartDefaults]'s keys missing from raw's
+// v34BackfillAudioSettingsScheduledStart adds any of
+// [v34AudioSettingsScheduledStartDefaults]'s keys missing from raw's
 // top-level object, changing nothing else. It reports changed=false, with
 // no error, for a payload that already carries both keys and for the JSON
 // literal null, matching v20BackfillAudioSettingsPayload exactly.
-func v33BackfillAudioSettingsScheduledStart(raw string) (string, bool, error) {
+func v34BackfillAudioSettingsScheduledStart(raw string) (string, bool, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
 		return "", false, fmt.Errorf("stored payload is not a JSON object: %w", err)
@@ -98,7 +98,7 @@ func v33BackfillAudioSettingsScheduledStart(raw string) (string, bool, error) {
 	}
 
 	changed := false
-	for key, def := range v33AudioSettingsScheduledStartDefaults {
+	for key, def := range v34AudioSettingsScheduledStartDefaults {
 		if _, present := top[key]; present {
 			continue
 		}

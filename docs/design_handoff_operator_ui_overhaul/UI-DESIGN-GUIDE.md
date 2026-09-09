@@ -160,14 +160,20 @@ for `'wide'`, clamped to `100vw - var(--rail-w)` below 1100px and to `100vw` bel
 closes it, focus moves to the first focusable element on open and returns to the opener on close,
 and `aria-modal="false"` because the page behind stays readable.
 
-**Tables scroll locally and never give the page horizontal scroll.** `.sm-table-wrap` is
-`overflow-x: auto` with `overscroll-behavior-inline: contain`; `.sm-table` carries
-`min-width: var(--sm-table-min-width, 520px)`, which `Table`'s `minWidth` prop sets per table. Keep
-that minimum low enough to fit inside a drawer as well as the page.
+**Tables scroll locally above 720px, and restack below it.** Above the breakpoint,
+`.sm-table-wrap` is `overflow-x: auto` with `overscroll-behavior-inline: contain`; `.sm-table`
+carries `min-width: var(--sm-table-min-width, 520px)`, which `Table`'s `minWidth` prop sets per
+table. Keep that minimum low enough to fit inside a drawer as well as the page. Below 720px this
+rule has a width condition, an owner ruling: every table restacks into rows, each row becoming a
+card with its cells laid out as labelled fields, and nothing scrolls sideways anywhere. `Table`
+reads its own header row and stamps each cell with the matching heading, so no call site repeats
+the label.
 
-**No responsive pass below 1100px exists yet.** The drawer and a handful of block rules have
-narrow-viewport clauses; the shell does not. A 390px phone pass is open work, and it must be solved
-without re-enabling wrap in the bar.
+**A responsive pass exists below 1100px.** The rail stops taking a grid column and becomes an
+openable drawer; the bar's own overflow (connection and principal) moves into a menu below 720px
+rather than clipping; the seven shared kit constructs that overflowed the 122px content width
+available at 390px collapse to one column below 720px. This is built and container-verified, not
+proven on phone hardware in the owner's hand.
 
 ---
 
@@ -475,9 +481,12 @@ Do not invent these; state their absence instead. Checked against the code on 20
    such capability, and it is held for the chrome bar until the responsive pass. Live Control offers
    no emergency-stop control today; its "Stop now" helper line says that the control halts this
    player only, and Resolume blackout is the separate, real, per-instance path.
-2. **390px phone pass.** Every screen assumes the fixed 212px rail; at very narrow widths the bar
-   clips its right-hand group. The drawer has narrow-viewport clauses at 1100px and 720px; the shell
-   has none. Solve it without re-enabling wrap in the bar.
+2. **390px phone pass.** The shell now has narrow-viewport clauses at 1100px and 720px: the rail
+   collapses to an openable drawer, the bar's overflow moves into a menu rather than clipping, and
+   the shared kit constructs that overflowed the 122px content width available at 390px collapse to
+   one column. This is built and checked in a browser at phone widths; it is not proven on phone
+   hardware in the owner's hand, and the drawer opener's own arrangement is provisional pending a
+   ruling.
 3. **Mode to mismatch-policy wiring.** Settings › Mode and Shows › Playlists both state that
    mismatch handling is expected to follow Show versus Program mode and that the wiring does not
    exist, so the per-playlist control is disabled and the stored policy is what takes effect today
@@ -524,10 +533,10 @@ waiting for the owner, and no working file collects them again.
    skew belongs to the chrome, because it invalidates every age on every screen. Data freshness is
    the page lede, not a banner.
 5. **An attention count states the count and nothing more.** "N items" is the whole of it. Saying an
-   item is not stopping tonight's show is a claim about dependency, and the coordinator reports each
-   resource's own health rather than what the running show depends on, so the UI does not get to say
-   it. Deriving the claim client side is refused permanently, not deferred. The same rule governs
-   Monitor's "Needs an operator" aside.
+   item is not stopping tonight's show is a claim about dependency, and the coordinator reports
+   each node's participation in the active show directly, so a row repeating that answer is not
+   deriving it. Deriving the claim client side is refused permanently, not deferred. The same rule
+   governs Monitor's "Needs an operator" aside.
 6. **Night-session commands ship enabled and report the coordinator's own refusal.** Predicting
    validity would mean a second copy of the coordinator's state table in the browser, across
    preparation epochs, monotonic finalization, interlock overrides and degraded-session ambiguity,

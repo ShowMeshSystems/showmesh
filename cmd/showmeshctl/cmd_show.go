@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -18,12 +19,30 @@ import (
 // (cmd_discovery.go)'s partial-update shape: DecodeShowPayload has no
 // per-field carry-forward, so omitting an unset --notes would silently
 // erase it.
+//
+// It deliberately does NOT do that to the participation selection, which
+// it reads and carries forward. The two fields are treated differently
+// inside one command on purpose: losing a show's instance selection
+// because someone renamed the show is show-affecting in a way losing
+// notes is not, because that selection decides what gets checked on a
+// show night. The wire contract is unchanged either way, since this
+// command still sends a complete payload; the difference is only in what
+// this client puts in it.
 
 // configShow mirrors v1.ConfigShow: the "show" configuration kind's
 // decoded payload.
 type configShow struct {
 	Name  string `json:"name"`
 	Notes string `json:"notes"`
+
+	// FPPInstances and ResolumeInstances are the show's participation
+	// selection. Pointers, not plain slices, because the wire keeps three
+	// states apart and so must this program: nil is "no selection has ever
+	// been recorded for this show" (the key is omitted), a pointer to an
+	// empty slice is the operator's explicit "no instance of this
+	// integration takes part", and a populated slice is the selection.
+	FPPInstances      *[]string `json:"fppInstances,omitempty"`
+	ResolumeInstances *[]string `json:"resolumeInstances,omitempty"`
 }
 
 // showConfigResponse is the body of GET and PUT /config/show/{id}. See
@@ -78,6 +97,8 @@ func cmdShow(args []string, stdout, stderr io.Writer, clock func() time.Time) in
 		return cmdShowSet(rest, stdout, stderr, clock)
 	case "revisions":
 		return cmdShowRevisions(rest, stdout, stderr, clock)
+	case "participation":
+		return cmdShowParticipation(rest, stdout, stderr, clock)
 	case "active":
 		return cmdShowActive(rest, stdout, stderr, clock)
 	case "activate":
@@ -104,8 +125,13 @@ singleton pointer. Reads require show:macro:run OR config:write, matching
 Subcommands:
   list             enumerate show objects (id, name, revision)
   get <id>         show one show's full definition
-  set <id>         write a new show revision (write, full replacement)
+  set <id>         write a new show revision (write, full replacement of
+                   name and notes; an instance selection you do not name
+                   is carried forward, not cleared)
   revisions <id>   list revision history, newest first
+  participation    read or change which FPP and which Resolume instances
+                   take part in a show, without restating its name and
+                   notes: "participation get <id>", "participation set <id>"
   active           print the currently active show (404 if none has ever
                    been activated)
   activate <id>    make <id> the active show (write, full replacement of
@@ -221,6 +247,7 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	var name, notes string
 	fs.StringVar(&name, "name", "", "the show's name (required)")
 	fs.StringVar(&notes, "notes", "", "the show's notes")
+	participation := registerParticipationFlags(fs, true)
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show set [flags] <show-id>")
@@ -229,9 +256,18 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, never a read-modify-write: --name and --notes")
 		_, _ = fmt.Fprintln(stderr, "are sent on every call regardless of whether either flag is given, and an")
 		_, _ = fmt.Fprintln(stderr, "omitted --notes becomes empty on the coordinator, never \"left as it was\".")
-		_, _ = fmt.Fprintln(stderr, "This command never reads the current value first (except for If-Match, below).")
-		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
-		_, _ = fmt.Fprintln(stderr, "show changed since it was read.")
+		_, _ = fmt.Fprintln(stderr, "\nPARTICIPATION IS THE ONE EXCEPTION, and it is deliberate rather than an")
+		_, _ = fmt.Fprintln(stderr, "oversight: an integration you do not name is read from the show and carried")
+		_, _ = fmt.Fprintln(stderr, "forward unchanged. Losing which instances take part because someone renamed")
+		_, _ = fmt.Fprintln(stderr, "a show is show-affecting in a way losing notes is not, since that selection")
+		_, _ = fmt.Fprintln(stderr, "decides what gets checked on a show night.")
+		_, _ = fmt.Fprintln(stderr, "\nNaming an integration still sets it outright: --fpp replaces the selection,")
+		_, _ = fmt.Fprintln(stderr, "--fpp-none records that no FPP instance takes part, and --fpp-unset removes")
+		_, _ = fmt.Fprintln(stderr, "the selection entirely so the show reads as never configured. Those last two")
+		_, _ = fmt.Fprintln(stderr, "are different states, not synonyms.")
+		_, _ = fmt.Fprintln(stderr, "\nThis command reads the show once, for the carried-forward selection and for")
+		_, _ = fmt.Fprintln(stderr, "the If-Match precondition it sends by default, refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "show changed since that read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -250,6 +286,10 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		_, _ = fmt.Fprintln(stderr, "showmeshctl show set: --name is required")
 		return exitUsage
 	}
+	if err := participation.validate(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl show set: %v\n", err)
+		return exitUsage
+	}
 
 	c, err := newRequestClient(g)
 	if err != nil {
@@ -259,19 +299,35 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	defer cancel()
 
 	apiPath := "/api/v1/config/show/" + url.PathEscape(id)
-	ifMatchRevision, ifMatchSet := ifMatchFlag()
-	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
-		var r showConfigResponse
-		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
-			return 0, err
+
+	// One read serves both the carried-forward selection and the If-Match
+	// precondition. A 404 here is the first creation of this show, not a
+	// failure: readErr is handed to resolveIfMatch, whose own exitNotFound
+	// branch turns it into "send no precondition".
+	var current showConfigResponse
+	readErr := c.getJSON(ctx, apiPath, nil, &current)
+	if readErr != nil {
+		var ce *cliError
+		if !errors.As(readErr, &ce) || ce.code != exitNotFound {
+			return reportError(stderr, "show set", readErr)
 		}
-		return r.Revision, nil
+	}
+
+	fppSel, resolumeSel, selErr := participation.resolve(current.Payload.FPPInstances, current.Payload.ResolumeInstances)
+	if selErr != nil {
+		_, _ = fmt.Fprintf(stderr, "showmeshctl show set: %v\n", selErr)
+		return exitUsage
+	}
+
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, current.Revision, func() (int64, error) {
+		return current.Revision, readErr
 	})
 	if err != nil {
 		return reportError(stderr, "show set", err)
 	}
 
-	body := configShow{Name: name, Notes: notes}
+	body := configShow{Name: name, Notes: notes, FPPInstances: fppSel, ResolumeInstances: resolumeSel}
 	var resp showConfigResponse
 	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "show set", err)
@@ -443,6 +499,8 @@ func printShowDetail(w io.Writer, resp showConfigResponse) {
 	if resp.Payload.Notes != "" {
 		_, _ = fmt.Fprintf(w, "Notes:     %s\n", resp.Payload.Notes)
 	}
+	printParticipationLine(w, "FPP", resp.Payload.FPPInstances)
+	printParticipationLine(w, "Resolume", resp.Payload.ResolumeInstances)
 	_, _ = fmt.Fprintf(w, "Revision:  %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:   %s\n", resp.UpdatedAt.Format(time.RFC3339))
 	if resp.CreatedByPrincipalName != nil {

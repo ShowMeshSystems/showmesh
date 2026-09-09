@@ -73,6 +73,16 @@ type nodeEvidence struct {
 	Heartbeat evidence `json:"heartbeat"`
 }
 
+// nodeShowParticipation is node.showParticipation: the coordinator's own
+// answer to whether this node participates in the show currently active.
+// State is one of "participating", "not_participating", "unknown", or
+// "not_configured"; Reason is populated for "unknown" and "not_configured".
+type nodeShowParticipation struct {
+	State  string  `json:"state"`
+	Show   string  `json:"show"`
+	Reason *string `json:"reason"`
+}
+
 // node is the Node shape from contract §6.10: an element of GET
 // /api/v1/nodes, the body of GET /api/v1/nodes/{id}, an element of the
 // snapshot, and the payload of a node.changed stream event.
@@ -107,6 +117,11 @@ type node struct {
 	// zero value (every pointer field nil) is what this program renders
 	// for that case, not a special "declaration unknown" branch.
 	Declaration nodeDeclaration `json:"declaration"`
+
+	// ShowParticipation is node.showParticipation, decoded unconditionally
+	// like Declaration above: an older coordinator that predates this
+	// field simply leaves it at its zero value, State "".
+	ShowParticipation nodeShowParticipation `json:"showParticipation"`
 
 	// Render is Track B seam B2b's addition, additive per contract §6.2:
 	// whatever render-pipeline observations this coordinator currently
@@ -741,6 +756,70 @@ type fppCommandResult struct {
 	AttributionDegraded bool       `json:"attributionDegraded"`
 	DispatchedAt        *time.Time `json:"dispatchedAt"`
 	ResolvedAt          *time.Time `json:"resolvedAt"`
+}
+
+// fppTransitionGainRequest is the body of
+// POST /api/v1/fpp/{instanceId}/brightness/transition-gain. RequestID is
+// minted by this program, once per invocation, for the same reason
+// [fppCommandRequest]'s IdempotencyKey is: the caller owns the key that
+// makes a retry safe, and a value minted per invocation can never turn two
+// deliberately separate operator writes into one silent no-op.
+type fppTransitionGainRequest struct {
+	TargetPercent int    `json:"targetPercent"`
+	FadeSeconds   int    `json:"fadeSeconds"`
+	RequestID     string `json:"requestId"`
+}
+
+// fppTransitionGainResponse is the body of a successful response from
+// POST /api/v1/fpp/{instanceId}/brightness/transition-gain.
+type fppTransitionGainResponse struct {
+	ServerTime     time.Time               `json:"serverTime"`
+	TransitionGain fppTransitionGainResult `json:"transitionGain"`
+}
+
+// fppTransitionGainResult mirrors v1.FPPTransitionGainResult field for
+// field - this program's own independent transcription of it, per this
+// file's own doc comment. Applied false is a success (an idempotent repeat
+// of a requestId already applied), never an error.
+type fppTransitionGainResult struct {
+	InstanceID      string `json:"instanceId"`
+	RequestID       string `json:"requestId"`
+	Applied         bool   `json:"applied"`
+	GainStart       int    `json:"gainStart"`
+	GainTarget      int    `json:"gainTarget"`
+	FadeSeconds     int    `json:"fadeSeconds"`
+	Ceiling         int    `json:"ceiling"`
+	EffectiveOutput int    `json:"effectiveOutput"`
+}
+
+// fppDefinitionRepublishRequest is the body of POST
+// /api/v1/fpp/{instanceId}/playlist-definitions/republish. RequestID is
+// minted by this program, once per invocation, for [fppTransitionGainRequest]'s
+// reason, and can be supplied by hand to poll one earlier request.
+type fppDefinitionRepublishRequest struct {
+	RequestID string `json:"requestId"`
+}
+
+// fppDefinitionRepublishResponse is the body of a successful response from
+// POST /api/v1/fpp/{instanceId}/playlist-definitions/republish.
+type fppDefinitionRepublishResponse struct {
+	ServerTime time.Time                    `json:"serverTime"`
+	Republish  fppDefinitionRepublishResult `json:"republish"`
+}
+
+// fppDefinitionRepublishResult mirrors v1.FPPDefinitionRepublishResult
+// field for field, this program's own independent transcription of it.
+// Every count here is the PLUGIN's own state; none of them says a
+// definition reached the coordinator, and SweepPending true means the
+// resend is owed rather than done.
+type fppDefinitionRepublishResult struct {
+	InstanceID                   string `json:"instanceId"`
+	RequestID                    string `json:"requestId"`
+	Applied                      bool   `json:"applied"`
+	DefinitionsCleared           int    `json:"definitionsCleared"`
+	DefinitionsHeld              int    `json:"definitionsHeld"`
+	DefinitionsRefusedTerminally int    `json:"definitionsRefusedTerminally"`
+	SweepPending                 bool   `json:"sweepPending"`
 }
 
 // Track G seam G-5: identity administration. principalObject mirrors

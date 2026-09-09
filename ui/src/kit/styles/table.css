@@ -115,3 +115,81 @@
   color: var(--text-faint);
   font: var(--t-data);
 }
+
+/*
+ * Owner ruling: below the restack breakpoint, wide tables restack into rows,
+ * each row becoming a labelled-field card. Nothing scrolls sideways here.
+ * `Table` stamps `data-label` on each cell from its own header row so the
+ * label can ride in a `::before` without any call site repeating it.
+ */
+@media (max-width: 720px) {
+  .sm-table-wrap {
+    overflow-x: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .sm-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .sm-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .sm-table tbody,
+  .sm-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .sm-table tbody tr {
+    margin-bottom: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-card);
+    background: var(--surface);
+  }
+
+  .sm-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .sm-table td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-2) 14px;
+    height: auto;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .sm-table td:first-child {
+    padding-left: 14px;
+  }
+
+  .sm-table td:last-child {
+    padding-right: 14px;
+    border-bottom: 0;
+  }
+
+  .sm-table td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    font: var(--t-meta);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+}

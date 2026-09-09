@@ -213,6 +213,13 @@ func Run() int {
 		resolumeConfiguredID = resolumeInstances[0].ID
 	}
 
+	// Owner ruling 2026-09-08 ("credentials into SQLite"): move the fpp.mqtt
+	// broker password out of its legacy file and into the credentials
+	// table, once, before anything below reads it. See
+	// migrateFPPMQTTSecretFileToStore's own doc comment for why this must
+	// run first and why it never refuses to start.
+	migrateFPPMQTTSecretFileToStore(ctx, st, identitySvc, cfg.DataDir, time.Now, logger)
+
 	// Track G seam G-3 (ADR-039): the SHOWMESH_FPP_MQTT_* -> store
 	// migration and disagreement rule, mirroring resolume.instances above
 	// — see fppmqttsync.go. From this point on, envFPPMQTT/envFPPMQTTPassword
@@ -221,7 +228,7 @@ func Run() int {
 		BrokerURL: cfg.FPPMQTTBrokerURL, Username: cfg.FPPMQTTUsername,
 		TopicPrefix: cfg.FPPMQTTTopicPrefix, Hosts: cfg.FPPMQTTHosts,
 	}
-	fppMQTTCfg, fppMQTTPassword, fppMQTTMigrationDeferred, err := resolveAuthoritativeFPPMQTT(ctx, st, identitySvc, cfg.DataDir, envFPPMQTT, cfg.FPPMQTTPassword, time.Now, logger)
+	fppMQTTCfg, fppMQTTPassword, fppMQTTMigrationDeferred, err := resolveAuthoritativeFPPMQTT(ctx, st, identitySvc, envFPPMQTT, cfg.FPPMQTTPassword, time.Now, logger)
 	if err != nil {
 		logger.Error("failed to resolve the authoritative fpp.mqtt configuration", "error", err)
 		_ = st.Close()
@@ -310,10 +317,26 @@ func Run() int {
 		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger, fppConnectStatus)
 	}
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithClockSink(clockStore))
-
 	// assetSync is constructed further down (it needs bm itself as its
-	// Publisher), but bm's OWN construction needs assetSync.HandleMessage
+	// Publisher), but inv's own construction needs assetSync's
+	// TriggerIfResyncIntentPrecedes wired in as its ResyncIntentTrigger:
+	// the identical forward-reference shape onHello/bm above already uses,
+	// one dependency earlier, since inv itself is what bm's own
+	// subscriptions are built from just below. resyncIntentTrigger takes
+	// assetSync's CURRENT value on every call, not its value at closure
+	// creation time, so a report arriving before assetSync exists (there
+	// should be none this early, but nothing guarantees it) is silently a
+	// no-op rather than a nil-pointer panic.
+	var assetSync *assetsync.Service
+	resyncIntentTrigger := inventory.ResyncIntentTriggerFunc(func(nodeID string, reportedAt time.Time) {
+		if assetSync != nil {
+			assetSync.TriggerIfResyncIntentPrecedes(nodeID, reportedAt)
+		}
+	})
+
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithClockSink(clockStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
+
+	// bm's OWN construction needs assetSync.HandleMessage
 	// wired in as part of the ONE process-wide message handler, the
 	// identical forward-reference shape as onHello/bm just above, the
 	// other direction: assetSyncHandler is a closure taking the pointer's
@@ -324,7 +347,8 @@ func Run() int {
 	// fixed subscription set here as a literal, matching
 	// assetsync.Service.Subscriptions()'s own filter exactly, rather than
 	// calling that method on an instance that does not exist yet.
-	var assetSync *assetsync.Service
+	// assetSync itself is declared above, ahead of inv's own construction,
+	// for resyncIntentTrigger's identical forward-reference need.
 	assetSyncHandler := func(m broker.Message) {
 		if assetSync != nil {
 			assetSync.HandleMessage(m)
@@ -568,7 +592,7 @@ func Run() int {
 	// Resolume source above is; the manager also answers CurrentHosts from
 	// this source, so the fpp.endpoints collision check sees the stored
 	// hosts even when no collector bundle is running.
-	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, cfg.DataDir, logger, fppMQTTCfg, fppMQTTPassword)
+	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, logger, fppMQTTCfg, fppMQTTPassword)
 	fppMQTTMgr := newFPPMQTTManager(fppRunner, fppMQTTConfigSrc, logger)
 	// The FIRST reconcile runs synchronously, here, for the identical
 	// "no request may observe a partially-wired dependency" reason
@@ -634,6 +658,13 @@ func Run() int {
 		// with no adapter either.
 		AudioPublisher: bm,
 		AudioSessions:  st,
+		// InventoryRequester: the SAME bm already satisfies
+		// api.InventoryRequester (RequestNodeInventory) with no adapter,
+		// matching RenderPublisher/AudioPublisher's identical wiring
+		// above. This is what makes POST /nodes/{nodeId}/assets/resync ask
+		// the node for a fresh report instead of always answering the
+		// no-op noInventoryRequester default's internal error.
+		InventoryRequester: bm,
 		// BrokerConnection: the SAME bm already satisfies
 		// api.BrokerConnectionState (ConnectedSince) with no adapter,
 		// matching RenderPublisher/AudioPublisher's identical wiring
@@ -806,9 +837,9 @@ func Run() int {
 		// startup snapshot — see api.FPPMQTTHostLister's own doc comment.
 		FPPMQTT: fppMQTTMgr,
 		// FPPMQTTSecret is Track G seam G-3's write-only credential surface
-		// (ADR-039 decision 7), backed by the secret file under cfg.DataDir
-		// — see fppMQTTSecretAdapter (apiwiring.go).
-		FPPMQTTSecret: fppMQTTSecretAdapter{dataDir: cfg.DataDir},
+		// (ADR-039 decision 7), backed by the credentials table. See
+		// fppMQTTSecretAdapter (apiwiring.go).
+		FPPMQTTSecret: fppMQTTSecretAdapter{st: st},
 		// FPPMQTTEnvVarSet/FPPMQTTMigrationDeferred are
 		// FPPEndpointsEnvVarSet/FPPEndpointsMigrationDeferred's mirror for
 		// Track G seam G-3 — see those two fields' own doc comments.

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -25,11 +26,21 @@ type fakeFPPMQTTSecretStore struct {
 	mu       sync.Mutex
 	password string
 	present  bool
+
+	// hasErr, when set, is returned by HasFPPMQTTPassword instead of a
+	// presence answer, used to prove GET's error path never leaks the
+	// password (it structurally cannot: this interface has no channel for
+	// the value at all, only presence), see
+	// TestGetFPPMQTTConfigErrorPathNeverLeaksPassword.
+	hasErr error
 }
 
 func (f *fakeFPPMQTTSecretStore) HasFPPMQTTPassword(context.Context) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.hasErr != nil {
+		return false, f.hasErr
+	}
 	return f.present, nil
 }
 
@@ -299,6 +310,50 @@ func TestGetFPPMQTTConfigNeverReturnsPassword(t *testing.T) {
 	}
 	if passwordSet, _ := getPayload["passwordSet"].(bool); !passwordSet {
 		t.Errorf("GET passwordSet = %v, want true", getPayload["passwordSet"])
+	}
+}
+
+// TestGetFPPMQTTConfigErrorPathNeverLeaksPassword covers the error path
+// ADR-039 decision 7's own test list names explicitly: even when the
+// credential store fails, GET must never surface the password. The
+// [FPPMQTTSecretStore] interface has no channel for the value at all on
+// this path (HasFPPMQTTPassword returns only bool/error), so this pins
+// that structural guarantee against ever growing one, and confirms the
+// error body carries no accidental echo of the injected error's own text.
+func TestGetFPPMQTTConfigErrorPathNeverLeaksPassword(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	deps, secret := fppMQTTConfigTestDeps(svc, st)
+	secret.hasErr = errors.New("simulated credential store failure naming s3cret-value-in-error")
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	getResp, _ := doRequest(t, api.Handler, "GET", "/api/v1/config/fpp.mqtt", auth)
+	if getResp.StatusCode != http.StatusNotFound {
+		// No fpp.mqtt configuration exists yet in this test, so the store
+		// error is never reached; this asserts the precondition rather than
+		// the property under test.
+		t.Fatalf("GET status = %d, want 404 (nothing configured yet, precondition for the rest of this test)", getResp.StatusCode)
+	}
+
+	body := `{"brokerURL":"tcp://10.0.1.5:1883","hosts":{"player-01":"FPP-Player"}}`
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.mqtt", body, auth)
+	putResp, putBody := doRawRequest(t, api.Handler, req)
+	if putResp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("PUT status = %d, want 500 (HasFPPMQTTPassword fails before the revision is written); body: %s", putResp.StatusCode, putBody)
+	}
+	if strings.Contains(string(putBody), "s3cret-value-in-error") {
+		t.Fatalf("PUT error body echoed the injected error's own text: %s", putBody)
+	}
+
+	secret.present = true
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/fpp.mqtt", auth)
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET status = %d, want 404: the failed PUT above must not have created a revision", getResp.StatusCode)
+	}
+	if strings.Contains(string(getBody), "s3cret-value-in-error") {
+		t.Fatalf("GET error body echoed the injected error's own text: %s", getBody)
 	}
 }
 

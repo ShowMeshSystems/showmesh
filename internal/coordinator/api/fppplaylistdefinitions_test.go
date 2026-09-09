@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +242,30 @@ func TestFPPPlaylistDefinitionPostRefusedDuplicateMemberName400(t *testing.T) {
 	// pass over the raw body is what must catch this one.
 	body := `{"schemaVersion":1,"schemaVersion":1,"instanceUuid":"instance-1","playlistName":"p",` +
 		`"playlistHash":"` + playlistHash64 + `","definition":{},"capturedAtMillis":1}`
+	resp, m := mustPostPlaylistDefinition(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+// TestFPPPlaylistDefinitionPostRefusedTrailingContent400 is the
+// trailing-content half of step 4's strict decode, mirroring
+// fppobservations_test.go's identical case in
+// TestFPPObservationDecodeRefusalsWriteNoAuditEntry: dec.More() after a
+// successful decode is what catches content after the JSON value, since
+// encoding/json.Decoder itself stops at the end of the first value and
+// never notices what follows it.
+func TestFPPPlaylistDefinitionPostRefusedTrailingContent400(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	def, hash := simpleDefinitionAndHash(t, "p1")
+	body := fppPlaylistDefinitionPublishBody(t, "instance-1", "p1", def, hash, 1) + " trailing"
 	resp, m := mustPostPlaylistDefinition(t, api, body, token)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
@@ -494,6 +521,143 @@ func TestFPPPlaylistDefinitionRefusalsAreAuditedWithReason(t *testing.T) {
 	}
 }
 
+// --- unknown top-level members ---
+
+// fppPlaylistDefinitionPublishBodyWithExtraMembers is
+// [fppPlaylistDefinitionPublishBody] with extra top-level members spliced
+// in, standing in for a plugin newer than the coordinator it is posting
+// to, mirroring fppobservations_test.go's
+// fppObservationBodyWithExtraMembers.
+func fppPlaylistDefinitionPublishBodyWithExtraMembers(t *testing.T, instanceUUID, playlistName string, def json.RawMessage, hash string, capturedAtMillis int64, extra map[string]any) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(fppPlaylistDefinitionPublishBody(t, instanceUUID, playlistName, def, hash, capturedAtMillis)), &m); err != nil {
+		t.Fatalf("unmarshal base publish body: %v", err)
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal publish body: %v", err)
+	}
+	return string(raw)
+}
+
+// TestFPPPlaylistDefinitionIgnoresUnknownMembersAndReportsThem is the
+// whole point of the change: a plugin newer than its coordinator keeps
+// working. Before this, the definition below was a 400 and the
+// coordinator stored nothing, so any observation whose entries reference
+// this definition's hash would never resolve, presenting as a coordinator
+// that accepts observations but refuses the definitions behind them.
+// Mirrors fppobservations_test.go's
+// TestFPPObservationIgnoresUnknownMembersAndReportsThem.
+func TestFPPPlaylistDefinitionIgnoresUnknownMembersAndReportsThem(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	def, hash := simpleDefinitionAndHash(t, "p1")
+	body := fppPlaylistDefinitionPublishBodyWithExtraMembers(t, "instance-1", "p1", def, hash, testNow.UnixMilli(), map[string]any{
+		"somethingElse": true,
+		"anotherThing":  map[string]any{"nested": 1},
+	})
+	resp, m := mustPostPlaylistDefinition(t, api, body, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if stored, _ := m["stored"].(bool); !stored {
+		t.Errorf("stored = %v, want true: an unknown member must not stop the definition being stored", m["stored"])
+	}
+
+	got, ok := m["ignoredFields"].([]any)
+	if !ok {
+		t.Fatalf("ignoredFields = %#v, want an array naming both unknown members", m["ignoredFields"])
+	}
+	var names []string
+	for _, v := range got {
+		names = append(names, v.(string))
+	}
+	if want := []string{"anotherThing", "somethingElse"}; !slices.Equal(names, want) {
+		t.Errorf("ignoredFields = %v, want %v (sorted)", names, want)
+	}
+
+	// The known fields still landed. An ignored member must not cost the
+	// definition anything else.
+	if _, err := setup.st.GetFPPPlaylistDefinition(context.Background(), "instance-1", hash); err != nil {
+		t.Fatalf("get stored definition: %v", err)
+	}
+}
+
+// TestFPPPlaylistDefinitionUnknownMemberDoesNotBypassValidation proves the
+// ignored member is ignored and nothing more: the body below is missing
+// instanceUuid, and must still be refused whether or not it also carries
+// an unknown member. Without this, "ignore what you do not know" could
+// quietly become "accept whatever arrives." Mirrors
+// fppobservations_test.go's
+// TestFPPObservationUnknownMemberDoesNotBypassValidation.
+func TestFPPPlaylistDefinitionUnknownMemberDoesNotBypassValidation(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	def, hash := simpleDefinitionAndHash(t, "p1")
+	m2 := map[string]any{
+		"schemaVersion": 1, "instanceUuid": "", "playlistName": "p1",
+		"playlistHash": hash, "definition": def, "capturedAtMillis": 1,
+		"somethingElse": true,
+	}
+	raw, err := json.Marshal(m2)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	resp, m := mustPostPlaylistDefinition(t, api, string(raw), token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing instanceUuid, unknown member present); body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+// TestFPPPlaylistDefinitionUnknownMemberLogDedupes proves the accept path
+// wires an unknown member into handlers.fppDefinitionUnknownMembers, the
+// definitions route's own instance of [unknownMemberLog]: the same
+// unknown member posted twice for the same instance produces one log
+// line, not a flood. The dedupe logic itself is exercised generically by
+// fppobservations_test.go's TestUnknownMemberLogDedupes; this only checks
+// that this route's accept path is actually wired to it.
+func TestFPPPlaylistDefinitionUnknownMemberLogDedupes(t *testing.T) {
+	var logged bytes.Buffer
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{
+		Clock:  fixedClock(testNow),
+		Logger: slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	def1, hash1 := simpleDefinitionAndHash(t, "p1")
+	body1 := fppPlaylistDefinitionPublishBodyWithExtraMembers(t, "instance-1", "p1", def1, hash1, 1, map[string]any{"somethingElse": true})
+	if resp, m := mustPostPlaylistDefinition(t, api, body1, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first post: status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if got := strings.Count(logged.String(), "does not know"); got != 1 {
+		t.Fatalf("log lines after first post = %d, want 1:\n%s", got, logged.String())
+	}
+
+	def2, hash2 := simpleDefinitionAndHash(t, "p2")
+	body2 := fppPlaylistDefinitionPublishBodyWithExtraMembers(t, "instance-1", "p2", def2, hash2, 2, map[string]any{"somethingElse": true})
+	if resp, m := mustPostPlaylistDefinition(t, api, body2, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second post: status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if got := strings.Count(logged.String(), "does not know"); got != 1 {
+		t.Fatalf("log lines after second post with the same unknown member on the same instance = %d, want still 1 (dedupe):\n%s", got, logged.String())
+	}
+}
+
 // --- storage, idempotency, and hash-filing ---
 
 // TestFPPPlaylistDefinitionStoredUnderRecomputedHashNotRawBytes checks
@@ -704,6 +868,64 @@ func TestFPPPlaylistDefinitionListReportsMetadataNewestFirstAndReferenced(t *tes
 		if d.EntryCount != 1 {
 			t.Errorf("EntryCount for %s = %d, want 1", d.PlaylistHash, d.EntryCount)
 		}
+	}
+}
+
+// TestFPPPlaylistDefinitionListReportsReferencedByPlaylistsForMultipleBindings
+// proves the case a single boolean could never express: a definition named
+// by more than one show.playlist object. The two are bound out of id order
+// (zebra, then apple) so a passing assertion proves the response is sorted
+// by playlist object id, not merely stable under this store's own
+// insertion/iteration order.
+func TestFPPPlaylistDefinitionListReportsReferencedByPlaylistsForMultipleBindings(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	def, hash := simpleDefinitionAndHash(t, "shared")
+	if resp, m := mustPostPlaylistDefinition(t, api, fppPlaylistDefinitionPublishBody(t, "instance-1", "shared", def, hash, 1), token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("post: status = %d; body %v", resp.StatusCode, m)
+	}
+	mustBindShowPlaylist(t, setup.st, "playlist-zebra", "instance-1", hash)
+	mustBindShowPlaylist(t, setup.st, "playlist-apple", "instance-1", hash)
+
+	req := newJSONRequest(t, http.MethodGet, "/api/v1/integrations/fpp/playlist-definitions", "", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, raw := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, raw)
+	}
+	assertMatchesSchema(t, c, "FPPPlaylistDefinitionsListResponse", raw)
+	var listResp struct {
+		Definitions []struct {
+			PlaylistHash          string `json:"playlistHash"`
+			Referenced            bool   `json:"referenced"`
+			ReferencedByPlaylists []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"referencedByPlaylists"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(raw, &listResp); err != nil {
+		t.Fatalf("decode: %v; body: %s", err, raw)
+	}
+	if len(listResp.Definitions) != 1 {
+		t.Fatalf("len(Definitions) = %d, want 1", len(listResp.Definitions))
+	}
+	d := listResp.Definitions[0]
+	if !d.Referenced {
+		t.Error("Referenced = false, want true (bound by two playlists)")
+	}
+	if len(d.ReferencedByPlaylists) != 2 {
+		t.Fatalf("len(ReferencedByPlaylists) = %d, want 2; body: %s", len(d.ReferencedByPlaylists), raw)
+	}
+	if d.ReferencedByPlaylists[0].ID != "playlist-apple" || d.ReferencedByPlaylists[0].Name != "playlist-apple" {
+		t.Errorf("ReferencedByPlaylists[0] = %+v, want id/name playlist-apple (ascending object id order)", d.ReferencedByPlaylists[0])
+	}
+	if d.ReferencedByPlaylists[1].ID != "playlist-zebra" || d.ReferencedByPlaylists[1].Name != "playlist-zebra" {
+		t.Errorf("ReferencedByPlaylists[1] = %+v, want id/name playlist-zebra (ascending object id order)", d.ReferencedByPlaylists[1])
 	}
 }
 

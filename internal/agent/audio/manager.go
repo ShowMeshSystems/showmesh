@@ -35,9 +35,11 @@ type Manager struct {
 	// [Manager.SettingsSnapshot] — see settings.go. Its own mutex, not
 	// m.mu: a settings read/write must never contend with session
 	// dispatch.
-	settingsMu     sync.RWMutex
-	settings       Settings
-	settingsIssues []string
+	settingsMu                sync.RWMutex
+	settings                  Settings
+	settingsState             SettingsState
+	settingsSubstitutedFields []string
+	settingsReason            string
 
 	// ltc tracks which session, if any, currently owns this node's one
 	// LTC run — see ltclifecycle.go.

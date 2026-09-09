@@ -20,6 +20,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -389,6 +390,17 @@ type Dependencies struct {
 	// API failing" posture.
 	AssetSyncNudger AssetSyncNudger
 
+	// InventoryRequester asks a node to publish a fresh asset inventory
+	// report now, stamped with a caller-supplied issuer, see
+	// [InventoryRequester]'s own doc comment (noderesync.go). In practice
+	// the real value is the SAME *broker.BrokerManager wired as
+	// [Dependencies.RenderPublisher]. A nil field is replaced by
+	// [noInventoryRequester], under which the resync route's inventory
+	// request fails with an internal error naming the missing wiring,
+	// matching [Dependencies.RenderPublisher]'s identical no-op default
+	// posture.
+	InventoryRequester InventoryRequester
+
 	// AssetFetchFailures exposes the coordinator's live view of the last
 	// asset.fetch failure per node/asset, so the manifest can say WHY a
 	// node is not_ready rather than only that it is; see
@@ -672,6 +684,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
 	}
+	if d.InventoryRequester == nil {
+		d.InventoryRequester = noInventoryRequester{}
+	}
 	if d.AssetFetchFailures == nil {
 		d.AssetFetchFailures = noAssetFetchFailureSource{}
 	}
@@ -854,8 +869,19 @@ func (noFPPMQTTSecretStore) ClearFPPMQTTPassword(context.Context) error {
 // identical shape one field over.
 type noAssetSyncNudger struct{}
 
-func (noAssetSyncNudger) Nudge()             {}
-func (noAssetSyncNudger) RequestNode(string) {}
+func (noAssetSyncNudger) Nudge()                               {}
+func (noAssetSyncNudger) RequestNode(string)                   {}
+func (noAssetSyncNudger) RecordResyncIntent(string, time.Time) {}
+
+// noInventoryRequester is [Dependencies.InventoryRequester]'s nil-safe
+// default: RequestNodeInventory reports the same "no broker wired in"
+// error [noRenderPublisher] answers with, matching that default's
+// identical posture.
+type noInventoryRequester struct{}
+
+func (noInventoryRequester) RequestNodeInventory(context.Context, string, mqttproto.CmdIssuer) (string, error) {
+	return "", errors.New("api: no mqtt broker wired in")
+}
 
 // noAssetFetchFailureSource is [Dependencies.AssetFetchFailures]'s
 // nil-safe default: LastFetchFailure always reports ok=false, matching
@@ -1578,6 +1604,7 @@ func New(deps Dependencies, opts Options) *API {
 		emergencyStopArms:         newEmergencyStopArmStore(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
+	h.hub = hub
 
 	mux := http.NewServeMux()
 	// "{$}" matches only the exact path "/api/v1/", not every path under
@@ -1619,6 +1646,22 @@ func New(deps Dependencies, opts Options) *API {
 	// supplies decision 6's CSRF check on top of the scope check —
 	// fppcommand_handler.go owns everything past authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/commands", h.writeGuard(&scopeFPPCommand, h.handleFPPCommand))
+
+	// POST /api/v1/fpp/{instanceId}/brightness/transition-gain: the
+	// operator write of one FPP host's brightness transition gain
+	// (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2), behind the same
+	// fpp:command scope dispatching an FPP command needs - see
+	// scopeFPPTransitionGain's own doc comment. fpptransitiongain.go owns
+	// everything past authorization.
+	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/transition-gain", h.writeGuard(&scopeFPPTransitionGain, h.handleFPPTransitionGain))
+
+	// POST /api/v1/fpp/{instanceId}/playlist-definitions/republish: ask
+	// one FPP host's plugin to resend its playlist definitions
+	// (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3.9), behind the same
+	// fpp:command scope. It accepts a request rather than importing
+	// anything; fppdefinitionrepublish.go owns everything past
+	// authorization.
+	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/playlist-definitions/republish", h.writeGuard(&scopeFPPDefinitionRepublish, h.handleFPPDefinitionRepublish))
 
 	// Track B seam B2b-front: dispatch the three agent render.* operations
 	// (renderdispatch.go). Guarded by render:command, matching

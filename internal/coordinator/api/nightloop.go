@@ -128,6 +128,8 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightAdvanceTransitionToResting(ctx, now, rec)
 	case nightStateFadingOut:
 		h.nightAdvanceFadingOut(ctx, now, rec)
+	case nightStateStopped:
+		h.nightAdvancePowerOff(ctx, now, rec)
 	}
 
 	// Track F seam F5: resting.backgroundAudio runs for the WHOLE resting

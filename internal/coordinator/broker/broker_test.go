@@ -673,7 +673,10 @@ func waitForPublishCount(t *testing.T, cm *fakeMQTTClient, n int) {
 // TestOnConnectionUpDispatchesInventoryRequestToEveryListedNode is the fix
 // itself: on a successful connection, onConnectionUp asks every node
 // nodeLister lists for a fresh asset inventory, with no params and the
-// exact minted action name.
+// exact minted action name, stamped with THIS COORDINATOR's own reconnect
+// issuer identity - never an operator's, since nothing human initiated
+// this dispatch. [TestRequestNodeInventoryStampsCallerSuppliedIssuer]
+// below proves the operator path's own issuer, one caller over.
 func TestOnConnectionUpDispatchesInventoryRequestToEveryListedNode(t *testing.T) {
 	cm := &fakeMQTTClient{}
 	bm := &BrokerManager{
@@ -697,10 +700,49 @@ func TestOnConnectionUpDispatchesInventoryRequestToEveryListedNode(t *testing.T)
 		if cmd.ConfirmationMethod == "" {
 			t.Error("ConfirmationMethod is empty, want a well-formed CmdPayload")
 		}
+		if cmd.Issuer.PrincipalID != reconnectInventoryRequestIssuerPrincipalID || cmd.Issuer.PrincipalName != reconnectInventoryRequestIssuerPrincipalName {
+			t.Errorf("Issuer = %+v, want the coordinator's own reconnect identity (%s/%s)",
+				cmd.Issuer, reconnectInventoryRequestIssuerPrincipalID, reconnectInventoryRequestIssuerPrincipalName)
+		}
 		seen[cmd.Target.ID] = true
 	}
 	if !seen["node-1"] || !seen["node-2"] {
 		t.Fatalf("dispatched nodes = %v, want both node-1 and node-2", seen)
+	}
+}
+
+// TestRequestNodeInventoryStampsCallerSuppliedIssuer proves the operator
+// path (internal/coordinator/api's POST .../assets/resync,
+// RequestNodeInventory's one caller) stamps the issuer IT was given,
+// never reconnectInventoryRequestIssuerPrincipalID/Name - the design
+// ruling this closes: an authenticated operator is a real principal and
+// the wire envelope must name them, not the broker-reconnect identity.
+func TestRequestNodeInventoryStampsCallerSuppliedIssuer(t *testing.T) {
+	cm := &fakeMQTTClient{}
+	bm := &BrokerManager{now: time.Now, cm: cm}
+
+	issuer := mqttproto.CmdIssuer{PrincipalID: "operator-1", PrincipalName: "Operator One"}
+	commandID, err := bm.RequestNodeInventory(context.Background(), "node-1", issuer)
+	if err != nil {
+		t.Fatalf("RequestNodeInventory() error = %v", err)
+	}
+	if commandID == "" {
+		t.Fatal("RequestNodeInventory() returned an empty commandID")
+	}
+
+	waitForPublishCount(t, cm, 1)
+	cmd := decodeCmdPayload(t, cm.publishes[0])
+	if cmd.CommandID != commandID {
+		t.Errorf("published CommandID = %q, want the returned %q", cmd.CommandID, commandID)
+	}
+	if cmd.Issuer != issuer {
+		t.Errorf("Issuer = %+v, want the caller-supplied %+v", cmd.Issuer, issuer)
+	}
+	if cmd.ConfirmationMethod != "evidence" {
+		t.Errorf("ConfirmationMethod = %q, want %q", cmd.ConfirmationMethod, "evidence")
+	}
+	if cmd.Action != "asset.inventory.request" {
+		t.Errorf("Action = %q, want %q", cmd.Action, "asset.inventory.request")
 	}
 }
 

@@ -926,11 +926,26 @@ func classifyBranchError(text string, gerr error) error {
 // ctx.Err() if ctx is done first. A blocking C call that ctx gives up on
 // keeps running in the abandoned goroutine — cgo has no mechanism to
 // interrupt it — so this bounds the caller, not the underlying call.
+//
+// The done case re-checks ctx.Err() before trusting fn's result: select
+// picks uniformly at random among ready cases, so an already-expired (or
+// very tight) ctx racing a fast fn can make the done case win even though
+// ctx.Done() is also ready, reporting a bounded success that discarded its
+// own deadline. Re-checking after receiving keeps that outcome
+// deterministic without skipping fn: every caller here already treats a
+// ctx error as the safe branch (Close leaves the pipeline reference alone
+// rather than touch it while its abandoned goroutine might still be
+// racing it; seekTo leaves segmentStart unmoved and marks the branch's
+// anchor unknown), so preferring ctx.Err() on a tie reports a condition
+// those callers were already written to handle, not a new one.
 func boundedCall(ctx context.Context, fn func() error) error {
 	done := make(chan error, 1)
 	go func() { done <- fn() }()
 	select {
 	case err := <-done:
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	case <-ctx.Done():
 		return ctx.Err()

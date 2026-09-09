@@ -3,12 +3,15 @@ package coordinator
 // This file is Track G seam G-3's own startup-sequencing suite (ADR-039),
 // mirroring resolumeinstancessync_test.go's identical shape for the
 // fpp.mqtt kind, plus the password-specific cases neither fpp.endpoints
-// nor resolume.instances has: the password migrates and compares
-// alongside the non-secret fields even though it lives in a separate file
-// rather than in the payload.
+// nor resolume.instances has: the password migrates and compares alongside
+// the non-secret fields even though it lives in the credentials table
+// rather than in the payload. It also covers migrateFPPMQTTSecretFileToStore,
+// the unrelated one-time move of the password out of its legacy file
+// (owner ruling 2026-09-08, "credentials into SQLite").
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -39,10 +42,27 @@ var testFPPMQTTConfig = config.FPPMQTTConfig{
 
 const testFPPMQTTPassword = "s3cret"
 
-func TestSyncFPPMQTTConfigNothingConfiguredIsANoop(t *testing.T) {
-	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+// dropCredentialsTable drops the credentials table over a second connection
+// to the same SQLite file the live *store.Store is using, so the store's
+// own next GetCredential/HasCredential call fails with a genuine "no such
+// table" read error rather than the benign not-set case, mirroring
+// configsync_test.go's makeTableUnwritable for a read instead of a write.
+func dropCredentialsTable(t *testing.T, dataDir string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "showmesh.db"))
+	if err != nil {
+		t.Fatalf("open sqlite directly: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`DROP TABLE credentials`); err != nil {
+		t.Fatalf("drop credentials table: %v", err)
+	}
+}
 
-	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, config.FPPMQTTConfig{}, "", time.Now, discardLogger())
+func TestSyncFPPMQTTConfigNothingConfiguredIsANoop(t *testing.T) {
+	st, svc, _ := newTestFPPMQTTSyncDeps(t)
+
+	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, config.FPPMQTTConfig{}, "", time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil", err)
 	}
@@ -56,12 +76,12 @@ func TestSyncFPPMQTTConfigNothingConfiguredIsANoop(t *testing.T) {
 
 // TestSyncFPPMQTTConfigMigratesFromEnv proves the env->store migration:
 // the non-secret fields land as revision 1 with source env_migration and
-// no principal, and the password lands in the secret file, never in the
-// revision's payload_json.
+// no principal, and the password lands in the credentials table, never in
+// the revision's payload_json.
 func TestSyncFPPMQTTConfigMigratesFromEnv(t *testing.T) {
-	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	st, svc, _ := newTestFPPMQTTSyncDeps(t)
 
-	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger())
+	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil", err)
 	}
@@ -90,12 +110,12 @@ func TestSyncFPPMQTTConfigMigratesFromEnv(t *testing.T) {
 		t.Errorf("payload_json = %q, must never contain the password (ADR-039 decision 7)", rev.PayloadJSON)
 	}
 
-	stored, present, err := config.ReadFPPMQTTPassword(dir)
+	stored, present, err := st.GetCredential(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField)
 	if err != nil {
-		t.Fatalf("ReadFPPMQTTPassword: %v", err)
+		t.Fatalf("GetCredential: %v", err)
 	}
 	if !present || stored != testFPPMQTTPassword {
-		t.Fatalf("ReadFPPMQTTPassword = (%q, %v), want (%q, true)", stored, present, testFPPMQTTPassword)
+		t.Fatalf("GetCredential = (%q, %v), want (%q, true)", stored, present, testFPPMQTTPassword)
 	}
 }
 
@@ -104,13 +124,13 @@ func TestSyncFPPMQTTConfigMigratesFromEnv(t *testing.T) {
 // when every non-secret field matches, a differing password refuses to
 // start rather than silently overriding the store.
 func TestSyncFPPMQTTConfigDisagreementRefusesToStart(t *testing.T) {
-	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	st, svc, _ := newTestFPPMQTTSyncDeps(t)
 
-	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
 		t.Fatalf("seed migration: %v", err)
 	}
 
-	_, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, "different-password", time.Now, discardLogger())
+	_, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, "different-password", time.Now, discardLogger())
 	if err == nil {
 		t.Fatalf("syncFPPMQTTConfig() error = nil, want a refusal")
 	}
@@ -131,14 +151,14 @@ func TestSyncFPPMQTTConfigDisagreementRefusesToStart(t *testing.T) {
 }
 
 func TestSyncFPPMQTTConfigIdenticalStartsWithWarning(t *testing.T) {
-	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	st, svc, _ := newTestFPPMQTTSyncDeps(t)
 
-	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
 		t.Fatalf("seed migration: %v", err)
 	}
 
 	logger, buf := capturingLogger()
-	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, logger)
+	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, logger)
 	if err != nil {
 		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil", err)
 	}
@@ -154,13 +174,13 @@ func TestSyncFPPMQTTConfigIdenticalStartsWithWarning(t *testing.T) {
 }
 
 func TestSyncFPPMQTTConfigEnvUnsetAfterMigrationUsesStore(t *testing.T) {
-	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	st, svc, _ := newTestFPPMQTTSyncDeps(t)
 
-	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
 		t.Fatalf("first syncFPPMQTTConfig() error = %v", err)
 	}
 
-	cfg, password, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, config.FPPMQTTConfig{}, "", time.Now, discardLogger())
+	cfg, password, _, err := syncFPPMQTTConfig(context.Background(), st, svc, config.FPPMQTTConfig{}, "", time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("syncFPPMQTTConfig() with env unset error = %v, want nil", err)
 	}
@@ -170,13 +190,13 @@ func TestSyncFPPMQTTConfigEnvUnsetAfterMigrationUsesStore(t *testing.T) {
 }
 
 func TestResolveAuthoritativeFPPMQTTUsesStoreOverEnv(t *testing.T) {
-	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	st, svc, _ := newTestFPPMQTTSyncDeps(t)
 
-	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
 		t.Fatalf("seed migration: %v", err)
 	}
 
-	cfg, password, deferred, err := resolveAuthoritativeFPPMQTT(context.Background(), st, svc, dir, config.FPPMQTTConfig{}, "", time.Now, discardLogger())
+	cfg, password, deferred, err := resolveAuthoritativeFPPMQTT(context.Background(), st, svc, config.FPPMQTTConfig{}, "", time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("resolveAuthoritativeFPPMQTT() error = %v, want nil", err)
 	}
@@ -190,19 +210,19 @@ func TestResolveAuthoritativeFPPMQTTUsesStoreOverEnv(t *testing.T) {
 
 // TestSyncFPPMQTTConfigAuditWriteFailureStartsWithoutMigrating is ADR-039
 // decision 3's own regression test: an unwritable audit_log must NOT stop
-// this coordinator starting, and must not leave a stray secret file with
-// no revision to match it.
+// this coordinator starting, and must not leave a stray credential with no
+// revision to match it.
 func TestSyncFPPMQTTConfigAuditWriteFailureStartsWithoutMigrating(t *testing.T) {
 	st, svc, dir := newTestFPPMQTTSyncDeps(t)
 	makeTableUnwritable(t, dir, "audit_log")
 	logger, buf := capturingLogger()
 
-	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, logger)
+	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, logger)
 	if err != nil {
-		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil — an audit-write failure must not stop the coordinator starting", err)
+		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil: an audit-write failure must not stop the coordinator starting", err)
 	}
 	if !config.FPPMQTTConfigEqual(cfg, testFPPMQTTConfig) || password != testFPPMQTTPassword {
-		t.Errorf("cfg/password = %+v/%q, want %+v/%q — this boot must still use the configuration it used before", cfg, password, testFPPMQTTConfig, testFPPMQTTPassword)
+		t.Errorf("cfg/password = %+v/%q, want %+v/%q: this boot must still use the configuration it used before", cfg, password, testFPPMQTTConfig, testFPPMQTTPassword)
 	}
 	if !deferred {
 		t.Error("migrationDeferred = false, want true")
@@ -210,7 +230,7 @@ func TestSyncFPPMQTTConfigAuditWriteFailureStartsWithoutMigrating(t *testing.T) 
 
 	_, err = st.GetConfigObject(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID)
 	if !errors.Is(err, store.ErrConfigObjectNotFound) {
-		t.Errorf("GetConfigObject error = %v, want ErrConfigObjectNotFound — the failed migration must persist nothing", err)
+		t.Errorf("GetConfigObject error = %v, want ErrConfigObjectNotFound: the failed migration must persist nothing", err)
 	}
 
 	out := buf.String()
@@ -219,21 +239,19 @@ func TestSyncFPPMQTTConfigAuditWriteFailureStartsWithoutMigrating(t *testing.T) 
 	}
 }
 
-// TestMigrateFPPMQTTFromEnvSecretFileFailureDefersWithoutTouchingStore
+// TestMigrateFPPMQTTFromEnvCredentialFailureDefersWithoutTouchingStore
 // covers the write-ordering guarantee handlePutFPPMQTTConfig's own doc
 // comment states for the API path and migrateFPPMQTTFromEnv shares for
-// startup: if the secret file cannot be written, the migration is
-// deferred and NOTHING is written to the store either.
-func TestMigrateFPPMQTTFromEnvSecretFileFailureDefersWithoutTouchingStore(t *testing.T) {
-	st, svc, _ := newTestFPPMQTTSyncDeps(t)
-	// A data directory that cannot hold the secret file: point at a path
-	// whose parent is a file, not a directory, so os.MkdirAll fails.
-	unwritableDir := "/dev/null/fpp-mqtt-secret-parent-is-a-file"
+// startup: if the credential cannot be written, the migration is deferred
+// and NOTHING is written as a config revision either.
+func TestMigrateFPPMQTTFromEnvCredentialFailureDefersWithoutTouchingStore(t *testing.T) {
+	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	makeTableUnwritable(t, dir, "credentials")
 	logger, buf := capturingLogger()
 
-	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, unwritableDir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, logger)
+	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, logger)
 	if err != nil {
-		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil — a secret-file failure must not stop the coordinator starting", err)
+		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil: a credential-write failure must not stop the coordinator starting", err)
 	}
 	if !config.FPPMQTTConfigEqual(cfg, testFPPMQTTConfig) || password != testFPPMQTTPassword {
 		t.Errorf("cfg/password = %+v/%q, want the raw env values %+v/%q", cfg, password, testFPPMQTTConfig, testFPPMQTTPassword)
@@ -242,41 +260,36 @@ func TestMigrateFPPMQTTFromEnvSecretFileFailureDefersWithoutTouchingStore(t *tes
 		t.Error("migrationDeferred = false, want true")
 	}
 	if _, err := st.GetConfigObject(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID); !errors.Is(err, store.ErrConfigObjectNotFound) {
-		t.Errorf("GetConfigObject error = %v, want ErrConfigObjectNotFound — a secret-file failure must not write a revision either", err)
+		t.Errorf("GetConfigObject error = %v, want ErrConfigObjectNotFound: a credential-write failure must not write a revision either", err)
 	}
-	if !strings.Contains(buf.String(), "secret file could not be written") {
-		t.Errorf("log output = %q, want an ERROR naming the secret file failure", buf.String())
+	if !strings.Contains(buf.String(), "credential could not be written") {
+		t.Errorf("log output = %q, want an ERROR naming the credential-write failure", buf.String())
 	}
 }
 
 // TestSyncFPPMQTTConfigPasswordReadErrorDegradesInsteadOfRefusingBoot
-// proves an unreadable secret file is scoped to the FPP MQTT collector's
+// proves an unreadable credential is scoped to the FPP MQTT collector's
 // credential, never a boot refusal: with the env unset the stored config
 // proceeds with no password, and with the env still set and matching on
 // the non-secret fields the env password fills in.
 func TestSyncFPPMQTTConfigPasswordReadErrorDegradesInsteadOfRefusingBoot(t *testing.T) {
 	st, svc, dir := newTestFPPMQTTSyncDeps(t)
 
-	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	// Make the secret file unreadable by replacing it with a directory —
-	// present (so this is a read error, not the benign not-exist case) and
-	// guaranteed to fail os.ReadFile.
-	secretPath := filepath.Join(dir, config.FPPMQTTSecretFileName)
-	if err := os.Remove(secretPath); err != nil {
-		t.Fatalf("remove secret file: %v", err)
-	}
-	if err := os.Mkdir(secretPath, 0o755); err != nil {
-		t.Fatalf("mkdir at secret path: %v", err)
-	}
+	// Make the credential unreadable: drop the credentials table out from
+	// under the live store, over a second connection to the same file, so
+	// GetCredential fails with a genuine read error rather than the benign
+	// not-set case.
+	dropCredentialsTable(t, dir)
 
 	// Env unset: the stored configuration proceeds with no password.
 	logger, buf := capturingLogger()
-	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, config.FPPMQTTConfig{}, "", time.Now, logger)
+	cfg, password, deferred, err := syncFPPMQTTConfig(context.Background(), st, svc, config.FPPMQTTConfig{}, "", time.Now, logger)
 	if err != nil {
-		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil — an unreadable secret file must not refuse boot", err)
+		t.Fatalf("syncFPPMQTTConfig() error = %v, want nil: an unreadable credential must not refuse boot", err)
 	}
 	if deferred {
 		t.Error("migrationDeferred = true, want false")
@@ -285,15 +298,15 @@ func TestSyncFPPMQTTConfigPasswordReadErrorDegradesInsteadOfRefusingBoot(t *test
 		t.Errorf("cfg = %+v, want the stored configuration %+v", cfg, testFPPMQTTConfig)
 	}
 	if password != "" {
-		t.Errorf("password = %q, want empty with the env unset and the file unreadable", password)
+		t.Errorf("password = %q, want empty with the env unset and the credential unreadable", password)
 	}
 	if !strings.Contains(buf.String(), "failed to read the stored fpp.mqtt password") {
-		t.Errorf("log output = %q, want an ERROR naming the unreadable secret file", buf.String())
+		t.Errorf("log output = %q, want an ERROR naming the unreadable credential", buf.String())
 	}
 
 	// Env still set and matching on the non-secret fields: the env
 	// password fills in rather than the collector connecting with none.
-	cfg, password, deferred, err = syncFPPMQTTConfig(context.Background(), st, svc, dir, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger())
+	cfg, password, deferred, err = syncFPPMQTTConfig(context.Background(), st, svc, testFPPMQTTConfig, testFPPMQTTPassword, time.Now, discardLogger())
 	if err != nil {
 		t.Fatalf("syncFPPMQTTConfig() with env set: error = %v, want nil", err)
 	}
@@ -304,11 +317,124 @@ func TestSyncFPPMQTTConfigPasswordReadErrorDegradesInsteadOfRefusingBoot(t *test
 		t.Errorf("cfg/password = %+v/%q, want the stored config with the env password %q", cfg, password, testFPPMQTTPassword)
 	}
 
-	// A genuine non-secret disagreement still refuses, unreadable file or
-	// not: the owner's disagreement rule is unrelated to the file failure.
+	// A genuine non-secret disagreement still refuses, unreadable
+	// credential or not: the owner's disagreement rule is unrelated to the
+	// read failure.
 	other := testFPPMQTTConfig
 	other.BrokerURL = "tcp://10.0.9.9:1883"
-	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, dir, other, testFPPMQTTPassword, time.Now, discardLogger()); !errors.Is(err, errFPPMQTTDisagree) {
+	if _, _, _, err := syncFPPMQTTConfig(context.Background(), st, svc, other, testFPPMQTTPassword, time.Now, discardLogger()); !errors.Is(err, errFPPMQTTDisagree) {
 		t.Errorf("syncFPPMQTTConfig() with disagreeing env: error = %v, want errFPPMQTTDisagree", err)
+	}
+}
+
+// --- migrateFPPMQTTSecretFileToStore ---
+
+func TestMigrateFPPMQTTSecretFileToStoreAbsentFileIsANoop(t *testing.T) {
+	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	logger, buf := capturingLogger()
+
+	migrateFPPMQTTSecretFileToStore(context.Background(), st, svc, dir, time.Now, logger)
+
+	if present, err := st.HasCredential(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField); err != nil || present {
+		t.Fatalf("HasCredential = (%v, %v), want (false, nil): nothing was ever written to migrate", present, err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("log output = %q, want silence: an absent legacy file is not an error", buf.String())
+	}
+}
+
+func TestMigrateFPPMQTTSecretFileToStoreMovesPasswordAndRemovesFile(t *testing.T) {
+	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	legacyPath := filepath.Join(dir, config.FPPMQTTSecretFileName)
+	if err := os.WriteFile(legacyPath, []byte(testFPPMQTTPassword), 0o600); err != nil {
+		t.Fatalf("seed legacy file: %v", err)
+	}
+
+	migrateFPPMQTTSecretFileToStore(context.Background(), st, svc, dir, time.Now, discardLogger())
+
+	value, present, err := st.GetCredential(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField)
+	if err != nil {
+		t.Fatalf("GetCredential: %v", err)
+	}
+	if !present || value != testFPPMQTTPassword {
+		t.Fatalf("GetCredential = (%q, %v), want (%q, true)", value, present, testFPPMQTTPassword)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy file stat error = %v, want it removed after a successful move", err)
+	}
+}
+
+func TestMigrateFPPMQTTSecretFileToStoreEmptyFileHasNothingToMoveButFileIsRemoved(t *testing.T) {
+	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	legacyPath := filepath.Join(dir, config.FPPMQTTSecretFileName)
+	if err := os.WriteFile(legacyPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("seed empty legacy file: %v", err)
+	}
+
+	migrateFPPMQTTSecretFileToStore(context.Background(), st, svc, dir, time.Now, discardLogger())
+
+	if present, err := st.HasCredential(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField); err != nil || present {
+		t.Fatalf("HasCredential = (%v, %v), want (false, nil): an empty legacy file has nothing to move", present, err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy file stat error = %v, want it removed even though nothing was moved", err)
+	}
+}
+
+// TestMigrateFPPMQTTSecretFileToStoreRerunAfterPartialMoveIsSafe covers the
+// crash-between-write-and-delete case: the credential already landed in
+// the store on a previous boot, but that boot died before removing the
+// file. A re-run must not fail or double-write badly, and must still
+// remove the file.
+func TestMigrateFPPMQTTSecretFileToStoreRerunAfterPartialMoveIsSafe(t *testing.T) {
+	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	legacyPath := filepath.Join(dir, config.FPPMQTTSecretFileName)
+	if err := os.WriteFile(legacyPath, []byte(testFPPMQTTPassword), 0o600); err != nil {
+		t.Fatalf("seed legacy file: %v", err)
+	}
+	// Simulate the credential already having landed on a prior, interrupted
+	// boot.
+	if err := st.SetCredential(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField, testFPPMQTTPassword); err != nil {
+		t.Fatalf("seed pre-existing credential: %v", err)
+	}
+
+	migrateFPPMQTTSecretFileToStore(context.Background(), st, svc, dir, time.Now, discardLogger())
+
+	value, present, err := st.GetCredential(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField)
+	if err != nil {
+		t.Fatalf("GetCredential: %v", err)
+	}
+	if !present || value != testFPPMQTTPassword {
+		t.Fatalf("GetCredential = (%q, %v), want (%q, true) after a re-run", value, present, testFPPMQTTPassword)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy file stat error = %v, want it removed by the re-run", err)
+	}
+}
+
+// TestMigrateFPPMQTTSecretFileToStoreAuditWriteFailureNeverExitsAndLeavesFile
+// is this migration's own hard rule under test: an audit-append failure
+// must be logged and MUST NOT stop the coordinator starting, and the
+// legacy file must be left in place (untouched) so nothing is lost and the
+// migration retries on the next boot.
+func TestMigrateFPPMQTTSecretFileToStoreAuditWriteFailureNeverExitsAndLeavesFile(t *testing.T) {
+	st, svc, dir := newTestFPPMQTTSyncDeps(t)
+	legacyPath := filepath.Join(dir, config.FPPMQTTSecretFileName)
+	if err := os.WriteFile(legacyPath, []byte(testFPPMQTTPassword), 0o600); err != nil {
+		t.Fatalf("seed legacy file: %v", err)
+	}
+	makeTableUnwritable(t, dir, "audit_log")
+	logger, buf := capturingLogger()
+
+	migrateFPPMQTTSecretFileToStore(context.Background(), st, svc, dir, time.Now, logger)
+
+	if present, err := st.HasCredential(context.Background(), config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField); err != nil || present {
+		t.Fatalf("HasCredential = (%v, %v), want (false, nil): a rolled-back audit write must persist nothing", present, err)
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("legacy file stat error = %v, want it left in place after a deferred migration", err)
+	}
+	if !strings.Contains(buf.String(), "could not migrate the legacy fpp.mqtt secret file") {
+		t.Errorf("log output = %q, want an ERROR naming the deferred migration, never a fatal exit", buf.String())
 	}
 }

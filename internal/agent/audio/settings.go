@@ -2,6 +2,7 @@ package audio
 
 import (
 	"fmt"
+	"strings"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
@@ -103,36 +104,67 @@ func validDuckTargetGain(g pkgaudio.Gain) error {
 	return nil
 }
 
+// SettingsState is [Manager.SettingsSubstitution]'s own report of whether
+// the most recent [Manager.SetSettings] call applied its revision as given
+// or fell back on at least one field's [DefaultSettings] value --
+// node.audio.settings.state (docs/build/IDENTIFIER-REGISTER.md), matching
+// the state/reason pairing [EngineRestoreState] and the LTC generator's
+// own state already use rather than inventing a second convention.
+type SettingsState string
+
+const (
+	// SettingsAccepted is the zero value: every field of the most recent
+	// SetSettings call passed its own wire-boundary validation and landed
+	// as given.
+	SettingsAccepted SettingsState = "accepted"
+
+	// SettingsSubstituted means at least one field of the most recent
+	// SetSettings call failed its own validation and was replaced by its
+	// [DefaultSettings] value; every other field the operator set still
+	// landed.
+	SettingsSubstituted SettingsState = "substituted"
+)
+
+// settingsFieldIssue is one field of a Settings value that failed its own
+// wire-boundary validation: field is the exact Settings struct field name
+// (what node.audio.settings.substituted_fields names), message is the
+// full description this package's log line and
+// node.audio.settings.reason carry.
+type settingsFieldIssue struct {
+	field   string
+	message string
+}
+
 // invalidSettingsFields validates s field by field against every wire
 // boundary this package independently reproduces — the coordinator
 // validates the same values on write, but that does not exempt this
 // package from checking what actually arrives over MQTT. Returns one
-// message per field that failed, naming the field and why.
-func invalidSettingsFields(s Settings) []string {
-	var issues []string
+// issue per field that failed, naming the field and why.
+func invalidSettingsFields(s Settings) []settingsFieldIssue {
+	var issues []settingsFieldIssue
 	if s.DefaultFadeDurationMs <= 0 {
-		issues = append(issues, fmt.Sprintf("DefaultFadeDurationMs %d is not positive", s.DefaultFadeDurationMs))
+		issues = append(issues, settingsFieldIssue{"DefaultFadeDurationMs", fmt.Sprintf("DefaultFadeDurationMs %d is not positive", s.DefaultFadeDurationMs)})
 	}
 	if err := s.DefaultFadeCurve.Validate(); err != nil {
-		issues = append(issues, "DefaultFadeCurve: "+err.Error())
+		issues = append(issues, settingsFieldIssue{"DefaultFadeCurve", "DefaultFadeCurve: " + err.Error()})
 	}
 	if err := s.DefaultMaxBackgroundGain.Validate(); err != nil {
-		issues = append(issues, "DefaultMaxBackgroundGain: "+err.Error())
+		issues = append(issues, settingsFieldIssue{"DefaultMaxBackgroundGain", "DefaultMaxBackgroundGain: " + err.Error()})
 	}
 	if err := validDuckTargetGain(s.DuckTargetGain); err != nil {
-		issues = append(issues, "DuckTargetGain: "+err.Error())
+		issues = append(issues, settingsFieldIssue{"DuckTargetGain", "DuckTargetGain: " + err.Error()})
 	}
 	if s.DuckFadeDurationMs <= 0 {
-		issues = append(issues, fmt.Sprintf("DuckFadeDurationMs %d is not positive", s.DuckFadeDurationMs))
+		issues = append(issues, settingsFieldIssue{"DuckFadeDurationMs", fmt.Sprintf("DuckFadeDurationMs %d is not positive", s.DuckFadeDurationMs)})
 	}
 	if s.DuckRestoreFadeDurationMs <= 0 {
-		issues = append(issues, fmt.Sprintf("DuckRestoreFadeDurationMs %d is not positive", s.DuckRestoreFadeDurationMs))
+		issues = append(issues, settingsFieldIssue{"DuckRestoreFadeDurationMs", fmt.Sprintf("DuckRestoreFadeDurationMs %d is not positive", s.DuckRestoreFadeDurationMs)})
 	}
 	if err := s.LTCFrameRate.Validate(); err != nil {
-		issues = append(issues, "LTCFrameRate: "+err.Error())
+		issues = append(issues, settingsFieldIssue{"LTCFrameRate", "LTCFrameRate: " + err.Error()})
 	}
 	if err := s.LTCDefaultStartOffset.Validate(); err != nil {
-		issues = append(issues, "LTCDefaultStartOffset: "+err.Error())
+		issues = append(issues, settingsFieldIssue{"LTCDefaultStartOffset", "LTCDefaultStartOffset: " + err.Error()})
 	}
 	return issues
 }
@@ -145,11 +177,13 @@ func invalidSettingsFields(s Settings) []string {
 // as given — every other field an operator actually set still lands, and
 // only the bad one falls back to [DefaultSettings]'s value for that
 // field. The substitution is logged and retained for
-// [Manager.SettingsValidationIssues]; no coordinator surface reports it
-// yet, so today it is visible on the node and nowhere else.
+// [Manager.SettingsSubstitution], which internal/agent's own audio report
+// carries onto node.audio.settings.state/.substituted_fields/.reason.
 func (m *Manager) SetSettings(s Settings) {
 	s.Configured = true
 	issues := invalidSettingsFields(s)
+	var fields []string
+	var messages []string
 	if len(issues) > 0 {
 		if s.DefaultFadeDurationMs <= 0 {
 			s.DefaultFadeDurationMs = DefaultSettings.DefaultFadeDurationMs
@@ -176,13 +210,24 @@ func (m *Manager) SetSettings(s Settings) {
 			s.LTCDefaultStartOffset = DefaultSettings.LTCDefaultStartOffset
 		}
 		for _, issue := range issues {
-			m.logf("audio settings: rejected invalid value, using default instead: %s", issue)
+			fields = append(fields, issue.field)
+			messages = append(messages, issue.message)
+			m.logf("audio settings: rejected invalid value, using default instead: %s", issue.message)
 		}
+	}
+
+	state := SettingsAccepted
+	var reason string
+	if len(issues) > 0 {
+		state = SettingsSubstituted
+		reason = strings.Join(messages, "; ")
 	}
 
 	m.settingsMu.Lock()
 	m.settings = s
-	m.settingsIssues = issues
+	m.settingsState = state
+	m.settingsSubstitutedFields = fields
+	m.settingsReason = reason
 	m.settingsMu.Unlock()
 }
 
@@ -194,12 +239,21 @@ func (m *Manager) SettingsSnapshot() Settings {
 	return m.settings
 }
 
-// SettingsValidationIssues returns the field-level problems the most
-// recent [Manager.SetSettings] call found, or nil once a call arrives
-// with none. Each entry names the field that fell back to its
-// [DefaultSettings] value and why. Nothing in production reads this yet.
-func (m *Manager) SettingsValidationIssues() []string {
+// SettingsSubstitution returns whether the most recent [Manager.
+// SetSettings] call applied its revision as given ([SettingsAccepted]) or
+// fell back on at least one field's [DefaultSettings] value
+// ([SettingsSubstituted]), which Settings struct fields were substituted,
+// and why, in one joined string. fields is nil and reason is "" whenever
+// state is [SettingsAccepted], including before SetSettings is ever
+// called. internal/agent's own audio report is this accessor's one
+// caller, carrying it onto node.audio.settings.state/.substituted_fields/
+// .reason (docs/build/IDENTIFIER-REGISTER.md).
+func (m *Manager) SettingsSubstitution() (state SettingsState, fields []string, reason string) {
 	m.settingsMu.RLock()
 	defer m.settingsMu.RUnlock()
-	return m.settingsIssues
+	state = m.settingsState
+	if state == "" {
+		state = SettingsAccepted
+	}
+	return state, m.settingsSubstitutedFields, m.settingsReason
 }

@@ -120,13 +120,25 @@ var migrations = []migration{
 	// see a playlist loop back into an entry it already visited, which is
 	// the only signal that does so on FPP 10.
 	{version: 32, fn: migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn},
-	// v33: backfills audio.settings' two scheduled-start keys into every
+	// v33 (owner ruling 2026-09-08, "credentials into SQLite"): adds
+	// credentials, a general-purpose (kind, object_id, field) -> value
+	// table (credentials.go's own doc comment). The fpp.mqtt broker
+	// password is its first tenant, moving out of a 0600 file on the data
+	// directory (migrateFPPMQTTSecretFileToStore, fppmqttsync.go) so a
+	// single SQLite backup captures every credential this coordinator
+	// holds, rather than a database plus a file an operator can forget. A
+	// pure addition, like schemaV7/schemaV25/schemaV28: no existing table
+	// is touched.
+	{version: 33, sql: schemaV33},
+	// v34: backfills audio.settings' two scheduled-start keys into every
 	// stored revision written before they were required
-	// (migrateV33AudioSettingsBackfillScheduledStartFields' own doc
-	// comment, migration_v33.go). Same defect class as v20: without it an
+	// (migrateV34AudioSettingsBackfillScheduledStartFields' own doc
+	// comment, migration_v34.go). Same defect class as v20: without it an
 	// upgraded coordinator cannot decode its own stored revision and stops
-	// pushing audio configuration to every node.
-	{version: 33, fn: migrateV33AudioSettingsBackfillScheduledStartFields},
+	// pushing audio configuration to every node. Numbered 34, not 33,
+	// because 33 shipped on main as schemaV33 and a repeated number never
+	// runs against a store already stamped at it.
+	{version: 34, fn: migrateV34AudioSettingsBackfillScheduledStartFields},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1772,6 +1784,24 @@ func migrateV30AddConfigObjectDeletedAtColumn(ctx context.Context, tx *sql.Tx) e
 	}
 	return nil
 }
+
+// schemaV33 creates credentials: a general-purpose, kind-agnostic
+// (kind, object_id, field) -> value table (credentials.go's own doc
+// comment). A pure addition needing no transformation of existing rows.
+// IF NOT EXISTS, matching schemaV25's own precedent: this package's own
+// tests rewind PRAGMA user_version to 18 and replay every later migration
+// to prove replay safety, and a bare CREATE TABLE fails outright on that
+// second pass ("table already exists") once the table already exists.
+const schemaV33 = `
+CREATE TABLE IF NOT EXISTS credentials (
+	kind       TEXT NOT NULL,
+	object_id  TEXT NOT NULL,
+	field      TEXT NOT NULL,
+	value      TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (kind, object_id, field)
+);
+`
 
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):
