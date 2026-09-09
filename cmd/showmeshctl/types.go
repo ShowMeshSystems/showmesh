@@ -73,6 +73,16 @@ type nodeEvidence struct {
 	Heartbeat evidence `json:"heartbeat"`
 }
 
+// nodeShowParticipation is node.showParticipation: the coordinator's own
+// answer to whether this node participates in the show currently active.
+// State is one of "participating", "not_participating", "unknown", or
+// "not_configured"; Reason is populated for "unknown" and "not_configured".
+type nodeShowParticipation struct {
+	State  string  `json:"state"`
+	Show   string  `json:"show"`
+	Reason *string `json:"reason"`
+}
+
 // node is the Node shape from contract §6.10: an element of GET
 // /api/v1/nodes, the body of GET /api/v1/nodes/{id}, an element of the
 // snapshot, and the payload of a node.changed stream event.
@@ -107,6 +117,11 @@ type node struct {
 	// zero value (every pointer field nil) is what this program renders
 	// for that case, not a special "declaration unknown" branch.
 	Declaration nodeDeclaration `json:"declaration"`
+
+	// ShowParticipation is node.showParticipation, decoded unconditionally
+	// like Declaration above: an older coordinator that predates this
+	// field simply leaves it at its zero value, State "".
+	ShowParticipation nodeShowParticipation `json:"showParticipation"`
 
 	// Render is Track B seam B2b's addition, additive per contract §6.2:
 	// whatever render-pipeline observations this coordinator currently

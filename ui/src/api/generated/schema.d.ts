@@ -3029,6 +3029,14 @@ export interface components {
             lastWill: components["schemas"]["Evidence"];
             heartbeat: components["schemas"]["Evidence"];
         };
+        /** @description The coordinator's own answer to whether this node participates in the show currently active. The UI renders this value directly and must never infer participation from any other field. "not_configured" is the ordinary state before an operator has activated a show, never a determination failure; "unknown" means participation could not be determined and must never be treated as "not_participating". show names the active show this was computed against, empty when none could be identified. reason is always populated for "unknown" and "not_configured", optional otherwise. */
+        NodeShowParticipation: {
+            /** @enum {string} */
+            state: "participating" | "not_participating" | "unknown" | "not_configured";
+            /** @description Empty only for "not_configured" and for "unknown" when no show could even be identified before catalog resolution was attempted - honest absence, never a bug: a real show id is never empty. */
+            show: string;
+            reason: string | null;
+        };
         /** @description One node's current representation: an element of GET /nodes, of the snapshot's nodes list, and the payload of a node.changed stream event - all three render identically. */
         Node: {
             nodeId: string;
@@ -3046,6 +3054,7 @@ export interface components {
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
             declaration: components["schemas"]["NodeDeclaration"];
+            showParticipation: components["schemas"]["NodeShowParticipation"];
             /**
              * @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent.
              *
