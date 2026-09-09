@@ -754,8 +754,14 @@ const validEvidenceJSON = `{"signal":"node.hello","value":null,"unit":null,"stat
 // validEvidenceJSON is: hand-built, not server output.
 const validDeclarationJSON = `{"declared":false,"label":null,"notes":null,"declaredAt":null,"declaredByPrincipalId":null,"declaredByPrincipalName":null,"discoveryState":"not_applicable","discoveryReason":null,"lastDiscoveryRunId":null,"lastDiscoveredAt":null,"notSeenAsOfRunId":null,"notSeenAsOfRunFinishedAt":null}`
 
+// validNodeShowParticipationJSON is a minimal, but fully schema-valid,
+// NodeShowParticipation envelope literal ("not_configured", reason
+// populated as that state requires), used the same way validDeclarationJSON
+// is: hand-built, not server output.
+const validNodeShowParticipationJSON = `{"state":"not_configured","show":"","reason":"no show is currently active"}`
+
 var nodeResponseJSONWithExtraField = `{"serverTime":"2026-01-01T00:00:00Z","node":{"nodeId":"x","label":null,"platform":null,"agentVersion":null,"bootId":null,"startedAt":null,"firstSeenAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","capabilities":[],"controlPlane":{"state":"unknown","reason":"x"},"evidence":{"hello":` +
-	validEvidenceJSON + `,"lastWill":` + validEvidenceJSON + `,"heartbeat":` + validEvidenceJSON + `},"declaration":` + validDeclarationJSON + `,"render":[],"audio":[],"fppConnect":[]},"unexpectedField":"surprise"}`
+	validEvidenceJSON + `,"lastWill":` + validEvidenceJSON + `,"heartbeat":` + validEvidenceJSON + `},"declaration":` + validDeclarationJSON + `,"showParticipation":` + validNodeShowParticipationJSON + `,"render":[],"audio":[],"fppConnect":[]},"unexpectedField":"surprise"}`
 
 // TestOpenAPIStreamEventSchemasMatchRealFrames validates one real
 // stream.start frame's JSON payload — obtained the same way

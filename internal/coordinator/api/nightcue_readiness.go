@@ -40,16 +40,31 @@ func (h *handlers) nightCheckFirstOutwardCueConfirmable(ctx context.Context, cue
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}
 }
 
-// nightCheckNoUnbuiltBrightnessComposition rejects any lighting-role cue
-// that declares a fade duration: the ceiling times transition-gain
-// provider that could apply one without overwriting the scheduled
-// ceiling is specified (RES-018) but not yet built.
-func nightCheckNoUnbuiltBrightnessComposition(transition string, cues []config.NightSessionCue) nightReadinessCheck {
+// nightCheckBrightnessCompositionUnverified warns, and no longer refuses,
+// on a lighting-role cue that declares a fade duration.
+//
+// It used to fail, because the ceiling times transition-gain provider was
+// specified and not built. The provider is now built: the plugin serves
+// the transition-gain route on both FPP majors and the coordinator writes
+// it as a cue effect. What is still missing is the other half of
+// RESTING-MODE's own condition. Line 228 rejects "until the ShowMesh
+// component passes its real-host acceptance matrix", and line 236 says
+// the seam "must be implemented before this behavior can be claimed".
+// Implemented is now true; the real-host acceptance matrix is the owner's
+// rig work and does not exist yet.
+//
+// So failing would make a built feature unreachable, and reporting
+// healthy would claim behaviour the spec explicitly forbids claiming
+// until it is verified on a real host. Degraded is the honest third
+// answer: the night starts, every consumer treats it as ready, and the
+// operator sees the one thing still outstanding before showtime. The
+// warning is what the acceptance matrix clears.
+func nightCheckBrightnessCompositionUnverified(transition string, cues []config.NightSessionCue) nightReadinessCheck {
 	name := transition + ":brightness-composition"
 	for _, cue := range cues {
 		if cue.Role == config.NightSessionCueRoleLighting && cue.FadeDurationMs != nil {
-			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-				"cue %q declares a lighting fade, and the brightness provider that can apply a fade without overwriting the currently scheduled ceiling is specified but not yet built or verified", cue.Name)}
+			return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
+				"cue %q declares a lighting fade; compositional brightness is implemented and has not yet been verified on a real host, so the fade will be attempted but its effect on the installation is unproven", cue.Name)}
 		}
 	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy()}

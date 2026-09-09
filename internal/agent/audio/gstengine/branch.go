@@ -80,18 +80,37 @@ type branch struct {
 	anchorUnknown bool
 
 	fadeActive bool
-	// fadeStartPos anchors both the GstController ramp itself and the
-	// completion bound in the branch's own raw stream position
-	// (queryPosition), not segmentStart-relative local running time.
-	// GstController evaluates a buffer's control value against the
-	// buffer's own PTS, which is stream time and stays continuous across
-	// a same-position seek (Resume's own re-anchor included); local
-	// running time does not, since seekTo resets segmentStart to the
-	// seek target on every seek, including one back to where a paused
+	// fadeStartPos anchors both the GstController ramp itself and
+	// fadeArrived's completion bound in the branch's own raw stream
+	// position, not segmentStart-relative local running time, which
+	// seekTo resets on every seek including one back to where a paused
 	// branch already was.
+	//
+	// It needs no correction for the gap fadeSyncedPos exists to fix:
+	// the controller is anchored to fadeStartPos exactly as given, so it
+	// already matches fadeSyncedPos's own clock; that gap was entirely
+	// on the other side of fadeArrived's subtraction.
 	fadeStartPos   time.Duration
 	fadeDuration   time.Duration
 	fadeTargetGain pkgaudio.Gain
+
+	// fadeSyncedPos is the PTS of the last buffer actually seen at
+	// volume's own sink pad while a fade is active: the exact input
+	// GstController evaluates the "volume" property against for that
+	// buffer, captured directly rather than approximated. queryPosition
+	// is not a substitute for it: a position query on volume resolves
+	// upstream toward the source and consistently answers with the
+	// buffer volume is about to receive, one buffer period ahead of the
+	// one it has actually synced against, which lets fadeArrived see an
+	// elapsed bound that has not really been reached yet. fadeSyncedPos
+	// only has a meaningful value while fadeSyncProbeID is nonzero.
+	fadeSyncedPos time.Duration
+	// fadeSyncProbeID is the pad probe on volume's sink pad maintaining
+	// fadeSyncedPos, installed by startFade and removed the moment
+	// fadeActive next clears (cancelFade, or observe's own arrival
+	// check) so the probe's per-buffer cost exists only for the
+	// duration of an actual fade, not for a branch's whole lifetime.
+	fadeSyncProbeID uint32
 
 	// blockProbeID is the pad probe holding this branch's own contribution
 	// to the mix at queue's sink pad, or 0 when flow is not blocked. It is
@@ -547,11 +566,15 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 	b.mu.Lock()
 	state := b.state
 	fadeActive := b.fadeActive
-	if fadeActive && fadeArrived(pos, b.fadeStartPos, b.fadeDuration, gain, b.fadeTargetGain) {
+	arrived := fadeActive && fadeArrived(b.fadeSyncedPos, b.fadeStartPos, b.fadeDuration, gain, b.fadeTargetGain)
+	if arrived {
 		fadeActive = false
 		b.fadeActive = false
 	}
 	b.mu.Unlock()
+	if arrived {
+		b.removeFadeSyncProbe()
+	}
 
 	return agentaudio.EngineObservation{
 		State:      state,
@@ -563,15 +586,21 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 }
 
 // fadeArrived reports whether a fade started at fadeStartPos with
-// fadeDuration should clear FadeActive: raw stream position must have
-// advanced the fade's own duration past fadeStartPos AND Gain must
-// actually equal target (see docs/build/BUILD-LOG.md for why the bound
-// is stream position, not local running time or the shared pipeline's
-// wall clock). A fade whose own clock says is due but whose gain has not
-// arrived stays reported in progress rather than falsely complete: a
-// stuck pending fade must be visible, a falsely completed one must not.
-func fadeArrived(pos, fadeStartPos, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
-	elapsed := pos-fadeStartPos >= fadeDuration
+// fadeDuration should clear FadeActive: syncedPos, the PTS of the buffer
+// actually synced through volume (see fadeSyncedPos), must have advanced
+// the fade's own duration past fadeStartPos AND Gain must actually equal
+// target (see docs/build/BUILD-LOG.md for why the bound is stream
+// position, not local running time or the shared pipeline's wall clock).
+// syncedPos, not a fresh queryPosition() call: a position query on
+// volume resolves upstream toward the source and answers with whatever
+// buffer volume is about to receive, one buffer period ahead of the one
+// it has actually synced its gain against, which previously let this
+// bound see an elapsed duration that had not really been reached yet. A
+// fade whose own clock says is due but whose gain has not arrived stays
+// reported in progress rather than falsely complete: a stuck pending
+// fade must be visible, a falsely completed one must not.
+func fadeArrived(syncedPos, fadeStartPos, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
+	elapsed := syncedPos-fadeStartPos >= fadeDuration
 	return elapsed && gainWithin(gain, target, fadeGainTolerance)
 }
 
@@ -713,8 +742,49 @@ func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
 	b.fadeStartPos = basePos
 	b.fadeDuration = fade.Duration
 	b.fadeTargetGain = fade.TargetGain
+	b.fadeSyncedPos = basePos
 	b.mu.Unlock()
+	// A fade dispatched while an earlier one is still active supersedes
+	// it without an intervening cancelFade (see Engine.Fade), so any
+	// probe that earlier fade installed must go before this one installs
+	// its own, or the superseded probe would keep paying its per-buffer
+	// cost forever with no fade left to serve.
+	b.removeFadeSyncProbe()
+	b.installFadeSyncProbe()
 	return nil
+}
+
+// installFadeSyncProbe attaches a buffer probe to volume's own sink pad
+// that keeps fadeSyncedPos current: the PTS of the buffer volume has
+// actually synced its gain against, as fadeArrived's own doc comment
+// explains. Called only from startFade, once per fade.
+func (b *branch) installFadeSyncProbe() {
+	pad := b.volume.GetStaticPad("sink")
+	id := pad.AddProbe(gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		if buf := info.GetBuffer(); buf != nil {
+			b.mu.Lock()
+			b.fadeSyncedPos = time.Duration(buf.PTS())
+			b.mu.Unlock()
+		}
+		return gst.PadProbeOK
+	})
+	b.mu.Lock()
+	b.fadeSyncProbeID = id
+	b.mu.Unlock()
+}
+
+// removeFadeSyncProbe detaches the probe installFadeSyncProbe attached,
+// or is a no-op if none is attached. Called wherever fadeActive next
+// clears (cancelFade, or observe's own arrival check) so the probe's
+// per-buffer cost lasts only as long as an actual fade does.
+func (b *branch) removeFadeSyncProbe() {
+	b.mu.Lock()
+	id := b.fadeSyncProbeID
+	b.fadeSyncProbeID = 0
+	b.mu.Unlock()
+	if id != 0 {
+		b.volume.GetStaticPad("sink").RemoveProbe(id)
+	}
 }
 
 func (b *branch) cancelFade() {
@@ -723,4 +793,5 @@ func (b *branch) cancelFade() {
 	b.mu.Lock()
 	b.fadeActive = false
 	b.mu.Unlock()
+	b.removeFadeSyncProbe()
 }

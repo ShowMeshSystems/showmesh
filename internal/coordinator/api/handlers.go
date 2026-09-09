@@ -101,6 +101,11 @@ type handlers struct {
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
 
+	// nightGainWriter substitutes the night lighting cue's transition-gain
+	// write - see [nightTransitionGainWriter] (nightlightinggain.go). Nil
+	// in production; only a test ever sets it.
+	nightGainWriter nightTransitionGainWriter
+
 	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
 	// intent gate state. See [emergencyStopArmStore]'s own doc comment
 	// for why this is in-memory, unpersisted, and a single-process
@@ -172,10 +177,12 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	// hello) must still appear here — see mergeDeclaredOnlyNodes' own doc
 	// comment.
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
+	active, activeErr := resolveActiveShowForParticipation(r.Context(), h.deps.AssetManifests)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
+		participation := nodeShowParticipation(r.Context(), h.deps.AssetManifests, active, activeErr, nv.NodeID)
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation))
 	}
 	jsonWrite(w, v1.NodesResponse{ServerTime: formatTime(now), Nodes: nodes})
 }
@@ -206,10 +213,12 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 	}
 	// DEFECT 4: see handleNodes' identical call for why.
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
+	active, activeErr := resolveActiveShowForParticipation(r.Context(), h.deps.AssetManifests)
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
 			render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID))})
+			participation := nodeShowParticipation(r.Context(), h.deps.AssetManifests, active, activeErr, nv.NodeID)
+			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation)})
 			return
 		}
 	}
@@ -490,10 +499,12 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	// DEFECT 4: see handleNodes' identical call for why.
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
+	active, activeErr := resolveActiveShowForParticipation(ctx, h.deps.AssetManifests)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
 		render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
+		participation := nodeShowParticipation(ctx, h.deps.AssetManifests, active, activeErr, nv.NodeID)
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation))
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)

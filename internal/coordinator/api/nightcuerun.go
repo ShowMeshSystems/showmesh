@@ -113,7 +113,13 @@ func (h *handlers) nightCommitCueRow(ctx context.Context, now time.Time, rec sto
 // identity) and persists the outcome into the row, which must already
 // exist. It is the ONE code path both the ordinary advance and crash
 // recovery use — see [nightCueDispatchHooks] for its two crash windows.
-func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer, dispatchRevision int64) (store.NightCueOutboxRecord, error) {
+//
+// fade, when non-nil, is the lighting cue's own brightness gain write,
+// performed AS WELL AS the cue's action and never instead of it, on the
+// side of the dispatch [nightLightingFade.BeforeAction] names. Nil means
+// this cue asks for no gain write. See nightlightinggain.go for why the
+// write is a direct client call rather than a dispatchable action.
+func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer, dispatchRevision int64, fade *nightLightingFade) (store.NightCueOutboxRecord, error) {
 	if h.hookAfterCommit(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
 	}
@@ -135,7 +141,16 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 		}
 	}
 
+	var gain nightGainResult
+	if fade != nil && fade.BeforeAction {
+		gain = h.nightApplyLightingFade(ctx, cueName, target, *fade, idemKey)
+	}
+
 	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, dispatchRevision)
+
+	if fade != nil && !fade.BeforeAction {
+		gain = h.nightApplyLightingFade(ctx, cueName, target, *fade, idemKey)
+	}
 
 	if h.hookAfterDispatch(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
@@ -149,7 +164,11 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 		row.DispatchedAt = result.dispatchedAt
 	}
 	if !result.resolved {
+		// The action's own outcome is still open, so this row must stay
+		// unresolved; the gain note is still recorded, because that write
+		// did happen and an unresolved row is the only place to say so.
 		row.State = nightCueStateDispatched
+		row.OutcomeReason = nightCueReasonWith(row.OutcomeReason, gain.note)
 		if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
 			return store.NightCueOutboxRecord{}, err
 		}
@@ -157,7 +176,10 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 	}
 	row.State = nightCueStateResolved
 	row.Outcome = result.outcome
-	row.OutcomeReason = result.reason
+	if gain.failed {
+		row.Outcome = nightCueOutcomeWithGainFailure(result.outcome)
+	}
+	row.OutcomeReason = nightCueReasonWith(result.reason, gain.note)
 	resolvedAt := now
 	row.ResolvedAt = &resolvedAt
 	if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
@@ -184,7 +206,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 		if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
 			dispatchRevision = r
 		}
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision)
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 
 	case nightCueStateDispatched:
 		action, err := nightResolveShowActionRevision(ctx, h.deps.Config, cue.Action, row.ActionRevision)
@@ -210,7 +232,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 		if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
 			dispatchRevision = r
 		}
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision)
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 
 	default:
 		return store.NightCueOutboxRecord{}, fmt.Errorf("api: night cue outbox row %s/%d/%s/%s has unrecognized state %q", rec.ID, rec.Cycle, phase, cue.Name, row.State)
@@ -270,7 +292,7 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 	if r, ok := h.nightAnnouncementApplyDispatchRevision(ctx, cue, action.Target); ok {
 		dispatchRevision = r
 	}
-	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision)
+	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, dispatchRevision, h.nightLightingFadeForCue(cue, phase))
 }
 
 // nightBarrierResolutionDeadline bounds how long a barrier cue may hold

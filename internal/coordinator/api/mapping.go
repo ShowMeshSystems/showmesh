@@ -407,7 +407,11 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // channel-range string per node). nil (no channel-range push ever resolved
 // for this node) renders as an empty array, matching renderObs/audioObs'
 // identical "absent evidence is stated, never omitted" rule.
-func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs, fppConnectObs []observation.Observation) v1.Node {
+//
+// participation is [nodeShowParticipation]'s already-resolved answer for
+// nv.NodeID, resolved by the caller rather than here, so mapNode stays
+// pure with no context or store access of its own.
+func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs, fppConnectObs []observation.Observation, participation v1.NodeShowParticipation) v1.Node {
 	render := make([]v1.ObservationEntry, 0, len(renderObs))
 	for _, o := range renderObs {
 		render = append(render, mapObservationEntry(o, now))
@@ -432,10 +436,11 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 			LastWill:  mapEvidence(lastWillObservation(nv.NodeID, nv.LWT, nv.UpdatedAt), now),
 			Heartbeat: mapEvidence(heartbeatObservation(nv.NodeID, nv.Health, nv.UpdatedAt), now),
 		},
-		Declaration: mapNodeDeclaration(decl, latestRun),
-		Render:      render,
-		Audio:       audio,
-		FPPConnect:  fppConnect,
+		Declaration:       mapNodeDeclaration(decl, latestRun),
+		ShowParticipation: participation,
+		Render:            render,
+		Audio:             audio,
+		FPPConnect:        fppConnect,
 	}
 
 	if nv.Hello != nil {

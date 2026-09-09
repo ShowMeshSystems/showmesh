@@ -1648,8 +1648,8 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	}
 	checks = append(checks, h.nightCheckCatalogCurrent(ctx, now, payload.Show)...)
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
-	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
-	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))
+	checks = append(checks, nightCheckBrightnessCompositionUnverified("enterShow", payload.EnterShow.Cues))
+	checks = append(checks, nightCheckBrightnessCompositionUnverified("enterResting", payload.EnterResting.Cues))
 	// Track F seam F6: every configured interlock, disabled ones included,
 	// gets its own check regardless of which phase this preparation epoch
 	// is actually about to enter, per RESTING-MODE.md §13: "configured
