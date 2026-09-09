@@ -1265,7 +1265,7 @@ The store schema version, bumped by migrations in
 | v8 | shipped | Track E (asset store tables, ADR-028) |
 | v9 | shipped | Track C seam C3 (audio session desired state, `audio_sessions`) |
 | v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox filled by seam F4) |
-| v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
+| v11 | released, dead | was credential storage moving from the data directory into SQLite, reserved 2026-08-18. Stale by the time this was built: v32 had already shipped, so v11 sits at or below the stamped maximum and a migration numbered here can never run, for the identical reason v21/v22/v23 moved. The work ships as v33 instead |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
 | v13 | released | reserved 2026-08-19 for the `commands.requested_revision` rename and never built; that work runs as v22 |
 | v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
@@ -1285,7 +1285,8 @@ The store schema version, bumped by migrations in
 | v28 | shipped | widens both `assets_current` and `assets_identity` to key on `media_type` as well as show/sequence/target, so an FSEQ and an audio asset may both be current for one sequence at once instead of the second upload superseding the first, and identical bytes registered under two different media types are a new identity rather than a raw constraint violation (ADR-028 decision 1's amendment). A pure widening for both indexes: every pre-v28 row already holds exactly one media type per tuple, so no data fix runs |
 | v29 | shipped | adds `fpp_playlist_entry_observations.evidence_broken_at_millis`, a nullable marker recording a persisted sequence-regression discontinuity for one instance, read directly by `cueactivate.Decide` (owner ruling 2026-09-02, cue-deactivate-on-jump). NULL/absent leaves the row unaffected for every earlier row; nothing sets it retroactively |
 | v30 | shipped | SM-72: adds `config_objects.deleted_at`, a nullable tombstone marker for delete on the eight per-object configuration kinds (audio.node, show, show.surface, show.action, show.macro, show.cue, show.playlist, night.session). `config_revisions` is untouched: a delete never removes or rewrites a revision, only marks the owning object gone. A pure addition: every pre-v30 row's `deleted_at` is implicitly NULL, so every existing object reads back live, unchanged, with no data fix |
-| v31+ | unallocated | free |
+| v33 | reserved (built on this branch, PR pending) | a general-purpose `(kind, object_id, field) -> value` credentials table; the fpp.mqtt broker password moves out of its legacy data-directory file into it (owner ruling 2026-09-08, "credentials into SQLite"). Renumbered from the stale v11 reservation above |
+| v34+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

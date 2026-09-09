@@ -31,9 +31,8 @@ const fppMQTTReconcileInterval = 10 * time.Second
 // live password) on demand, caching against the revision number it came
 // from — mirrors resolumeInstanceSource.
 type fppMQTTConfigSource struct {
-	st      *store.Store
-	dataDir string
-	logger  *slog.Logger
+	st     *store.Store
+	logger *slog.Logger
 
 	mu       sync.Mutex
 	revision int64
@@ -47,8 +46,8 @@ type fppMQTTConfigSource struct {
 // authoritative the store holds no fpp.mqtt object, and an unseeded source
 // would manufacture an empty configuration and tear down the env-built
 // collector on the first reconcile tick.
-func newFPPMQTTConfigSource(st *store.Store, dataDir string, logger *slog.Logger, initialCfg config.FPPMQTTConfig, initialPassword string) *fppMQTTConfigSource {
-	return &fppMQTTConfigSource{st: st, dataDir: dataDir, logger: logger, cached: initialCfg, password: initialPassword}
+func newFPPMQTTConfigSource(st *store.Store, logger *slog.Logger, initialCfg config.FPPMQTTConfig, initialPassword string) *fppMQTTConfigSource {
+	return &fppMQTTConfigSource{st: st, logger: logger, cached: initialCfg, password: initialPassword}
 }
 
 // Current returns the active fpp.mqtt configuration and password. A
@@ -86,7 +85,7 @@ func (s *fppMQTTConfigSource) Current(ctx context.Context) (config.FPPMQTTConfig
 	// password rotation always bumps the revision number too (see
 	// api/fppmqttconfig.go's handlePutFPPMQTTConfig), so this is a
 	// sufficient invalidation signal for both halves at once.
-	password, _, err := config.ReadFPPMQTTPassword(s.dataDir)
+	password, _, err := s.st.GetCredential(ctx, config.FPPMQTTConfigKind, config.FPPMQTTConfigObjectID, config.FPPMQTTPasswordCredentialField)
 	if err != nil {
 		s.logWarn("failed to read the stored fpp.mqtt password; continuing with the last known value", err)
 		return s.cached, s.password

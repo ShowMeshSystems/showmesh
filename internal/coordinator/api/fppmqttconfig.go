@@ -63,8 +63,8 @@ func (h *handlers) currentFPPMQTTConfig(ctx context.Context) (config.FPPMQTTConf
 // handleGetFPPMQTTConfig serves GET /api/v1/config/fpp.mqtt: the active
 // revision, its decoded non-secret payload, and the password's LIVE
 // presence (read through [Dependencies.FPPMQTTSecret], never from the
-// revision's own stored marker, so this always answers the current state
-// of the secret file even in the rare window where the two could
+// revision's own stored marker, so this always answers the credentials
+// table's current state even in the rare window where the two could
 // disagree — see handlePutFPPMQTTConfig's own note on write ordering).
 // 404 when no revision has ever been activated, mirroring
 // handleGetFPPEndpointsConfig's "not configured yet" vs. "migration
@@ -287,16 +287,19 @@ func decodeFPPMQTTStringField(raw json.RawMessage, field, clearHint string) (str
 // and fail-closed-on-audit posture.
 //
 // The broker password is written to [Dependencies.FPPMQTTSecret] BEFORE
-// the config_revisions write, not inside the same SQL transaction (the
-// secret lives in a different storage system entirely — see
-// internal/coordinator/config/fppmqttsecret.go). If the secret write
-// fails, nothing below it runs and no revision is created, so a refused
-// write never leaves the store and the secret file disagreeing about
-// whether it happened. The narrower remaining risk — the secret write
-// succeeds and the SQL transaction fails afterward for an unrelated
-// reason — is the same class of cross-system risk this codebase already
-// accepts wherever a write spans two storage systems (see ADR-024
-// decision 11's own scope: "a coordinator-local state change").
+// the config_revisions write, as its own statement rather than inside the
+// same SQL transaction as the revision (see
+// internal/coordinator/store/credentials.go: both now live in the same
+// SQLite database, but this ordering predates that move and is kept
+// unchanged rather than combined into one transaction, to keep this write
+// path's shape identical to every other config PUT's). If the credential
+// write fails, nothing below it runs and no revision is created, so a
+// refused write never leaves the revision and the credential disagreeing
+// about whether it happened. The narrower remaining risk, that the
+// credential write succeeds and the SQL transaction fails afterward for an
+// unrelated reason, is the same class of risk this codebase already
+// accepts wherever a write spans two statements (see ADR-024 decision 11's
+// own scope: "a coordinator-local state change").
 func (h *handlers) handlePutFPPMQTTConfig(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
