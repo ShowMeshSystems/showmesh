@@ -336,6 +336,32 @@ describe('Drawer', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('closes only the topmost of two stacked drawers on Escape, leaving the outer one open', () => {
+    function StackedHarness() {
+      const [outerOpen, setOuterOpen] = useState(true)
+      const [innerOpen, setInnerOpen] = useState(true)
+      return (
+        <>
+          <Drawer open={outerOpen} onClose={() => setOuterOpen(false)} labelledBy="outer-heading">
+            <h2 id="outer-heading">Outer</h2>
+          </Drawer>
+          <Drawer open={innerOpen} onClose={() => setInnerOpen(false)} labelledBy="inner-heading" width="wide">
+            <h2 id="inner-heading">Inner</h2>
+          </Drawer>
+        </>
+      )
+    }
+
+    render(<StackedHarness />)
+    expect(screen.getAllByRole('dialog')).toHaveLength(2)
+
+    const innerDialog = screen.getByRole('dialog', { name: 'Inner' })
+    fireEvent.keyDown(innerDialog, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: 'Inner' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Outer' })).toBeInTheDocument()
+  })
+
   it('closes on a scrim click but not on a click inside the panel', () => {
     const { container } = render(<Harness />)
     fireEvent.click(screen.getByRole('button', { name: 'Inspect' }))
