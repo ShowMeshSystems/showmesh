@@ -735,6 +735,40 @@ type fppCommandResult struct {
 	ResolvedAt          *time.Time `json:"resolvedAt"`
 }
 
+// fppTransitionGainRequest is the body of
+// POST /api/v1/fpp/{instanceId}/brightness/transition-gain. RequestID is
+// minted by this program, once per invocation, for the same reason
+// [fppCommandRequest]'s IdempotencyKey is: the caller owns the key that
+// makes a retry safe, and a value minted per invocation can never turn two
+// deliberately separate operator writes into one silent no-op.
+type fppTransitionGainRequest struct {
+	TargetPercent int    `json:"targetPercent"`
+	FadeSeconds   int    `json:"fadeSeconds"`
+	RequestID     string `json:"requestId"`
+}
+
+// fppTransitionGainResponse is the body of a successful response from
+// POST /api/v1/fpp/{instanceId}/brightness/transition-gain.
+type fppTransitionGainResponse struct {
+	ServerTime     time.Time               `json:"serverTime"`
+	TransitionGain fppTransitionGainResult `json:"transitionGain"`
+}
+
+// fppTransitionGainResult mirrors v1.FPPTransitionGainResult field for
+// field - this program's own independent transcription of it, per this
+// file's own doc comment. Applied false is a success (an idempotent repeat
+// of a requestId already applied), never an error.
+type fppTransitionGainResult struct {
+	InstanceID      string `json:"instanceId"`
+	RequestID       string `json:"requestId"`
+	Applied         bool   `json:"applied"`
+	GainStart       int    `json:"gainStart"`
+	GainTarget      int    `json:"gainTarget"`
+	FadeSeconds     int    `json:"fadeSeconds"`
+	Ceiling         int    `json:"ceiling"`
+	EffectiveOutput int    `json:"effectiveOutput"`
+}
+
 // Track G seam G-5: identity administration. principalObject mirrors
 // v1.PrincipalObject field for field — this program's own independent
 // transcription, per this file's own doc comment.

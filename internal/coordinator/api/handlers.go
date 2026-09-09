@@ -106,6 +106,11 @@ type handlers struct {
 	// in production; only a test ever sets it.
 	nightGainWriter nightTransitionGainWriter
 
+	// fppGainWriter substitutes the operator transition-gain write - see
+	// [fppTransitionGainWriter] (fpptransitiongain.go). Nil in production;
+	// only a test ever sets it.
+	fppGainWriter fppTransitionGainWriter
+
 	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
 	// intent gate state. See [emergencyStopArmStore]'s own doc comment
 	// for why this is in-memory, unpersisted, and a single-process

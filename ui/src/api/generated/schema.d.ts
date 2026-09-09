@@ -207,6 +207,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fpp/{instanceId}/brightness/transition-gain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write one FPP host's brightness transition gain
+         * @description Behind `fpp:command`, the same scope dispatching an FPP command needs: this is an operator writing a live output value to one FPP host, the blast radius that scope already governs. Writes the brightness transition gain, a 0-100 multiplier that composes with FPP's own scheduled brightness ceiling as `effective output = round(ceiling * gain / 100)`. ShowMesh owns the gain and never the ceiling, so this write can never overwrite a limit FPP's own schedule set.
+         *     The `200` body is the applied state the FPP plugin returned, never a bare success: `gainStart`, `gainTarget`, `fadeSeconds`, `ceiling` and `effectiveOutput` are what the host is now doing. `applied: false` is part of that success, not an error - it is what a repeated `requestId` returns, the idempotency key working, with the gain unchanged and the current state reported.
+         *     An out-of-range `targetPercent` or `fadeSeconds` is refused with `400`, never clamped, so a mistyped value stays visible. An instance id that names no configured `fpp.endpoints` entry is `404`. A write that reaches a configured host but does not take is `502`, carrying the host's own refusal text verbatim.
+         */
+        post: operations["setFPPTransitionGain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/render/surfaces/{surfaceId}/apply": {
         parameters: {
             query?: never;
@@ -3242,6 +3267,39 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["ResolumeInstance"];
         };
+        /** @description The body of POST /fpp/{instanceId}/brightness/transition-gain (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2). Out of range is refused, never clamped. */
+        FPPTransitionGainRequest: {
+            /** @description The gain, a multiplier over FPP's own scheduled brightness ceiling - never the ceiling itself. Required; an explicit `null` is a `400`, distinct from omitting it, and `0` is a real value (blackout) rather than a missing one. */
+            targetPercent: number;
+            /** @description Fade duration; `0` applies immediately. Required, with the same absent/null/zero distinction `targetPercent` documents. */
+            fadeSeconds: number;
+            /** @description Caller-minted idempotency key. Optional: supply one and a retry of an unanswered request is safe, because a repeat of an id already applied changes nothing and comes back with `applied: false` and the gain as it stands. Omit it and the coordinator mints one, which makes the request a new fade rather than a retry of any earlier one; the minted value is echoed on the response. Present but empty is a `400`. */
+            requestId?: string;
+        };
+        /** @description The body of a successful (200) response from POST /fpp/{instanceId}/brightness/transition-gain. */
+        FPPTransitionGainResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            transitionGain: components["schemas"]["FPPTransitionGainResult"];
+        };
+        /** @description The applied state the FPP plugin returned, carried through unchanged so a caller has evidence of what the host is now doing rather than only "the request did not error". */
+        FPPTransitionGainResult: {
+            instanceId: string;
+            /** @description The idempotency key this write actually carried, whether the caller supplied it or the coordinator minted it. */
+            requestId: string;
+            /** @description `false` is a SUCCESS, not a failure: an idempotent repeat of a `requestId` already applied, with nothing changed and the fields below reporting the gain as it stands. A client that treats `false` as an error will retry a write that already took. */
+            applied: boolean;
+            /** @description The gain the fade now running started from. */
+            gainStart: number;
+            /** @description The gain the fade now running is heading to. */
+            gainTarget: number;
+            /** @description The fade duration the plugin is actually running. */
+            fadeSeconds: number;
+            /** @description FPP's own scheduled brightness ceiling, as the plugin sees it. */
+            ceiling: number;
+            /** @description `round(ceiling * gain / 100)`, the value actually reaching the channels. Carried because the gain alone does not say what the audience sees. */
+            effectiveOutput: number;
+        };
         /**
          * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) - a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies - the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape - required fields, enums, numeric bounds - as real JSON Schema, not as prose a generator cannot see.
          *     `idempotencyKey` is required on every variant (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. Its scoping rule (replay vs. `409` conflict) is identical on every variant - see any one variant's own `idempotencyKey` description below; the text is not repeated here a ninth time.
@@ -4665,7 +4723,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
             title: string;
             status: number;
             detail: string;
@@ -6890,6 +6948,59 @@ export interface operations {
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    setFPPTransitionGain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPTransitionGainRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPTransitionGainResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `fpp:command` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+            /** @description The request was valid and the instance is configured, but the write to the FPP host's plugin did not take. `type` is `https://showmesh.dev/problems/fpp-transition-gain-write-failed` and `detail` carries the host's own error text verbatim. */
+            502: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     dispatchRenderSurfaceApply: {
