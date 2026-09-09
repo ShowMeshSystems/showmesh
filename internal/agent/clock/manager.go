@@ -136,6 +136,23 @@ func (m *Manager) Poll(ctx context.Context) Status {
 	return t.Poll(ctx)
 }
 
+// Now reports this node's media clock, delegating to whatever [Provider]
+// is currently configured (every Provider is also a [MediaClock] by
+// construction). A Manager with no accepted configuration reports an
+// INVALID reading with a reason rather than a plausible-looking time: a
+// node with no clock provider has no media clock to read, and a caller
+// scheduling media against a fabricated one is exactly the failure this
+// returns a validity flag to prevent.
+func (m *Manager) Now(ctx context.Context) MediaTime {
+	m.mu.Lock()
+	p := m.provider
+	m.mu.Unlock()
+	if p == nil {
+		return MediaTime{Valid: false, Reason: "no node.clock configuration is active for this node"}
+	}
+	return p.Now(ctx)
+}
+
 // Close releases whatever provider this Manager currently holds.
 func (m *Manager) Close() error {
 	m.mu.Lock()

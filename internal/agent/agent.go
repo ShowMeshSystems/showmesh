@@ -401,6 +401,10 @@ func Run() int {
 	// before this seam existed.
 	clockMgr := clock.NewManager(time.Now, logger)
 	clockBind := newClockBinding(clockMgr)
+	// Seam I2: the audio session layer reads the same media clock, for a
+	// scheduled start's T0 and for its timeline. Read-only; the audio
+	// Manager never configures or steps it.
+	audioMgr.SetClockSource(clockMgr)
 
 	// audioRestoreRetryDone: this node's own bounded, backed-off retry of
 	// every deferred audio restore, re-probing the device on its own

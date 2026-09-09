@@ -27,6 +27,13 @@ type audioSessionSnapshotter interface {
 	// applyEngineRestoreStatus, which this report loop calls fresh on
 	// every tick, matching Snapshot's own live-not-cached rule.
 	NodeRestoreRetryStatus(now time.Time) (state audio.EngineRestoreState, attempts int, nextAttempt time.Duration, lastReason string)
+
+	// TimelineSnapshot is [audio.Manager.TimelineSnapshot]'s own
+	// signature: this node's node.audio.timeline.* evidence for whatever
+	// session is currently playing against a scheduled start instant,
+	// read live on every tick like everything else here. A node running
+	// nothing scheduled reports not scheduled with a reason.
+	TimelineSnapshot(ctx context.Context) audio.TimelineSnapshot
 }
 
 // ltcObserver is the read side of this node's LTC generation — fresh
@@ -119,6 +126,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			applyEngineAvailability(&payload, engine)
 			applyEngineGlitchCounts(&payload, engine)
 			applyEngineRestoreStatus(&payload, mgr, tickAt)
+			applyTimeline(ctx, &payload, mgr)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
 	}
@@ -413,4 +421,34 @@ func buildAudioPayload(d audio.Discovery, probedAt time.Time) mqttproto.AudioPay
 	}
 
 	return p
+}
+
+// applyTimeline writes mgr's current scheduled-playback timeline onto
+// payload's Timeline* fields, fresh on every call for the same reason
+// [applyEngineRestoreStatus] is: a session's error against its schedule
+// is the definition of a live fact. A nil mgr (no asset directory
+// configured on this node, matching this loop's other nil-safe optional
+// sources) leaves every field zero, which reads on the wire as this node
+// running nothing scheduled -- never as a session perfectly on time.
+func applyTimeline(ctx context.Context, payload *mqttproto.AudioPayload, mgr audioSessionSnapshotter) {
+	if mgr == nil {
+		return
+	}
+	t := mgr.TimelineSnapshot(ctx)
+	payload.TimelineReason = t.Reason
+	if !t.Scheduled {
+		return
+	}
+	payload.TimelineScheduled = true
+	payload.TimelineSessionID = string(t.SessionID)
+	payload.TimelineScheduledAtNs = t.ScheduledAtNs
+	payload.TimelineResyncs = t.Resyncs
+	payload.TimelineLastResyncReason = t.LastResyncReason
+	if !t.Measured {
+		return
+	}
+	payload.TimelineMeasured = true
+	payload.TimelineExpectedMs = t.ExpectedMs
+	payload.TimelineActualMs = t.ActualMs
+	payload.TimelineErrorMs = t.ErrorMs
 }

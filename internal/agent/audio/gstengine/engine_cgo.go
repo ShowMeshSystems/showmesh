@@ -836,6 +836,38 @@ func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
 	}, true
 }
 
+// PresentedElapsed reports the shared output pipeline's current running
+// time: clock time minus base time, where the pipeline clock is the one
+// the sink provides (this engine never calls UseClock, so GStreamer's
+// default selection takes the sink's own clock for a non-live pipeline).
+// That is the presented sample count over the nominal rate, read at the
+// output, and it is deliberately NOT any element's position query, which
+// a decoder well ahead of the speaker would answer from the wrong end of
+// the pipeline.
+//
+// UNVERIFIED HERE, AND IT BOUNDS WHAT THIS READING IS WORTH: a source
+// forcing clock selection before the sink has acquired its ring buffer
+// leaves the pipeline running on the system clock rather than the card,
+// which a separate lane is measuring and fixing. Until that lands, this
+// reports whatever clock the pipeline actually selected, which on such a
+// node is the system clock. It is still the output's own running time
+// and never the decode frontier; it is not yet confirmed to be the
+// card's.
+//
+// Reported unknown before the pipeline first reaches PLAYING, when it has
+// no running time at all, rather than as a zero that would read as "the
+// output has presented nothing".
+func (e *Engine) PresentedElapsed(_ context.Context) (time.Duration, bool, string) {
+	if ok, reason := e.Available(); !ok {
+		return 0, false, reason
+	}
+	rt := e.pipeline.GetCurrentRunningTime()
+	if rt == gst.ClockTimeNone {
+		return 0, false, "this node's output pipeline has no running time yet; it has not reached PLAYING"
+	}
+	return time.Duration(rt), true, ""
+}
+
 // branchForSource walks msg's originating object up through its parents,
 // returning the branch it belongs to, or nil when the error is not
 // attributable to any live branch (a fault in the shared output topology
