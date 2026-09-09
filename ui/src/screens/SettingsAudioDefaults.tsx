@@ -30,6 +30,8 @@ export function SettingsAudioDefaults() {
   const [duckFadeDurationMs, setDuckFadeDurationMs] = useState('')
   const [duckRestoreFadeDurationMs, setDuckRestoreFadeDurationMs] = useState('')
   const [driftIgnoreThresholdMs, setDriftIgnoreThresholdMs] = useState('')
+  const [scheduledStartDeliveryBoundMs, setScheduledStartDeliveryBoundMs] = useState('')
+  const [scheduledStartMarginMs, setScheduledStartMarginMs] = useState('')
   const [ltcFrameRate, setLtcFrameRate] = useState<(typeof LTC_FRAME_RATES)[number]>('30')
   const [ltcDefaultStartOffset, setLtcDefaultStartOffset] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -50,6 +52,8 @@ export function SettingsAudioDefaults() {
         setDuckFadeDurationMs(String(response.payload.duckFadeDurationMs))
         setDuckRestoreFadeDurationMs(String(response.payload.duckRestoreFadeDurationMs))
         setDriftIgnoreThresholdMs(String(response.payload.driftIgnoreThresholdMs))
+        setScheduledStartDeliveryBoundMs(String(response.payload.scheduledStartDeliveryBoundMs))
+        setScheduledStartMarginMs(String(response.payload.scheduledStartMarginMs))
         setLtcFrameRate(response.payload.ltcFrameRate)
         setLtcDefaultStartOffset(response.payload.ltcDefaultStartOffset)
         setDirty(false)
@@ -70,6 +74,8 @@ export function SettingsAudioDefaults() {
     setDuckFadeDurationMs(String(state.response.payload.duckFadeDurationMs))
     setDuckRestoreFadeDurationMs(String(state.response.payload.duckRestoreFadeDurationMs))
     setDriftIgnoreThresholdMs(String(state.response.payload.driftIgnoreThresholdMs))
+    setScheduledStartDeliveryBoundMs(String(state.response.payload.scheduledStartDeliveryBoundMs))
+    setScheduledStartMarginMs(String(state.response.payload.scheduledStartMarginMs))
     setLtcFrameRate(state.response.payload.ltcFrameRate)
     setLtcDefaultStartOffset(state.response.payload.ltcDefaultStartOffset)
     setDirty(false)
@@ -84,6 +90,8 @@ export function SettingsAudioDefaults() {
     const duckFadeMs = Number(duckFadeDurationMs)
     const duckRestoreFadeMs = Number(duckRestoreFadeDurationMs)
     const driftMs = Number(driftIgnoreThresholdMs)
+    const deliveryBoundMs = Number(scheduledStartDeliveryBoundMs)
+    const marginMs = Number(scheduledStartMarginMs)
     if (!Number.isFinite(fadeMs) || fadeMs < 0) {
       setSaveError('Default fade duration must be a non-negative number of milliseconds.')
       return
@@ -112,6 +120,14 @@ export function SettingsAudioDefaults() {
       setSaveError('LTC default start offset must be HH:MM:SS:FF.')
       return
     }
+    if (!Number.isInteger(deliveryBoundMs) || deliveryBoundMs < 0 || deliveryBoundMs > 60000) {
+      setSaveError('Scheduled start delivery bound must be a whole number of milliseconds between 0 and 60000.')
+      return
+    }
+    if (!Number.isInteger(marginMs) || marginMs < 0 || marginMs > 60000) {
+      setSaveError('Scheduled start margin must be a whole number of milliseconds between 0 and 60000.')
+      return
+    }
     setSaving(true)
     setSaveError(null)
     setStale(null)
@@ -129,6 +145,8 @@ export function SettingsAudioDefaults() {
           driftIgnoreThresholdMs: driftMs,
           ltcFrameRate,
           ltcDefaultStartOffset,
+          scheduledStartDeliveryBoundMs: deliveryBoundMs,
+          scheduledStartMarginMs: marginMs,
         }),
     })
       .then((outcome) => {
@@ -256,6 +274,42 @@ export function SettingsAudioDefaults() {
                     value={driftIgnoreThresholdMs}
                     onChange={(e) => {
                       setDriftIgnoreThresholdMs(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Scheduled start delivery bound (ms)"
+                help="Read by the coordinator, not by a node. How long a start command is assumed to take to reach the slowest node and finish its preroll. A guess, not a measurement."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    max={60000}
+                    value={scheduledStartDeliveryBoundMs}
+                    onChange={(e) => {
+                      setScheduledStartDeliveryBoundMs(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Scheduled start margin (ms)"
+                help="Read by the coordinator, not by a node. Slack held back beyond the delivery bound. A judgement, and it stays one after the bound is measured."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    max={60000}
+                    value={scheduledStartMarginMs}
+                    onChange={(e) => {
+                      setScheduledStartMarginMs(e.target.value)
                       setDirty(true)
                     }}
                   />

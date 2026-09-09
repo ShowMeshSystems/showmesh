@@ -51,6 +51,7 @@ function node(
     showParticipation,
     render: signals.map(evidence),
     audio: [],
+    clock: [],
     fppConnect: [],
   } as unknown as Node
 }

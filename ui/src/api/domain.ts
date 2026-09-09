@@ -150,6 +150,34 @@ export type ObservationsResponse = components['schemas']['ObservationsResponse']
 // output.unmute's own response shape, aliased for the identical reason
 // as RenderCommandResult above.
 export type AudioSessionCommandResult = components['schemas']['AudioSessionCommandResult']
+
+/**
+ * POST /audio/sessions/{sessionId}/aligned-start's response, with the one
+ * correction the generated types cannot make: `scheduledAtNs` and the other
+ * nanosecond fields are int64 values past `Number.MAX_SAFE_INTEGER`, and the
+ * API client parses them through `parseJsonPreservingBigInts`, so an oversized
+ * one arrives as an exact decimal STRING. OpenAPI has no integer wider than
+ * `number`, so the generated schema calls them `number`; this alias says what
+ * actually arrives, so a caller renders the digits instead of rounding them.
+ */
+export type AlignedAudioStartResult = Omit<
+  components['schemas']['AlignedAudioStartResponse'],
+  'selection'
+> & {
+  selection:
+    | (Omit<
+        components['schemas']['AlignedAudioStartSelection'],
+        'scheduledAtNs' | 'leadNs' | 'prerollNs' | 'deliveryBoundNs' | 'marginNs' | 'clockErrorBoundNs'
+      > & {
+        scheduledAtNs: string | number
+        leadNs: string | number
+        prerollNs: string | number
+        deliveryBoundNs: string | number
+        marginNs: string | number
+        clockErrorBoundNs: string | number
+      })
+    | null
+}
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
 // declaration. NodeDeclaration is also reachable as Node['declaration'],
 // aliased here separately for call sites (DomainBadges.tsx,

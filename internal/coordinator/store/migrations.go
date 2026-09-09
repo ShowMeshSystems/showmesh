@@ -130,6 +130,15 @@ var migrations = []migration{
 	// pure addition, like schemaV7/schemaV25/schemaV28: no existing table
 	// is touched.
 	{version: 33, sql: schemaV33},
+	// v34: backfills audio.settings' two scheduled-start keys into every
+	// stored revision written before they were required
+	// (migrateV34AudioSettingsBackfillScheduledStartFields' own doc
+	// comment, migration_v34.go). Same defect class as v20: without it an
+	// upgraded coordinator cannot decode its own stored revision and stops
+	// pushing audio configuration to every node. Numbered 34, not 33,
+	// because 33 shipped on main as schemaV33 and a repeated number never
+	// runs against a store already stamped at it.
+	{version: 34, fn: migrateV34AudioSettingsBackfillScheduledStartFields},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

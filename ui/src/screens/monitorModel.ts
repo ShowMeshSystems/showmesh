@@ -228,6 +228,14 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
           ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'
           : null,
     },
+    {
+      name: 'Clock',
+      rows: observationRows(node.clock, 'clock').map((row) => ({ ...row, label: row.label.replace(/^node\.clock\.ptp\./, '') })),
+      absent:
+        node.clock.length === 0
+          ? 'This node has never published a clock report. That is not the same as a clock that is failing.'
+          : null,
+    },
   ]
 }
 
@@ -424,6 +432,7 @@ export function signalRows(model: Model, nowIso: string | null): SignalRow[] {
     const to = `/monitor/fleet/node/${node.nodeId}`
     rows.push(...evidenceRows(node.render, `node:${node.nodeId}:render`, resource, to, 'node', nowIso))
     rows.push(...evidenceRows(node.audio, `node:${node.nodeId}:audio`, resource, to, 'node', nowIso))
+    rows.push(...evidenceRows(node.clock, `node:${node.nodeId}:clock`, resource, to, 'node', nowIso))
     rows.push(...evidenceRows(node.fppConnect, `node:${node.nodeId}:fppConnect`, resource, to, 'node', nowIso))
   }
   for (const instance of model.fpp) {

@@ -252,7 +252,7 @@ func TestFPPConnectConfigureRefusesInvalidSettings(t *testing.T) {
 
 func TestFPPConnectOperationsRegisteredInAllowlist(t *testing.T) {
 	state := newFPPConnectState()
-	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, state, discardLogger())
+	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, state, discardLogger())
 	if _, ok := ops["fppconnect.configure"]; !ok {
 		t.Fatal(`newOperationRegistry() does not contain "fppconnect.configure"`)
 	}

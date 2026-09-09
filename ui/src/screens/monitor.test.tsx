@@ -67,6 +67,7 @@ function node(
     showParticipation,
     render,
     audio,
+    clock: [],
     fppConnect: [],
   } as unknown as Node
 }

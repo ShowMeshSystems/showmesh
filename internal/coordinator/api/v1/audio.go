@@ -27,6 +27,11 @@ type ConfigAudioSettingsPayload struct {
 	DuckRestoreFadeDurationMs int    `json:"duckRestoreFadeDurationMs"`
 	LTCFrameRate              string `json:"ltcFrameRate"`
 	LTCDefaultStartOffset     string `json:"ltcDefaultStartOffset"`
+	// The only two fields here the COORDINATOR reads rather than a node:
+	// the two terms it adds to a scheduled start's T0. Both are guesses,
+	// not measurements; see config.AudioSettingsPayload.
+	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
+	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 }
 
 // AudioSettingsConfigResponse is the body of GET and PUT

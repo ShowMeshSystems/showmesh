@@ -239,8 +239,78 @@ func decodeAudioSessionCommandRequestBody(body io.Reader) (v1.AudioSessionComman
 		if err := json.Unmarshal(raw, &req.Params); err != nil {
 			return v1.AudioSessionCommandRequest{}, fmt.Errorf(`"params" must be a JSON object: %w`, err)
 		}
+		preserveExactScheduledAtNs(req.Params, raw)
 	}
 	return req, nil
+}
+
+// preserveExactScheduledAtNs replaces params[[pkgaudio.ParamScheduledAtNs]]
+// with the exact json.Number decoded from raw. encoding/json decodes a
+// bare number into a map[string]any as a float64, and a media-clock
+// instant in nanoseconds is around 1.79e18 -- past float64's exact
+// integer range -- so without this the coordinator rounds the instant on
+// the way IN, before [mqttproto.DecodeCmdPayload]'s own exact-integer
+// path ever sees it. A json.Number marshals back out as its own literal
+// digits, so the value the operator sent is the value the node reads.
+//
+// Only this one param is treated this way; every other param keeps its
+// float64 decode, matching mqttproto's own exactIntegerParams list rather
+// than switching this endpoint wholesale to json.Number and changing the
+// type every existing param reader asserts on.
+func preserveExactScheduledAtNs(params map[string]any, raw json.RawMessage) {
+	if _, present := params[pkgaudio.ParamScheduledAtNs]; !present {
+		return
+	}
+	var exact map[string]json.Number
+	if err := json.Unmarshal(raw, &exact); err != nil {
+		// Some other param is not a number. The value stays as
+		// encoding/json decoded it and validateScheduledAtNsParam
+		// reports it, rather than this helper deciding a type error.
+		return
+	}
+	if n, ok := exact[pkgaudio.ParamScheduledAtNs]; ok {
+		params[pkgaudio.ParamScheduledAtNs] = n
+	}
+}
+
+// scheduledAtNsPattern is a JSON integer with no fraction and no
+// exponent. A start instant is a count of nanoseconds, so "1.5e18" is not
+// a less precise spelling of one, it is a caller who has already lost the
+// bottom of the value.
+var scheduledAtNsPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
+
+// validateScheduledAtNsParam refuses a malformed or misplaced
+// [pkgaudio.ParamScheduledAtNs]. It is accepted only on
+// audio.session.start: the name means "start playing at this instant",
+// and silently ignoring it on a pause or a resume would let an operator
+// believe they had scheduled something.
+//
+// This is deliberately stricter than the node, matching the posture
+// api/openapi.yaml's params schemas already state.
+func validateScheduledAtNsParam(action string, params map[string]any) *v1.Problem {
+	raw, present := params[pkgaudio.ParamScheduledAtNs]
+	if !present {
+		return nil
+	}
+	if action != "audio.session.start" {
+		p := invalidParameterProblem(fmt.Sprintf(
+			"%s schedules a start instant and is accepted only on audio.session.start, not on %s",
+			pkgaudio.ParamScheduledAtNs, action))
+		return &p
+	}
+	n, ok := raw.(json.Number)
+	if !ok || !scheduledAtNsPattern.MatchString(n.String()) {
+		p := invalidParameterProblem(fmt.Sprintf(
+			"%s must be a non-negative JSON integer with no fraction or exponent: it is a reading of the target node's media clock in nanoseconds, not a duration and not wall time",
+			pkgaudio.ParamScheduledAtNs))
+		return &p
+	}
+	if _, err := n.Int64(); err != nil {
+		p := invalidParameterProblem(fmt.Sprintf(
+			"%s does not fit in an int64: %v", pkgaudio.ParamScheduledAtNs, err))
+		return &p
+	}
+	return nil
 }
 
 func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Request, action string) {
@@ -280,6 +350,10 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 			writeProblem(w, h.logger, now, *problem)
 			return
 		}
+	}
+	if problem := validateScheduledAtNsParam(action, params); problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
 	}
 	params["sessionId"] = sessionID
 
@@ -343,6 +417,18 @@ type AudioDispatchInput struct {
 	IssuerForm         identity.CredentialForm
 	IssuerCredentialID string
 	ClientAddr         string
+
+	// OnEvidence, when set, receives the node's own result evidence map
+	// exactly as it decoded, before this dispatch reduces it to an
+	// outcome/reason pair. It exists for audio.session.prepare's
+	// media-clock readiness fields (pkg/audio's Result* constants),
+	// which an aligned start needs and which the outcome/reason pair
+	// necessarily discards. Never called when no result arrived.
+	//
+	// The map's numbers are NOT uniformly float64: mqttproto decodes the
+	// nanosecond-scale fields as json.Number so they are not rounded, so
+	// a reader must handle both (see alignedstart.go's own accessors).
+	OnEvidence func(map[string]any)
 }
 
 // executeAudioSessionDispatch records the command and its ADR-024
@@ -535,6 +621,12 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 	if err != nil {
 		markDispatched("dispatched", "collection_failed", "result payload did not decode", "{}")
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("decode result payload: %w", err)
+	}
+
+	if in.OnEvidence != nil && res.Evidence != nil {
+		if v, ok := res.Evidence.Value.(map[string]any); ok {
+			in.OnEvidence(v)
+		}
 	}
 
 	outcome, reason := mapResultOutcome(res)

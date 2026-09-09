@@ -398,7 +398,9 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // collection on [v1.Node].
 //
 // audioObs is [NodeAudioLister.NodeAudioObservations]'s identical
-// pass-through, one dependency over.
+// pass-through, one dependency over. clockObs is [NodeClockLister.
+// NodeClockObservations]'s identical pass-through, Track I seam I1's
+// addition.
 //
 // fppConnectObs is [fppconnectpush.StatusStore.NodeFPPConnectObservations]'s
 // identical pass-through, one push surface over: the two
@@ -411,7 +413,7 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // participation is [nodeShowParticipation]'s already-resolved answer for
 // nv.NodeID, resolved by the caller rather than here, so mapNode stays
 // pure with no context or store access of its own.
-func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs, fppConnectObs []observation.Observation, participation v1.NodeShowParticipation) v1.Node {
+func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs, clockObs, fppConnectObs []observation.Observation, participation v1.NodeShowParticipation) v1.Node {
 	render := make([]v1.ObservationEntry, 0, len(renderObs))
 	for _, o := range renderObs {
 		render = append(render, mapObservationEntry(o, now))
@@ -419,6 +421,10 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 	audio := make([]v1.ObservationEntry, 0, len(audioObs))
 	for _, o := range audioObs {
 		audio = append(audio, mapObservationEntry(o, now))
+	}
+	clock := make([]v1.ObservationEntry, 0, len(clockObs))
+	for _, o := range clockObs {
+		clock = append(clock, mapObservationEntry(o, now))
 	}
 	fppConnect := make([]v1.ObservationEntry, 0, len(fppConnectObs))
 	for _, o := range fppConnectObs {
@@ -440,6 +446,7 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 		ShowParticipation: participation,
 		Render:            render,
 		Audio:             audio,
+		Clock:             clock,
 		FPPConnect:        fppConnect,
 	}
 

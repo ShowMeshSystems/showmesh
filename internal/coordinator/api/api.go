@@ -59,6 +59,11 @@ type Dependencies struct {
 	// identical no-op default posture.
 	Audio NodeAudioLister
 
+	// Clock is Track I seam I1's dependency — see [NodeClockLister]. A
+	// nil field is replaced by [noNodeClockLister], matching Audio's
+	// identical no-op default posture.
+	Clock NodeClockLister
+
 	// FPPConnectStatus: this SAME *fppconnectpush.StatusStore instance
 	// is both written to (by
 	// pushFPPConnectToAllNodes/pushFPPConnectToNode, passed straight into
@@ -631,6 +636,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Audio == nil {
 		d.Audio = noNodeAudioLister{}
 	}
+	if d.Clock == nil {
+		d.Clock = noNodeClockLister{}
+	}
 	if d.RenderPublisher == nil {
 		d.RenderPublisher = noRenderPublisher{}
 	}
@@ -999,6 +1007,12 @@ func (noNodeRenderLister) NodeRenderObservations(string) []observation.Observati
 type noNodeAudioLister struct{}
 
 func (noNodeAudioLister) NodeAudioObservations(string) []observation.Observation { return nil }
+
+// noNodeClockLister is [Dependencies.Clock]'s nil-safe default, matching
+// [noNodeAudioLister]'s identical posture one dependency over.
+type noNodeClockLister struct{}
+
+func (noNodeClockLister) NodeClockObservations(string) []observation.Observation { return nil }
 
 type noFPPLister struct{}
 
@@ -1676,6 +1690,7 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/apply", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionApply))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/prepare", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPrepare))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/start", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionStart))
+	mux.HandleFunc("POST /api/v1/audio/sessions/{sessionId}/aligned-start", h.writeGuard(&scopeAudioCommand, h.handleAlignedAudioStart))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/pause", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionPause))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/resume", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionResume))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/seek", h.writeGuard(&scopeAudioCommand, h.handleAudioSessionSeek))
@@ -2204,6 +2219,16 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/fppconnect.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPConnectSettingsConfig))
 	mux.HandleFunc("PUT /api/v1/config/fppconnect.settings", h.writeGuard(&scopeConfigWrite, h.handlePutFPPConnectSettingsConfig))
 	mux.HandleFunc("GET /api/v1/config/fppconnect.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPConnectSettingsConfigRevisions))
+
+	// GET/PUT /api/v1/config/node.clock/{id} (Track I seam I1, ADR-039): a
+	// collection keyed by node id, mirroring audio.node's identical
+	// four-route shape (nodeclock.go) and its config:write-only posture —
+	// see config.NodeClockConfigKind's own doc comment for why this is a
+	// separate kind from audio.node.
+	mux.HandleFunc("GET /api/v1/config/node.clock", h.requireScope(identity.ScopeConfigWrite, h.handleListNodeClocks))
+	mux.HandleFunc("GET /api/v1/config/node.clock/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetNodeClock))
+	mux.HandleFunc("PUT /api/v1/config/node.clock/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutNodeClock))
+	mux.HandleFunc("GET /api/v1/config/node.clock/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetNodeClockRevisions))
 
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"

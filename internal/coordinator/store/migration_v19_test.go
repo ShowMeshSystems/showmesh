@@ -72,10 +72,10 @@ func TestMigrateV19KeepsStoredRevisionsAtTheSameLevel(t *testing.T) {
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1,
 		`{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,`+
-			`"defaultMaxBackgroundGain":0.6,"duckTargetGain":0.25,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`)
+			`"defaultMaxBackgroundGain":0.6,"duckTargetGain":0.25,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`)
 	seedAudioSettingsRevision(t, db, 2,
 		`{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,`+
-			`"defaultMaxBackgroundGain":1,"duckTargetGain":0,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`)
+			`"defaultMaxBackgroundGain":1,"duckTargetGain":0,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`)
 
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -129,7 +129,7 @@ func TestMigrateV19ClampsTheOldCeilingBoundIntoRange(t *testing.T) {
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1,
 		`{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,`+
-			`"defaultMaxBackgroundGain":4,"duckTargetGain":0.25,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`)
+			`"defaultMaxBackgroundGain":4,"duckTargetGain":0.25,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`)
 
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -147,7 +147,7 @@ func TestMigrateV19ClampsTheOldCeilingBoundIntoRange(t *testing.T) {
 func TestMigrateV19LeavesAlreadyMigratedRevisionsAlone(t *testing.T) {
 	const already = `{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,` +
 		`"defaultMaxBackgroundGainDb":-4.44,"duckTargetGainDb":-12.04,"duckFadeDurationMs":200,` +
-		`"duckRestoreFadeDurationMs":800,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
+		`"duckRestoreFadeDurationMs":800,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`
 
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1, already)

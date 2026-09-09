@@ -101,6 +101,7 @@ export type {
   // GET /observations, the flat evidence list.
   ObservationsResponse,
   // The first audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
+  AlignedAudioStartResult,
   AudioSessionCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
   // seven-action vocabulary.
@@ -333,6 +334,7 @@ export {
   unmuteAudioSessionOutput,
   prepareAudioSession,
   startAudioSession,
+  alignedStartAudioSession,
   advanceAudioSession,
   clearAudioSession,
   seekAudioSession,

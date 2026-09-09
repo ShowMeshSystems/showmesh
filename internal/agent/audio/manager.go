@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -76,6 +77,23 @@ type Manager struct {
 	// zero value already reads as EngineRestoreIdle.
 	nodeRestoreRetry nodeRestoreRetryStatus
 
+	// clockMu and clockSource back [Manager.SetClockSource]: this node's
+	// media clock, wired once at agent startup and read by a scheduled
+	// session's timeline. Its own mutex for settingsMu's reason: a clock
+	// read must never contend with session dispatch. nil on a node with
+	// no clock wired at all, which reports no timeline rather than a
+	// fabricated one.
+	clockMu     sync.RWMutex
+	clockSource ClockSource
+
+	// engineEpoch identifies the current engine binding. Incremented by
+	// [Manager.RebindEngine], the single path an audio.node rebind, a
+	// device change, and a sample-rate rebuild all take, so a scheduled
+	// timeline can tell a device change from a coincidence without
+	// inferring it from the numbers. Atomic rather than under m.mu
+	// because a timeline reads it holding a SESSION's lock.
+	engineEpoch atomic.Uint64
+
 	// rebindMu makes invalidate-Set-retry one atomic unit across
 	// concurrent RebindEngine calls. Two audio.node.configure commands
 	// delivered back to back produce genuinely concurrent calls (MQTT
@@ -126,6 +144,9 @@ func (m *Manager) RebindEngine(ctx context.Context, engine *SwitchableEngine, ne
 	m.rebindMu.Lock()
 	defer m.rebindMu.Unlock()
 	m.invalidateActiveSessions(reason)
+	// Bumped before the swap, so no evaluation can read the new engine's
+	// sink clock while still believing it is anchored to the old one.
+	m.engineEpoch.Add(1)
 	prev := engine.Set(next)
 	// A nil next detaches the node (rebuild closes the outgoing engine
 	// before it probes the device); there is nothing to retry a deferred
@@ -341,6 +362,12 @@ func (m *Manager) Apply(ctx context.Context, id pkgaudio.SessionID, invocation p
 // Prepare gates readiness — a missing, changed, or undecodable asset
 // fails here rather than at Start — and loads the current item without
 // starting it.
+//
+// It is also where a scheduled start's own budget comes from: RES-019
+// section 6's coordinator picks T0 from the node ready times it is
+// given, so how long this call took to open, decode and preroll the item
+// is reported alongside readiness rather than left for the coordinator
+// to guess. See [Manager.PrerollLatency].
 func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -367,14 +394,35 @@ func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation
 		}
 		s.state = pkgaudio.StateReady
 		s.timingKnown = true
+		s.prerollLatency, s.prerollKnown = m.now().Sub(dispatchedAt), true
 		return m.gateAvailability(confirmLocked(pkgaudio.StateReady, pkgaudio.OutcomePosition, obs, dispatchedAt))
 	})
 	return res.outcome
 }
 
 // Start prepares (if not already prepared) and starts the current item
-// from its bookmark position, or 0 with no bookmark.
+// from its bookmark position, or 0 with no bookmark, on arrival.
 func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
+	return m.start(ctx, id, invocation, revision, nil)
+}
+
+// StartAt is [Manager.Start] against a media-clock start instant
+// (pkg/audio.ParamScheduledAtNs): atNs is a reading of THIS node's media
+// clock, and the first sample is presented at it rather than on arrival.
+//
+// A T0 this node's media clock has already passed is REFUSED with
+// [pkgaudio.ReasonScheduledStartInPast]. It is not clamped to now and it
+// does not start late: a node that starts late is audible, and a node
+// that refused is legible.
+//
+// A node whose clock provider is not locked ignores atNs entirely,
+// starts on arrival exactly as [Manager.Start] does, and says so in the
+// outcome's own reason rather than silently discarding the schedule.
+func (m *Manager) StartAt(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64) pkgaudio.OutcomeResult {
+	return m.start(ctx, id, invocation, revision, &atNs)
+}
+
+func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
@@ -427,6 +475,15 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 			s.bookmark = nil
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
 		}
+		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, scheduledAtNs)
+		if refusal != nil {
+			return *refusal
+		}
+		if sched != nil {
+			if err := sched.waitUntilT0(ctx); err != nil {
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled start instant: " + err.Error()}
+			}
+		}
 		dispatchedAt := m.now()
 		// This call can still fail for a real engine reason
 		// (ClassifyFault below covers those), but never with
@@ -451,7 +508,12 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		s.bookmark = nil
 		s.lastObservedAt = obs.ObservedAt
 		m.startLTCLocked(ctx, s, position)
-		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
+		m.anchorTimelineLocked(ctx, s, sched, position)
+		out := m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
+		if scheduleNote != "" && out.Reason == "" {
+			out.Reason = scheduleNote
+		}
+		return out
 	})
 
 	// duck/interrupt resolution needs to lock OTHER sessions, so it must
@@ -650,6 +712,7 @@ func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation p
 		if !s.handleLoaded {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no active playback to pause"}
 		}
+		s.timeline = nil
 		s.timingKnown = false
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Pause(ctx, s.handle)
@@ -764,6 +827,11 @@ func (m *Manager) Seek(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		if !s.handleLoaded {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no active playback to seek"}
 		}
+		// A commanded seek supersedes the schedule: the operator has
+		// moved the position deliberately, and a timeline that kept
+		// measuring against the old T0 would report that as error and
+		// try to seek it back.
+		s.timeline = nil
 		s.timingKnown = false
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Seek(ctx, s.handle, position)

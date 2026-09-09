@@ -16,7 +16,7 @@ import (
 func TestAudioNodeSilenceIsAllowlisted(t *testing.T) {
 	dir := t.TempDir()
 	mgr := audio.NewManager(audio.NewFakeEngine(time.Now), audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
-	ops := newOperationRegistry(testNodeID, dir, "", nil, mgr, nil, nil, nil, discardLogger())
+	ops := newOperationRegistry(testNodeID, dir, "", nil, mgr, nil, nil, nil, nil, discardLogger())
 	if _, ok := ops["audio.node.silence"]; !ok {
 		t.Fatal(`newOperationRegistry() does not contain "audio.node.silence" when an audio manager is wired`)
 	}
@@ -26,7 +26,7 @@ func TestAudioNodeSilenceIsAllowlisted(t *testing.T) {
 // manager configured never wires "audio.node.silence" either, matching
 // audioSessionOperations' identical nil-disables convention.
 func TestAudioNodeSilenceNotWiredWithoutManager(t *testing.T) {
-	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, discardLogger())
+	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, discardLogger())
 	if _, ok := ops["audio.node.silence"]; ok {
 		t.Fatal(`newOperationRegistry() contains "audio.node.silence" with a nil audio manager`)
 	}

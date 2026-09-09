@@ -488,7 +488,7 @@ func (h *Hub) render(ctx context.Context) {
 			present[key] = struct{}{}
 			render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
 			participation := nodeShowParticipation(ctx, h.deps.AssetManifests, active, activeErr, nv.NodeID)
-			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation)
+			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.Clock.NodeClockObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID), participation)
 			if h.updateRendered(key, node) {
 				n := node
 				pending = append(pending, pendingFrame{event: "node.changed", serverTime: formatTime(now), node: &n})

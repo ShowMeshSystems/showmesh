@@ -113,6 +113,7 @@ function node(overrides: Partial<Node> = {}): Node {
     declaration: { state: 'declared' },
     render: [],
     audio: [],
+    clock: [],
     fppConnect: [],
     ...overrides,
   } as unknown as Node

@@ -32,6 +32,7 @@ function node(nodeId: string, render: Node['render'] = []): Node {
     declaration: {},
     render,
     audio: [],
+    clock: [],
     fppConnect: [],
   } as unknown as Node
 }

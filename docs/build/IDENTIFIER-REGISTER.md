@@ -953,6 +953,28 @@ report signal only.
 |---|---|---|
 | `node.audio.silence` | shipped | SM-494 |
 
+**Six node-level `node.audio.timeline.*` signals, owner-minted for Track
+I seam I2, 2026-09-08.** RES-019 section 10's timeline namespace, spelled
+by the owner and closed: a seventh name needs another ruling. `scheduled_at`
+is the `T0` the running session was given, on the reporting node's media
+clock, in nanoseconds as an `int64` (past `Number.MAX_SAFE_INTEGER`, so
+every decoder on the path preserves the literal rather than rounding it);
+`expected_ms` is `media_now` minus `T0`; `actual_ms` is the presented
+sample count over the nominal rate, read from the sink clock and never
+from the decode frontier; `error_ms` is expected minus actual; `resyncs`
+counts discontinuity seeks performed; `last_resync_reason` names why the
+most recent one fired. A node with no locked clock provider keeps
+start-on-arrival and reports all six as `not_collected`.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.timeline.scheduled_at` | reserved | Track I seam I2 |
+| `node.audio.timeline.expected_ms` | reserved | Track I seam I2 |
+| `node.audio.timeline.actual_ms` | reserved | Track I seam I2 |
+| `node.audio.timeline.error_ms` | reserved | Track I seam I2 |
+| `node.audio.timeline.resyncs` | reserved | Track I seam I2 |
+| `node.audio.timeline.last_resync_reason` | reserved | Track I seam I2 |
+
 **Lane 18a signal reservations, 2026-08-28.** Reserved by the lane before
 its builders start, so that two branches cannot mint two spellings for the
 same fact. A builder ships the rows its chosen shape needs and leaves the
@@ -1288,7 +1310,8 @@ The store schema version, bumped by migrations in
 | v31 | shipped | rewrites every stored timestamp from schemaV1's original trimmed `time.RFC3339Nano` text to `timeLayout`'s fixed nine-digit-fraction format (`migrateV31FixedWidthTimestamps`, `migration_v31.go`), so a plain string `ORDER BY` on any of this package's timestamp columns sorts in true chronological order rather than lexically |
 | v32 | shipped | adds `fpp_playlist_entry_observations.playlist_loop`, FPP's own `mainPlaylist` pass counter exactly as the plugin reported it, NULL when it reported none (`migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn`, `migration_v32.go`). Ingestion compares it to see a playlist loop back into an entry it already visited, which is the only signal that does so on FPP 10 |
 | v33 | shipped | a general-purpose `(kind, object_id, field) -> value` credentials table; the fpp.mqtt broker password moves out of its legacy data-directory file into it (owner ruling 2026-09-08, "credentials into SQLite"). Renumbered from the stale v11 reservation above |
-| v34+ | unallocated | free |
+| v34 | shipped | every stored `audio.settings` revision is backfilled with `scheduledStartDeliveryBoundMs`/`scheduledStartMarginMs` when either is missing, using each field's own stated default, so a revision written before the two scheduled-start keys joined the required set still decodes and can be pushed (`migrateV34AudioSettingsBackfillScheduledStartFields`, `migration_v34.go`). Same defect class as v20 and v24. Renumbered from v33 when `dev/clock-sync` took `main`: v33 had already shipped as the credentials table, and a number at or below the stamped maximum can never run |
+| v35+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

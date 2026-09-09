@@ -72,6 +72,7 @@ import { SYSTEM_CLOCK, type Clock, type TimerHandle } from './clock'
 import {
   asEventSeq,
   initialModel,
+  type AlignedAudioStartResult,
   type AudioSessionCommandResult,
   type ConnectionState,
   type CurrentRunsResponse,
@@ -178,10 +179,12 @@ type SchemaAudioSessionParams =
   | components['schemas']['AudioSessionSeekParams']
   | components['schemas']['AudioSessionGainParams']
   | components['schemas']['AudioSessionGainFadeParams']
+  | components['schemas']['AudioSessionStartParams']
   | components['schemas']['AudioSessionNoParamsRequest']['params']
 // GET /observations, the flat evidence list an operator uses to
 // discover a real audio session id (resourceKind=audio_session) and its
 // desired_revision, since the API lists no sessions any other way.
+type SchemaAlignedAudioStartResponse = components['schemas']['AlignedAudioStartResponse']
 type SchemaObservationsResponse = components['schemas']['ObservationsResponse']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
@@ -1527,9 +1530,71 @@ export class ApiStore {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'prepare', revision)
   }
 
-  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command. */
-  async startAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
-    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
+  /**
+   * `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command.
+   *
+   * `scheduledAtNs`, when given, is the instant the session presents media
+   * sample zero, read on the TARGET NODE's own media clock, in nanoseconds
+   * (api/openapi.yaml: AudioSessionStartParams). Omitted, this is the
+   * ordinary start-on-arrival.
+   *
+   * It is a `bigint`, not a `number`, and that is not a stylistic choice:
+   * nanoseconds since an epoch are around 1.79e18 and `Number.MAX_SAFE_INTEGER`
+   * is 9.007e15, so a `number` here would be a rounded instant, off by up to
+   * hundreds of nanoseconds, before it ever left the browser. It reaches the
+   * wire as exact digits through `stringifyJsonPreservingBigInts`, the same
+   * path `revision` already takes.
+   */
+  async startAudioSession(
+    nodeId: string,
+    sessionId: string,
+    revision: bigint,
+    scheduledAtNs?: bigint,
+  ): Promise<AudioSessionCommandResult> {
+    if (scheduledAtNs === undefined) {
+      return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
+    }
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision, {
+      scheduledAtNs,
+    } as unknown as Record<string, unknown>)
+  }
+
+  /**
+   * `POST /audio/sessions/{sessionId}/aligned-start`. Requires audio:command.
+   *
+   * Prepares every node in `nodeIds`, then starts them all at ONE instant on
+   * the shared media clock, which the coordinator picks from the node holding
+   * the program plus LTC role.
+   *
+   * `response.aligned` false is NOT a failure and NOT an aligned start: no
+   * usable clock reading existed, every node started on arrival exactly as
+   * before, and `unalignedReason` says why. A caller must render that
+   * distinction rather than collapsing it into success.
+   *
+   * `selection.scheduledAtNs` is an int64 past `Number.MAX_SAFE_INTEGER`. The
+   * API client parses responses through `parseJsonPreservingBigInts`, so it
+   * arrives as an exact decimal STRING rather than a rounded number; the
+   * generated schema types it `number` because OpenAPI has no wider integer,
+   * which is why this method's own return type says `string | number`.
+   */
+  async alignedStartAudioSession(
+    sessionId: string,
+    revision: bigint,
+    nodeIds: readonly string[],
+  ): Promise<AlignedAudioStartResult> {
+    const controller = this.beginSideCall()
+    try {
+      const body = { revision, idempotencyKey: randomUUIDv4(), nodeIds: [...nodeIds] }
+      const resp = await this.client.postJson<SchemaAlignedAudioStartResponse>(
+        `/audio/sessions/${encodeURIComponent(sessionId)}/aligned-start`,
+        body,
+        controller.signal,
+        AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
+      )
+      return resp as unknown as AlignedAudioStartResult
+    } finally {
+      this.endSideCall(controller)
+    }
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/advance`. Requires audio:command. */

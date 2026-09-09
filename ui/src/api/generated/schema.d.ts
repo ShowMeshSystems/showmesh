@@ -390,9 +390,29 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.start to a node's playback session
-         * @description Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome. This is the one session endpoint that accepts an operation-specific param: optional `params.scheduledAtNs` starts the session at a named instant on the TARGET NODE's own media clock instead of on arrival. See AudioSessionStartParams. Its two failure modes are answered at DIFFERENT layers and a caller must not conflate them. A MALFORMED instant - not an integer, negative, carrying a fraction or an exponent, or too large for an int64 - is refused by this coordinator as `400` before anything is dispatched, and no command reaches the node. A well-formed instant the node's own media clock has ALREADY PASSED is not a `400`: the command is dispatched, the node refuses it, and this endpoint answers `200` with `command.outcome` `"refused"` and `command.reason` `"scheduled_start_in_past"`. The node does not start late and does not clamp to now. Sending `scheduledAtNs` to any other session endpoint is also a `400`, since the name means "start playing at this instant" and silently ignoring it elsewhere would let a caller believe it had scheduled something.
          */
         post: operations["dispatchAudioSessionStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audio/sessions/{sessionId}/aligned-start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start one session on several nodes at ONE instant on the shared media clock
+         * @description Behind `audio:command`. RES-019 section 6's scheduled start across a group: this prepares every node in `nodeIds`, takes the media-clock reading those prepare results carry, picks ONE start instant, and starts every node at that identical instant. The instant is chosen here rather than per node on purpose - one instant on one shared clock is the point, and a per-node value would produce a set of different times by construction. The reading is taken from the node carrying the program plus LTC role (the one that declares an `ltcRoute` in its `audio.node` configuration), because the coordinator holds no media clock of its own. A reading from any other node is never substituted: the readings are on different nodes' clocks, and borrowing one would hide the misconfiguration this endpoint exists to expose. `T0 = reading + slowest reported preroll + scheduledStartDeliveryBoundMs + scheduledStartMarginMs`, plus the clock's stated error bound when it has one. A `200` is never itself success. When no usable reading exists - no target holds the role, or the holder's clock is not locked - `aligned` is `false`, `unalignedReason` says why, and every node is started UNSCHEDULED, on arrival, exactly as before this endpoint existed. That is the documented behaviour for a node without a locked clock, not a failure, and it is reported rather than hidden so an operator is never told an unaligned start was aligned. Each node's own prepare and start outcome is reported separately in `prepares` and `starts`.
+         */
+        post: operations["dispatchAlignedAudioStart"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1323,7 +1343,7 @@ export interface paths {
         };
         /**
          * The audio.settings engine-wide singleton (ADR-039)
-         * @description Requires `config:write`, mirroring `GET /config/render.settings`'s own always-sensitive, never-404 posture: the payload has a well-defined default, so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written. `driftIgnoreThresholdMs`'s default has never been measured against real playback and is a starting point, not a tuned value.
+         * @description Requires `config:write`, mirroring `GET /config/render.settings`'s own always-sensitive, never-404 posture: the payload has a well-defined default, so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written. `driftIgnoreThresholdMs`'s default is derived from a measurement: a real sink was observed making routine skew corrections of exactly 20.0 ms (960 samples at 48 kHz) about 21 minutes apart, so a threshold of 20 was the same number as the correction it had to be told apart from. The default is 40, that sink's own documented drift tolerance.
          */
         get: operations["getAudioSettingsConfig"];
         /**
@@ -1466,6 +1486,70 @@ export interface paths {
          * @description Requires `config:write`.
          */
         get: operations["getAudioNodeConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/node.clock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate node.clock objects (Track I seam I1, ADR-039)
+         * @description Requires `config:write`. Object ids (the node id) with label (the configured provider) and current revision number, NOT the full payloads - `show` is always empty, since node.clock carries no show reference.
+         */
+        get: operations["listNodeClocks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/node.clock/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One node.clock object's active revision
+         * @description Requires `config:write`. `id` is the node id.
+         */
+        get: operations["getNodeClock"];
+        /**
+         * Write a new node.clock revision (Track I seam I1)
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: `provider`, `interface`, and `domain` are required on every write. `provider` selects which of the three concrete PTP providers this node runs (`managed`, `external`, or `fpp`); `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as a node before this seam existed (RES-019). Optionally carries `If-Match`/`If-None-Match` (opt-in; see those parameters): refused with `409` when the precondition names a revision that is no longer current.
+         */
+        put: operations["putNodeClock"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/node.clock/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * node.clock revision history, newest first
+         * @description Requires `config:write`.
+         */
+        get: operations["getNodeClockConfigRevisions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3090,6 +3174,8 @@ export interface components {
             render: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.audio.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published an audio discovery report. */
             audio: components["schemas"]["ObservationEntry"][];
+            /** @description Track I seam I1: whatever node.clock.ptp.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a clock status report (no node.clock configuration, or a node still starting up). */
+            clock: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.fppconnect.channel_range.* observations this coordinator currently holds for this node's most recently resolved fppconnect.configure push - whether the pushed channel range was formatted, legitimately empty (no configured surface), or dropped (a surface existed but could not be formatted, e.g. a refused range or a string too long for the ping's 120-byte field), and why. Never omitted; an empty array means this node has never had a fppconnect.configure push resolved for it. Resource names this node directly, the `node.multisync.*` precedent (one push carries one channel-range string per node). */
             fppConnect: components["schemas"]["ObservationEntry"][];
         };
@@ -3507,6 +3593,82 @@ export interface components {
             /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
             idempotencyKey?: string;
             params?: components["schemas"]["AudioSessionApplyParams"];
+        };
+        /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/start. Identical to AudioSessionNoParamsRequest except that params is AudioSessionStartParams rather than an empty object: start is the only one of those nine operations that takes an operation-specific param. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioSessionStartRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            idempotencyKey?: string;
+            params?: components["schemas"]["AudioSessionStartParams"];
+        };
+        /** @description Optional in full: a start with no params at all is the ordinary start-on-arrival this endpoint has always performed. */
+        AudioSessionStartParams: {
+            /**
+             * Format: int64
+             * @description RES-019 section 6's `T0`: the instant the session presents media sample zero, read on the RECEIVING NODE's own media clock, in NANOSECONDS on that clock's own timescale. It is never wall time and never a duration, and the same value is sent to every node in an aligned group - one instant on one shared clock is the entire point. A node whose media clock has already passed this instant REFUSES the start (`scheduled_start_in_past`) rather than starting late or clamping to now: a late start is audible, a refusal is legible. Nanoseconds since an epoch are around 1.79e18, past IEEE-754 double's exact integer range (9.007e15), so a client that parses this response body with a stock JSON parser ROUNDS the value. Parse it as an exact integer. Milliseconds are not an alternative unit: 1 ms is 48 samples at 48 kHz, several times coarser than the alignment this endpoint exists to reach. Accepted only here. Sending it to any other session endpoint is refused rather than ignored.
+             */
+            scheduledAtNs?: number;
+        };
+        /** @description The body of POST /audio/sessions/{sessionId}/aligned-start. `nodeIds` is the aligned group: every node named is prepared, then started at one instant. A node named twice is refused rather than deduplicated, since that would dispatch two starts and report two results for one node. `revision` goes through each node's own per-session revision ledger, exactly as a single-node start does. */
+        AlignedAudioStartRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. Each per-node prepare and start derives its own key from it, so one aligned start is one replayable unit rather than 2N unrelated commands. */
+            idempotencyKey?: string;
+            nodeIds: string[];
+        };
+        /** @description The chosen start instant and the evidence behind it. */
+        AlignedAudioStartSelection: {
+            /**
+             * Format: int64
+             * @description The instant every node was started at, on the media clock of `clockNodeId`. Around 1.79e18, past IEEE-754 double's exact integer range (9.007e15), so a client parsing this body with a stock JSON parser ROUNDS it. Parse it as an exact integer.
+             */
+            scheduledAtNs: number;
+            /** @description The node whose media-clock reading this instant came from. */
+            clockNodeId: string;
+            /**
+             * Format: int64
+             * @description How far scheduledAtNs sits past that reading; the sum of the four terms below.
+             */
+            leadNs: number;
+            /**
+             * Format: int64
+             * @description The largest preroll any target actually reported. Zero with prerollReportedBy zero means NOBODY reported one, which is not the same as everybody reporting zero.
+             */
+            prerollNs: number;
+            /** @description How many targets reported a preroll latency. */
+            prerollReportedBy: number;
+            /**
+             * Format: int64
+             * @description audio.settings' scheduledStartDeliveryBoundMs, in nanoseconds.
+             */
+            deliveryBoundNs: number;
+            /**
+             * Format: int64
+             * @description audio.settings' scheduledStartMarginMs, in nanoseconds.
+             */
+            marginNs: number;
+            /** @description False means the clock's error bound was UNKNOWN and no allowance for it is included in leadNs - NOT that the bound was zero. A zero bound is a claim of exactness no source here can make, so an unknown one contributes nothing and says so. */
+            clockErrorBoundKnown: boolean;
+            /**
+             * Format: int64
+             * @description The allowance folded into leadNs; 0 whenever clockErrorBoundKnown is false.
+             */
+            clockErrorBoundNs: number;
+        };
+        /** @description Per-node prepare and start results plus the selection. `aligned` false means no instant could be chosen and every node started unscheduled, on arrival; it is neither a failure nor an aligned start, and `unalignedReason` says which node's clock was the reason. */
+        AlignedAudioStartResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            sessionId: string;
+            aligned: boolean;
+            /** @description Empty exactly when aligned is true. */
+            unalignedReason: string;
+            /** @description Null exactly when aligned is false. */
+            selection: components["schemas"]["AlignedAudioStartSelection"] | null;
+            prepares: components["schemas"]["AudioSessionCommandResult"][];
+            starts: components["schemas"]["AudioSessionCommandResult"][];
         };
         /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/seek. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
         AudioSessionSeekRequest: {
@@ -4180,7 +4342,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop" | "media.playlist" | "node.clock";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -4700,7 +4862,7 @@ export interface components {
             idempotencyKey: string;
             armToken: string;
         };
-        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
+        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs`'s default is measurement-derived: a real sink makes routine 20.0 ms skew corrections, so the default is 40, that sink's own documented drift tolerance, rather than the 20 that collided with the correction magnitude. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. `scheduledStartDeliveryBoundMs` and `scheduledStartMarginMs` are the only two fields in this object the COORDINATOR reads rather than a node: every other field is a default a node applies to its own playback. They are the two terms added to a scheduled start's `T0`, which the coordinator computes as max(node ready times) plus the bound plus the margin and sends identically to every target. The bound is how long a start command is assumed to take to reach the slowest target and finish its preroll, and is a property of the path a bench can eventually measure. The margin is deliberate slack and stays a judgement even after the bound is measured, which is why these are two fields and not one sum. BOTH SHIPPED DEFAULTS ARE GUESSES: nothing has timed a command from dispatch to a node's completed preroll. Together they place a start three seconds after the last target reports ready. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
             /** @enum {string} */
@@ -4718,6 +4880,10 @@ export interface components {
             ltcFrameRate: "24" | "25" | "29.97" | "30";
             /** @description HH:MM:SS:FF, non-drop-frame. */
             ltcDefaultStartOffset: string;
+            /** @description Read by the coordinator, not by a node. How long a start command is assumed to take to reach the slowest target node and finish its preroll. A guess, not a measurement. The bounds are a typo guard, not a tuned range. */
+            scheduledStartDeliveryBoundMs: number;
+            /** @description Read by the coordinator, not by a node. Deliberate slack held back beyond scheduledStartDeliveryBoundMs. Stays a judgement even once the bound is measured. The bounds are a typo guard. */
+            scheduledStartMarginMs: number;
         };
         /** @description The body of GET and PUT /config/audio.settings. Never `404`s: the payload has a well-defined default, reported with `revision` `0` and `source` `"default"` when nothing has ever been written, mirroring RenderSettingsConfigResponse's identical posture. */
         AudioSettingsConfigResponse: {
@@ -4783,6 +4949,33 @@ export interface components {
             id: string;
             revision: number;
             payload: components["schemas"]["ConfigAudioNode"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        /** @description The "node.clock" configuration kind's decoded payload (Track I seam I1, RES-019, ADR-039): the body PUT /config/node.clock/{id} accepts (a full replacement), and the "payload" member of GET /config/node.clock/{id}'s response. `provider` selects which of the three concrete PTP providers this node runs: `managed` (ShowMesh writes the ptp4l config and supervises the process, refusing to start when one is already bound on `interface` and `domain`), `external` (observes an externally-owned ptp4l's read-only management socket only), or `fpp` (observes an FPP 10 host's own AES67/PTP status over HTTP). `domain` is the declared PTP domain number (0-255), used to detect a mismatch when a provider's own observed domain disagrees. `clientOnly` declares this node's role policy for `managed`: true when the operator declares an external domain, so this node never attempts to become the domain's own grandmaster. `holdoverLimitSeconds` bounds how long a lost lock is reported as `holdover` before this node gives up and reports `unsynchronized`; it defaults to 60 when omitted. `priority1` and `hardwareTimestamping` apply to `managed` only. `externalUdsAddress` applies to `external` only, defaulting to linuxptp's own `/var/run/ptp/ptp4lro`. `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as it did before this seam existed. */
+        ConfigNodeClock: {
+            /** @enum {string} */
+            provider: "managed" | "external" | "fpp";
+            interface: string;
+            domain: number;
+            clientOnly?: boolean;
+            holdoverLimitSeconds?: number;
+            priority1?: number;
+            hardwareTimestamping?: boolean;
+            externalUdsAddress?: string;
+            fppBaseUrl?: string;
+        };
+        /** @description The body of GET and PUT /config/node.clock/{id}. */
+        NodeClockConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigNodeClock"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -4874,12 +5067,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, and GET /config/media.playlist. GET /config/audio.node has its own dedicated AudioNodeListResponse instead, since its list carries channel placement that this shared, kind-agnostic shape has no field for. */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, GET /config/media.playlist, and GET /config/node.clock. GET /config/audio.node has its own dedicated AudioNodeListResponse instead, since its list carries channel placement that this shared, kind-agnostic shape has no field for. node.clock's own list summary reports its configured provider as label and leaves show empty, since node.clock carries no show reference. */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "media.playlist" | "node.clock";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description One element of AudioNodeListResponse.objects: enough to enumerate every audio.node object's routing, including its program and LTC channel placement, without fetching each one's full payload. programChannels and ltcChannel carry the same meaning here as on ConfigAudioNode. */
@@ -7407,7 +7600,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
+                "application/json": components["schemas"]["AudioSessionStartRequest"];
             };
         };
         responses: {
@@ -7435,6 +7628,38 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchAlignedAudioStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlignedAudioStartRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlignedAudioStartResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -9647,6 +9872,133 @@ export interface operations {
         };
     };
     getAudioNodeConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listNodeClocks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNodeClock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeClockConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putNodeClock: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional revision precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). When present, must be a quoted revision integer of 1 or greater, e.g. `"7"` - the value of this response shape's own `revision` field, quoted; revisions start at 1, so `"0"` is refused as `400` malformed rather than accepted as an undocumented second spelling of `If-None-Match: "*"`. Asserts that the revision the client last read is still the object's current one: if the object's current revision has moved since, the write is refused with `409` and nothing is written. Mutually exclusive with `If-None-Match` on the same request (`400` if both are sent). Absent means unconditional: this coordinator accepts the write regardless of the object's current revision, exactly as it always has before this precondition existed. That absence-accepted default is deliberate and ruled, not a gap: the guarantee this parameter provides is opt-in, never mandatory, so a client that never sends it is unprotected, and two clients that both omit it can still silently overwrite one another. */
+                "If-Match"?: components["parameters"]["ConfigRevisionIfMatch"];
+                /** @description Optional create-only precondition for a config PUT, shared by every route sharing this parameter across every config kind that supports it (no per-kind variation). The only accepted value is the literal `*`; anything else is refused `400`. Asserts that this id has no active revision yet: if one already exists, the write is refused with `409` and nothing is written. Mutually exclusive with `If-Match` on the same request (`400` if both are sent). Absent means unconditional, exactly like `If-Match`'s own absence: this coordinator creates or overwrites whatever is there, exactly as it always has before this precondition existed. */
+                "If-None-Match"?: components["parameters"]["ConfigRevisionIfNoneMatch"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigNodeClock"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeClockConfigResponse"];
+                };
+            };
+            /** @description Either an ordinary payload validation refusal, or a malformed `If-Match`/`If-None-Match` value, or both of those headers sent on the same request. */
+            400: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNodeClockConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;
