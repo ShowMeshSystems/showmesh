@@ -21,8 +21,17 @@ import {
   staleSignalLeader,
   nextStartVerdict,
   showInProgress,
+  type ParticipationState,
   type ReadinessVerdict,
 } from './dashboardModel'
+
+/** The operator-facing sentence for each participation state but "absent", which says nothing. */
+const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
+  participating: "Participating in tonight's show.",
+  not_participating: "Not participating in tonight's show.",
+  unknown: 'Participation unknown.',
+  not_configured: 'No active show.',
+}
 
 /**
  * The change stream only announces a night-session CHANGE, so the model
@@ -135,24 +144,33 @@ export function Dashboard() {
           />
         ) : (
           <div className="sm-dashboard__attention">
-            {items.map((item) => (
-              <AttentionRow
-                key={item.key}
-                tone={item.tone}
-                state={item.state}
-                appearance="word"
-                fact={
-                  <>
-                    <Link to={item.to}>{item.subject}</Link> {item.fact}
-                  </>
-                }
-                detail={
-                  <>
-                    {item.detail} <Link to={item.to}>Open</Link>
-                  </>
-                }
-              />
-            ))}
+            {items.map((item) => {
+              const participationSentence =
+                item.participation === 'absent' ? null : PARTICIPATION_SENTENCE[item.participation]
+              return (
+                <AttentionRow
+                  key={item.key}
+                  tone={item.tone}
+                  state={item.state}
+                  appearance="word"
+                  fact={
+                    <>
+                      <Link to={item.to}>{item.subject}</Link> {item.fact}
+                    </>
+                  }
+                  detail={
+                    <>
+                      {participationSentence !== null && (
+                        <>
+                          <span className="sm-small sm-muted">{participationSentence}</span>{' '}
+                        </>
+                      )}
+                      {item.detail} <Link to={item.to}>Open</Link>
+                    </>
+                  }
+                />
+              )
+            })}
           </div>
         )}
       </Section>
