@@ -178,6 +178,7 @@ type SchemaAudioSessionParams =
   | components['schemas']['AudioSessionSeekParams']
   | components['schemas']['AudioSessionGainParams']
   | components['schemas']['AudioSessionGainFadeParams']
+  | components['schemas']['AudioSessionStartParams']
   | components['schemas']['AudioSessionNoParamsRequest']['params']
 // GET /observations, the flat evidence list an operator uses to
 // discover a real audio session id (resourceKind=audio_session) and its
@@ -1523,9 +1524,33 @@ export class ApiStore {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'prepare', revision)
   }
 
-  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command. */
-  async startAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
-    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
+  /**
+   * `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command.
+   *
+   * `scheduledAtNs`, when given, is the instant the session presents media
+   * sample zero, read on the TARGET NODE's own media clock, in nanoseconds
+   * (api/openapi.yaml: AudioSessionStartParams). Omitted, this is the
+   * ordinary start-on-arrival.
+   *
+   * It is a `bigint`, not a `number`, and that is not a stylistic choice:
+   * nanoseconds since an epoch are around 1.79e18 and `Number.MAX_SAFE_INTEGER`
+   * is 9.007e15, so a `number` here would be a rounded instant, off by up to
+   * hundreds of nanoseconds, before it ever left the browser. It reaches the
+   * wire as exact digits through `stringifyJsonPreservingBigInts`, the same
+   * path `revision` already takes.
+   */
+  async startAudioSession(
+    nodeId: string,
+    sessionId: string,
+    revision: bigint,
+    scheduledAtNs?: bigint,
+  ): Promise<AudioSessionCommandResult> {
+    if (scheduledAtNs === undefined) {
+      return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
+    }
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision, {
+      scheduledAtNs,
+    } as unknown as Record<string, unknown>)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/advance`. Requires audio:command. */

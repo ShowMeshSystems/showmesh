@@ -23,9 +23,9 @@ func cmdAudioGain(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		printAudioGainUsage(stdout)
 		return exitOK
 	case "set":
-		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio gain set", "gain")
+		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio gain set", "gain", false)
 	case "fade":
-		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio gain fade", "gain/fade")
+		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio gain fade", "gain/fade", false)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio gain: unknown subcommand %q\n\n", sub)
 		printAudioGainUsage(stderr)
@@ -74,9 +74,9 @@ func cmdAudioOutput(args []string, stdout, stderr io.Writer, clock func() time.T
 		printAudioOutputUsage(stdout)
 		return exitOK
 	case "mute":
-		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio output mute", "output/mute")
+		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio output mute", "output/mute", false)
 	case "unmute":
-		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio output unmute", "output/unmute")
+		return cmdAudioSessionLikeDispatch(rest, stdout, stderr, clock, "audio output unmute", "output/unmute", false)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio output: unknown subcommand %q\n\n", sub)
 		printAudioOutputUsage(stderr)

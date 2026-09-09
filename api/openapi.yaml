@@ -925,6 +925,10 @@ paths:
         decision - every dispatch against the shipped agent reports
         `"unconfirmable"` with a reason, which is a real, expected
         outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        This is the one session endpoint that accepts an operation-specific
+        param: optional `params.scheduledAtNs` starts the session at a
+        named instant on the TARGET NODE's own media clock instead of on
+        arrival. See AudioSessionStartParams.
       parameters:
         - name: nodeId
           in: path
@@ -941,7 +945,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/AudioSessionNoParamsRequest"
+              $ref: "#/components/schemas/AudioSessionStartRequest"
       responses:
         "200":
           description: OK
@@ -10346,6 +10350,66 @@ components:
             params.
         params:
           $ref: "#/components/schemas/AudioSessionApplyParams"
+    AudioSessionStartRequest:
+      type: object
+      description: >-
+        The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/start.
+        Identical to AudioSessionNoParamsRequest except that params is
+        AudioSessionStartParams rather than an empty object: start is the
+        only one of those nine operations that takes an
+        operation-specific param. revision goes through the node's own
+        per-session revision ledger: a value not strictly greater than the
+        session's current desired revision is refused, never silently
+        applied out of order.
+      required: [revision]
+      additionalProperties: false
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key (same action, same params) dispatches nothing
+            and returns the original command's own result, flagged
+            `replay: true` - see the `409` response for what happens
+            when the SAME key is reused with a DIFFERENT action or
+            params.
+        params:
+          $ref: "#/components/schemas/AudioSessionStartParams"
+    AudioSessionStartParams:
+      type: object
+      additionalProperties: false
+      description: >-
+        Optional in full: a start with no params at all is the ordinary
+        start-on-arrival this endpoint has always performed.
+      properties:
+        scheduledAtNs:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            RES-019 section 6's `T0`: the instant the session presents
+            media sample zero, read on the RECEIVING NODE's own media
+            clock, in NANOSECONDS on that clock's own timescale. It is
+            never wall time and never a duration, and the same value is
+            sent to every node in an aligned group - one instant on one
+            shared clock is the entire point.
+            A node whose media clock has already passed this instant
+            REFUSES the start (`scheduled_start_in_past`) rather than
+            starting late or clamping to now: a late start is audible,
+            a refusal is legible.
+            Nanoseconds since an epoch are around 1.79e18, past
+            IEEE-754 double's exact integer range (9.007e15), so a client
+            that parses this response body with a stock JSON parser
+            ROUNDS the value. Parse it as an exact integer. Milliseconds
+            are not an alternative unit: 1 ms is 48 samples at 48 kHz,
+            several times coarser than the alignment this endpoint exists
+            to reach.
+            Accepted only here. Sending it to any other session endpoint
+            is refused rather than ignored.
     AudioSessionSeekRequest:
       type: object
       description: >-
@@ -13432,10 +13496,25 @@ components:
         (RES-001 §9) - an explicit ruling, not a silent default.
         `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start
         point when its own audio.session.apply carries no override.
+        `scheduledStartDeliveryBoundMs` and `scheduledStartMarginMs` are
+        the only two fields in this object the COORDINATOR reads rather
+        than a node: every other field is a default a node applies to its
+        own playback. They are the two terms added to a scheduled start's
+        `T0`, which the coordinator computes as max(node ready times) plus
+        the bound plus the margin and sends identically to every target.
+        The bound is how long a start command is assumed to take to reach
+        the slowest target and finish its preroll, and is a property of
+        the path a bench can eventually measure. The margin is deliberate
+        slack and stays a judgement even after the bound is measured,
+        which is why these are two fields and not one sum. BOTH SHIPPED
+        DEFAULTS ARE GUESSES: nothing has timed a command from dispatch to
+        a node's completed preroll. Together they place a start three
+        seconds after the last target reports ready.
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
          defaultMaxBackgroundGainDb, duckTargetGainDb, duckFadeDurationMs,
-         duckRestoreFadeDurationMs, ltcFrameRate, ltcDefaultStartOffset]
+         duckRestoreFadeDurationMs, ltcFrameRate, ltcDefaultStartOffset,
+         scheduledStartDeliveryBoundMs, scheduledStartMarginMs]
       properties:
         driftIgnoreThresholdMs:
           type: integer
@@ -13479,6 +13558,23 @@ components:
         ltcDefaultStartOffset:
           type: string
           description: HH:MM:SS:FF, non-drop-frame.
+        scheduledStartDeliveryBoundMs:
+          type: integer
+          minimum: 0
+          maximum: 60000
+          description: >-
+            Read by the coordinator, not by a node. How long a start
+            command is assumed to take to reach the slowest target node
+            and finish its preroll. A guess, not a measurement. The bounds
+            are a typo guard, not a tuned range.
+        scheduledStartMarginMs:
+          type: integer
+          minimum: 0
+          maximum: 60000
+          description: >-
+            Read by the coordinator, not by a node. Deliberate slack held
+            back beyond scheduledStartDeliveryBoundMs. Stays a judgement
+            even once the bound is measured. The bounds are a typo guard.
     AudioSettingsConfigResponse:
       type: object
       description: >-

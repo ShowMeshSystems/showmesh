@@ -56,6 +56,7 @@ import {
   ButtonRule,
   Callout,
   Choice,
+  DefinitionStrip,
   Drawer,
   Field,
   Input,
@@ -88,6 +89,8 @@ import {
   nightLifecycleGroups,
   outputRows,
   parseExactRevisionInput,
+  parseScheduledAtNsInput,
+  audioTimelineRows,
   reportedPlaylistName,
   transportState,
   type CommandOutcome,
@@ -1115,6 +1118,36 @@ function useAudioSessionObservations(reloadKey: number): ObservationsState {
   return state
 }
 
+/**
+ * The selected node's own `node.audio.*` observations, which is where the
+ * six node.audio.timeline.* signals live: they describe the NODE's
+ * playback timeline, not one session's state, so they come from a
+ * separate read against resourceKind `node` rather than from the
+ * audio_session list above.
+ */
+function useNodeAudioObservations(nodeId: string, reloadKey: number): ObservationsState {
+  const [state, setState] = useState<ObservationsState>({ kind: 'loading' })
+  useEffect(() => {
+    if (nodeId === '') {
+      setState({ kind: 'loaded', observations: [] })
+      return
+    }
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listObservations('node', nodeId)
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', observations: response.observations })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [nodeId, reloadKey])
+  return state
+}
+
 type LtcFrameRateState = { kind: 'loading' } | { kind: 'loaded'; fps: number } | { kind: 'failed' }
 
 function useLtcFrameRate(): LtcFrameRateState {
@@ -1185,6 +1218,7 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   const [gainDb, setGainDb] = useState('')
   const [fadeTargetDb, setFadeTargetDb] = useState('')
   const [fadeDurationMs, setFadeDurationMs] = useState('')
+  const [scheduledAtNs, setScheduledAtNs] = useState('')
   const [clearConfirm, setClearConfirm] = useState('')
   const [applyPayload, setApplyPayload] = useState('')
   const [applyConfirm, setApplyConfirm] = useState('')
@@ -1198,7 +1232,10 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
     }
   }, [nodesState, selectedNodeId])
 
+  const nodeObservationsState = useNodeAudioObservations(selectedNodeId ?? '', reloadKey)
+
   const observations = observationsState.kind === 'loaded' ? observationsState.observations : []
+  const nodeObservations = nodeObservationsState.kind === 'loaded' ? nodeObservationsState.observations : []
   const actions = actionsState.kind === 'loaded' ? actionsState.actions : []
   const options = audioSessionOptions(observations, actions)
   const summaries = audioSessionSummaries(observations, actions, nowIso)
@@ -1223,6 +1260,16 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
   const positionMs =
     position.trim() === '' ? null : timecodeToMillis(position, frameRateState.kind === 'loaded' ? frameRateState.fps : null)
 
+  // An empty box means "start on arrival", which is what Start has always
+  // done; only a non-empty box can be a bad instant.
+  const scheduledAtNsValue = scheduledAtNs.trim() === '' ? null : parseScheduledAtNsInput(scheduledAtNs)
+  const scheduledAtNsError =
+    scheduledAtNs.trim() !== '' && scheduledAtNsValue === null
+      ? 'Not a valid instant. Type whole nanoseconds, 0 or greater, as digits.'
+      : null
+  const canStart = canDispatch && scheduledAtNsError === null
+  const startTitle = scheduledAtNsError ?? dispatchTitle
+
   const run = useCallback((action: string, call: () => Promise<AudioSessionCommandResult>) => {
     call()
       .then((result) => {
@@ -1231,6 +1278,8 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
       })
       .catch((err: unknown) => setOutcome({ tone: 'bad', label: 'Refused', detail: `${action}: ${describeApiError(err)}` }))
   }, [])
+
+  const timelineRows = audioTimelineRows(nodeObservations, nodeId)
 
   const stateEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.state')
   const positionEntry = trimmedSessionId === '' ? undefined : audioSessionSignal(observations, trimmedSessionId, 'audio_session.position_ms')
@@ -1434,7 +1483,14 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                   <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Prepare', () => prepareAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
                     Prepare
                   </Button>
-                  <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Start', () => startAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
+                  <Button
+                    size="gloved"
+                    disabled={!canStart}
+                    title={startTitle}
+                    onClick={() =>
+                      run('Start', () => startAudioSession(nodeId, trimmedSessionId, effectiveRevision, scheduledAtNsValue ?? undefined))
+                    }
+                  >
                     Start
                   </Button>
                   <Button size="gloved" disabled={!canDispatch} title={dispatchTitle} onClick={() => run('Pause', () => pauseAudioSession(nodeId, trimmedSessionId, effectiveRevision))}>
@@ -1469,6 +1525,38 @@ function AudioSessionsBlock({ gate, show, nowIso }: { gate: Gate; show: string |
                     Seek
                   </Button>
                 </div>
+                <Field
+                  label="Start at"
+                  help="Nanoseconds on this node's own media clock, as digits. Empty starts on arrival. A node whose clock has already passed the instant refuses the start rather than starting late."
+                  error={scheduledAtNsError ?? undefined}
+                >
+                  {(props) => (
+                    <Input
+                      {...props}
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]+"
+                      value={scheduledAtNs}
+                      onChange={(event) => setScheduledAtNs(event.target.value)}
+                      placeholder="1789012345678901234"
+                    />
+                  )}
+                </Field>
+              </div>
+
+              <div className="sm-panel">
+                <h3 className="sm-subsection__title">Timeline</h3>
+                <p className="sm-small sm-muted">
+                  This node's scheduled-playback timeline. A signal with no value says why it has none; nothing here is
+                  inferred from anything else this node reports.
+                </p>
+                <DefinitionStrip
+                  items={timelineRows.map((row) => ({
+                    term: row.label,
+                    value: row.value !== null ? <span className="sm-data">{row.value}</span> : 'Not collected',
+                    detail: row.value !== null ? undefined : (row.reason ?? 'No reason reported.'),
+                  }))}
+                />
               </div>
 
               <div className="sm-panel">

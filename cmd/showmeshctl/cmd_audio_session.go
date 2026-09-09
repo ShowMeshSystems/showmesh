@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -70,6 +72,10 @@ this program. apply accepts an optional "ceilingDb" field (decibels,
 same scale and +12 dB bound as "showmeshctl audio gain set"'s own
 gainDb) to change the session's standing gain ceiling; every other apply
 field is documented at api/openapi.yaml's AudioSessionApplyParams.
+"start" additionally accepts --scheduled-at-ns, the only op-specific
+flag here: the instant the session presents media sample zero, read on
+the TARGET NODE's own media clock, in nanoseconds. Unset, start behaves
+as it always has and starts on arrival.
 --revision sets the desired-state revision this command carries
 (pkg/audio.RevisionState); a stale or replayed value is reported as
 "refused", not treated as a transport error. Left unset, it defaults
@@ -163,7 +169,9 @@ func currentAudioSessionDesiredRevision(ctx context.Context, c *client, sessionI
 // cmdAudioSessionDispatch dispatches one of the nine audio.session.*
 // operations, whose URL path suffix and CLI label are both the op name.
 func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, op string) int {
-	return cmdAudioSessionLikeDispatch(args, stdout, stderr, clock, "audio session "+op, op)
+	// start is the one op that takes an operation-specific flag; see
+	// scheduledAtNsFlagUsage.
+	return cmdAudioSessionLikeDispatch(args, stdout, stderr, clock, "audio session "+op, op, op == "start")
 }
 
 // cmdAudioSessionLikeDispatch is every audio session-shaped command's
@@ -174,11 +182,15 @@ func cmdAudioSessionDispatch(args []string, stdout, stderr io.Writer, clock func
 // audio.output.* operations are reachable as "showmeshctl audio gain
 // set"/"showmeshctl audio output mute" — a different CLI verb than their
 // URL path segment ("gain", "output/mute").
-func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, pathSuffix string) int {
+func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock func() time.Time, cmdLabel, pathSuffix string, acceptsScheduledStart bool) int {
 	fs, g := newFlagSet("showmeshctl "+cmdLabel, stderr)
 	revision := fs.Uint64("revision", 0, "the desired-state revision this command carries; defaults to this "+
 		"session's current observed revision (GET /api/v1/observations) plus one, or 1 for a session this "+
 		"coordinator has never observed")
+	var scheduledAtNs *string
+	if acceptsScheduledStart {
+		scheduledAtNs = fs.String("scheduled-at-ns", "", scheduledAtNsFlagUsage)
+	}
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl %s [flags] <node-id> <session-id> [params-json]\n", cmdLabel)
 		fs.PrintDefaults()
@@ -207,6 +219,13 @@ func cmdAudioSessionLikeDispatch(args []string, stdout, stderr io.Writer, clock 
 			return reportError(stderr, cmdLabel, newCLIError(exitUsage, "params-json is not valid JSON"))
 		}
 		params = json.RawMessage(rest[2])
+	}
+	if scheduledAtNs != nil && *scheduledAtNs != "" {
+		merged, err := withScheduledAtNs(params, *scheduledAtNs)
+		if err != nil {
+			return reportError(stderr, cmdLabel, err)
+		}
+		params = merged
 	}
 
 	timeout := effectiveAudioSessionCommandTimeout(g.timeout)
@@ -322,4 +341,68 @@ func exitCodeForAudioSessionCommandResult(result audioSessionCommandResult) int 
 		}
 		return exitOK
 	}
+}
+
+// scheduledAtNsFlagUsage documents --scheduled-at-ns, which only
+// "showmeshctl audio session start" registers.
+//
+// This file otherwise deliberately takes op-specific fields as a raw
+// params-json blob rather than as named flags (see its own doc comment).
+// This one field earns a flag anyway: it is the only session param the
+// COORDINATOR itself validates rather than passing through, and the only
+// one whose exactness a JSON round trip through a float64 would quietly
+// destroy. A named flag lets this program refuse a rounded or malformed
+// instant here, instead of forwarding it and having a node start at the
+// wrong time.
+const scheduledAtNsFlagUsage = "start the session at this instant on the TARGET NODE's own media clock, " +
+	"in nanoseconds, as digits (api/openapi.yaml: AudioSessionStartParams); unset starts on arrival. " +
+	"Never wall time and never a duration. A node whose media clock has already passed the instant " +
+	"refuses the start rather than starting late"
+
+// paramScheduledAtNs mirrors pkg/paramScheduledAtNs -- this
+// program's own independent transcription, matching
+// signalAudioSessionDesiredRevision's identical "reproduced, not
+// imported" rule above and this file's own doc comment on why this
+// program shares no Go types with the coordinator.
+const paramScheduledAtNs = "scheduledAtNs"
+
+// scheduledAtNsDigits is a non-negative decimal integer with no sign, no
+// fraction, and no exponent.
+var scheduledAtNsDigits = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
+
+// withScheduledAtNs merges --scheduled-at-ns into params as an exact JSON
+// integer literal.
+//
+// The merge goes through map[string]json.RawMessage, never
+// map[string]any: encoding/json decodes a bare number into an `any` as a
+// float64, and a media-clock instant in nanoseconds is around 1.79e18,
+// past float64's exact integer range. Decoding params that way to add one
+// key would round every other oversized integer already in it.
+func withScheduledAtNs(params json.RawMessage, raw string) (json.RawMessage, error) {
+	if !scheduledAtNsDigits.MatchString(raw) {
+		return nil, newCLIError(exitUsage,
+			"--scheduled-at-ns must be a non-negative whole number of nanoseconds, written as digits: "+
+				"it is a reading of the target node's media clock, not a duration and not wall time")
+	}
+	if _, err := strconv.ParseInt(raw, 10, 64); err != nil {
+		return nil, newCLIError(exitUsage, "--scheduled-at-ns does not fit in an int64: %v", err)
+	}
+
+	fields := map[string]json.RawMessage{}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, newCLIError(exitUsage, "params-json must be a JSON object to combine with --scheduled-at-ns")
+		}
+	}
+	if _, present := fields[paramScheduledAtNs]; present {
+		return nil, newCLIError(exitUsage,
+			"--scheduled-at-ns and a %s key in params-json both set the start instant; pass only one", paramScheduledAtNs)
+	}
+	fields[paramScheduledAtNs] = json.RawMessage(raw)
+
+	merged, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	return merged, nil
 }

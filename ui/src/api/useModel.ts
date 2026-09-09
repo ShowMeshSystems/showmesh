@@ -511,8 +511,13 @@ export function prepareAudioSession(nodeId: string, sessionId: string, revision:
   return store.prepareAudioSession(nodeId, sessionId, revision)
 }
 
-export function startAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
-  return store.startAudioSession(nodeId, sessionId, revision)
+export function startAudioSession(
+  nodeId: string,
+  sessionId: string,
+  revision: bigint,
+  scheduledAtNs?: bigint,
+): Promise<AudioSessionCommandResult> {
+  return store.startAudioSession(nodeId, sessionId, revision, scheduledAtNs)
 }
 
 export function advanceAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {

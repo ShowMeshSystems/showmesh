@@ -120,6 +120,13 @@ var migrations = []migration{
 	// see a playlist loop back into an entry it already visited, which is
 	// the only signal that does so on FPP 10.
 	{version: 32, fn: migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn},
+	// v33: backfills audio.settings' two scheduled-start keys into every
+	// stored revision written before they were required
+	// (migrateV33AudioSettingsBackfillScheduledStartFields' own doc
+	// comment, migration_v33.go). Same defect class as v20: without it an
+	// upgraded coordinator cannot decode its own stored revision and stops
+	// pushing audio configuration to every node.
+	{version: 33, fn: migrateV33AudioSettingsBackfillScheduledStartFields},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

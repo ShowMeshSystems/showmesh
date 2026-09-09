@@ -64,6 +64,17 @@ const (
 	minDuckTargetGainDb = audio.SilenceFloorDb
 )
 
+// Bounds on scheduledStartDeliveryBoundMs and scheduledStartMarginMs.
+// Typo guards only, not tuned ceilings: zero is admissible for both (an
+// operator who has measured a negligible path, or who wants no pad at
+// all, may say so), and the ceiling is a minute, far past any plausible
+// value, so a duration typed in microseconds is caught while a genuinely
+// slow path is not refused.
+const (
+	minScheduledStartOffsetMs = 0
+	maxScheduledStartOffsetMs = 60000
+)
+
 // Bounds on duckFadeDurationMs and duckRestoreFadeDurationMs share
 // defaultFadeDurationMs's own typo-guard range: neither is a fade a
 // node can ever run outside it either.
@@ -145,6 +156,31 @@ type AudioSettingsPayload struct {
 	// carries no ltcStartOffset override — the generating half of
 	// RES-001 §54's per-clip Offset convention.
 	LTCDefaultStartOffset string `json:"ltcDefaultStartOffset"`
+
+	// ScheduledStartDeliveryBoundMs and ScheduledStartMarginMs are read by
+	// the COORDINATOR, not by a node: every other field in this object is
+	// a default a node applies to its own playback, so the consumer is
+	// worth stating rather than inferring. They are the two terms
+	// RES-019 section 6 adds to a scheduled start's T0, which the
+	// coordinator computes as max(node ready times) + bound + margin and
+	// sends identically to every target.
+	//
+	// DeliveryBound is how long the coordinator assumes a start command
+	// takes to reach the slowest target and finish its preroll. It is a
+	// property of the path and a bench can eventually replace it with a
+	// measurement.
+	//
+	// Margin is the pad held back beyond that bound. It is a judgement
+	// about how much slack a show should carry, and stays a judgement even
+	// after the bound is measured -- which is why these are two fields and
+	// not one sum: collapsing them would make the measurable half
+	// unmeasurable.
+	//
+	// BOTH SHIPPED VALUES ARE GUESSES, NOT MEASUREMENTS. Nothing in this
+	// repository has timed a command from dispatch to a node's completed
+	// preroll. See AudioSettingsDefaultPayload.
+	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
+	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 }
 
 // AudioSettingsDefaultPayload is the value reported when nothing has ever
@@ -152,6 +188,14 @@ type AudioSettingsPayload struct {
 // the drift ignore threshold in particular has never been measured against
 // real playback (RES-007 is the work queue), so 20ms is a guess labelled
 // as one, not a result.
+//
+// The two scheduled-start numbers are guesses of the same kind. Together
+// they put a scheduled start three seconds after the last target reports
+// ready, which is invisible for a cue the show schedules and is three
+// seconds of waiting for an operator pressing go. If that is felt as
+// latency, the delivery bound is the half to measure and reduce: the
+// margin is deliberate slack, and the bound is a placeholder standing in
+// for a measurement nobody has taken.
 var AudioSettingsDefaultPayload = AudioSettingsPayload{
 	DriftIgnoreThresholdMs:     20,
 	DefaultFadeCurve:           string(audio.FadeCurveLinear),
@@ -162,6 +206,9 @@ var AudioSettingsDefaultPayload = AudioSettingsPayload{
 	DuckRestoreFadeDurationMs:  800,
 	LTCFrameRate:               string(audio.LTCFrameRate30),
 	LTCDefaultStartOffset:      "00:00:00:00",
+
+	ScheduledStartDeliveryBoundMs: 2000,
+	ScheduledStartMarginMs:        1000,
 }
 
 var audioSettingsTopLevelKeys = map[string]bool{
@@ -169,6 +216,7 @@ var audioSettingsTopLevelKeys = map[string]bool{
 	"defaultFadeDurationMs": true, "defaultMaxBackgroundGainDb": true,
 	"duckTargetGainDb": true, "duckFadeDurationMs": true, "duckRestoreFadeDurationMs": true,
 	"ltcFrameRate": true, "ltcDefaultStartOffset": true,
+	"scheduledStartDeliveryBoundMs": true, "scheduledStartMarginMs": true,
 }
 
 // EncodeAudioSettingsPayload marshals p into config_revisions.payload_json's
@@ -319,6 +367,28 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		}
 	}
 
+	deliveryBoundMs, verr := decodeRequiredInt(top, "scheduledStartDeliveryBoundMs", "scheduledStartDeliveryBoundMs")
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	if deliveryBoundMs < minScheduledStartOffsetMs || deliveryBoundMs > maxScheduledStartOffsetMs {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "scheduledStartDeliveryBoundMs",
+			Detail: fmt.Sprintf("scheduledStartDeliveryBoundMs must be between %d and %d", minScheduledStartOffsetMs, maxScheduledStartOffsetMs),
+		}
+	}
+
+	marginMs, verr := decodeRequiredInt(top, "scheduledStartMarginMs", "scheduledStartMarginMs")
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	if marginMs < minScheduledStartOffsetMs || marginMs > maxScheduledStartOffsetMs {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "scheduledStartMarginMs",
+			Detail: fmt.Sprintf("scheduledStartMarginMs must be between %d and %d", minScheduledStartOffsetMs, maxScheduledStartOffsetMs),
+		}
+	}
+
 	return AudioSettingsPayload{
 		DriftIgnoreThresholdMs:     driftMs,
 		DefaultFadeCurve:           fadeCurve,
@@ -329,6 +399,9 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		DuckRestoreFadeDurationMs:  duckRestoreFadeMs,
 		LTCFrameRate:               ltcFrameRate,
 		LTCDefaultStartOffset:      ltcOffset,
+
+		ScheduledStartDeliveryBoundMs: deliveryBoundMs,
+		ScheduledStartMarginMs:        marginMs,
 	}, nil
 }
 

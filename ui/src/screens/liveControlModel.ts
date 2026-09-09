@@ -469,3 +469,76 @@ export function describeAudioSessionOutcome(result: AudioSessionCommandResult, a
     detail: `${action}: ${result.reason}`.trim() + replaySuffix + attributionSuffix,
   }
 }
+
+/**
+ * A typed scheduled-start instant, or `null` for anything that is not a
+ * plain non-negative decimal integer.
+ *
+ * A `bigint`, and never a `number`: this is `T0` in NANOSECONDS on the
+ * target node's own media clock (api/openapi.yaml,
+ * AudioSessionStartParams). Nanoseconds since an epoch are around 1.79e18
+ * and `Number.MAX_SAFE_INTEGER` is 9.007e15, so a `number` would round
+ * the operator's instant before it reached the wire. Milliseconds are not
+ * an alternative unit here: 1 ms is 48 samples at 48 kHz.
+ */
+export function parseScheduledAtNsInput(text: string): bigint | null {
+  return parseExactRevisionInput(text)
+}
+
+/** One node.audio.timeline.* signal and the label Live Control shows it under. */
+export type AudioTimelineRow = {
+  signal: string
+  label: string
+  /** The reported value, already rendered; `null` when the signal carries none. */
+  value: string | null
+  /** Why there is no value, straight from the coordinator; never invented here. */
+  reason: string | null
+  state: string
+}
+
+/**
+ * RES-019 section 10's six timeline signals, in the order they read as a
+ * story: what was asked for, where the node should be, where it is, and
+ * how far apart those are, then the resync history.
+ */
+const AUDIO_TIMELINE_SIGNALS: readonly { signal: string; label: string }[] = [
+  { signal: 'node.audio.timeline.scheduled_at', label: 'Scheduled at (ns)' },
+  { signal: 'node.audio.timeline.expected_ms', label: 'Expected (ms)' },
+  { signal: 'node.audio.timeline.actual_ms', label: 'Actual (ms)' },
+  { signal: 'node.audio.timeline.error_ms', label: 'Error (ms)' },
+  { signal: 'node.audio.timeline.resyncs', label: 'Resyncs' },
+  { signal: 'node.audio.timeline.last_resync_reason', label: 'Last resync' },
+]
+
+/**
+ * The six timeline rows for `nodeId`, in AUDIO_TIMELINE_SIGNALS' order.
+ *
+ * A signal this coordinator holds no observation for at all is reported
+ * as absent with that stated, not omitted from the list and not shown as
+ * a zero: an operator asking why a node is not aligned needs to see the
+ * difference between "no timeline" and "a timeline reading zero".
+ *
+ * `scheduled_at` arrives as a decimal STRING rather than a number when it
+ * exceeds `Number.MAX_SAFE_INTEGER`, because the API client parses
+ * responses through `parseJsonPreservingBigInts`. Both spellings render
+ * the same way here, which is the point: the digits are never rounded on
+ * the way to the screen.
+ */
+export function audioTimelineRows(observations: ObservationEntry[], nodeId: string): AudioTimelineRow[] {
+  return AUDIO_TIMELINE_SIGNALS.map(({ signal, label }) => {
+    const entry = observations.find(
+      (candidate) =>
+        candidate.resource.kind === 'node' && candidate.resource.id === nodeId && candidate.signal === signal,
+    )
+    if (entry === undefined) {
+      return { signal, label, value: null, reason: 'This coordinator holds no observation for this signal.', state: 'unknown' }
+    }
+    return {
+      signal,
+      label,
+      value: entry.value === null ? null : String(entry.value),
+      reason: entry.reason,
+      state: entry.state,
+    }
+  })
+}

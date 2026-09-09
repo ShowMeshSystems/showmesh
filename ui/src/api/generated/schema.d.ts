@@ -338,7 +338,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.start to a node's playback session
-         * @description Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome. This is the one session endpoint that accepts an operation-specific param: optional `params.scheduledAtNs` starts the session at a named instant on the TARGET NODE's own media clock instead of on arrival. See AudioSessionStartParams.
          */
         post: operations["dispatchAudioSessionStart"];
         delete?: never;
@@ -3438,6 +3438,22 @@ export interface components {
             idempotencyKey?: string;
             params?: components["schemas"]["AudioSessionApplyParams"];
         };
+        /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/start. Identical to AudioSessionNoParamsRequest except that params is AudioSessionStartParams rather than an empty object: start is the only one of those nine operations that takes an operation-specific param. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioSessionStartRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            idempotencyKey?: string;
+            params?: components["schemas"]["AudioSessionStartParams"];
+        };
+        /** @description Optional in full: a start with no params at all is the ordinary start-on-arrival this endpoint has always performed. */
+        AudioSessionStartParams: {
+            /**
+             * Format: int64
+             * @description RES-019 section 6's `T0`: the instant the session presents media sample zero, read on the RECEIVING NODE's own media clock, in NANOSECONDS on that clock's own timescale. It is never wall time and never a duration, and the same value is sent to every node in an aligned group - one instant on one shared clock is the entire point. A node whose media clock has already passed this instant REFUSES the start (`scheduled_start_in_past`) rather than starting late or clamping to now: a late start is audible, a refusal is legible. Nanoseconds since an epoch are around 1.79e18, past IEEE-754 double's exact integer range (9.007e15), so a client that parses this response body with a stock JSON parser ROUNDS the value. Parse it as an exact integer. Milliseconds are not an alternative unit: 1 ms is 48 samples at 48 kHz, several times coarser than the alignment this endpoint exists to reach. Accepted only here. Sending it to any other session endpoint is refused rather than ignored.
+             */
+            scheduledAtNs?: number;
+        };
         /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/seek. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
         AudioSessionSeekRequest: {
             /** Format: int64 */
@@ -4630,7 +4646,7 @@ export interface components {
             idempotencyKey: string;
             armToken: string;
         };
-        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
+        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. `scheduledStartDeliveryBoundMs` and `scheduledStartMarginMs` are the only two fields in this object the COORDINATOR reads rather than a node: every other field is a default a node applies to its own playback. They are the two terms added to a scheduled start's `T0`, which the coordinator computes as max(node ready times) plus the bound plus the margin and sends identically to every target. The bound is how long a start command is assumed to take to reach the slowest target and finish its preroll, and is a property of the path a bench can eventually measure. The margin is deliberate slack and stays a judgement even after the bound is measured, which is why these are two fields and not one sum. BOTH SHIPPED DEFAULTS ARE GUESSES: nothing has timed a command from dispatch to a node's completed preroll. Together they place a start three seconds after the last target reports ready. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
             /** @enum {string} */
@@ -4648,6 +4664,10 @@ export interface components {
             ltcFrameRate: "24" | "25" | "29.97" | "30";
             /** @description HH:MM:SS:FF, non-drop-frame. */
             ltcDefaultStartOffset: string;
+            /** @description Read by the coordinator, not by a node. How long a start command is assumed to take to reach the slowest target node and finish its preroll. A guess, not a measurement. The bounds are a typo guard, not a tuned range. */
+            scheduledStartDeliveryBoundMs: number;
+            /** @description Read by the coordinator, not by a node. Deliberate slack held back beyond scheduledStartDeliveryBoundMs. Stays a judgement even once the bound is measured. The bounds are a typo guard. */
+            scheduledStartMarginMs: number;
         };
         /** @description The body of GET and PUT /config/audio.settings. Never `404`s: the payload has a well-defined default, reported with `revision` `0` and `source` `"default"` when nothing has ever been written, mirroring RenderSettingsConfigResponse's identical posture. */
         AudioSettingsConfigResponse: {
@@ -7218,7 +7238,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
+                "application/json": components["schemas"]["AudioSessionStartRequest"];
             };
         };
         responses: {
