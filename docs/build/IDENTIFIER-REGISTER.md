@@ -1266,7 +1266,7 @@ The store schema version, bumped by migrations in
 | v9 | shipped | Track C seam C3 (audio session desired state, `audio_sessions`) |
 | v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox filled by seam F4) |
 | v11 | released, dead | was credential storage moving from the data directory into SQLite, reserved 2026-08-18. Stale by the time this was built: v32 had already shipped, so v11 sits at or below the stamped maximum and a migration numbered here can never run, for the identical reason v21/v22/v23 moved. The work ships as v33 instead |
-| v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
+| v12 | released | was durable action-invocation attribution and lifecycle state, reserved 2026-08-19 (Linear SM-100/SM-102). Released 2026-09-08 for the same reason as v11, v13, v21, v22 and v23: v33 has shipped, so v12 sits far below the stamped maximum and a migration numbered here can never run. The work renumbers above the maximum when it is built, and is not cancelled |
 | v13 | released | reserved 2026-08-19 for the `commands.requested_revision` rename and never built; that work runs as v22 |
 | v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
 | v15 | shipped | Track H seam H2: FPP playlist definition storage (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3) |
@@ -1296,6 +1296,12 @@ free one. That follows this file's own rule at the top: reserving costs
 nothing and a collision costs a rename across a whole branch. v22 is now
 registered to SM-111 in the row above, so the gap is closed rather than
 standing.
+
+**v12 is released on the same rule, 2026-09-08.** It was held from 2026-08-19
+and never built, and v33 shipped in the meantime, so it sits twenty-one versions
+below the stamp. A row that says reserved below the maximum is not a reservation,
+which is why it is marked rather than left standing. The work it was held for
+renumbers above the maximum when it is built.
 
 **v21, v22 and v23 are released as dead, and nothing at or below the shipped
 maximum is ever reserved again.** v24 shipped on 2026-08-31. `migrate()` targets
