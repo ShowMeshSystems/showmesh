@@ -935,6 +935,28 @@ report signal only.
 |---|---|---|
 | `node.audio.silence` | shipped | SM-494 |
 
+**Six node-level `node.audio.timeline.*` signals, owner-minted for Track
+I seam I2, 2026-09-08.** RES-019 section 10's timeline namespace, spelled
+by the owner and closed: a seventh name needs another ruling. `scheduled_at`
+is the `T0` the running session was given, on the reporting node's media
+clock, in nanoseconds as an `int64` (past `Number.MAX_SAFE_INTEGER`, so
+every decoder on the path preserves the literal rather than rounding it);
+`expected_ms` is `media_now` minus `T0`; `actual_ms` is the presented
+sample count over the nominal rate, read from the sink clock and never
+from the decode frontier; `error_ms` is expected minus actual; `resyncs`
+counts discontinuity seeks performed; `last_resync_reason` names why the
+most recent one fired. A node with no locked clock provider keeps
+start-on-arrival and reports all six as `not_collected`.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.timeline.scheduled_at` | reserved | Track I seam I2 |
+| `node.audio.timeline.expected_ms` | reserved | Track I seam I2 |
+| `node.audio.timeline.actual_ms` | reserved | Track I seam I2 |
+| `node.audio.timeline.error_ms` | reserved | Track I seam I2 |
+| `node.audio.timeline.resyncs` | reserved | Track I seam I2 |
+| `node.audio.timeline.last_resync_reason` | reserved | Track I seam I2 |
+
 **Lane 18a signal reservations, 2026-08-28.** Reserved by the lane before
 its builders start, so that two branches cannot mint two spellings for the
 same fact. A builder ships the rows its chosen shape needs and leaves the

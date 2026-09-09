@@ -1929,21 +1929,36 @@ func DecodeLWTPayload(env Envelope) (LWTPayload, error) {
 	return p, nil
 }
 
-// preserveExactRevision replaces p.Params["revision"] with the exact
-// json.Number decoded from raw, if present and numeric.
-func preserveExactRevision(p *CmdPayload, raw json.RawMessage) {
-	if _, present := p.Params["revision"]; !present {
-		return
-	}
+// exactIntegerParams are the command params whose values legitimately
+// exceed float64's exact integer range, so that encoding/json's default
+// float64 decode would round them: a nanosecond-scale session revision,
+// and audio.session.start's media-clock start instant (pkg/audio's
+// ParamScheduledAtNs, kept in step by this package's own
+// TestExactIntegerParamsMatchTheAudioVocabulary). Every other param
+// decodes as float64 exactly as before.
+var exactIntegerParams = []string{"revision", "scheduledAtNs"}
+
+// preserveExactIntegers replaces each of [exactIntegerParams] present in
+// p.Params with the exact json.Number decoded from raw. A param that is
+// present but not a JSON number is left as encoding/json decoded it, so
+// the ordinary type check at the reading end still reports it.
+func preserveExactIntegers(p *CmdPayload, raw json.RawMessage) {
 	var shell struct {
-		Params struct {
-			Revision json.Number `json:"revision"`
-		} `json:"params"`
+		Params map[string]json.RawMessage `json:"params"`
 	}
 	if err := json.Unmarshal(raw, &shell); err != nil {
 		return
 	}
-	p.Params["revision"] = shell.Params.Revision
+	for _, name := range exactIntegerParams {
+		if _, present := p.Params[name]; !present {
+			continue
+		}
+		var n json.Number
+		if err := json.Unmarshal(shell.Params[name], &n); err != nil {
+			continue
+		}
+		p.Params[name] = n
+	}
 }
 
 // DecodeCmdPayload decodes env.Payload as a [CmdPayload]. It returns an
@@ -1962,10 +1977,11 @@ func DecodeCmdPayload(env Envelope) (CmdPayload, error) {
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
-	// p.Params["revision"] comes out a json.Number here, unlike every
-	// other number in p.Params (float64): nanosecond-scale revisions
-	// exceed float64's exact integer range.
-	preserveExactRevision(&p, env.Payload)
+	// Each of exactIntegerParams comes out a json.Number here, unlike
+	// every other number in p.Params (float64): a nanosecond-scale
+	// revision or media-clock instant exceeds float64's exact integer
+	// range.
+	preserveExactIntegers(&p, env.Payload)
 	if err := p.Validate(); err != nil {
 		return CmdPayload{}, fmt.Errorf("mqttproto: decode cmd payload: %w", err)
 	}
