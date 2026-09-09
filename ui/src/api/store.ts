@@ -189,6 +189,10 @@ type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationRespo
 // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action/show.macro
 // configuration objects and the macro run surface.
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
+// audio.node's list carries channel placement no other kind's list does,
+// so it has its own dedicated response shape rather than
+// SchemaConfigObjectsListResponse - see listConfigObjects' own overloads.
+type SchemaAudioNodeListResponse = components['schemas']['AudioNodeListResponse']
 type SchemaConfigShowAction = components['schemas']['ConfigShowAction']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaConfigShowMacro = components['schemas']['ConfigShowMacro']
@@ -1970,6 +1974,15 @@ export class ApiStore {
    * does not accept it on itself.
    */
   async listConfigObjects(
+    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'media.playlist' | 'night.session',
+    show?: string,
+  ): Promise<SchemaConfigObjectsListResponse>
+  // audio.node has its own dedicated list response (SchemaAudioNodeListResponse):
+  // its objects carry programChannels/ltcChannel, a shape
+  // SchemaConfigObjectsListResponse has no field for. It also carries no
+  // show reference, so `show` is never passed for it.
+  async listConfigObjects(kind: 'audio.node'): Promise<SchemaAudioNodeListResponse>
+  async listConfigObjects(
     kind:
       | 'show.action'
       | 'show.macro'
@@ -1979,15 +1992,13 @@ export class ApiStore {
       | 'show.playlist'
       | 'media.playlist'
       | 'night.session'
-      // audio.node carries no show reference (its own list summary reports
-      // programRoute as label instead) - `show` is simply never passed for it.
       | 'audio.node',
     show?: string,
-  ): Promise<SchemaConfigObjectsListResponse> {
+  ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {
     const controller = this.beginSideCall()
     try {
       const query = kind !== 'show' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
-      return await this.client.getJson<SchemaConfigObjectsListResponse>(
+      return await this.client.getJson<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse>(
         `/config/${kind}${query}`,
         controller.signal,
       )

@@ -5,7 +5,7 @@ import {
   listConfigObjects,
   putAudioNode,
   type AudioNodeConfigResponse,
-  type ConfigObjectSummary,
+  type AudioNodeSummary,
 } from '../api'
 import { Button, ButtonRow, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
 import type { ConfigAudioNode } from '../api'
@@ -24,7 +24,7 @@ const ROLE_OPTIONS: readonly { value: AudioNodeRole; label: string }[] = [
   { value: 'zone', label: 'Zone' },
 ]
 
-type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
+type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 type NodeState =
   | { kind: 'loading' }
   | { kind: 'loaded'; response: AudioNodeConfigResponse }

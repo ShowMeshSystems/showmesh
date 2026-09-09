@@ -179,6 +179,21 @@ const (
 	// reachable-or-not network hop the operator can act on (is the host
 	// up, is the plugin installed) rather than a coordinator defect.
 	ProblemTypeFPPTransitionGainWriteFailed = problemBaseURI + "fpp-transition-gain-write-failed"
+
+	// ProblemTypeFPPDefinitionRepublishFailed is
+	// POST /fpp/{instanceId}/playlist-definitions/republish's own upstream
+	// failure: the request was valid and the instance is configured, but
+	// the republish produced no usable result. That covers an unreachable
+	// host, a plugin that refused, and a plugin that answered something
+	// the coordinator will not relay: an undecodable body, an unsupported
+	// schemaVersion, or an applied answer claiming no sweep is owed. The
+	// last of those did apply, so nothing here may call this a refusal.
+	// Its own type, and a 502 rather than a 500, for
+	// [ProblemTypeFPPTransitionGainWriteFailed]'s reason: the fault is on
+	// the far side of a network hop the operator can act on (is the host
+	// up, is the plugin installed and publishing definitions) rather than
+	// a coordinator defect.
+	ProblemTypeFPPDefinitionRepublishFailed = problemBaseURI + "fpp-definition-republish-failed"
 )
 
 // supportedAPIVersions is the fixed, single-element list this coordinator
@@ -706,5 +721,22 @@ func fppTransitionGainWriteFailedProblem(instanceID string, err error) v1.Proble
 		Title:  "FPP transition gain write failed",
 		Status: http.StatusBadGateway,
 		Detail: fmt.Sprintf("the brightness transition gain write to FPP instance %q did not take: %v", instanceID, err),
+	}
+}
+
+// fppDefinitionRepublishFailedProblem reports a republish that produced no
+// usable result. The prefix deliberately claims nothing about why: one of
+// the cases it serves is a plugin that DID apply and then contradicted the
+// contract, so a prefix asserting a refusal would contradict its own
+// appended error text, and an operator mid-show acts on the first clause.
+// That error text is carried verbatim: the plugin refuses with its own
+// wording, and paraphrasing it would cost the operator the only
+// description of what the FPP host actually said.
+func fppDefinitionRepublishFailedProblem(instanceID string, err error) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPDefinitionRepublishFailed,
+		Title:  "FPP playlist definition republish failed",
+		Status: http.StatusBadGateway,
+		Detail: fmt.Sprintf("the playlist definition republish request to FPP instance %q did not produce a usable result: %v", instanceID, err),
 	}
 }
