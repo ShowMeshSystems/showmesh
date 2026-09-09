@@ -618,9 +618,12 @@ func Run() int {
 	// HTTP POST arriving." A short nudge floor here is safe precisely
 	// because this Runner polls nothing over the network — Poll only
 	// renders state Observe already recorded — so nothing here can turn a
-	// fast nudge into a poll storm against a live FPP host.
+	// fast nudge into a poll storm against a live FPP host. Matches
+	// fppMQTTPushNudgeMinInterval immediately above, on the identical
+	// reasoning: this is a push-only Runner, not the REST poller
+	// [collector.DefaultNudgeMinInterval] was sized to protect.
 	fppPluginRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger,
-		collector.WithNudgeMinInterval(200*time.Millisecond))
+		collector.WithNudgeMinInterval(fppMQTTPushNudgeMinInterval))
 	fppPluginCollector := fppplugin.New(fppPluginEndpointResolver{st: st, endpoints: fppEndpoints}, func() {
 		fppPluginRunner.Nudge(fppplugin.CollectorID)
 	})
