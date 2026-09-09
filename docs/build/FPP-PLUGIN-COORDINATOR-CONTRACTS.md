@@ -32,6 +32,14 @@ previously discarded. Per owner ruling (2026-09-08): the fleet is moving to FPP
 unchanged; see §1.8 for why the `start` term stays and why the upgrade order
 matters.
 
+**2026-09-08 amendment, definition republish:** §3 gains §3.9, a frozen shape
+for a coordinator-triggered republish of playlist definitions, served by the
+plugin as an inbound route. §3.8 and the section now numbered §3.10 are
+corrected where §3.9 makes them false. The plugin has served an inbound route
+since it shipped section 2.2's brightness path, so §3.8's "no inbound HTTP
+route" clause was already stale before this amendment; the second-listener and
+callback-thread constraints beside it are unchanged and stay.
+
 **2026-08-26 correction:** sections 1.2 and 1.3 left the canonical spelling
 of `section` implicit — described as "FPP playlist section" with no fixed
 vocabulary. Two independently correct implementations each read that as a
@@ -610,8 +618,8 @@ is not a claim that either exists.
 
 ## 3. Playlist definition publication
 
-**Status: SHIPPED**, apart from the coordinator-triggered republish, which has
-no agreed shape yet.
+**Status: SHIPPED,** except §3.9, which carries its own status: both sides are
+built for everything else in this section.
 
 Frozen 2026-08-22 for Track H seam H2. Section 1 gives the coordinator a
 playlist hash and an entry key. Neither says what the playlist contains, so
@@ -816,14 +824,167 @@ listed here with where it landed, so the next reader does not re-derive it:
 - The posted-hash set section 3.7 describes is `heldDefinitions_`, keyed on
   instance UUID and playlist hash, in memory only, so a restart re-posts.
 
-Still true, and still a constraint rather than a task: no inbound HTTP route,
-no second listener, and no change to the callback thread's bounded
-copy-and-return.
+Still true, and still a constraint rather than a task: no second listener, and
+no change to the callback thread's bounded copy-and-return. The
+no-inbound-route half of that sentence no longer holds, independently of
+anything in this section: the plugin serves section 2.2's brightness route on
+both majors, and §3.9 specifies a second inbound route for this section. Both
+register on fppd's own web server, which is exactly what section 3.1 permits;
+neither opens a listener of its own, and neither runs on the callback
+thread.
 
-### 3.9 What this section does not do
+### 3.9 The coordinator-triggered republish
 
-- It does not let the coordinator write anything to FPP or to the plugin.
-- It does not give the coordinator a second source of entry identity. The
+**Status: DESIGNED, NOT BUILT.** Neither side serves or calls this. Everything
+else in section 3 is shipped; this subsection is a frozen shape, and no
+sentence in it reports deployed behavior.
+
+Be precise about the size of the win, because it is bounded. Section 3.7's
+re-scan already recovers an edited playlist by itself: the sweep re-reads the
+host's playlist definitions, and the skip that suppresses a repeat of one is
+content addressed, so a playlist the operator just edited hashes
+differently, is not suppressed, and reaches the coordinator within the 60
+second interval with nobody asking. **This route makes no previously
+impossible thing possible.** For an edit it collapses a bounded wait to now,
+and that is the whole of it: the operator who has just changed a playlist on
+the FPP host, wants ShowMesh to show the new revision before they carry on
+authoring, and today waits.
+
+There is a second case, and that one does not self-heal. If the coordinator
+loses, or never durably stored, a definition it once accepted, the plugin
+still holds that hash in `heldDefinitions_`, the content-addressed skip fires
+on every later sweep because the content has not changed, and only a plugin
+restart clears it. No action available from the coordinator repairs that
+today. That is the repair this route exists for; the faster edit is the
+convenience it also buys.
+
+**The address.** The coordinator posts to the resident plugin component, on
+the FPP host, at:
+
+```text
+POST /api/plugin-apis/showmesh/playlists/republish
+```
+
+**That is the address. It is not the path the plugin registers**, and the two
+are different strings for the reason section 2.2 sets out in full. The plugin
+registers `/showmesh/playlists/republish` with its own major's web server; the
+`/api/plugin-apis` prefix is what FPP's Apache requires to reach it. Section
+2.2's three facts apply here unchanged: both majors bind their own HTTP server
+to `127.0.0.1` only, Apache proxies plugin routes under exactly one prefix,
+and both majors register on the server that prefix reaches. A registered path
+that itself begins with `/api` still works, but only at an address carrying
+`/api` twice. The distinction is load bearing rather than cosmetic, because a
+route can register successfully, appear in the host's own route table, and
+still answer `404` to every real caller.
+
+The plugin opens no listening socket of its own to serve this. It is the
+second route to use the general permission section 3.1 states, not an
+exception to it.
+
+**This route is unauthenticated,** on section 2.2's accepted posture and for
+its reasons. Any host on the show LAN can post to it. What such a caller can
+cause is narrow: a republish sends the plugin's own definitions, read from the
+host's own playlist files, under hashes the coordinator verifies for itself
+(§3.4 step 7). The worst an accidental or hostile caller achieves is a sweep
+that arrives early and a set of idempotent `200`s.
+
+Body:
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schemaVersion` | integer | yes | Currently `1`. Any other value is refused. |
+| `requestId` | string | yes | Caller-minted idempotency key, non-empty. A repeat of the same id applies nothing and answers with the state as it stands. |
+
+The body is bounded at **4096 bytes**; a larger body is refused before it is
+parsed. Two small fields never need more, and the bound exists because the
+route is unauthenticated: an unbounded read on an FPP host during a show is a
+risk no body size justifies. The plugin remembers only the last applied
+`requestId`, exactly as section 2.2's route does, so a caller that alternates
+between two ids applies both; the key defends a retried request, not a
+replayed one. The key is checked after the body validates, not before, because
+a malformed body carrying an already-seen id is still malformed.
+
+**What an applied request does.** Exactly three things, and the third is a
+prohibition.
+
+1. **It clears the re-scan cadence,** so the sweep runs on the worker's next
+   pass instead of waiting out `kDefinitionRescanIntervalMillis`. The route
+   does not run the sweep on the HTTP thread: the sweep reads the playlist
+   directory, hashes every definition, and posts each one with the retry
+   policy's full backoff budget, which is unbounded work to hold an inbound
+   request open across, and it must not run twice concurrently. The route
+   makes a sweep due; the worker performs it.
+2. **It clears `heldDefinitions_`,** so a definition the coordinator lost is
+   sent again even though its hash has not changed. This is the whole of the
+   repair. Without it the route would accelerate only the case that already
+   recovers on its own, and would leave the case that cannot recover exactly
+   where it was. Any other suppression the sweep carries is cleared with it:
+   if an implementation takes section 3.7's option to skip a file whose size
+   and modification time are unchanged, a republish must clear that too, or
+   the definition the coordinator lost is skipped before its hash is ever
+   reconsidered.
+3. **It MUST NOT clear `refusedDefinitions_`.** A terminal refusal is one
+   whose reason cannot change until the plugin restarts: the plugin's own JSON
+   for that definition was unusable, or the coordinator rejected the hash it
+   declared, §3.5's `definition-hash-mismatch`. Re-sending those bytes gets
+   the identical answer. Clearing the set would turn one operator action into
+   a retry loop against a condition that will not improve, spending the retry
+   policy's backoff ahead of the observations and definitions that would
+   succeed. An implementation that clears both sets because they sit beside
+   each other is wrong, and this is the sentence it is wrong against.
+
+**The response.** It reports what the plugin did and what it holds at the
+moment it answers, never a bare `200` and never an echo of the request:
+
+```json
+{"schemaVersion":1,"applied":true,"definitionsCleared":6,"definitionsHeld":0,"definitionsRefusedTerminally":1,"sweepPending":true}
+```
+
+Every field is knowable when the response is written, and each is there
+because it answers a question the operator actually has:
+
+| Field | Type | What it is, and why the plugin can know it |
+|---|---|---|
+| `schemaVersion` | integer | Always `1`. |
+| `applied` | boolean | `true` when this request cleared state, `false` on a repeat of the last applied `requestId`. The plugin holds that id itself. |
+| `definitionsCleared` | integer | How many `(instanceUuid, playlistHash)` pairs this request dropped from `heldDefinitions_`, counted in the same critical section that clears the set. `0` on a repeat, which cleared nothing. |
+| `definitionsHeld` | integer | How many pairs that set holds as the answer is written, read in that same critical section. `0` immediately after an applied clear. On a repeat it is how many the worker has already re-sent and had accepted, so a repeat reports progress rather than an echo. |
+| `definitionsRefusedTerminally` | integer | How many pairs are held in `refusedDefinitions_` and were deliberately not cleared. This is the count of playlists the republish will not re-send, which is what an operator needs when the playlist they were chasing is still missing afterwards. |
+| `sweepPending` | boolean | Whether a sweep is owed and has not yet completed since this republish. Always `true` on an applied answer. On a repeat it is the current value, so polling the same `requestId` is how a caller learns the sweep finished. It must be readable by the HTTP handler without touching worker-thread-only state. |
+
+**What the response deliberately does not carry is a count of definitions the
+coordinator accepted.** The sweep is asynchronous and runs on the worker
+thread; when this route answers, not one of its posts has been attempted, so
+any acceptance count would be a guess or a number from the previous sweep
+presented as this one's. `sweepPending` is the strongest honest claim
+available at response time: the sweep is owed, not done. What actually arrived
+is read from the coordinator through section 3.6, which is authoritative
+because the coordinator computed those hashes itself, and `definitionsHeld` on
+a later repeat is the plugin's own view of the same progress.
+
+**Refusals** answer `400` with `{"schemaVersion":1,"applied":false,"error":"..."}`,
+matching the refusal shape section 2.2's route already serves: a body that is
+not valid JSON or not an object, a `schemaVersion` other than `1`, a missing,
+non-string, or empty `requestId`, a body over the bound, and a plugin not
+configured to publish definitions at all. This route has no `413` and no
+problem-type vocabulary, unlike sections 1 and 3.2. That is a deliberate
+difference rather than an omission: those are coordinator routes and answer in
+the coordinator's own refusal vocabulary, while this one is served by the
+plugin and answers in the plugin's, which is one shape for every refusal.
+
+Nothing here grants execution authority. The route writes nothing to FPP,
+alters no definition, and cannot cause the plugin to publish a definition it
+did not itself read from the host and hash.
+
+### 3.10 What this section does not do
+
+- It does not let the coordinator write anything to FPP. §3.9 does give the
+  coordinator one write to the plugin, and the whole of its effect is to make
+  the plugin re-send definitions it has already read from the host and hashed:
+  it sets no FPP state, alters no definition, and adds no value the plugin did
+  not derive from the host's own files.
+- It does not give the coordinator a second source of entry identity, and
+  §3.9 does not add one either. The
   entry key still comes from section 1.3, derived from the same five fields.
 - It does not make a definition an observation. It carries no sequence, is not
   ordered against anything, and grants no execution authority. Track H applies
