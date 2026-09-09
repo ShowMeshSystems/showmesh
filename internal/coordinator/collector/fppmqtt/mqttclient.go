@@ -127,6 +127,33 @@ type Options struct {
 	// means time.Now. Tests inject a fake clock so staleness/ordering
 	// assertions do not need real sleeps.
 	Now func() time.Time
+
+	// PushSignal, when set, is called once after every stored inbound
+	// message (see newPublishHandler) so a caller can drive an immediate
+	// out-of-band Poll instead of waiting out this Collector's own
+	// [DefaultPollInterval]. This is the fix for the one latency this
+	// package's own push-to-poll design otherwise adds on top of
+	// whatever FPP's own publish cadence already is: a message that just
+	// arrived sitting in the message store until the next scheduled Poll
+	// call.
+	//
+	// PushSignal must return immediately and must never block: it is
+	// called synchronously from the MQTT client library's own publish
+	// callback goroutine (see doc.go's "never publishes" concerns — this
+	// is the equivalent concern for read latency, not for the read-only
+	// guarantee itself), and a PushSignal that blocks would stall every
+	// subsequent inbound message on this same connection. The intended
+	// implementation is a rate-limited, coalescing nudge of a dedicated
+	// [collector.Runner] registered for this Collector (see
+	// internal/coordinator/fppmqttmanager.go) — never a direct call back
+	// into this Collector's own Poll, which stays the sole property of
+	// whatever Runner is polling it.
+	//
+	// nil (the default, and every existing caller of New before this
+	// field existed) means no push path: this Collector's evidence
+	// reaches the store only on its registered Runner's own poll cadence,
+	// exactly as before.
+	PushSignal func()
 }
 
 // Collector implements collector.Collector for FPP's own MQTT-published
@@ -140,6 +167,11 @@ type Collector struct {
 	username    string
 	password    string
 	topicPrefix string
+
+	// pushSignal is Options.PushSignal, called once per stored message —
+	// see that field's doc comment. nil is a valid, common value (no push
+	// path configured); callers must check before invoking it.
+	pushSignal func()
 
 	// hosts is instanceID -> FPP HostName, exactly Options.Hosts (after
 	// validation). hostToInstance is its precomputed reverse, HostName ->
@@ -323,6 +355,7 @@ func New(opts Options) (*Collector, error) {
 		store:           newMessageStore(),
 		unmatchedLogged: make(map[string]bool),
 		connReason:      "mqtt broker connection not yet established",
+		pushSignal:      opts.PushSignal,
 	}, nil
 }
 
@@ -453,6 +486,13 @@ func (c *Collector) newPublishHandler() func(paho.PublishReceived) (bool, error)
 			receivedAt: c.now(),
 		})
 		c.markMessageReceived(instanceID)
+
+		// Fire the push path (if configured) AFTER the store write is
+		// already visible, and never block on it — see Options.PushSignal's
+		// doc comment for why this must stay a fire-and-forget call.
+		if c.pushSignal != nil {
+			c.pushSignal()
+		}
 
 		// Always report the message as handled: this is the only consumer
 		// on this connection.

@@ -27,6 +27,26 @@ import (
 // plausibly notice otherwise.
 const fppMQTTReconcileInterval = 10 * time.Second
 
+// fppMQTTPushNudgeMinInterval governs the DEDICATED Runner
+// coordinator.go builds for fppMQTTMgr (fppMQTTRunner) — never
+// fppRunner's own [collector.DefaultNudgeMinInterval], which stays
+// exactly as measured for the REST collector's command-dispatch bursts.
+//
+// Owner ruling (2026-09-09): the coordinator's own push latency added to
+// FPP's real publish cadence must be at most about one second, not the
+// 5 second [fppmqtt.DefaultPollInterval] this collector's poll cadence
+// otherwise waits out. SHOWMESH HYPOTHESIS, NOT MEASURED as a standalone
+// number, but bounded well under budget by construction: this Runner's
+// Poll is fppmqtt.Collector.Poll, which never touches the network (a
+// pure render of an in-memory cache — see that package's own doc
+// comment), so nothing here risks "monitoring impairing a show device"
+// the way [collector.DefaultNudgeMinInterval]'s 2s was sized to guard
+// against for the REST collector's live HTTP polls. A short interval only
+// coalesces a genuine burst (several topics landing within the same
+// windowed the FPP daemon happens to publish them in) into one Poll
+// call; it does not throttle anything a display depends on.
+const fppMQTTPushNudgeMinInterval = 200 * time.Millisecond
+
 // fppMQTTConfigSource resolves the active fpp.mqtt configuration (plus its
 // live password) on demand, caching against the revision number it came
 // from — mirrors resolumeInstanceSource.
@@ -152,6 +172,18 @@ func (m *fppMQTTManager) buildBundle(ctx context.Context, cfg config.FPPMQTTConf
 		TopicPrefix: cfg.TopicPrefix,
 		Hosts:       cfg.Hosts,
 		Logger:      m.logger,
+		// PushSignal drives m.runner's own Nudge/loop machinery instead
+		// of writing to the sink directly: the only caller of this
+		// Collector's Poll stays m.runner's poll loop, so this never
+		// risks two goroutines rendering (and delivering) this
+		// Collector's snapshot concurrently. m.runner is fppMQTTRunner
+		// (coordinator.go), dedicated to this one bundle, so nudging it
+		// freely never disturbs fppRunner's REST-tuned spacing. Nudge's
+		// own suppression (an already-pending or too-recent request) is
+		// never surfaced as a failure here, matching its documented
+		// contract: the collector's own poll cadence is the fallback
+		// either way.
+		PushSignal: func() { m.runner.Nudge(fppMQTTCollectorSourceID) },
 	})
 	if err != nil {
 		return nil, err
