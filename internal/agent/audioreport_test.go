@@ -1009,3 +1009,178 @@ func TestRunAudioReportWedgedEngineAvailableFreezesTheTickInsteadOfPublishingFal
 		t.Fatalf("publish calls after releasing the wedge = %d, want 2", got)
 	}
 }
+
+func TestDecideAudioReportIntervalStaysNormalWhenNoFadeIsActive(t *testing.T) {
+	var state audioReportCadenceState
+	now := time.Unix(1_700_000_000, 0)
+	got := decideAudioReportInterval(&state, false, now, 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	if got != 5*time.Second {
+		t.Fatalf("interval with no fade active = %v, want the normal 5s interval", got)
+	}
+}
+
+func TestDecideAudioReportIntervalElevatesTheTickAFadeFirstReportsActive(t *testing.T) {
+	var state audioReportCadenceState
+	now := time.Unix(1_700_000_000, 0)
+	got := decideAudioReportInterval(&state, true, now, 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	if got != 500*time.Millisecond {
+		t.Fatalf("interval on the tick a fade first reports active = %v, want the elevated 500ms interval", got)
+	}
+}
+
+func TestDecideAudioReportIntervalStaysElevatedWhileWithinTheCap(t *testing.T) {
+	var state audioReportCadenceState
+	start := time.Unix(1_700_000_000, 0)
+	decideAudioReportInterval(&state, true, start, 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	got := decideAudioReportInterval(&state, true, start.Add(9*time.Second), 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	if got != 500*time.Millisecond {
+		t.Fatalf("interval 9s into a still-active fade (10s cap) = %v, want still elevated", got)
+	}
+}
+
+// mutation target: the cap comparison in decideAudioReportInterval. This
+// is the case that matters most in this issue's lane: another builder is
+// separately investigating a fade whose own FadeState can be left stuck
+// in_progress by a stop that interrupts it, never reporting completion.
+// If this node's report cadence keyed only on "a fade is active" with no
+// independent bound, a single such stuck session would report fast for
+// the rest of the process's life. This proves the cap alone ends the
+// elevation once it elapses, with no dependence on FadeState ever
+// clearing on its own.
+func TestDecideAudioReportIntervalCapEndsElevationWhenFadeStateNeverReportsComplete(t *testing.T) {
+	var state audioReportCadenceState
+	start := time.Unix(1_700_000_000, 0)
+	decideAudioReportInterval(&state, true, start, 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	got := decideAudioReportInterval(&state, true, start.Add(10*time.Second), 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	if got != 5*time.Second {
+		t.Fatalf("interval once the elevation cap elapses with fadeActive still true = %v, want back to the normal 5s interval", got)
+	}
+}
+
+// mutation target: a capped elevation re-arming itself on the very next
+// tick merely because the same stuck fade is still reported active,
+// which would make the node alternate between elevated and normal
+// forever instead of settling at normal -- the flapping the cap alone,
+// without this latch, would produce.
+func TestDecideAudioReportIntervalDoesNotReElevateOnTheTickAfterCappingWhileStillStuck(t *testing.T) {
+	var state audioReportCadenceState
+	start := time.Unix(1_700_000_000, 0)
+	decideAudioReportInterval(&state, true, start, 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	decideAudioReportInterval(&state, true, start.Add(10*time.Second), 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	got := decideAudioReportInterval(&state, true, start.Add(10500*time.Millisecond), 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	if got != 5*time.Second {
+		t.Fatalf("interval one tick after capping, fade still reported active = %v, want normal (no re-elevation until fadeActive genuinely reports false)", got)
+	}
+}
+
+func TestDecideAudioReportIntervalReArmsAfterCapOnceFadeStateGenuinelyClears(t *testing.T) {
+	var state audioReportCadenceState
+	start := time.Unix(1_700_000_000, 0)
+	decideAudioReportInterval(&state, true, start, 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	decideAudioReportInterval(&state, true, start.Add(10*time.Second), 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	decideAudioReportInterval(&state, false, start.Add(15*time.Second), 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	got := decideAudioReportInterval(&state, true, start.Add(20*time.Second), 5*time.Second, 500*time.Millisecond, 10*time.Second)
+	if got != 500*time.Millisecond {
+		t.Fatalf("interval on a genuinely new fade after a prior one capped and then cleared = %v, want elevated again", got)
+	}
+}
+
+func TestAnyFadeInProgressTrueOnlyWhenASessionReportsFadeInProgress(t *testing.T) {
+	cases := []struct {
+		name  string
+		snaps []audio.SessionSnapshot
+		want  bool
+	}{
+		{"no sessions", nil, false},
+		{"one session none", []audio.SessionSnapshot{{FadeState: audio.FadeStateNone}}, false},
+		{"one session complete", []audio.SessionSnapshot{{FadeState: audio.FadeStateComplete}}, false},
+		{"one session in progress", []audio.SessionSnapshot{{FadeState: audio.FadeStateInProgress}}, true},
+		{"second of two in progress", []audio.SessionSnapshot{{FadeState: audio.FadeStateNone}, {FadeState: audio.FadeStateInProgress}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := anyFadeInProgress(tc.snaps); got != tc.want {
+				t.Fatalf("anyFadeInProgress(...) = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunAudioReportTickerElevatesCadenceWhileAFadeIsActive(t *testing.T) {
+	mgr := &stubSnapshotter{results: [][]audio.SessionSnapshot{
+		{{FadeState: audio.FadeStateInProgress}},
+	}}
+	out := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReportTicker(ctx, mgr, 400*time.Millisecond, 40*time.Millisecond, time.Second, time.Now, out)
+	}()
+
+	start := time.Now()
+	<-out
+	firstGap := time.Since(start)
+	if firstGap < 300*time.Millisecond {
+		t.Fatalf("first tick arrived after %v, want close to the normal 400ms interval (must not already be elevated)", firstGap)
+	}
+
+	afterFirst := time.Now()
+	<-out
+	secondGap := time.Since(afterFirst)
+	if secondGap > 250*time.Millisecond {
+		t.Fatalf("second tick arrived after %v once a fade was reported active, want close to the elevated 40ms interval", secondGap)
+	}
+
+	cancel()
+	<-done
+}
+
+// Constraint: a node that cannot actually speed up (here, an
+// elevatedInterval no shorter than normalInterval) must keep reporting
+// at its normal cadence rather than failing -- never handed to
+// time.Ticker.Reset, which this would not even make invalid, just
+// pointless or, for a shorter normalInterval than elevatedInterval,
+// backwards.
+func TestRunAudioReportTickerStaysNormalWhenElevatedIntervalCannotSpeedAnythingUp(t *testing.T) {
+	mgr := &stubSnapshotter{results: [][]audio.SessionSnapshot{
+		{{FadeState: audio.FadeStateInProgress}},
+	}}
+	out := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReportTicker(ctx, mgr, 120*time.Millisecond, 120*time.Millisecond, time.Second, time.Now, out)
+	}()
+
+	start := time.Now()
+	<-out
+	<-out
+	if d := time.Since(start); d < 200*time.Millisecond {
+		t.Fatalf("two ticks arrived within %v, want each spaced close to the normal 120ms interval (elevation must not apply)", d)
+	}
+
+	cancel()
+	<-done
+}
+
+// A nil snapshotter (no asset directory configured on this node, the
+// same nil convention every other live-evidence source in this file
+// already honors) must not panic this loop; it simply has nothing to
+// elevate for.
+func TestRunAudioReportTickerToleratesNilSnapshotter(t *testing.T) {
+	out := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReportTicker(ctx, nil, 50*time.Millisecond, 10*time.Millisecond, time.Second, time.Now, out)
+	}()
+	<-out
+	cancel()
+	<-done
+}

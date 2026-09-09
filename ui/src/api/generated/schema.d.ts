@@ -2872,10 +2872,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Ask the existing asset-sync service to re-check this node now
-         * @description Behind `asset:write`, the same write-authority scope as `POST .../assets/remove`. Dispatches no command of its own: it nudges the existing asset-sync service (Track E seam E6, `assetsync.Service`) to run its own gap-driven tick now, for every declared node including this one, instead of waiting out its own sync interval - the identical hook `POST /assets` (upload) already uses.
+         * Ask this node for a fresh inventory report and repair against it
+         * @description Behind `asset:write`, the same write-authority scope as `POST .../assets/remove`. Asks nodeId for a fresh asset inventory report now, stamped with the authenticated caller as issuer, and records that this node has an outstanding re-sync intent. Neither of those waits for the node. The repair itself (the existing asset-sync service's gap-driven dispatch, the same mechanism `POST /assets` upload already nudges) runs later, triggered by the node's own next live asset inventory report once that report is fresher than this intent - never on a wall-clock timer, and never against a report already on hand when this request was accepted.
          *
-         *     Answers `202`, never `200`: accepted, and never confirmed by anything downstream at this layer - this route holds no confirmation loop of its own. Whether anything was actually missing, and whether a dispatched `asset.fetch` succeeded, is never claimed here; that evidence surfaces later, from the node's own next asset report, on `GET /nodes/{nodeId}/assets`.
+         *     Answers `202`, never `200`: accepted, and never confirmed by anything downstream at this layer - this route holds no confirmation loop of its own. Whether anything was actually missing, and whether a dispatched `asset.fetch` succeeded, is never claimed here; that evidence surfaces later, from the node's own next asset report, on `GET /nodes/{nodeId}/assets`. A node that never answers simply leaves the intent outstanding.
          *
          *     `400` when `assets.settings`' `contentBaseUrl` is not set: with sync disabled, dispatching an `asset.fetch` command would be accepted but never actually deliver anything, so this route refuses before accepting rather than promising a re-sync it cannot perform. `404` when `nodeId` does not name a declared node.
          */
@@ -6289,7 +6289,7 @@ export interface components {
             /** Format: date-time */
             resolvedAt?: string | null;
         };
-        /** @description The 202 body of POST /nodes/{nodeId}/assets/resync: acceptance only, never an outcome (this route holds no confirmation loop of its own - see that operation's own description). The re-sync itself runs on the existing asset-sync service's own gap-driven dispatch; its result surfaces later on GET /nodes/{nodeId}/assets. */
+        /** @description The 202 body of POST /nodes/{nodeId}/assets/resync: acceptance only, never an outcome (this route holds no confirmation loop of its own - see that operation's own description). The re-sync itself runs later, triggered by this node's own next live asset inventory report; its result surfaces later on GET /nodes/{nodeId}/assets. */
         ResyncNodeAssetsResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -6300,6 +6300,8 @@ export interface components {
             node: string;
             /** Format: date-time */
             acceptedAt: string;
+            /** @description The commandId of the asset.inventory.request this route published to node, naming the outstanding request the repair is waiting on. Omitted when publishing it failed; the node's outstanding re-sync intent still stands and still runs off its own next ordinary report. */
+            inventoryRequestCommandId?: string;
         };
         /** @description One node target's render activation within a fallback program (ADR-048, Track J's J1). filename is the runtime filename a node must open (and verify against assetHashes) to render it; sequence is a logical identity only. */
         FallbackProgramRenderActivation: {

@@ -31,19 +31,22 @@ import (
 // broker reconnect (see dispatchReconnectInventoryRequests), the same
 // "the process itself, not an operator" issuer shape assetsync's own
 // asset.fetch dispatch uses (internal/coordinator/assetsync/sync.go's
-// assetSyncIssuerPrincipalID/Name).
+// assetSyncIssuerPrincipalID/Name). publishInventoryRequest's other caller,
+// [BrokerManager.RequestNodeInventory], passes the authenticated operator
+// instead.
 const (
 	reconnectInventoryRequestIssuerPrincipalID   = "showmesh-broker-reconnect"
 	reconnectInventoryRequestIssuerPrincipalName = "ShowMesh broker reconnect"
 )
 
-// reconnectInventoryRequestConfirmationMethod is the wire value for
+// inventoryRequestConfirmationMethod is the wire value for
 // pkg/command.ConfirmationEvidence, independently reproduced here rather
 // than imported: this package does not import pkg/command, matching
 // mqttproto.CmdPayload.ConfirmationMethod's own doc comment on why every
 // wire-boundary package in this codebase keeps its own copy of this
-// constant.
-const reconnectInventoryRequestConfirmationMethod = "evidence"
+// constant. Shared by both publishInventoryRequest callers: the
+// confirmation method never varies with who is asking.
+const inventoryRequestConfirmationMethod = "evidence"
 
 // brokerProbeInterval is how often the background probe goroutine re-checks
 // the broker connection and re-stamps BrokerState.ObservedAt, independent of
@@ -214,44 +217,64 @@ func (b *BrokerManager) dispatchReconnectInventoryRequests(ctx context.Context, 
 			return
 		}
 		for _, nodeID := range nodeIDs {
-			if err := b.publishInventoryRequest(ctx, nodeID); err != nil {
+			issuer := mqttproto.CmdIssuer{
+				PrincipalID:   reconnectInventoryRequestIssuerPrincipalID,
+				PrincipalName: reconnectInventoryRequestIssuerPrincipalName,
+			}
+			if _, err := b.publishInventoryRequest(ctx, nodeID, issuer); err != nil {
 				logger.Warn("mqtt reconnect: failed to dispatch asset.inventory.request", "node_id", nodeID, "error", err)
 			}
 		}
 	}()
 }
 
+// RequestNodeInventory publishes an "asset.inventory.request" to nodeID
+// stamped with issuer and returns the CommandID assigned to it, so a
+// caller acting on behalf of an authenticated operator (see
+// internal/coordinator/api's POST .../assets/resync) can name that
+// principal in the wire envelope rather than borrowing this package's own
+// reconnect identity. Otherwise identical to publishInventoryRequest, which
+// this is a thin exported wrapper over.
+func (b *BrokerManager) RequestNodeInventory(ctx context.Context, nodeID string, issuer mqttproto.CmdIssuer) (string, error) {
+	return b.publishInventoryRequest(ctx, nodeID, issuer)
+}
+
 // publishInventoryRequest publishes one "asset.inventory.request"
 // [mqttproto.CmdPayload] to nodeID's cmd topic, QoS 1, never retained
 // (mqttproto.CmdDeliveryPolicy), with no params, matching internal/agent's
-// own assetInventoryRequestOperation, which requires none. Fire and forget: no
-// AwaitResponse, since dispatchReconnectInventoryRequests' own doc comment
-// already commits to never acting on whether this is answered.
-func (b *BrokerManager) publishInventoryRequest(ctx context.Context, nodeID string) error {
+// own assetInventoryRequestOperation, which requires none, stamped with
+// issuer. Fire and forget: no AwaitResponse, since
+// dispatchReconnectInventoryRequests' own doc comment already commits to
+// never acting on whether this is answered, and AwaitResponse itself would
+// discard this payload's own retained delivery once one arrives (see
+// [response.go]'s doc comment on why RETAINED deliveries are dropped
+// there).
+func (b *BrokerManager) publishInventoryRequest(ctx context.Context, nodeID string, issuer mqttproto.CmdIssuer) (string, error) {
 	topic, err := mqttproto.CmdTopic(nodeID)
 	if err != nil {
-		return fmt.Errorf("build cmd topic: %w", err)
+		return "", fmt.Errorf("build cmd topic: %w", err)
 	}
+	commandID := uuid.NewString()
 	payload := mqttproto.CmdPayload{
-		CommandID:      uuid.NewString(),
-		IdempotencyKey: uuid.NewString(),
-		Action:         "asset.inventory.request",
-		Target:         mqttproto.CmdTarget{Kind: "node", ID: nodeID},
-		Issuer: mqttproto.CmdIssuer{
-			PrincipalID:   reconnectInventoryRequestIssuerPrincipalID,
-			PrincipalName: reconnectInventoryRequestIssuerPrincipalName,
-		},
-		ConfirmationMethod: reconnectInventoryRequestConfirmationMethod,
+		CommandID:          commandID,
+		IdempotencyKey:     uuid.NewString(),
+		Action:             "asset.inventory.request",
+		Target:             mqttproto.CmdTarget{Kind: "node", ID: nodeID},
+		Issuer:             issuer,
+		ConfirmationMethod: inventoryRequestConfirmationMethod,
 	}
 	env, err := mqttproto.NewCmdEnvelope(b.now, nodeID, payload)
 	if err != nil {
-		return fmt.Errorf("build cmd envelope: %w", err)
+		return "", fmt.Errorf("build cmd envelope: %w", err)
 	}
 	raw, err := json.Marshal(env)
 	if err != nil {
-		return fmt.Errorf("marshal cmd envelope: %w", err)
+		return "", fmt.Errorf("marshal cmd envelope: %w", err)
 	}
-	return b.Publish(ctx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, raw)
+	if err := b.Publish(ctx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, raw); err != nil {
+		return "", err
+	}
+	return commandID, nil
 }
 
 // subscriptionsToOptions converts this package's own [Subscription] type to
