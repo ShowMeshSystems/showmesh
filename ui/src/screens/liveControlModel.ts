@@ -139,11 +139,16 @@ export function transportState(instance: FPPInstance): TransportState {
     itemCount: numberValue(obs, 'fpp.playlist.count'),
     media: stringValue(obs, 'fpp.media.filename') ?? stringValue(obs, 'fpp.sequence.name'),
     playerState: stringValue(obs, 'fpp.status.player_state'),
-    elapsedSeconds: numberValue(obs, 'fpp.position.elapsed.seconds'),
-    // fpp.position.seconds is FPP's "seconds_played" -- elapsed time, not a
-    // duration. fpp.position.duration.seconds is the coordinator's own
-    // computed total (seconds_played + seconds_remaining); this is the
-    // only signal that answers "how long is this item."
+    // fpp.position.seconds is FPP's "seconds_played" -- elapsed play time
+    // of the current item, present on every player-mode and remote-mode
+    // capture. fpp.position.elapsed.seconds is a DIFFERENT, remote-mode-only
+    // field and is deliberately not read here: binding elapsed to it left
+    // this pair unusable on a player-mode host, which is the mode that
+    // carries the playlist/entry the rest of this state reports.
+    // fpp.position.duration.seconds is the coordinator's own computed total
+    // (seconds_played + seconds_remaining); it is the only signal that
+    // answers "how long is this item."
+    elapsedSeconds: numberValue(obs, 'fpp.position.seconds'),
     totalSeconds: numberValue(obs, 'fpp.position.duration.seconds'),
     volume: numberValue(obs, 'fpp.volume'),
   }

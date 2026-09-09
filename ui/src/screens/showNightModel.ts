@@ -118,19 +118,29 @@ export type NextTransition =
 /**
  * Derived from observed playback, not a clock. A stale or missing position
  * makes the boundary unknown rather than assumed.
+ *
+ * elapsed reads fpp.position.seconds (FPP's "seconds_played"), never
+ * fpp.position.elapsed.seconds -- that signal is remote-mode-only and
+ * subtracting it from another elapsed value produced a wrong number on a
+ * remote host rather than an absence. total reads the coordinator-computed
+ * fpp.position.duration.seconds. remainingSeconds is computed from those two
+ * in one place below; swapping it for a single reported
+ * fpp.position.remaining.seconds later is a one-line change at that
+ * assignment, not a restructure.
  */
 export function nextTransition(model: Model): NextTransition {
   const instance = model.fpp[0]
   if (instance === undefined) return { known: false, reason: 'No FPP instance is reporting a position.' }
-  const elapsed = findSignal(instance.observations, 'fpp.position.elapsed.seconds')
-  const total = findSignal(instance.observations, 'fpp.position.seconds')
+  const elapsed = findSignal(instance.observations, 'fpp.position.seconds')
+  const total = findSignal(instance.observations, 'fpp.position.duration.seconds')
   if (elapsed === undefined || total === undefined || typeof elapsed.value !== 'number' || typeof total.value !== 'number') {
     return { known: false, reason: 'The playhead position has not been observed.' }
   }
   if (elapsed.state !== 'current' || total.state !== 'current') {
     return { known: false, reason: `The playhead position is ${elapsed.state.replace('_', ' ')}, so the boundary is unknown rather than assumed.` }
   }
-  return { known: true, remainingSeconds: Math.max(0, total.value - elapsed.value), source: instance.instanceId }
+  const remainingSeconds = Math.max(0, total.value - elapsed.value)
+  return { known: true, remainingSeconds, source: instance.instanceId }
 }
 
 /**

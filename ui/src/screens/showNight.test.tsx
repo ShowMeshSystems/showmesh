@@ -1,12 +1,24 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, PROBLEM_TYPE, type FPPInstance, type Model, type NightSessionState } from '../api'
+import { ApiError, PROBLEM_TYPE, type Evidence, type FPPInstance, type Model, type NightSessionState } from '../api'
 import { initialModel } from '../api/domain'
+import { makeMainInstance } from '../api/test-support/fppFleetFixtures'
 import { ModelContext } from '../app/ModelContext'
 import { ShowNight } from './ShowNight'
 import { ShowsNightSession } from './ShowsNightSession'
+import { formatPosition } from './liveControlModel'
 import { cycleRail, evidenceReadouts, nextTransition, nightRail, runOfShow } from './showNightModel'
+
+/** Overrides specific signals within a real fixture instance's observations, leaving every other signal (including an unsupported one) untouched. */
+function withOverriddenObservations(instance: FPPInstance, updates: Record<string, number>): FPPInstance {
+  return {
+    ...instance,
+    observations: instance.observations.map((o: Evidence) =>
+      Object.prototype.hasOwnProperty.call(updates, o.signal) ? { ...o, value: updates[o.signal] as number, state: 'current', reason: null } : o,
+    ),
+  }
+}
 
 const stubs = vi.hoisted(() => ({
   dispatchNightCommand: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
@@ -213,8 +225,8 @@ describe('Show Night', () => {
     const instance = {
       instanceId: 'main',
       observations: [
-        { signal: 'fpp.position.elapsed.seconds', value: 102, state: 'stale', resource: { kind: 'fpp', id: 'main' } },
-        { signal: 'fpp.position.seconds', value: 168, state: 'stale', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.seconds', value: 102, state: 'stale', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.duration.seconds', value: 168, state: 'stale', resource: { kind: 'fpp', id: 'main' } },
       ],
     } as unknown as FPPInstance
     const next = nextTransition({ ...initialModel(), fpp: [instance] })
@@ -226,14 +238,15 @@ describe('Show Night', () => {
     const instance = {
       instanceId: 'main',
       observations: [
-        { signal: 'fpp.position.elapsed.seconds', value: 90, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.seconds', value: 90, state: 'current', resource: { kind: 'fpp', id: 'main' } },
         { signal: 'fpp.position.duration.seconds', value: 180, state: 'current', resource: { kind: 'fpp', id: 'main' } },
       ],
     } as unknown as FPPInstance
     renderScreen({ nightSession: session(), fpp: [instance] })
-    expect(screen.getByText('1:30')).toBeInTheDocument()
-    expect(screen.getByText('3:00')).toBeInTheDocument()
-    const position = screen.getByText('1:30').closest('.sm-nownext__position') as HTMLElement
+    const nowPlaying = screen.getByRole('region', { name: 'Now playing · reported by FPP' })
+    expect(within(nowPlaying).getByText('1:30')).toBeInTheDocument()
+    expect(within(nowPlaying).getByText('3:00')).toBeInTheDocument()
+    const position = within(nowPlaying).getByText('1:30').closest('.sm-nownext__position') as HTMLElement
     const fill = position.querySelector('.sm-nownext__track span')
     expect(fill).not.toBeNull()
     expect(fill).toHaveStyle({ width: '50%' })
@@ -243,14 +256,48 @@ describe('Show Night', () => {
     const instance = {
       instanceId: 'main',
       observations: [
-        { signal: 'fpp.position.elapsed.seconds', value: 90, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.seconds', value: 90, state: 'current', resource: { kind: 'fpp', id: 'main' } },
       ],
     } as unknown as FPPInstance
     renderScreen({ nightSession: session(), fpp: [instance] })
-    expect(screen.getByText('1:30')).toBeInTheDocument()
-    const position = screen.getByText('1:30').closest('.sm-nownext__position') as HTMLElement
+    const nowPlaying = screen.getByRole('region', { name: 'Now playing · reported by FPP' })
+    expect(within(nowPlaying).getByText('1:30')).toBeInTheDocument()
+    const position = within(nowPlaying).getByText('1:30').closest('.sm-nownext__position') as HTMLElement
     expect(position.querySelector('.sm-nownext__track span')).toBeNull()
     expect(within(position).getByText('not reported')).toBeInTheDocument()
+  })
+
+  it('uses the shipped player-mode fixture, with real distinct non-zero values, to prove the bar and the next-transition countdown both bind to the right signals', () => {
+    const played = 90
+    const remaining = 30
+    const duration = played + remaining
+    const percent = (played / duration) * 100
+    // All four are pairwise distinct, so a wrong binding (elapsed <-> total,
+    // or the countdown reading duration instead of remaining time) fails
+    // loudly rather than by coincidence.
+    expect(new Set([played, remaining, duration, percent]).size).toBe(4)
+
+    const instance = withOverriddenObservations(makeMainInstance(), {
+      'fpp.position.seconds': played,
+      'fpp.position.remaining.seconds': remaining,
+      'fpp.position.duration.seconds': duration,
+    })
+    // The player-mode fixture still carries fpp.position.elapsed.seconds as
+    // unsupported, unchanged -- the fix must not depend on it.
+    const stillUnsupported = instance.observations.find((o) => o.signal === 'fpp.position.elapsed.seconds')
+    expect(stillUnsupported?.state).toBe('unsupported')
+
+    renderScreen({ nightSession: session(), fpp: [instance] })
+    const nowPlaying = screen.getByRole('region', { name: 'Now playing · reported by FPP' })
+    expect(within(nowPlaying).getByText(formatPosition(played) as string)).toBeInTheDocument()
+    expect(within(nowPlaying).getByText(formatPosition(duration) as string)).toBeInTheDocument()
+    const position = within(nowPlaying).getByText(formatPosition(played) as string).closest('.sm-nownext__position') as HTMLElement
+    const fill = position.querySelector('.sm-nownext__track span') as HTMLElement
+    expect(fill).not.toBeNull()
+    expect(fill).toHaveStyle({ width: `${percent}%` })
+
+    const nextTransitionSection = screen.getByRole('region', { name: 'Next transition' })
+    expect(within(nextTransitionSection).getByText(formatPosition(remaining) as string)).toBeInTheDocument()
   })
 
   it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {

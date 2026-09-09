@@ -585,7 +585,7 @@ describe('Live Control', () => {
       observations: [
         observation('fpp.playlist.name', 'WinterRidge_Main', 'current', 'fpp', 'main'),
         observation('fpp.status.player_state', 'playing', 'current', 'fpp', 'main'),
-        observation('fpp.position.elapsed.seconds', 102, 'current', 'fpp', 'main'),
+        observation('fpp.position.seconds', 102, 'current', 'fpp', 'main'),
       ],
     } as never)
     expect(state.playlist).toBe('WinterRidge_Main')
