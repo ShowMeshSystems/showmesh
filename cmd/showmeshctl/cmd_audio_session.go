@@ -45,6 +45,8 @@ func cmdAudioSession(args []string, stdout, stderr io.Writer, clock func() time.
 	case "-h", "-help", "--help", "help":
 		printAudioSessionUsage(stdout)
 		return exitOK
+	case "show":
+		return cmdAudioSessionShow(rest, stdout, stderr, clock)
 	}
 	for _, op := range audioSessionOps {
 		if sub == op {
@@ -58,14 +60,19 @@ func cmdAudioSession(args []string, stdout, stderr io.Writer, clock func() time.
 
 func printAudioSessionUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio session <op> [flags] <node-id> <session-id> [params-json]
+       showmeshctl audio session show [flags] [<session-id>]
 
 Dispatch one of the nine audio.session.* operations (requires
 audio:command): apply, prepare, start, pause, resume, seek,
 advance, stop, clear. params-json, when given, is passed through verbatim
 as this command's "params" body field — the node validates its shape, not
-this program. --revision sets the desired-state revision this command
-carries (pkg/audio.RevisionState); a stale or replayed value is reported
-as "refused", not treated as a transport error. Left unset, it defaults
+this program. apply accepts an optional "ceilingDb" field (decibels,
+same scale and +12 dB bound as "showmeshctl audio gain set"'s own
+gainDb) to change the session's standing gain ceiling; every other apply
+field is documented at api/openapi.yaml's AudioSessionApplyParams.
+--revision sets the desired-state revision this command carries
+(pkg/audio.RevisionState); a stale or replayed value is reported as
+"refused", not treated as a transport error. Left unset, it defaults
 to this session's current observed revision plus one, or 1 for a session
 this coordinator has never observed.
 
@@ -73,6 +80,12 @@ The pipeline backend behind these operations is an open owner decision;
 every dispatch against the shipped agent reports "unconfirmable" — this
 is expected and does not mean the request failed to reach the node. See
 "showmeshctl audio session <op> --help".
+
+"show" is a read, not one of the nine dispatch ops: it displays a
+session's audio_session.* observations (or, with no session id, every
+session this coordinator holds evidence for). No node scope: an
+audio_session observation carries no node field. See
+"showmeshctl audio session show --help".
 
 `)
 }

@@ -71,6 +71,24 @@ const (
 	SignalEngineQosDrops         observation.SignalID = "node.audio.engine.qos_drops"
 )
 
+// SignalEngineRestoreState, SignalEngineRestoreAttempts,
+// SignalEngineRestoreNextAttemptMs, and SignalEngineRestoreLastReason
+// report internal/agent's own automatic restore-retry driver's status
+// for a node as a whole (mqttproto.AudioPayload.EngineRestoreState/
+// EngineRestoreAttempts/EngineRestoreNextAttemptMs/EngineRestoreLastReason)
+// -- the node-level counterpart to SignalSessionRestoreAttempts/
+// SignalSessionRestoreNextAttemptMs/SignalSessionRestoreLastReason below,
+// which only ever cover a session with a queued restore. State is one of
+// "idle", "scheduled", or "exhausted" -- see that field's own doc comment
+// for why a countdown or a boolean alone cannot make this distinction.
+// Minted identifiers, docs/build/IDENTIFIER-REGISTER.md.
+const (
+	SignalEngineRestoreState         observation.SignalID = "node.audio.engine.restore.state"
+	SignalEngineRestoreAttempts      observation.SignalID = "node.audio.engine.restore.attempts"
+	SignalEngineRestoreNextAttemptMs observation.SignalID = "node.audio.engine.restore.next_attempt_ms"
+	SignalEngineRestoreLastReason    observation.SignalID = "node.audio.engine.restore.last_reason"
+)
+
 // AllSignalIDs is every signal this package ever emits, in the order
 // [Collector.Poll] builds them for one node.
 var AllSignalIDs = []observation.SignalID{
@@ -95,6 +113,10 @@ var AllSignalIDs = []observation.SignalID{
 	SignalEngineWarningsResource,
 	SignalEngineWarningsOther,
 	SignalEngineQosDrops,
+	SignalEngineRestoreState,
+	SignalEngineRestoreAttempts,
+	SignalEngineRestoreNextAttemptMs,
+	SignalEngineRestoreLastReason,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one
@@ -125,7 +147,19 @@ const (
 	// audio reached an output. Always present, never empty.
 	SignalSessionStateReason observation.SignalID = "audio_session.state.reason"
 
-	SignalSessionDesiredRevision  observation.SignalID = "audio_session.desired_revision"
+	SignalSessionDesiredRevision observation.SignalID = "audio_session.desired_revision"
+
+	// SignalSessionGain and SignalSessionGainCeiling report in decibels
+	// (pkg/audio.GainToDb/CeilingToDb), matching the unit every
+	// operator-facing gain input already takes (pkg/audio/gain.go's own
+	// coordinator-boundary conversion). The agent's own report
+	// (mqttproto.AudioSessionReport.Gain/Ceiling) and everything below
+	// it — pkg/audio.Gain/Ceiling, the engine — stay linear; only this
+	// collector's read side converts, so an operator who typed -6 sees
+	// -6, never the linear multiplier that value produces.
+	// audio_session.gain.effective_db and .ceiling_db stay reserved and
+	// unshipped (docs/build/IDENTIFIER-REGISTER.md): these two existing
+	// signals were converted in place instead of gaining companions.
 	SignalSessionGain             observation.SignalID = "audio_session.gain.effective"
 	SignalSessionGainCeiling      observation.SignalID = "audio_session.gain.ceiling"
 	SignalSessionFadeState        observation.SignalID = "audio_session.fade.state"
@@ -134,6 +168,30 @@ const (
 	SignalSessionAssetProbeReason observation.SignalID = "audio_session.readiness.reason"
 	SignalSessionFaultKind        observation.SignalID = "audio_session.fault.kind"
 	SignalSessionFaultReason      observation.SignalID = "audio_session.fault.reason"
+
+	// SignalSessionLTCClaimState and SignalSessionLTCClaimReason are this
+	// session's own standing relationship to its node's one LTC run —
+	// "held", "refused", or "none" — the surface that makes a refused
+	// claim legible on its own session, not only as a warn-level line in
+	// the node's log. Reason is present only when State is "refused",
+	// matching SignalSessionFaultReason's identical shape one signal up.
+	SignalSessionLTCClaimState  observation.SignalID = "audio_session.ltc.claim.state"
+	SignalSessionLTCClaimReason observation.SignalID = "audio_session.ltc.claim.reason"
+
+	// SignalSessionRestoreAttempts, SignalSessionRestoreNextAttemptMs,
+	// and SignalSessionRestoreLastReason are this node's own automatic
+	// restore-retry driver's status for a session currently waiting on a
+	// deferred or re-queued restore (see the sibling change that
+	// introduces the pkg/audio.State value "restore_pending" for what
+	// State itself reports while this is happening).
+	// Attempts and NextAttemptMs report [observation.StateNotCollected]
+	// with a stated reason whenever the node reports no restore
+	// currently queued for this session; LastReason is present whenever
+	// Attempts is nonzero, matching SignalSessionFaultReason's identical
+	// shape.
+	SignalSessionRestoreAttempts      observation.SignalID = "audio_session.restore.attempts"
+	SignalSessionRestoreNextAttemptMs observation.SignalID = "audio_session.restore.next_attempt_ms"
+	SignalSessionRestoreLastReason    observation.SignalID = "audio_session.restore.last_reason"
 
 	// SignalSessionItemGapMs and SignalSessionItemGapReason are the
 	// measured interval between one playlist item's natural completion
@@ -177,6 +235,11 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionAssetProbeReason,
 	SignalSessionFaultKind,
 	SignalSessionFaultReason,
+	SignalSessionLTCClaimState,
+	SignalSessionLTCClaimReason,
+	SignalSessionRestoreAttempts,
+	SignalSessionRestoreNextAttemptMs,
+	SignalSessionRestoreLastReason,
 	SignalSessionItemGapMs,
 	SignalSessionItemGapReason,
 	SignalSessionStale,

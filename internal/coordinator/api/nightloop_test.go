@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -418,6 +421,130 @@ func TestNightAdvanceTransitionToShow_UnrelatedPlaylistRunning_Refuses(t *testin
 	}
 }
 
+// TestNightAdvanceTransitionToShow_BusyRefusalLogsAndRetriesAfterBackoff
+// closes the rig's own silent gap: a launch refused as busy (the same
+// non-terminal ProblemTypeFPPStartPlaylistBusy shape as the test above)
+// used to leave nothing behind between the launch instant and the
+// eventual retry - no log line, nothing an operator watching the
+// coordinator could read to learn why the show had not launched on time.
+// Three calls at real wall-clock spacing exercise the whole window: the
+// refusal itself (must log exactly once), a tick still inside
+// nightDispatchRetryBackoff (must add nothing further - the wait itself
+// stays quiet by design, never spammed), and a tick past the backoff once
+// the obstruction has cleared (the retry must land and reach live).
+func TestNightAdvanceTransitionToShow_BusyRefusalLogsAndRetriesAfterBackoff(t *testing.T) {
+	now := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	obs := &mutableObservationLister{}
+	obs.set([]observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "someone-elses-playlist", now),
+	})
+	gotArgs := new([]string)
+	cmdSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Command == "Start Playlist" && len(body.Args) > 0 {
+			*gotArgs = body.Args
+			// Stamped at THIS call's own live now, not a fixed test
+			// instant - this fixture drives several calls at distinct
+			// wall-clock times, unlike setupTransitionToShowTest.
+			obs.add(
+				statusObservation("player-01", fppStatusValuePlaying, now),
+				playlistNameObservation("player-01", body.Args[0], now),
+				positionMSObservation("player-01", 0, now),
+			)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Playlist Starting"))
+	}))
+	t.Cleanup(cmdSrv.Close)
+
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	deps := Dependencies{
+		NightSessions: st, Observations: obs, Identity: svc, Config: st,
+		FPP: &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: cmdSrv.URL}}},
+	}.withDefaults()
+	opts := Options{}.withDefaults()
+	var logBuf bytes.Buffer
+	h := &handlers{
+		deps: deps, clock: clock, logger: slog.New(slog.NewTextHandler(&logBuf, nil)),
+		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline, fppCommandPollInterval: opts.FPPCommandPollInterval,
+	}
+
+	enteredAt := now.Add(-time.Minute)
+	rec := store.NightSessionRecord{
+		ID: "sess-1", ConfigObjectID: "halloween-main", ConfigRevision: 1,
+		State: nightStateTransitionToShow, StateEnteredAt: enteredAt,
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &enteredAt, LastTickAt: &now}),
+	}
+	if err := st.CreateNightSession(context.Background(), rec, now); err != nil {
+		t.Fatalf("create night session: %v", err)
+	}
+	payload := config.NightSessionPayload{
+		Show:         "halloween-2026",
+		Label:        "test",
+		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "player-01", Playlist: "halloween-show"},
+		Resting:      config.NightSessionResting{FPPInstanceID: "player-01", Playlist: "halloween-resting", EndOfNightPlaylist: "halloween-resting"},
+		EnterShow:    config.NightSessionEnterShow{BlackoutHoldMs: 6000},
+	}
+	payloadJSON, err := config.EncodeNightSessionPayload(payload)
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	if _, err := st.CreateConfigObject(context.Background(), config.NightSessionConfigKind, "halloween-main"); err != nil {
+		t.Fatalf("create config object: %v", err)
+	}
+	if _, err := st.CreateConfigRevision(context.Background(), store.ConfigRevisionRecord{
+		Kind: config.NightSessionConfigKind, ObjectID: "halloween-main", Revision: 1,
+		PayloadJSON: payloadJSON, Source: "api",
+	}); err != nil {
+		t.Fatalf("create config revision: %v", err)
+	}
+
+	h.nightAdvanceTransitionToShow(context.Background(), now, rec)
+	if len(*gotArgs) != 0 {
+		t.Fatalf("Start Playlist args after the first refused attempt = %v, want none", *gotArgs)
+	}
+	if n := strings.Count(logBuf.String(), "startPlaylist did not launch on this attempt"); n != 1 {
+		t.Fatalf("log line count after the refusal = %d, want exactly 1: %s", n, logBuf.String())
+	}
+	if got := mustGetCurrentSession(t, st); got.State != nightStateTransitionToShow {
+		t.Fatalf("state after the refusal = %q, want still %q", got.State, nightStateTransitionToShow)
+	}
+
+	// Still inside the backoff window: this must stay exactly as silent
+	// as it was before this fix - no further log line, no dispatch.
+	now = now.Add(3 * time.Second)
+	h.nightAdvanceTransitionToShow(context.Background(), now, mustGetCurrentSession(t, st))
+	if n := strings.Count(logBuf.String(), "startPlaylist did not launch on this attempt"); n != 1 {
+		t.Fatalf("log line count mid-backoff = %d, want still 1 (the wait itself must stay quiet): %s", n, logBuf.String())
+	}
+	if len(*gotArgs) != 0 {
+		t.Fatalf("Start Playlist args mid-backoff = %v, want none (still backing off)", *gotArgs)
+	}
+
+	// The obstruction clears (the observed playlist is now this session's
+	// own resting playlist, replace-eligible per nightShowLaunchIfBusy)
+	// and the backoff has elapsed: the retry lands.
+	now = now.Add(nightDispatchRetryBackoff + time.Second)
+	obs.set([]observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "halloween-resting", now),
+	})
+	h.nightAdvanceTransitionToShow(context.Background(), now, mustGetCurrentSession(t, st))
+	if len(*gotArgs) < 1 || (*gotArgs)[0] != "halloween-show" {
+		t.Fatalf("Start Playlist args once the backoff elapsed and the obstruction cleared = %v, want [halloween-show, ...]", *gotArgs)
+	}
+	if final := mustGetCurrentSession(t, st); final.State != nightStateLive {
+		t.Fatalf("state once the retry landed = %q, want %q", final.State, nightStateLive)
+	}
+}
+
 // No current evidence at all: identity cannot be established, so this
 // must refuse exactly like the unrelated-playlist case, with its own
 // reason, and never advance.
@@ -510,6 +637,56 @@ func TestNightAdvanceRestingIntershow_InvalidatedBoundaryNeverRecomputed(t *test
 	got := mustGetCurrentSession(t, st)
 	if got.State != nightStateRestingIntershow {
 		t.Fatalf("state = %q, want still %q (an invalidated boundary must never silently re-arm)", got.State, nightStateRestingIntershow)
+	}
+	// This fix's own defect 2: today the silence around this permanent
+	// wedge is invisible. The operator must be told, via the same
+	// degrade mechanism as everywhere else in this file.
+	if !got.Degraded {
+		t.Fatalf("expected the session to be marked degraded once the invalid boundary is found never-recomputable")
+	}
+	if !strings.Contains(got.DegradedReason, "invalidated") {
+		t.Fatalf("degraded reason = %q, want it to name the invalid boundary", got.DegradedReason)
+	}
+}
+
+// Defect 2's visibility half must not re-warn or re-degrade on every tick:
+// once the session is marked degraded, a second tick over the same
+// never-recomputed invalid boundary must neither log again nor disturb the
+// state further.
+func TestNightAdvanceRestingIntershow_InvalidBoundaryDegradesOnceNotEveryTick(t *testing.T) {
+	dispatchedAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	anchor := nightContentAnchor{
+		Purpose: nightAnchorPurposeRestingOneShot, FPPInstanceID: "player-01", Playlist: "halloween-resting",
+		Item: "halloween-resting.fseq", DurationMS: 300000, PositionSeconds: 2, PositionMS: 2000, PositionMSKnown: true,
+		DispatchedAt: dispatchedAt, ObservedAt: dispatchedAt.Add(time.Second),
+	}
+	persistedInvalid := encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: "playback is paused"})
+	h, st, rec, now := setupRestingIntershowTest(t, func(now time.Time) []observation.Observation {
+		return []observation.Observation{
+			statusObservation("player-01", fppStatusValuePlaying, now),
+			playlistNameObservation("player-01", "halloween-resting", now),
+			positionMSObservation("player-01", 2000, now),
+		}
+	}, anchor, persistedInvalid)
+	var logBuf bytes.Buffer
+	h.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	h.nightAdvanceRestingIntershow(context.Background(), now, rec)
+	afterFirst := mustGetCurrentSession(t, st)
+	if !afterFirst.Degraded {
+		t.Fatalf("expected the session degraded after the first tick")
+	}
+
+	h.nightAdvanceRestingIntershow(context.Background(), now, afterFirst)
+	afterSecond := mustGetCurrentSession(t, st)
+	if afterSecond.State != nightStateRestingIntershow {
+		t.Fatalf("state = %q, want still %q (an invalidated boundary must never silently re-arm)", afterSecond.State, nightStateRestingIntershow)
+	}
+	if afterSecond.DegradedReason != afterFirst.DegradedReason {
+		t.Fatalf("degraded reason changed on a second tick: %q -> %q", afterFirst.DegradedReason, afterSecond.DegradedReason)
+	}
+	if got := strings.Count(logBuf.String(), "night loop: session degraded"); got != 1 {
+		t.Fatalf("\"session degraded\" logged %d times across two ticks, want exactly 1", got)
 	}
 }
 
@@ -607,6 +784,99 @@ func TestNightAdvanceLive_Rule4_AbsentPlaylistEvidenceIsNotCompletion(t *testing
 	got := mustGetCurrentSession(t, st)
 	if got.State != nightStateLive {
 		t.Fatalf("state = %q, want still %q (absent playlist evidence must never read as completion)", got.State, nightStateLive)
+	}
+}
+
+// withNightAdvanceLiveDeadline drives [nightAdvanceLiveDeadline] down for
+// one test and restores the original value afterward.
+func withNightAdvanceLiveDeadline(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := nightAdvanceLiveDeadline
+	nightAdvanceLiveDeadline = d
+	t.Cleanup(func() { nightAdvanceLiveDeadline = orig })
+}
+
+// A defect fixed by this change: nightAdvanceLive waited forever with no
+// deadline and no operator-visible sign of why. Past
+// [nightAdvanceLiveDeadline], a still-unmet completion condition must WARN
+// and mark the session degraded (never invent end evidence, so the state
+// stays live) - and, since "not idle" and "playlist still present" are two
+// different faults, the reason must name which one applies.
+func TestNightAdvanceLive_PastDeadlineStillPlayingWarnsAndDegradesWithoutTransitioning(t *testing.T) {
+	withNightAdvanceLiveDeadline(t, time.Minute)
+	stateEnteredAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := stateEnteredAt.Add(2 * time.Minute)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "halloween-show", now),
+	}}
+	h, st := nightLoopTestHandlers(t, func() time.Time { return now }, obs)
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", stateEnteredAt)
+	mustCreateLiveSession(t, st, stateEnteredAt, anchor)
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	got := mustGetCurrentSession(t, st)
+	if got.State != nightStateLive {
+		t.Fatalf("state = %q, want still %q (a deadline must never force the transition, only end the silence)", got.State, nightStateLive)
+	}
+	if !got.Degraded {
+		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
+	}
+	if !strings.Contains(got.DegradedReason, "not idle") {
+		t.Fatalf("degraded reason = %q, want it to name the unmet condition (status not idle)", got.DegradedReason)
+	}
+}
+
+// Same deadline, a different unmet condition: idle, but the playlist name
+// has not cleared. The degraded reason must name THIS condition, not the
+// "not idle" one above - an operator needs to know which of the two is
+// actually stuck.
+func TestNightAdvanceLive_PastDeadlinePlaylistStillNamedWarnsAndDegradesWithoutTransitioning(t *testing.T) {
+	withNightAdvanceLiveDeadline(t, time.Minute)
+	stateEnteredAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := stateEnteredAt.Add(2 * time.Minute)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValueIdle, now),
+		playlistNameObservation("player-01", "halloween-show", now),
+	}}
+	h, st := nightLoopTestHandlers(t, func() time.Time { return now }, obs)
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", stateEnteredAt)
+	mustCreateLiveSession(t, st, stateEnteredAt, anchor)
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	got := mustGetCurrentSession(t, st)
+	if got.State != nightStateLive {
+		t.Fatalf("state = %q, want still %q (a deadline must never force the transition, only end the silence)", got.State, nightStateLive)
+	}
+	if !got.Degraded {
+		t.Fatalf("expected the session to be marked degraded once the deadline elapsed with no completion evidence")
+	}
+	if !strings.Contains(got.DegradedReason, `still named "halloween-show"`) {
+		t.Fatalf("degraded reason = %q, want it to name the unmet condition (playlist still named)", got.DegradedReason)
+	}
+}
+
+// Before the deadline elapses, the same unmet condition must stay silent:
+// this is a wait, not an instant fault.
+func TestNightAdvanceLive_BeforeDeadlineStaysSilent(t *testing.T) {
+	withNightAdvanceLiveDeadline(t, time.Hour)
+	stateEnteredAt := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	now := stateEnteredAt.Add(2 * time.Minute)
+	obs := &fakeObservationLister{obs: []observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, now),
+		playlistNameObservation("player-01", "halloween-show", now),
+	}}
+	h, st := nightLoopTestHandlers(t, func() time.Time { return now }, obs)
+	anchor := liveSessionAnchor("player-01", "halloween-show", "halloween-show.fseq", stateEnteredAt)
+	mustCreateLiveSession(t, st, stateEnteredAt, anchor)
+
+	h.nightAdvanceLive(context.Background(), now, mustGetCurrentSession(t, st))
+
+	got := mustGetCurrentSession(t, st)
+	if got.Degraded {
+		t.Fatalf("expected no degrade before nightAdvanceLiveDeadline has elapsed, got reason %q", got.DegradedReason)
 	}
 }
 

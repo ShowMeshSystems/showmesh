@@ -77,7 +77,8 @@
       },
       "render": [],
       "audio": [],
-      "clock": []
+      "clock": [],
+      "fppConnect": []
     },
     {
       "nodeId": "shed-01",
@@ -147,7 +148,8 @@
       },
       "render": [],
       "audio": [],
-      "clock": []
+      "clock": [],
+      "fppConnect": []
     }
   ]
 }

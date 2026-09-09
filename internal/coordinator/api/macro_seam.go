@@ -103,11 +103,12 @@ type MacroPriorFailure struct {
 }
 
 // MacroRunFilter is GET /api/v1/macro-runs' query, normalized. An empty
-// MacroObjectID or State means no filter on that dimension; the route is
-// responsible for rejecting a State outside {"running", "finished"} rather
-// than passing an unknown value through as "no filter".
+// MacroObjectID, Show, or State means no filter on that dimension; the
+// route is responsible for rejecting a State outside {"running",
+// "finished"} rather than passing an unknown value through as "no filter".
 type MacroRunFilter struct {
 	MacroObjectID string
+	Show          string
 	State         string
 	Limit         int
 }

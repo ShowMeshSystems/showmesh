@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">&#9662;</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 &middot; next in 1:06</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:0 0 80px">
+
+      <div style="padding:20px 28px 0">
+        <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Shows</a> <span style="color:var(--text-faint)">/</span> Winter Ridge 2026</p>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:8px">
+          <div style="min-width:0">
+            <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">Winter Ridge 2026</h1>
+            <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">Revision <span style="font:var(--t-data);color:var(--text)">47</span> · saved by erbartos at 18:22</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Show details</button>
+            <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Check readiness</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:18px;padding:0 28px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:2px;flex-wrap:wrap">
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Playlists<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">2</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Cues<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">14</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Assets<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">22</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Presentation<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">3</span></a>
+          <a href="#" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid transparent;color:var(--text-muted);font:var(--t-body);text-decoration:none" style-hover="color:var(--text);border-bottom-color:var(--border-strong)">Automation<span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">2</span></a>
+          <span style="display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-bottom:2px solid var(--accent);color:var(--accent);font:var(--t-body);font-weight:600">Night session<span style="font:var(--t-data);font-size:11px;color:var(--accent)">3</span></span>
+        </div>
+      </div>
+
+      <sc-if value="{{ isList }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:22px 28px 0;max-width:1012px">
+
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+          <div style="min-width:0">
+            <h2 style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Night session definitions</h2>
+            <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">A definition says what happens when the night enters the show and when it returns to resting. It never says <em>when</em>: the coordinator refuses any field named <span style="font:var(--t-data)">at</span>, <span style="font:var(--t-data)">cron</span>, <span style="font:var(--t-data)">schedule</span>, <span style="font:var(--t-data)">time</span>, <span style="font:var(--t-data)">date</span>, <span style="font:var(--t-data)">weekday</span> or <span style="font:var(--t-data)">timezone</span>, and any field that restates the resting sequence's own duration.</p>
+          </div>
+          <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">New definition</button>
+        </div>
+
+        <section aria-labelledby="ns-active" style="margin-top:22px">
+          <h3 id="ns-active" style="margin:0 0 8px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Active definition</h3>
+          <div style="display:grid;grid-template-columns:154px minmax(0,1fr) auto;gap:14px;align-items:center;padding:13px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)">Active</span>
+            <div style="min-width:0">
+              <p style="margin:0;font:var(--t-body)"><strong style="font-weight:600">Standard Night</strong> <span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-standard · revision 12</span></p>
+              <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">Pointed here at <span style="font:var(--t-data);color:var(--text)">17:40</span> on 26 Aug by erbartos. Tonight's cycles are running from this definition.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-self:end">
+              <button type="button" style="height:32px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">Activate a different one</button>
+            </div>
+          </div>
+          <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">One definition is active at a time, and the pointer is its own configuration object with its own history — activating is an operational act, not an edit. Clearing it is allowed and leaves the night lifecycle with nothing to run.</p>
+        </section>
+
+        <section aria-labelledby="ns-defs" style="margin-top:26px">
+          <h3 id="ns-defs" style="margin:0 0 8px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Definitions <span style="color:var(--text-muted)">· 3</span></h3>
+          <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+            <table style="width:100%;min-width:820px;border-collapse:collapse;font:var(--t-body)">
+              <thead>
+                <tr>
+                  <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Definition</th>
+                  <th style="width:184px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show playlist</th>
+                  <th style="width:184px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Resting playlist</th>
+                  <th style="width:82px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Revision</th>
+                  <th style="width:96px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">State</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="cursor:pointer;background:var(--accent-bg)">
+                  <td style="padding:10px 10px 10px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--accent)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Standard Night</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-standard</span></td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">barn-player<br>WR26 Main Show</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">barn-player<br>WR26 Resting Loop</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--text-muted)">12</td>
+                  <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--accent)">Active</span></td>
+                </tr>
+                <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                  <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border)"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">Weekend Extended</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-weekend</span></td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">barn-player<br>WR26 Main Show</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">barn-player<br>WR26 Resting Loop</td>
+                  <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);color:var(--text-muted)">5</td>
+                  <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Inactive</span></td>
+                </tr>
+                <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                  <td style="padding:10px 10px 10px 14px"><a href="#" style="font-weight:600;color:var(--accent);text-decoration:none" style-hover="text-decoration:underline">New Year&rsquo;s Eve</a><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">winter-nye</span></td>
+                  <td style="padding:10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">barn-player<br>WR26 Main Show</td>
+                  <td style="padding:10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">barn-player<br>WR26 Resting Loop</td>
+                  <td style="padding:10px;font:var(--t-data);color:var(--text-muted)">2</td>
+                  <td style="padding:10px 14px 10px 10px"><span style="font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Inactive</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="padding:9px 14px;border-top:1px solid var(--border);background:var(--raised)">
+              <span style="font:var(--t-small);color:var(--text-muted)">All three belong to Winter Ridge 2026. Every cue action, asset and interlock signal a definition names must belong to the same show.</span>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="ns-hist" style="margin-top:26px">
+          <h3 id="ns-hist" style="margin:0 0 4px;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Activation history</h3>
+          <p style="margin:0 0 10px;font:var(--t-small);color:var(--text-muted);max-width:74ch">Revisions of the active pointer, newest first. A cleared pointer is a real revision, not a gap.</p>
+          <div style="border-top:1px solid var(--border)">
+            <div style="display:grid;grid-template-columns:96px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--accent)">Active · 4</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">26 Aug 17:40 by erbartos — pointed at <span style="color:var(--text)">Standard Night</span></p>
+            </div>
+            <div style="display:grid;grid-template-columns:96px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">3</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">24 Aug 09:12 by erbartos — <span style="color:var(--warn-fg)">cleared</span>. No definition was active for two days; the night lifecycle had nothing to run.</p>
+            </div>
+            <div style="display:grid;grid-template-columns:96px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">2</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">23 Aug 16:05 by erbartos — pointed at <span style="color:var(--text)">Weekend Extended</span></p>
+            </div>
+            <div style="display:grid;grid-template-columns:96px minmax(0,1fr);gap:0 16px;align-items:start;padding:11px 0;border-bottom:1px solid var(--border)">
+              <span style="font:var(--t-meta);letter-spacing:0.08em;text-transform:uppercase;color:var(--text-faint)">1</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">12 Aug 11:30 by erbartos — pointed at <span style="color:var(--text)">Standard Night</span></p>
+            </div>
+          </div>
+        </section>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isEdit }}">
+      <div style="padding:22px 28px 0;max-width:1012px">
+
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--border-strong)">
+          <div style="min-width:0">
+            <p style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Editing definition</p>
+            <h2 style="margin:6px 0 0;font:var(--t-heading);letter-spacing:-0.015em">Standard Night</h2>
+            <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)"><span style="font:var(--t-data)">winter-standard</span> · revision <span style="font:var(--t-data);color:var(--text)">12</span> · <span style="color:var(--accent)">active</span> — saving takes effect on the next cycle, not this one</p>
+          </div>
+          <button type="button" style="height:32px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">All definitions</button>
+        </div>
+
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px">
+          <a href="#ns-id" style="font:var(--t-small)">Identity &amp; show playlist</a>
+          <a href="#ns-rest" style="font:var(--t-small)">Resting</a>
+          <a href="#ns-enter" style="font:var(--t-small)">Enter show</a>
+          <a href="#ns-return" style="font:var(--t-small)">Enter resting</a>
+          <a href="#ns-site" style="font:var(--t-small)">Site control</a>
+        </div>
+
+        <section aria-labelledby="ns-id" style="margin-top:26px">
+          <h3 id="ns-id" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Identity &amp; show playlist</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:12px;max-width:760px">
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Label</span>
+              <input type="text" value="Standard Night" style="height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body)">
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Announcement policy default</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>duck</option>
+                <option>mix</option>
+                <option>interrupt</option>
+              </select>
+              <span style="font:var(--t-small);color:var(--text-faint)">Applies to any announcement cue that names no policy of its own.</span>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Show playlist — FPP instance</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>barn-player</option>
+                <option>garage-player</option>
+              </select>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Show playlist</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>WR26 Main Show</option>
+                <option>WR26 Resting Loop</option>
+                <option>WR26 End Of Night</option>
+              </select>
+              <span style="font:var(--t-small);color:var(--text-faint)">Referenced, never created — FPP owns this playlist. Definitions received from <span style="font:var(--t-data)">barn-player</span> are listed in <a href="#">Monitor › Fleet</a>.</span>
+            </label>
+          </div>
+        </section>
+
+        <section aria-labelledby="ns-rest" style="margin-top:30px">
+          <h3 id="ns-rest" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Resting</h3>
+          <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">The loop that runs between cycles. Its own sequence decides how long a rest lasts — this definition holds no duration for it.</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:12px;max-width:760px">
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">FPP instance</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>barn-player</option>
+                <option>garage-player</option>
+              </select>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Resting playlist</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>WR26 Resting Loop</option>
+                <option>WR26 Main Show</option>
+              </select>
+            </label>
+            <label style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">End-of-night playlist</span>
+              <select style="height:34px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                <option>WR26 End Of Night</option>
+                <option>WR26 Resting Loop</option>
+              </select>
+              <span style="font:var(--t-small);color:var(--text-faint)">Left unset it is the resting playlist. It is set here, so the two differ on purpose.</span>
+            </label>
+            <div style="display:grid;gap:5px">
+              <span style="font:var(--t-body);font-weight:500">Repeat after the last show</span>
+              <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px;width:max-content">
+                <button type="button" aria-pressed="{{ false }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Play once</button>
+                <button type="button" aria-pressed="{{ true }}" style="padding:6px 12px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">Repeat</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:16px;padding:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);max-width:760px">
+            <p style="margin:0;font:var(--t-body);font-weight:500">Resting timeline asset</p>
+            <p style="margin:5px 0 0;font:var(--t-small);color:var(--text-muted)">One asset, named the way every asset is named: show, sequence, and the node that renders it.</p>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:12px">
+              <div style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">Show</span>
+                <p style="margin:0;display:flex;align-items:center;height:32px;padding:0 10px;border:1px solid var(--border);border-radius:5px;background:var(--sunken);font:var(--t-data);color:var(--text-muted)">winter-ridge-2026</p>
+              </div>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">Sequence</span>
+                <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <option>resting-loop</option>
+                  <option>rooftop-finale</option>
+                </select>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">Target node</span>
+                <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <option>media-front</option>
+                  <option>media-side</option>
+                  <option>media-garage</option>
+                </select>
+              </label>
+            </div>
+            <p style="margin:10px 0 0;font:var(--t-small);color:var(--text-faint)">Must resolve to a current asset. <span style="font:var(--t-data)">resting-loop</span> for <span style="font:var(--t-data)">media-front</span> is current as of the 20:59 sync.</p>
+          </div>
+
+          <div style="margin-top:16px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden;max-width:760px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:13px 14px;background:var(--raised);border-bottom:1px solid var(--border)">
+              <div style="min-width:0">
+                <p style="margin:0;font:var(--t-body);font-weight:500">Background audio</p>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">A ShowMesh background session, played over the resting loop. Configured here; a definition without it is complete, not degraded.</p>
+              </div>
+              <button type="button" style="height:30px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="color:var(--bad-fg);background:var(--surface)">Remove</button>
+            </div>
+            <ol style="margin:0;padding:0;list-style:none">
+              <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 1</span>
+                <span style="min-width:0"><span style="font:var(--t-body)">Winter Bed — Track 1</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">bed-01 · winter-bed-01 · barn-player</span></span>
+                <span style="justify-self:end;font:var(--t-data);font-size:11px;color:var(--text-muted)">4:12</span>
+              </li>
+              <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 2</span>
+                <span style="min-width:0"><span style="font:var(--t-body)">Winter Bed — Track 2</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">bed-02 · winter-bed-02 · barn-player</span></span>
+                <span style="justify-self:end;font:var(--t-data);font-size:11px;color:var(--text-muted)">3:48</span>
+              </li>
+              <li style="display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);cursor:pointer" style-hover="background:var(--raised)">
+                <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 3</span>
+                <span style="min-width:0"><span style="font:var(--t-body)">Winter Bed — Track 3</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">bed-03 · winter-bed-03 · barn-player</span></span>
+                <span style="justify-self:end;font:var(--t-data);font-size:11px;color:var(--text-muted)">5:02</span>
+              </li>
+            </ol>
+            <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Drag to reorder. Item ids are stable and survive a reorder — a run refers to <span style="font:var(--t-data)">bed-02</span>, never to "the second item".</p>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;padding:14px">
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">Repeat</span>
+                <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <option>playlist</option>
+                  <option>item</option>
+                  <option>none</option>
+                </select>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">After an interruption</span>
+                <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <option>resume</option>
+                  <option>restart</option>
+                </select>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">Between items</span>
+                <select style="height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data)">
+                  <option>crossfade</option>
+                  <option>gapless</option>
+                  <option>sequential</option>
+                </select>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">Crossfade</span>
+                <input type="text" value="2500 ms" style="height:32px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">Required for crossfade, refused for the other two.</span>
+              </label>
+              <label style="display:grid;gap:5px">
+                <span style="font:var(--t-small);color:var(--text-muted)">Ceiling</span>
+                <input type="text" value="−6 dB" style="height:32px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">0 dB or quieter.</span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="ns-enter" style="margin-top:30px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+            <h3 id="ns-enter" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Enter show <span style="color:var(--text-muted)">· 4 cues</span></h3>
+            <span style="font:var(--t-small);color:var(--text-faint)">Offsets are relative to the show start. Negative runs before it.</span>
+          </div>
+
+          <div style="margin-top:12px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+            <div style="position:relative;height:124px;margin:0;padding:0;background:var(--sunken);border-bottom:1px solid var(--border);overflow:hidden">
+              <div style="position:absolute;left:24px;right:24px;top:52px;height:1px;background:var(--border-strong)"></div>
+
+              <div style="position:absolute;left:24px;top:20px;bottom:20px;width:2px;background:var(--accent)"></div>
+              <span style="position:absolute;left:24px;top:2px;font:var(--t-meta);font-size:10px;color:var(--accent)">−4.0s</span>
+              <span style="position:absolute;left:24px;top:60px;max-width:120px;font:var(--t-small);color:var(--text)">House Lights Down</span>
+
+              <div style="position:absolute;left:50%;top:12px;bottom:12px;width:2px;background:var(--warn-fg)"></div>
+              <span style="position:absolute;left:50%;top:2px;transform:translateX(-50%);font:var(--t-meta);font-size:10px;color:var(--warn-fg)">Barrier</span>
+              <span style="position:absolute;left:50%;top:60px;transform:translateX(-50%);max-width:190px;text-align:center;font:var(--t-small);color:var(--text)">Show Deck<br><span style="font:var(--t-meta);font-size:10px;color:var(--warn-fg)">−2.0s · holds the rest</span></span>
+
+              <div style="position:absolute;left:62.5%;top:26px;bottom:26px;width:2px;background:var(--border-strong)"></div>
+              <span style="position:absolute;left:62.5%;top:8px;transform:translateX(-50%);font:var(--t-meta);font-size:10px;color:var(--text-faint)">−1.5s</span>
+              <span style="position:absolute;left:62.5%;top:96px;transform:translateX(-50%);max-width:110px;text-align:center;font:var(--t-small);color:var(--text)">Bed Out</span>
+
+              <div style="position:absolute;right:24px;top:20px;bottom:20px;width:2px;background:var(--accent)"></div>
+              <span style="position:absolute;right:24px;top:2px;transform:translateX(50%);font:var(--t-meta);font-size:10px;color:var(--accent)">0</span>
+              <span style="position:absolute;right:24px;top:60px;transform:translateX(35%);max-width:120px;text-align:right;font:var(--t-small);color:var(--text)">Show start</span>
+            </div>
+
+            <div style="overflow-x:auto;overscroll-behavior-inline:contain">
+              <table style="width:100%;min-width:820px;border-collapse:collapse;font:var(--t-body)">
+                <thead>
+                  <tr>
+                    <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Cue</th>
+                    <th style="width:104px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Role</th>
+                    <th style="width:92px;padding:8px 10px;text-align:right;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Offset</th>
+                    <th style="width:84px;padding:8px 10px;text-align:right;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Fade</th>
+                    <th style="width:80px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Barrier</th>
+                    <th style="width:112px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">On failure</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-body);font-weight:500">House Lights Down</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">mqtt-house-lights-off</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">lighting</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">−4 000</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">3 000</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-faint)">continue</td>
+                  </tr>
+                  <tr style="cursor:pointer;background:var(--warn-bg)">
+                    <td style="padding:9px 10px 9px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--warn-fg)"><span style="font:var(--t-body);font-weight:500">Show Deck</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">resolume-select-show-deck</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">projection</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">−2 000</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--warn-fg)">Yes</span></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--warn-fg)">abort</td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-body);font-weight:500">Bed Out</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">audio-bed-down</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">audio</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">−1 500</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">1 200</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-faint)">continue</td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:9px 10px 9px 14px"><span style="font:var(--t-body);font-weight:500">Garage Speakers Mute</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">audio-garage-mute</span></td>
+                    <td style="padding:9px 10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">audio</td>
+                    <td style="padding:9px 10px;text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">0</td>
+                    <td style="padding:9px 10px;text-align:right;font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 10px;font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 14px 9px 10px;font:var(--t-data);font-size:11px;color:var(--text-faint)">continue</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div style="display:grid;grid-template-columns:154px minmax(0,1fr);gap:14px;align-items:start;padding:12px 14px;border-top:1px solid var(--border);background:var(--raised)">
+              <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--unk-fg)">Binding unknown</span>
+              <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Garage Speakers Mute targets <span style="font:var(--t-data);color:var(--text)">media-garage</span>, which has not reported since <span style="font:var(--t-data);color:var(--text)">20:41:07</span>, so its binding could not be checked. That is not evidence the cue is broken. <a href="#">Automation</a> holds the action.</p>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--border)">
+              <label style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <span style="font:var(--t-body);font-weight:500">Blackout hold</span>
+                <input type="text" value="1 500 ms" style="width:120px;height:32px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">Dark between the resting loop stopping and the show starting.</span>
+              </label>
+              <button type="button" style="height:32px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">Add cue</button>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="ns-return" style="margin-top:30px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+            <h3 id="ns-return" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Enter resting <span style="color:var(--text-muted)">· 3 cues</span></h3>
+            <span style="font:var(--t-small);color:var(--text-faint)">Offsets are relative to the show ending.</span>
+          </div>
+
+          <div style="margin-top:12px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+            <div style="position:relative;height:104px;background:var(--sunken);border-bottom:1px solid var(--border);overflow:hidden">
+              <div style="position:absolute;left:24px;right:24px;top:52px;height:1px;background:var(--border-strong)"></div>
+
+              <div style="position:absolute;left:24px;top:12px;bottom:12px;width:2px;background:var(--warn-fg)"></div>
+              <span style="position:absolute;left:24px;top:2px;font:var(--t-meta);font-size:10px;color:var(--warn-fg)">0 · Barrier</span>
+              <span style="position:absolute;left:24px;top:60px;max-width:150px;font:var(--t-small);color:var(--text)">Stop Show Playlist<br><span style="font:var(--t-meta);font-size:10px;color:var(--warn-fg)">holds the rest</span></span>
+
+              <div style="position:absolute;left:80%;top:26px;bottom:26px;width:2px;background:var(--border-strong)"></div>
+              <span style="position:absolute;left:80%;top:8px;transform:translateX(-50%);font:var(--t-meta);font-size:10px;color:var(--text-faint)">+2.0s</span>
+              <span style="position:absolute;left:80%;top:60px;transform:translateX(-50%);max-width:120px;text-align:center;font:var(--t-small);color:var(--text)">House Lights Up</span>
+
+              <div style="position:absolute;right:24px;top:26px;bottom:26px;width:2px;background:var(--border-strong)"></div>
+              <span style="position:absolute;right:24px;top:8px;transform:translateX(50%);font:var(--t-meta);font-size:10px;color:var(--text-faint)">+2.5s</span>
+              <span style="position:absolute;right:24px;top:60px;transform:translateX(30%);max-width:100px;text-align:right;font:var(--t-small);color:var(--text)">Bed In</span>
+            </div>
+
+            <div style="overflow-x:auto;overscroll-behavior-inline:contain">
+              <table style="width:100%;min-width:820px;border-collapse:collapse;font:var(--t-body)">
+                <thead>
+                  <tr>
+                    <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Cue</th>
+                    <th style="width:104px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Role</th>
+                    <th style="width:92px;padding:8px 10px;text-align:right;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Offset</th>
+                    <th style="width:84px;padding:8px 10px;text-align:right;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Fade</th>
+                    <th style="width:80px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Barrier</th>
+                    <th style="width:112px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">On failure</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="cursor:pointer;background:var(--warn-bg)">
+                    <td style="padding:9px 10px 9px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--warn-fg)"><span style="font:var(--t-body);font-weight:500">Stop Show Playlist</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">fpp-stop-graceful · safety stop</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">other</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">0</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--warn-fg)">Yes</span></td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--warn-fg)">abort</td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-body);font-weight:500">House Lights Up</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">mqtt-house-lights-up</span></td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">lighting</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">+2 000</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">4 000</td>
+                    <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-faint)">continue</td>
+                  </tr>
+                  <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                    <td style="padding:9px 10px 9px 14px"><span style="font:var(--t-body);font-weight:500">Bed In</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">audio-bed-up</span></td>
+                    <td style="padding:9px 10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">audio</td>
+                    <td style="padding:9px 10px;text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">+2 500</td>
+                    <td style="padding:9px 10px;text-align:right;font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">2 000</td>
+                    <td style="padding:9px 10px;font:var(--t-small);color:var(--text-faint)">—</td>
+                    <td style="padding:9px 14px 9px 10px;font:var(--t-data);font-size:11px;color:var(--text-faint)">continue</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--border)">
+              <label style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <span style="font:var(--t-body);font-weight:500">Blackout after the show</span>
+                <input type="text" value="30 000 ms" style="width:130px;height:32px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-data);font-variant-numeric:tabular-nums">
+                <span style="font:var(--t-small);color:var(--text-faint)">Dark before the resting loop picks up — 30 s tonight.</span>
+              </label>
+              <button type="button" style="height:32px;padding:0 12px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-small);font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">Add cue</button>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="ns-site" style="margin-top:30px">
+          <h3 id="ns-site" style="margin:0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Site control &amp; interlocks</h3>
+          <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Both are optional in full. A definition that omits them runs the whole night loop unchanged — an empty object is refused, so it is either configured or absent.</p>
+
+          <div style="display:grid;gap:14px;margin-top:14px;max-width:760px">
+            <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+              <div style="padding:12px 14px;background:var(--raised);border-bottom:1px solid var(--border)">
+                <p style="margin:0;font:var(--t-body);font-weight:500">Presentation power off</p>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">What <span style="font:var(--t-data)">power-down-presentation</span> invokes. The domain must be <span style="font:var(--t-data)">presentation</span> — every other domain is refused rather than guessed.</p>
+              </div>
+              <div style="display:grid;grid-template-columns:154px minmax(0,1fr);gap:12px 14px;padding:14px">
+                <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Action</span>
+                <span style="font:var(--t-data);color:var(--text)">mqtt-projector-power</span>
+                <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Domain</span>
+                <span style="min-width:0"><span style="font:var(--t-data);color:var(--text)">presentation</span> <span style="font:var(--t-small);color:var(--text-faint)">· operator-declared</span><br><span style="font:var(--t-small);color:var(--text-muted)">No control provider in this build can identify a binding's physical targets, so every binding is your declaration. <span style="font:var(--t-data)">provider</span> is refused.</span></span>
+                <span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Removal</span>
+                <span style="min-width:0"><span style="font:var(--t-data);color:var(--text)">after-actions</span><br><span style="font:var(--t-small);color:var(--text-muted)">So prerequisites are required and a safety attestation is refused. Choosing <span style="font:var(--t-data)">immediate</span> swaps that pair round.</span></span>
+              </div>
+              <ol style="margin:0;padding:0;list-style:none;border-top:1px solid var(--border)">
+                <li style="display:grid;grid-template-columns:34px 96px minmax(0,1fr);gap:10px;align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--border)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 1</span>
+                  <span style="font:var(--t-data);font-size:11px;color:var(--text-muted)">action</span>
+                  <span style="min-width:0"><span style="font:var(--t-data)">resolume-blackout-all</span> <span style="font:var(--t-small);color:var(--text-faint)">· confirmation required</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px 96px minmax(0,1fr);gap:10px;align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--border)">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 2</span>
+                  <span style="font:var(--t-data);font-size:11px;color:var(--text-muted)">delay</span>
+                  <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted)">120 000 ms <span style="font:var(--t-small);color:var(--text-faint)">— lamp cool-down</span></span>
+                </li>
+                <li style="display:grid;grid-template-columns:34px 96px minmax(0,1fr);gap:10px;align-items:baseline;padding:9px 14px">
+                  <span style="font:var(--t-data);color:var(--text-faint);cursor:grab">&#10303; 3</span>
+                  <span style="font:var(--t-data);font-size:11px;color:var(--text-muted)">evidence</span>
+                  <span style="min-width:0"><span style="font:var(--t-data)">mqtt-projector-lamp-temp</span></span>
+                </li>
+              </ol>
+              <div style="padding:11px 14px;border-top:1px solid var(--border);background:var(--raised)">
+                <p style="margin:0;font:var(--t-small);color:var(--text-faint)">A prerequisite may not name this binding's own action, directly or through another action.</p>
+              </div>
+            </div>
+
+            <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+              <div style="padding:12px 14px;background:var(--raised);border-bottom:1px solid var(--border)">
+                <p style="margin:0;font:var(--t-body);font-weight:500">Interlocks <span style="font:var(--t-small);color:var(--text-muted);font-weight:400">· 2</span></p>
+                <p style="margin:4px 0 0;font:var(--t-small);color:var(--text-muted)">One rule, one lifecycle phase. Its evidence is an MQTT action's own reply — the only way this build reaches a site sensor — so the signal action must expect a response.</p>
+              </div>
+              <div style="overflow-x:auto;overscroll-behavior-inline:contain">
+                <table style="width:100%;min-width:700px;border-collapse:collapse;font:var(--t-body)">
+                  <thead>
+                    <tr>
+                      <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Rule</th>
+                      <th style="width:160px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Phase</th>
+                      <th style="width:92px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Posture</th>
+                      <th style="width:200px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">If evidence is unavailable</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                      <td style="padding:9px 10px 9px 14px;border-bottom:1px solid var(--border)"><span style="font:var(--t-body);font-weight:500">Rain sensor dry</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">mqtt-rain-sensor · fresh within 300 s</span></td>
+                      <td style="padding:9px 10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">start-night</td>
+                      <td style="padding:9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--warn-fg)">block</span></td>
+                      <td style="padding:9px 14px 9px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-data);font-size:11px;color:var(--text-muted)">block</span><br><span style="font:var(--t-small);color:var(--text-faint)">override: authorized-operator</span></td>
+                    </tr>
+                    <tr style="cursor:pointer" style-hover="background:var(--raised)">
+                      <td style="padding:9px 10px 9px 14px"><span style="font:var(--t-body);font-weight:500">Driveway clear</span><br><span style="font:var(--t-data);font-size:11px;color:var(--text-faint)">mqtt-driveway-motion</span></td>
+                      <td style="padding:9px 10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">prepare-site</td>
+                      <td style="padding:9px 10px"><span style="font:var(--t-meta);font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">observe</span></td>
+                      <td style="padding:9px 14px 9px 10px;font:var(--t-small);color:var(--text-faint)">Not applicable — an observe rule never blocks, and both fields are refused for it.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div style="padding:11px 14px;border-top:1px solid var(--border);background:var(--raised)">
+                <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Freshness has no effect on a phase whose evidence is dispatched live. On <span style="font:var(--t-data)">start-night</span> it is checked against the stored readiness result, and the stricter of this bound and the coordinator's own readiness max age wins.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding:14px 0;border-top:1px solid var(--border);max-width:760px">
+          <button type="button" style="height:34px;padding:0 16px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-body);font-weight:600;cursor:pointer" style-hover="background:var(--accent-hover);border-color:var(--accent-hover)">Save definition</button>
+          <button type="button" style="height:34px;padding:0 12px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="color:var(--text);background:var(--raised)">Discard changes</button>
+          <span style="margin-left:auto;font:var(--t-small);color:var(--text-muted)">Creates revision <span style="font:var(--t-data);color:var(--text)">13</span></span>
+        </div>
+
+        <p style="margin:0;font:var(--t-small);color:var(--text-muted);max-width:74ch">Some phases refuse a new <span style="font:var(--t-data)">block</span> interlock while the night is in them. If a save is withheld, the coordinator names the phase and the rule.</p>
+      </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;view&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;list&quot;, &quot;edit&quot;], &quot;default&quot;: &quot;list&quot;, &quot;tsType&quot;: &quot;'list' | 'edit'&quot; },
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    const view = this.props.view ?? 'list';
+    return {
+      theme: this.props.theme ?? 'dark',
+      isList: view === 'list',
+      isEdit: view === 'edit',
+    };
+  }
+}
+
+</script>
+</body>
+</html>

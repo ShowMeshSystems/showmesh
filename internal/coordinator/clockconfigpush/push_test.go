@@ -2,6 +2,7 @@ package clockconfigpush
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -10,6 +11,23 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
+
+// wireRevision reads params["revision"] as the exact int64
+// mqttproto.DecodeCmdPayload now recovers it as (json.Number), failing
+// the test if it decoded as anything else. Matches audioconfigpush's
+// identical helper, one push surface over.
+func wireRevision(t *testing.T, params map[string]any) int64 {
+	t.Helper()
+	n, ok := params["revision"].(json.Number)
+	if !ok {
+		t.Fatalf("params[\"revision\"] = %#v (%T), want json.Number", params["revision"], params["revision"])
+	}
+	rev, err := n.Int64()
+	if err != nil {
+		t.Fatalf("params[\"revision\"] = %q did not parse as an integer: %v", n, err)
+	}
+	return rev
+}
 
 // fakeConfigStore mirrors audioconfigpush's own identical test helper —
 // an in-memory [ConfigStore] keyed by (kind, id).
@@ -118,7 +136,7 @@ func TestToNodePushesManagedConfig(t *testing.T) {
 	if cmd.Params["hardwareTimestamping"] != true {
 		t.Fatalf("hardwareTimestamping missing from params: %+v", cmd.Params)
 	}
-	if int(cmd.Params["revision"].(float64)) != 3 {
+	if wireRevision(t, cmd.Params) != 3 {
 		t.Fatalf("revision = %v, want 3", cmd.Params["revision"])
 	}
 }

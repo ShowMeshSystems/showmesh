@@ -43,9 +43,11 @@ var agentConfigEnvVars = map[string]string{
 	"SHOWMESH_LOG_LEVEL": "one of debug/info/warn/error, read once at LoadConfig; Config.LogLevel",
 	"SHOWMESH_ASSET_DIR": "the node-local directory show assets are downloaded into and played from; " +
 		"Config.AssetDir's doc comment notes this agent has no other persistent state-directory concept yet",
-	"SHOWMESH_AGENT_API_TOKEN": "bearer credential asset.fetch sends the coordinator's read API; deliberately " +
-		"not named SHOWMESH_API_TOKEN so copying an agent env line into a coordinator .env file cannot trigger " +
-		"ADR-024 decision 2's coordinator startup refusal (see the envAgentAPIToken doc comment in config.go)",
+	"SHOWMESH_AGENT_API_TOKEN": "bearer credential this agent sends the coordinator, required (with asset:write) " +
+		"for FPP Connect registration and, separately, for asset.fetch's read whenever the coordinator has closed " +
+		"anonymous reads; deliberately not named SHOWMESH_API_TOKEN so copying an agent env line into a " +
+		"coordinator .env file cannot trigger ADR-024 decision 2's coordinator startup refusal (see the " +
+		"envAgentAPIToken doc comment in config.go)",
 	"SHOWMESH_ASSET_INVENTORY_INTERVAL": "asset inventory report cadence with a default, documented on " +
 		"Config.AssetInventoryInterval",
 	"SHOWMESH_RENDER_REPORT_INTERVAL": "render pipeline health report cadence with a default, documented on " +
@@ -58,6 +60,10 @@ var agentConfigEnvVars = map[string]string{
 		"Config.MultiSyncListenAddr defaults to pkg/multisync's own default",
 	"SHOWMESH_MULTISYNC_INTERFACE": "restricts the MultiSync multicast group join to one named interface; " +
 		"Config.MultiSyncInterface",
+	"SHOWMESH_FPPCONNECT_LISTEN_ADDR": "the local host:port the render node's FPP Connect HTTP compatibility " +
+		"listener binds, default \":80\" because xLights hardcodes port 80 in both the discovery and upload " +
+		"URLs it builds (RES-003 section 10.4); a bind address must be known before the process starts " +
+		"(ADR-044 decision 5, ADR-039 decision 9); Config.FPPConnectListenAddr",
 	"SHOWMESH_RENDER_DIAGNOSTIC_SURFACE": "names the node-local diagnostic idle surface, empty (the default) " +
 		"disabling it; DiagnosticSurface's own doc comment records why the owner's ruling on diagnostic idle " +
 		"output makes this node-local start-time configuration rather than a coordinator-delivered setting",

@@ -171,11 +171,19 @@ func TestSupervisorClearedSurfaceExcludedFromSnapshotAll(t *testing.T) {
 // an unrequested exit IS treated as a crash and does trigger a restart.
 func TestSupervisorCrashTriggersRestart(t *testing.T) {
 	clock := newFakeClock(time.Now())
-	var procs []*fakeProcess
+	// procCh hands the started fakeProcess to this goroutine through a
+	// channel receive, not a plain slice: AwaitState observing StateRunning
+	// only proves the supervisor reached that state, it does not publish an
+	// unsynchronized write on some other goroutine to this one. The state
+	// transition is driven by onRunningMarker firing on its own goroutine,
+	// which can race ahead of (or behind) the starter callback below, so a
+	// receive that blocks until the handle actually arrives is required —
+	// reading a slice index right after AwaitState returns is not enough.
+	procCh := make(chan *fakeProcess, 1)
 	fs := &fakeStarter{}
 	sup := NewSupervisor(clock.Now, func(ctx context.Context, path string, args []string, onRunningMarker func()) (ProcessHandle, error) {
 		h, err := fs.Start(ctx, path, args, onRunningMarker)
-		procs = append(procs, h.(*fakeProcess))
+		procCh <- h.(*fakeProcess)
 		return h, err
 	}, testLogger{})
 	shutdownSupervisor(t, sup)
@@ -183,6 +191,14 @@ func TestSupervisorCrashTriggersRestart(t *testing.T) {
 	if err := sup.Apply(testSpec("s1")); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
+
+	var proc *fakeProcess
+	select {
+	case proc = <-procCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("starter callback never sent the started process")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if _, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
@@ -195,7 +211,7 @@ func TestSupervisorCrashTriggersRestart(t *testing.T) {
 	// what resets consecFails per loop()'s policy (F11) rather than a
 	// wall-clock window.
 	code := 1
-	procs[0].exitNow(ExitResult{ExitCode: &code, StderrTail: "boom", SawRunningMarker: true})
+	proc.exitNow(ExitResult{ExitCode: &code, StderrTail: "boom", SawRunningMarker: true})
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()

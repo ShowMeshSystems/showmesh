@@ -1,10 +1,15 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // This file is Track C seam C1b's own test suite for the audio.settings
@@ -28,7 +33,7 @@ func TestGetAudioSettingsDefaultsBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
+const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"duckFadeDurationMs":150,"duckRestoreFadeDurationMs":700,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 
 // TestPutAudioSettingsThenGetReflectsWrittenValue proves the zero-to-one
 // transition: an unconfigured kind, one write, and a subsequent GET that
@@ -69,5 +74,152 @@ func TestPutAudioSettingsRejectsInvalidBody(t *testing.T) {
 	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.settings", map[string]string{"Authorization": "Bearer " + token})
 	if !containsAll(string(getBody), `"revision":0`) {
 		t.Fatalf("a rejected write must leave no revision behind; body: %s", getBody)
+	}
+}
+
+// seedUndecodableAudioSettingsRevision writes payloadJSON directly to the
+// store as the audio.settings singleton's active revision, bypassing the
+// API's own validating PUT — the only way to reproduce a revision that
+// was legal when written and stopped decoding later, the same way a
+// migration or a tightened bound would leave one behind.
+func seedUndecodableAudioSettingsRevision(t *testing.T, st *store.Store, payloadJSON string) {
+	t.Helper()
+	ctx := context.Background()
+	rec, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.AudioSettingsConfigKind, ObjectID: config.AudioSettingsConfigObjectID,
+		Revision: 1, PayloadJSON: payloadJSON, Source: config.AudioSettingsSourceAPI,
+	})
+	if err != nil {
+		t.Fatalf("seed revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, rec.Revision); err != nil {
+		t.Fatalf("activate seeded revision: %v", err)
+	}
+}
+
+// TestSnapshotReportsAudioConfigPushUnusableForAnUndecodableRevision is
+// this issue's own acceptance: a stored revision that fails to decode (here,
+// the reachable defaultMaxBackgroundGainDb = -66.02 dB left behind by
+// schemaV19's ceiling-only clamp of a legal pre-decibel 0.0005) must
+// produce operator-visible evidence naming the reason, not just a Warn log
+// line. GET /api/v1/snapshot is what an operator actually reads.
+func TestSnapshotReportsAudioConfigPushUnusableForAnUndecodableRevision(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	seedUndecodableAudioSettingsRevision(t, st,
+		`{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,`+
+			`"defaultMaxBackgroundGainDb":-66.02,"duckTargetGainDb":-12.04,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`)
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/snapshot", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if !containsAll(string(body), `"audioConfigPush":{"state":"unusable"`) {
+		t.Fatalf("snapshot does not report the push as unusable; body: %s", body)
+	}
+	if !containsAll(string(body), "defaultMaxBackgroundGainDb") || !containsAll(string(body), "-60") {
+		t.Fatalf("snapshot's reason does not name the failing field and bound; body: %s", body)
+	}
+	t.Logf("what an operator reads: %s", body)
+}
+
+// TestSnapshotReportsAudioConfigPushUsableWhenNothingEverWritten proves
+// the unconfigured coordinator (falls back to the built-in default,
+// exactly as [pushSettings] does) is not mistakenly reported unusable.
+func TestSnapshotReportsAudioConfigPushUsableWhenNothingEverWritten(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	_, body := doRequest(t, api.Handler, "GET", "/api/v1/snapshot", map[string]string{"Authorization": "Bearer " + token})
+	if !containsAll(string(body), `"audioConfigPush":{"state":"usable","reason":null}`) {
+		t.Fatalf("unconfigured coordinator must report usable/null; body: %s", body)
+	}
+}
+
+// TestSnapshotDegradesAudioConfigPushOnConfigStoreFailure is this review
+// round's own acceptance: a config-store failure while reading
+// audio.settings (a dangling current_revision pointer is one real cause —
+// [errInjectingConfigStore]'s own doc comment names transient SQLite
+// failures as another) must degrade only the audioConfigPush field, not
+// the whole snapshot. On the pre-fix code this same setup returned 500
+// for the entire response, costing the operator the node/FPP/collector
+// evidence the snapshot also carries — resolumeCompositionDegradeOnError
+// already established the "you cannot act, never you cannot see"
+// resolution for this exact handler and this exact dependency; this
+// applies it here too.
+func TestSnapshotDegradesAudioConfigPushOnConfigStoreFailure(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+
+	// A real, decodable revision — this proves the field is reported as
+	// "unknown" (a store failure) rather than "unusable" (a decode
+	// failure): the two must not be conflated, since a store failure says
+	// nothing about whether the stored revision itself is usable.
+	seedUndecodableAudioSettingsRevision(t, st, validAudioSettingsBody)
+
+	deps := showConfigTestDeps(svc, st)
+	deps.Config = &errInjectingConfigStore{Store: st, getConfigRevisionErr: errors.New("simulated transient sqlite error")}
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/snapshot", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a config-store failure reading audioConfigPush must degrade that field, not fail the snapshot; body: %s", resp.StatusCode, body)
+	}
+	if !containsAll(string(body), `"audioConfigPush":{"state":"unknown"`) {
+		t.Fatalf("snapshot does not report the push status as unknown on a store failure; body: %s", body)
+	}
+	if containsAll(string(body), `"audioConfigPush":{"state":"unusable"`) {
+		t.Fatalf("a store failure must not be reported as a decode failure (unusable); body: %s", body)
+	}
+	t.Logf("what an operator reads when the coordinator itself cannot read audio.settings: %s", body)
+}
+
+// TestPutAudioSettingsConfigRevisionPreconditionWiring is a smoke test
+// proving handlePutAudioSettingsConfig actually threads the shared
+// revision precondition through to its own call site. The full
+// behavioural matrix lives once, on the representative kind
+// fpp.endpoints (config_test.go).
+func TestPutAudioSettingsConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := func(driftMs int) string {
+		return fmt.Sprintf(`{"driftIgnoreThresholdMs":%d,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"duckFadeDurationMs":150,"duckRestoreFadeDurationMs":700,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`, driftMs)
+	}
+	put := func(payload string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/audio.settings", payload, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, respBody := put(body(10), nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	if resp, respBody := put(body(20), map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	resp, respBody := put(body(30), map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, respBody)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.settings", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["driftIgnoreThresholdMs"] != float64(20) {
+		t.Errorf("payload.driftIgnoreThresholdMs = %v, want 20 (the matching-If-Match writer's payload, which must have survived the refused stale write); body: %s", payload["driftIgnoreThresholdMs"], getBody)
 	}
 }

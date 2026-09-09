@@ -11,6 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -88,20 +89,11 @@ func (s *Store) NodeAudioObservations(nodeID string) []observation.Observation {
 
 func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc ClockDomainSource) []observation.Observation {
 	p := rep.payload
-	// discoveredAt is the one-shot startup probe's evidence time and
-	// backs device/outputs/program/ltc-availability, which the agent
-	// truly never re-checks after boot (see runAudioReport's doc
-	// comment). observedAt is this report tick's own live evidence time
-	// and backs every signal the agent re-derives on every tick: the
-	// engine's own state/reason (applyEngineAvailability calls
-	// engine.Available() fresh on every publish, never cached, so its
-	// verdict is a NOW observation even when engine.Available() reports
-	// unavailable) and the LTC generator's four signals below. Stamping
-	// the engine with discoveredAt instead used to pin it to the agent's
-	// startup probe forever: a node whose engine kept reporting fresh
-	// evidence every tick still aged past DefaultValidFor and read
-	// permanently stale even while the node kept reporting.
-	discoveredAt := p.DiscoveredAt
+	// observedAt backs every signal this function builds. [Store] keeps
+	// only a node's most recent report and nothing evicts it, so ValidFor
+	// is the only thing that ever ages a dark node's signals: stamping a
+	// signal with anything but this tick's own evidence time leaves it
+	// reading current forever, even off a node that stopped reporting.
 	observedAt := p.ObservedAt
 
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
@@ -140,22 +132,18 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 		if p.ProgramAvailable {
 			programState = StateUsable
 		}
-		ltcState := StateUnavailable
-		if p.LTCAvailable {
-			ltcState = StateUsable
-		}
 		obs = append(obs,
-			buildValue(nodeID, SignalDeviceState, deviceState, discoveredAt, rep),
-			buildValue(nodeID, SignalDeviceReason, deviceReason, discoveredAt, rep),
-			buildValue(nodeID, SignalOutputsCount, p.OutputsCount, discoveredAt, rep),
-			buildValue(nodeID, SignalProgramState, programState, discoveredAt, rep),
-			buildValue(nodeID, SignalLTCState, ltcState, discoveredAt, rep),
+			buildValue(nodeID, SignalDeviceState, deviceState, observedAt, rep),
+			buildValue(nodeID, SignalDeviceReason, deviceReason, observedAt, rep),
+			buildValue(nodeID, SignalOutputsCount, p.OutputsCount, observedAt, rep),
+			buildValue(nodeID, SignalProgramState, programState, observedAt, rep),
+			ltcStateObservation(nodeID, p, observedAt, rep),
 		)
 	}
 
 	obs = append(obs,
-		buildValue(nodeID, SignalOutputsEnumerated, int64(p.EnumeratedCount), discoveredAt, rep),
-		buildValue(nodeID, SignalOutputsTruncated, p.Truncated, discoveredAt, rep),
+		buildValue(nodeID, SignalOutputsEnumerated, int64(p.EnumeratedCount), observedAt, rep),
+		buildValue(nodeID, SignalOutputsTruncated, p.Truncated, observedAt, rep),
 	)
 
 	domain, provenance, declaredAt, reason := lookupClockDomain(ctx, clockSrc, nodeID)
@@ -195,8 +183,65 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	}
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
+	obs = append(obs, engineRestoreObservations(nodeID, p, observedAt, rep)...)
 
 	return obs
+}
+
+// engineRestoreObservations renders the four node.audio.engine.restore.*
+// signals (see signals.go). State and Attempts are always collected --
+// "idle"/0 are real facts about a node that has never had an engine
+// problem, never "not collected" -- following [AudioPayload.
+// EngineRestoreState]'s own "\"\" reads as idle" rule for a report from
+// an agent built before these fields existed. NextAttemptMs is collected
+// only while State is "scheduled": 0 is otherwise genuinely ambiguous
+// between "never started" and "gave up", which State (not this signal)
+// exists to resolve, so reporting it not_collected rather than a
+// fabricated 0 keeps that resolution honest. LastReason is collected
+// only once Attempts is nonzero, matching sessionObservations' identical
+// RestoreLastReason gate one resource kind down.
+func engineRestoreObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+
+	state := p.EngineRestoreState
+	if state == "" {
+		state = "idle"
+	}
+
+	obs := []observation.Observation{
+		buildValue(nodeID, SignalEngineRestoreState, state, observedAt, rep),
+		buildValue(nodeID, SignalEngineRestoreAttempts, p.EngineRestoreAttempts, observedAt, rep),
+	}
+
+	if state == "scheduled" {
+		obs = append(obs, buildValue(nodeID, SignalEngineRestoreNextAttemptMs, p.EngineRestoreNextAttemptMs, observedAt, rep))
+	} else {
+		reason := "no automatic restore attempt is scheduled: this node's restore-retry driver has not run or has exhausted its bounded schedule"
+		obs = append(obs, notCollected(res, SignalEngineRestoreNextAttemptMs, source, reason, rep.receivedAt))
+	}
+
+	if p.EngineRestoreAttempts > 0 {
+		obs = append(obs, buildValue(nodeID, SignalEngineRestoreLastReason, p.EngineRestoreLastReason, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalEngineRestoreLastReason, source, "no automatic restore attempt has been made on this node", rep.receivedAt))
+	}
+
+	return obs
+}
+
+// ltcStateObservation derives node.audio.ltc.state from live
+// LTCGeneratorState, not the startup-probed LTCAvailable (finding 2).
+// "stopped" counts as usable: an unbound channel reports unsupported, not
+// stopped, so stopped already proves the node can drive LTC. Do not
+// tighten this to running-only: LTC is idle before a show starts on
+// every capable node, and that would reintroduce the pre-show wrong answer.
+func ltcStateObservation(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) observation.Observation {
+	state := StateUnavailable
+	if p.LTCGeneratorState == "running" || p.LTCGeneratorState == "stopped" {
+		state = StateUsable
+	}
+	return buildValue(nodeID, SignalLTCState, state, observedAt, rep)
 }
 
 // engineGlitchObservations renders the five node.audio.engine.* glitch
@@ -308,12 +353,14 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	obs = append(obs, buildSessionValue(res, source, SignalSessionDesiredRevision, int64(sess.DesiredRevision), sessionAt, rep))
 
 	if sess.HasGain {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionGain, sess.Gain, sessionAt, rep))
+		gainDb := pkgaudio.GainToDb(pkgaudio.Gain(sess.Gain))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGain, gainDb, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionGain, source, "session has no gain set", rep.receivedAt))
 	}
 	if sess.HasCeiling {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, sess.Ceiling, sessionAt, rep))
+		ceilingDb := pkgaudio.CeilingToDb(pkgaudio.Ceiling(sess.Ceiling))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, ceilingDb, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionGainCeiling, source, "session has no gain ceiling set", rep.receivedAt))
 	}
@@ -351,6 +398,40 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		obs = append(obs, buildSessionValue(res, source, SignalSessionFaultReason, sess.FaultReason, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
+	}
+
+	ltcClaimState := sess.LTCClaimState
+	if ltcClaimState == "" {
+		ltcClaimState = "none"
+	}
+	obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimState, ltcClaimState, sessionAt, rep))
+	if ltcClaimState == "refused" {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimReason, sess.LTCClaimReason, sessionAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionLTCClaimReason, source, "session's LTC claim was not refused", rep.receivedAt))
+	}
+
+	// Gated on RestorePending, not on RestoreAttempts > 0: attempts
+	// starting at 0 is genuinely ambiguous between "nothing queued" and
+	// "queued, but the automatic retry driver has not attempted it yet"
+	// — exactly the window an operator most needs to see, and the one a
+	// gate on the count alone reports as nothing at all.
+	if sess.RestorePending {
+		obs = append(obs,
+			buildSessionValue(res, source, SignalSessionRestoreAttempts, sess.RestoreAttempts, sessionAt, rep),
+			buildSessionValue(res, source, SignalSessionRestoreNextAttemptMs, sess.RestoreNextAttemptMs, sessionAt, rep),
+		)
+		if sess.RestoreAttempts > 0 {
+			obs = append(obs, buildSessionValue(res, source, SignalSessionRestoreLastReason, sess.RestoreLastReason, sessionAt, rep))
+		} else {
+			obs = append(obs, notCollected(res, SignalSessionRestoreLastReason, source, "a restore is queued but the automatic retry driver has not attempted it yet", rep.receivedAt))
+		}
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalSessionRestoreAttempts, source, "no restore is currently queued for this session", rep.receivedAt),
+			notCollected(res, SignalSessionRestoreNextAttemptMs, source, "no restore is currently queued for this session", rep.receivedAt),
+			notCollected(res, SignalSessionRestoreLastReason, source, "no restore is currently queued for this session", rep.receivedAt),
+		)
 	}
 
 	if sess.GapKnown {
@@ -465,14 +546,12 @@ func lookupClockDomain(ctx context.Context, src ClockDomainSource, nodeID string
 	return payload.ClockDomain, payload.ClockDomainProvenance, rev.CreatedAt, ""
 }
 
-// buildValue stamps ObservedAt from whichever evidence timestamp the
-// caller passes as observedAt — [mqttproto.AudioPayload.DiscoveredAt] for
-// the one-shot discovery signals, [mqttproto.AudioPayload.ObservedAt] for
-// the engine and per-tick LTC generator signals, never rep.receivedAt, the
-// coordinator's own bookkeeping time, which stays CollectedAt. Matches
-// noderender.buildValue's identical rule (ADR-011, generalized a fourth
-// time in this project). observedAt nil means genuinely unknown, matching
-// those fields' own convention.
+// buildValue stamps ObservedAt from the caller-supplied observedAt:
+// [mqttproto.AudioPayload.ObservedAt] at every call site in this package,
+// never rep.receivedAt, the coordinator's own bookkeeping time, which
+// stays CollectedAt. Matches noderender.buildValue's identical rule
+// (ADR-011). observedAt nil means genuinely unknown, matching that
+// field's own convention.
 func buildValue(nodeID string, sig observation.SignalID, value any, observedAt *time.Time, rep report) observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)

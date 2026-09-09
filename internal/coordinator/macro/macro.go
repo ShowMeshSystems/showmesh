@@ -65,6 +65,16 @@ type resolumeActionDispatcher interface {
 	Dispatch(ctx context.Context, action string, params map[string]any, now time.Time) (api.ResolumeActionResult, error)
 }
 
+// audioActionDispatcher is this package's own minimal view of
+// [api.AudioActionDispatcher]: dispatch one audio.session.*/audio.gain.*/
+// audio.output.* command through the SAME in-process dispatch/confirm/audit
+// core the HTTP audio.session.* routes use — the audio integration's own
+// mirror of fppDispatcher's identical role one type up.
+// *api.AudioActionDispatcher satisfies this with no adapter.
+type audioActionDispatcher interface {
+	Dispatch(ctx context.Context, in api.AudioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error)
+}
+
 // mqttRegistry is this package's own minimal view of [broker.Registry]:
 // resolve a broker identifier, publish through it, and run one
 // publish-then-wait exchange through it. *broker.Registry satisfies this
@@ -140,6 +150,18 @@ type Dependencies struct {
 	// as an ordinary refused outcome rather than a nil dereference,
 	// matching Brokers' identical nil-safe posture above.
 	ResolumeActions resolumeActionDispatcher
+
+	// AudioActions is the in-process audio dispatch seam
+	// (ADR-029/STEP-9-SPEC.md section 5.3's fourth show.action integration).
+	// The real value is *api.AudioActionDispatcher, built with
+	// [api.NewAudioActionDispatcher] against the SAME [api.Dependencies] and
+	// [api.Options] the coordinator's HTTP surface uses, mirroring Dispatch's
+	// (above) identical FPP pattern: both dispatch through the identical
+	// core. May be nil when no audio publisher is configured on this
+	// coordinator at all; step_audio.go's own call site handles that as an
+	// ordinary refused outcome rather than a nil dereference, matching
+	// ResolumeActions' identical nil-safe posture above.
+	AudioActions audioActionDispatcher
 
 	// Primitives is the Step 8 FPP primitive registry, used at resolve
 	// time to re-normalize a pinned action's params out of stored JSON
@@ -266,6 +288,7 @@ type Executor struct {
 	dispatch        fppDispatcher
 	brokers         mqttRegistry
 	resolumeActions resolumeActionDispatcher
+	audioActions    audioActionDispatcher
 	prims           config.FPPPrimitiveRegistry
 	notify          func()
 	clock           func() time.Time
@@ -296,6 +319,7 @@ func NewExecutor(deps Dependencies, opts Options) *Executor {
 		dispatch:                  deps.Dispatch,
 		brokers:                   deps.Brokers,
 		resolumeActions:           deps.ResolumeActions,
+		audioActions:              deps.AudioActions,
 		prims:                     deps.Primitives,
 		notify:                    deps.Notify,
 		clock:                     deps.Clock,

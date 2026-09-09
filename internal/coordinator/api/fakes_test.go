@@ -44,6 +44,29 @@ func (f *fakeNodeLister) setViews(views []inventory.NodeView) {
 	f.views = views
 }
 
+// fakeNodeAudioLister is [NodeAudioLister]'s test double, for a test that
+// needs to drive audioNodeEngineConfirmedUsableNow against controlled
+// node.audio.* observations without a real collector.
+type fakeNodeAudioLister struct {
+	mu     sync.Mutex
+	byNode map[string][]observation.Observation
+}
+
+func (f *fakeNodeAudioLister) NodeAudioObservations(nodeID string) []observation.Observation {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.byNode[nodeID]
+}
+
+func (f *fakeNodeAudioLister) setObservations(nodeID string, obs []observation.Observation) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.byNode == nil {
+		f.byNode = map[string][]observation.Observation{}
+	}
+	f.byNode[nodeID] = obs
+}
+
 type fakeFPPLister struct {
 	views []FPPInstanceView
 	err   error
@@ -67,14 +90,29 @@ func (f *fakeResolumeLister) ListInstances(context.Context) ([]ResolumeInstanceV
 type fakeObservationLister struct {
 	obs []observation.Observation
 	err error
-	// gotFilter records the last filter passed in, for tests asserting the
-	// query parameters were parsed and forwarded correctly.
+	// mu guards gotFilter: the emergency-stop feature's own concurrent
+	// per-instance dispatch (emergencyStopAllInstances) can call
+	// ListObservations from several goroutines at once against this SAME
+	// fake, and an unguarded write here was a real data race under -race,
+	// not merely a theoretical one.
+	mu        sync.Mutex
 	gotFilter ObservationFilter
 }
 
 func (f *fakeObservationLister) ListObservations(_ context.Context, filter ObservationFilter) ([]observation.Observation, error) {
+	f.mu.Lock()
 	f.gotFilter = filter
+	f.mu.Unlock()
 	return f.obs, f.err
+}
+
+// lastFilter is the race-safe way to read gotFilter after ListObservations
+// has been called; direct field access is a race under concurrent
+// dispatch even from a single-threaded test's own assertions.
+func (f *fakeObservationLister) lastFilter() ObservationFilter {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gotFilter
 }
 
 type fakeEventReader struct {

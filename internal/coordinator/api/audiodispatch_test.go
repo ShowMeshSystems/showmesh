@@ -61,6 +61,19 @@ type fakeAudioPublisher struct {
 	// map falls back to f.result.
 	resultsByAction map[string]mqttproto.ResultPayload
 
+	// resultsByNode, when non-nil, answers AwaitResponse per dispatched
+	// TARGET NODE and action (key "nodeID" alone matches every action on
+	// that node; key "nodeID:action" matches only that one action, and
+	// takes priority), checked before resultsByAction - this file's own
+	// multi-node tests need the SAME action (e.g. "apply") to confirm on
+	// one node and refuse on another, or one specific action on one node
+	// to refuse while every other action on that SAME node confirms
+	// (e.g. a node's clear and apply confirm but its start is refused),
+	// in the SAME test - neither of which resultsByAction (keyed only by
+	// action) can express. A node/action absent from both key forms
+	// falls through to resultsByAction, then f.result.
+	resultsByNode map[string]mqttproto.ResultPayload
+
 	// dispatched records every command this fake was handed, in order.
 	// lastAction/lastParams answer "what was the final one"; a test that
 	// must prove a command was NEVER sent, or must read the params of an
@@ -74,11 +87,13 @@ type fakeAudioPublisher struct {
 	onAwaitResponse func()
 }
 
-// dispatchedAudioCommand is one recorded publish: the action string and
-// the params it carried.
+// dispatchedAudioCommand is one recorded publish: the action string, the
+// target node id, and the params it carried.
 type dispatchedAudioCommand struct {
-	Action string
-	Params map[string]any
+	Action   string
+	NodeID   string
+	Params   map[string]any
+	Deadline *time.Time
 }
 
 func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool, payload []byte) error {
@@ -86,15 +101,20 @@ func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool
 	defer f.mu.Unlock()
 	f.publishCount++
 	var env struct {
+		NodeID  string `json:"nodeId"`
 		Payload struct {
-			Action string         `json:"action"`
-			Params map[string]any `json:"params"`
+			Action   string         `json:"action"`
+			Params   map[string]any `json:"params"`
+			Deadline *time.Time     `json:"deadline"`
 		} `json:"payload"`
 	}
 	_ = json.Unmarshal(payload, &env)
 	f.lastAction = env.Payload.Action
 	f.lastParams = env.Payload.Params
-	f.dispatched = append(f.dispatched, dispatchedAudioCommand{Action: env.Payload.Action, Params: env.Payload.Params})
+	f.dispatched = append(f.dispatched, dispatchedAudioCommand{
+		Action: env.Payload.Action, NodeID: env.NodeID, Params: env.Payload.Params,
+		Deadline: env.Payload.Deadline,
+	})
 	return f.publishErr
 }
 
@@ -134,6 +154,14 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 	result := f.result
 	if f.resultsByAction != nil {
 		if r, ok := f.resultsByAction[cmd.Action]; ok {
+			result = r
+		}
+	}
+	if f.resultsByNode != nil {
+		if r, ok := f.resultsByNode[cmdEnv.NodeID]; ok {
+			result = r
+		}
+		if r, ok := f.resultsByNode[cmdEnv.NodeID+":"+cmd.Action]; ok {
 			result = r
 		}
 	}
@@ -279,12 +307,166 @@ func TestAudioSessionDispatchConfirmsFromNodeEvidence(t *testing.T) {
 		t.Fatalf("outcome = %q, want stopped (from node evidence, not the transport-level mqttproto outcome)", decoded.Command.Outcome)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession: %v", err)
 	}
 	if rec.NodeID != "node-a" || rec.Revision != 1 {
 		t.Fatalf("persisted record = %+v", rec)
+	}
+}
+
+// TestAudioSessionDispatchSetsWireDeadlineForListedAction proves the half
+// of audioCommandDeadlineActions's boolean check that a mutation to
+// "always true" cannot fake: a listed action (audio.session.stop) must
+// carry a wire CmdPayload.Deadline, generous (audioCommandWireDeadline)
+// and anchored to the dispatch clock, not merely non-nil.
+func TestAudioSessionDispatchSetsWireDeadlineForListedAction(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.audio_session.stop",
+			Value:  map[string]any{"sessionId": "night-session", "outcome": "stopped", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if len(setup.pub.dispatched) != 1 {
+		t.Fatalf("dispatched count = %d, want 1", len(setup.pub.dispatched))
+	}
+	got := setup.pub.dispatched[0].Deadline
+	if got == nil {
+		t.Fatalf("Deadline = nil, want set for listed action audio.session.stop")
+	}
+	want := testNow.Add(audioCommandWireDeadline)
+	if !got.Equal(want) {
+		t.Fatalf("Deadline = %v, want %v (testNow + audioCommandWireDeadline)", got, want)
+	}
+}
+
+// TestAudioSessionDispatchLeavesUnlistedActionWithoutDeadline proves the
+// other half of audioCommandDeadlineActions's boolean check that a
+// mutation to "always false" cannot fake, and is the entire point of the
+// positive-list design: an action not on the list (audio.gain.set, which
+// dispatches through the SAME executeAudioSessionDispatch) must carry a
+// nil wire Deadline, exactly as it did before this change, so an
+// unclassified future action (e.g. a steady-playback re-affirm) is safe
+// by default rather than safe by someone remembering an exemption.
+func TestAudioSessionDispatchLeavesUnlistedActionWithoutDeadline(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.audio_session.gain",
+			Value:  map[string]any{"sessionId": "night-session", "gainDb": -6.0},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/gain", `{"revision":1,"params":{"gainDb":-6.0}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if len(setup.pub.dispatched) != 1 {
+		t.Fatalf("dispatched count = %d, want 1", len(setup.pub.dispatched))
+	}
+	if setup.pub.dispatched[0].Action != "audio.gain.set" {
+		t.Fatalf("dispatched action = %q, want audio.gain.set", setup.pub.dispatched[0].Action)
+	}
+	if got := setup.pub.dispatched[0].Deadline; got != nil {
+		t.Fatalf("Deadline = %v, want nil for unlisted action audio.gain.set", *got)
+	}
+}
+
+// TestAudioSessionDispatchSameSessionIDDifferentNodesAreIndependent is
+// this seam's own end-to-end acceptance proof: "night-session" (like the
+// real cue and blackAndSilence session ids) is not unique to one node,
+// and two nodes dispatching a command against that SAME session id must
+// each keep their own durable desired-state record and their own
+// revision counter - neither node's write may drop or be dropped by the
+// other's, which is exactly what audio_sessions' pre-schemaV20 `id`-only
+// primary key allowed to happen.
+func TestAudioSessionDispatchSameSessionIDDifferentNodesAreIndependent(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "stopped", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	reqA := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqA); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-a dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+	reqB := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-b/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqB); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-b dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	recA, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-a: %v", err)
+	}
+	recB, err := setup.st.GetAudioSession(context.Background(), "node-b", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-b: %v", err)
+	}
+	if recA.NodeID != "node-a" || recA.Revision != 1 {
+		t.Fatalf("node-a record = %+v", recA)
+	}
+	if recB.NodeID != "node-b" || recB.Revision != 1 {
+		t.Fatalf("node-b record = %+v", recB)
+	}
+
+	// Advance node-a to revision 2; node-b's own row, still at revision 1,
+	// must be untouched and must not block a later node-b write at a
+	// revision that would be a rewind only if the two nodes shared a
+	// counter.
+	reqA2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":2}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqA2); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-a second dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	recA, err = setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-a after advance: %v", err)
+	}
+	if recA.Revision != 2 {
+		t.Fatalf("node-a revision = %d, want 2", recA.Revision)
+	}
+	recB, err = setup.st.GetAudioSession(context.Background(), "node-b", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-b after node-a advanced: %v", err)
+	}
+	if recB.Revision != 1 {
+		t.Fatalf("node-b revision = %d, want still 1 (node-a's advance must not touch node-b's row)", recB.Revision)
+	}
+
+	reqB2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-b/audio/sessions/night-session/stop", `{"revision":2}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqB2); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-b second dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+	recB, err = setup.st.GetAudioSession(context.Background(), "node-b", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-b after advance: %v", err)
+	}
+	if recB.Revision != 2 {
+		t.Fatalf("node-b revision = %d, want 2 (node-b's own write must not have been dropped)", recB.Revision)
 	}
 }
 
@@ -500,7 +682,7 @@ func TestAudioSessionDispatchRefusedResultDoesNotPersistDesiredState(t *testing.
 		t.Fatalf("second apply status = %d; body: %s", resp2.StatusCode, body2)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession: %v", err)
 	}
@@ -541,7 +723,7 @@ func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.
 		t.Fatalf("pause status = %d; body: %s", resp.StatusCode, body)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession: %v", err)
 	}
@@ -553,14 +735,22 @@ func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.
 	}
 }
 
-// TestAudioSessionDispatchAuditWriteFailureRefusesDispatch proves the
-// ADR-024 fail-closed default for a NON-exempt action: when the audit
-// store cannot be written, nothing is recorded and nothing is
-// dispatched. pause carries no ADR-024 decision 11 safety-class
-// exemption - see TestAudioSessionSafetyExemptActionsDispatchDegraded
-// for stop/clear/output.mute, which do.
-func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
+// TestAudioSessionDispatchAuditWriteFailureRunsWithDegradedAttribution
+// proves ADR-024 decision 11's amendment (owner ruling, 2026-08-26):
+// a NON-exempt action (pause carries no ADR-024 decision 11
+// safety-class exemption) still dispatches, with AttributionDegraded
+// true, when the audit store cannot be written - never refused. See
+// TestAudioSessionSafetyExemptActionsDispatchDegraded for stop/clear/
+// output.mute, whose own exemption predates this amendment and is
+// unchanged by it.
+func TestAudioSessionDispatchAuditWriteFailureRunsWithDegradedAttribution(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "paused", "reason": ""},
+		},
+	}
 	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, op.ID)
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -569,11 +759,22 @@ func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
 
 	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/pause", `{"revision":1}`, token)
 	resp, body := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (dispatched with degraded attribution, never refused); body: %s", resp.StatusCode, body)
 	}
-	if setup.pub.count() != 0 {
-		t.Fatalf("publish count = %d, want 0 - an audit-write failure must dispatch nothing", setup.pub.count())
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want 1 - an audit-write failure must not stop dispatch", setup.pub.count())
+	}
+	var decoded struct {
+		Command struct {
+			AttributionDegraded bool `json:"attributionDegraded"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode response: %v; body: %s", err, body)
+	}
+	if !decoded.Command.AttributionDegraded {
+		t.Errorf("attributionDegraded = false, want true (the audit store is failing)")
 	}
 }
 
@@ -729,7 +930,7 @@ func TestAudioSessionDispatchUnconfirmablePersistsDesiredState(t *testing.T) {
 		t.Fatalf("outcome = %q, want unconfirmable", decoded1.Command.Outcome)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession after unconfirmable dispatch: %v", err)
 	}
@@ -758,7 +959,7 @@ func TestAudioSessionDispatchUnconfirmablePersistsDesiredState(t *testing.T) {
 		t.Fatalf("second apply status = %d; body: %s", resp2.StatusCode, body2)
 	}
 
-	rec2, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec2, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession after stale-revision dispatch: %v", err)
 	}
@@ -808,7 +1009,7 @@ func TestAudioSessionDispatchDeadlineExceededPersistsDesiredState(t *testing.T) 
 		t.Fatalf("outcome = %q, want unconfirmable", decoded.Command.Outcome)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession after deadline-exceeded dispatch: %v", err)
 	}
@@ -830,5 +1031,86 @@ func TestAudioOutcomeShouldPersistRejectsUnrecognisedOutcomes(t *testing.T) {
 		if !audioOutcomeShouldPersist(outcome) {
 			t.Errorf("audioOutcomeShouldPersist(%q) = false, want true", outcome)
 		}
+	}
+}
+
+// evidenceResult builds a mqttproto.ResultPayload carrying the given
+// outcome/reason pair as node evidence, the shape mapResultOutcome reads
+// its finer-grained outcome from.
+func evidenceResult(outcome string, reason any) mqttproto.ResultPayload {
+	return mqttproto.ResultPayload{
+		CommandID: "irrelevant", IdempotencyKey: "irrelevant", Action: "audio.session.stop",
+		Outcome: mqttproto.OutcomeUnconfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.audio_session.stop",
+			Value:  map[string]any{"outcome": outcome, "reason": reason},
+		},
+	}
+}
+
+// TestMapResultOutcomeRejectsReasonlessRequiredOutcome proves the
+// coordinator's fix for each of the three outcomes pkgaudio.
+// OutcomeResult.Validate requires a reason for: the coordinator keeps
+// the node's own outcome
+// word and replaces a blank reason with its own statement of the
+// violation, asserted exactly so a mutation that swaps the outcome word
+// into the wrong message, or reuses one outcome's text for another, is
+// caught.
+func TestMapResultOutcomeRejectsReasonlessRequiredOutcome(t *testing.T) {
+	for _, outcome := range []string{"refused", "failed", "unconfirmable"} {
+		gotOutcome, gotReason := mapResultOutcome(evidenceResult(outcome, ""))
+		if gotOutcome != outcome {
+			t.Errorf("mapResultOutcome(%q, reason=\"\") outcome = %q, want %q (verdict must survive)", outcome, gotOutcome, outcome)
+		}
+		wantReason := fmt.Sprintf("node reported outcome %q with no reason; the coordinator did not receive one and the outcome requires one", outcome)
+		if gotReason != wantReason {
+			t.Errorf("mapResultOutcome(%q, reason=\"\") reason = %q, want %q", outcome, gotReason, wantReason)
+		}
+	}
+}
+
+// TestMapResultOutcomeLeavesReasonedRefusalUntouched is the acceptance
+// test for this fix: enforcement must never rewrite a reason the node
+// actually supplied. A refusal that already carries a reason must pass
+// through byte for byte, because an over-eager fix that rewrites good
+// reasons is a worse bug than the gap it closes.
+func TestMapResultOutcomeLeavesReasonedRefusalUntouched(t *testing.T) {
+	const reason = "downstream device reported input already in use by another session"
+	gotOutcome, gotReason := mapResultOutcome(evidenceResult("refused", reason))
+	if gotOutcome != "refused" {
+		t.Fatalf("outcome = %q, want refused", gotOutcome)
+	}
+	if gotReason != reason {
+		t.Fatalf("reason = %q, want %q unchanged", gotReason, reason)
+	}
+}
+
+// TestMapResultOutcomeLeavesUnrequiredOutcomeReasonEmpty proves
+// enforcement does not leak onto outcomes outcomesRequiringReason does
+// not cover. "started" is an observation, not a failure; an empty
+// reason on it is not a violation and must stay empty.
+func TestMapResultOutcomeLeavesUnrequiredOutcomeReasonEmpty(t *testing.T) {
+	gotOutcome, gotReason := mapResultOutcome(evidenceResult("started", ""))
+	if gotOutcome != "started" {
+		t.Fatalf("outcome = %q, want started", gotOutcome)
+	}
+	if gotReason != "" {
+		t.Fatalf("reason = %q, want empty (started does not require a reason)", gotReason)
+	}
+}
+
+// TestMapResultOutcomeTreatsNonStringReasonAsMissing proves the
+// unchecked type assertion on v["reason"] (r, _ := v["reason"].(string))
+// does not let a non-string reason read as satisfied, or panic: a
+// refusal whose "reason" field is a number must be treated exactly like
+// a refusal with no "reason" field at all.
+func TestMapResultOutcomeTreatsNonStringReasonAsMissing(t *testing.T) {
+	gotOutcome, gotReason := mapResultOutcome(evidenceResult("refused", 42))
+	if gotOutcome != "refused" {
+		t.Fatalf("outcome = %q, want refused", gotOutcome)
+	}
+	wantReason := `node reported outcome "refused" with no reason; the coordinator did not receive one and the outcome requires one`
+	if gotReason != wantReason {
+		t.Fatalf("reason = %q, want %q", gotReason, wantReason)
 	}
 }

@@ -136,6 +136,51 @@ func slogTestLogger(buf *strings.Builder) *slog.Logger {
 	return slog.New(slog.NewTextHandler(buf, nil))
 }
 
+// postThroughShortWriteTimeoutServer posts body to path against a REAL
+// *http.Server with a short WriteTimeout, then returns the raw status and
+// body for the caller to assert on - both are real evidence a route's own
+// SetWriteDeadline extension delivered, whether the route's own honest
+// answer is 200 (an unconfirmed outcome) or a refusal status (a withheld
+// interlock gate). This is the shared shape
+// TestEmergencyStopSurvivesServerWriteTimeout (emergencystop_writetimeout_test.go)
+// established and every per-route write-deadline-extension test in this
+// package now reuses: a passing test against a handler that forgot its own
+// extension would otherwise still pass if the caller's own pacing (an
+// onAwaitResponse-style hook, sleeping past ts.Config.WriteTimeout while
+// staying well inside the handler's real, much larger extended deadline)
+// were removed - see that test's own doc comment for the trap this guards
+// against. httptest.NewRecorder (doRequest/doRawRequest above) cannot
+// exercise this at all: net/http.Server.WriteTimeout only ever fires
+// against a real network connection.
+func postThroughShortWriteTimeoutServer(t *testing.T, handler http.Handler, path, body string, auth map[string]string) (status int, respBody []byte) {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(handler)
+	ts.Config.WriteTimeout = 50 * time.Millisecond
+	ts.Start()
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("request paced past the server write timeout failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	return resp.StatusCode, respBody
+}
+
 // decodeMap decodes body into a generic map[string]any, the contract's
 // standing-rule-compliant way to assert on specific keys without
 // round-tripping through this package's own wire structs (which would

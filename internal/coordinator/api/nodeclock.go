@@ -117,7 +117,7 @@ func (h *handlers) handlePutNodeClock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NodeClockConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.NodeClockConfigKind, id, payloadJSON, revisionPrecondition{},
 		map[string]any{"provider": payload.Provider, "interface": payload.Interface})
 	if writeErr != nil {
 		h.writeInternalError(w, now, "write node.clock config revision", writeErr)

@@ -74,6 +74,7 @@ import {
   initialModel,
   type AudioSessionCommandResult,
   type ConnectionState,
+  type CurrentRunsResponse,
   type CueCatalogDeployResult,
   type Evidence,
   type Event as ModelEvent,
@@ -85,6 +86,7 @@ import {
   type NightCommandName,
   type RenderCommandResult,
   type ResolumeInstance,
+  type ResyncNodeAssetsResult,
 } from './domain'
 import { IncompatibleVersionError, UnauthorizedError, isAbortError } from './errors'
 import { SSEParser, type SSEFrame } from './sse'
@@ -108,6 +110,8 @@ type SchemaConfigResolumeInstancesPayload = components['schemas']['ConfigResolum
 // Track G seam G-3 (ADR-039).
 type SchemaFPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
 type SchemaConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
+type SchemaFPPConnectSettingsConfigResponse = components['schemas']['FPPConnectSettingsConfigResponse']
+type SchemaConfigFPPConnectSettingsPayload = components['schemas']['ConfigFPPConnectSettingsPayload']
 // Track G seam G-4 (ADR-039).
 type SchemaAssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
 type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
@@ -122,6 +126,7 @@ type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRes
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+type SchemaResolumeRecoveryChangedEvent = components['schemas']['ResolumeRecoveryChangedEvent']
 // The pending-instanceUuid-change acknowledgement.
 type SchemaAcknowledgeFPPInstanceUUIDChangeResponse = components['schemas']['AcknowledgeFPPInstanceUUIDChangeResponse']
 // `GET /` (getServiceDescriptor): the coordinator's own self-description.
@@ -149,13 +154,35 @@ type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPl
 type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
 type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
 type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+// ADR-048, Track J's J1: the fallback-program metadata list and one
+// host's full signed-program read, an operator's pre-show readiness
+// evidence for FPP's coordinator-loss fallback.
+type SchemaFallbackProgramListResponse = components['schemas']['FallbackProgramListResponse']
+type SchemaFallbackProgramResponse = components['schemas']['FallbackProgramResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
 type SchemaRenderSurfaceRequest = components['schemas']['RenderSurfaceRequest']
 // First audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
 type SchemaAudioSessionCommandResponse = components['schemas']['AudioSessionCommandResponse']
-type SchemaAudioSessionCommandRequest = components['schemas']['AudioSessionCommandRequest']
+// Each of the thirteen audio session dispatch endpoints has its own
+// request schema now (api/openapi.yaml review finding 2: a shared
+// AudioSessionCommandRequest with a params union let any operation's
+// body validate against any other operation's own shape). The envelope
+// (revision/idempotencyKey/params) is identical across all five; this
+// alias reconstructs it locally, typed against the union of the real
+// per-operation params shapes, rather than importing a combined
+// "AudioSessionCommandParams" schema type that no longer exists.
+type SchemaAudioSessionParams =
+  | components['schemas']['AudioSessionApplyParams']
+  | components['schemas']['AudioSessionSeekParams']
+  | components['schemas']['AudioSessionGainParams']
+  | components['schemas']['AudioSessionGainFadeParams']
+  | components['schemas']['AudioSessionNoParamsRequest']['params']
+// GET /observations, the flat evidence list an operator uses to
+// discover a real audio session id (resourceKind=audio_session) and its
+// desired_revision, since the API lists no sessions any other way.
+type SchemaObservationsResponse = components['schemas']['ObservationsResponse']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -176,12 +203,20 @@ type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse'
 // aliasing pattern.
 type SchemaConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
 type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+
+// media.playlist's own read/write response, same aliasing pattern.
+type SchemaConfigMediaPlaylist = components['schemas']['ConfigMediaPlaylist']
+type SchemaMediaPlaylistConfigResponse = components['schemas']['MediaPlaylistConfigResponse']
+type SchemaConfigObjectDeleteRequest = components['schemas']['ConfigObjectDeleteRequest']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
 type SchemaCreateMacroRunRequest = components['schemas']['CreateMacroRunRequest']
 type SchemaMacroRunChangedEvent = components['schemas']['MacroRunChangedEvent']
 type SchemaMacroRunSummary = components['schemas']['MacroRunSummary']
+// POST /cues/{id}/activate: an operator hand-firing one Cue
+// directly from Live Control's Announcements control.
+type SchemaCueActivateResponse = components['schemas']['CueActivateResponse']
 // Track D seam D-2a (ADR-032).
 type SchemaResolumeCompositionResponse = components['schemas']['ResolumeCompositionResponse']
 type SchemaResolumeCompositionUploadResponse = components['schemas']['ResolumeCompositionUploadResponse']
@@ -219,6 +254,7 @@ type SchemaAssetResponse = components['schemas']['AssetResponse']
 type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
 type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
 type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
+type SchemaResyncNodeAssetsResponse = components['schemas']['ResyncNodeAssetsResponse']
 type SchemaAuditResponse = components['schemas']['AuditResponse']
 type SchemaCueCatalogResponse = components['schemas']['CueCatalogResponse']
 type SchemaCueCatalogDeployRequest = components['schemas']['CueCatalogDeployRequest']
@@ -227,12 +263,22 @@ type SchemaCueCatalogDeployResponse = components['schemas']['CueCatalogDeployRes
 // night.session/night.session.active configuration kinds.
 type SchemaNightSessionResponse = components['schemas']['NightSessionResponse']
 type SchemaNightCommandRequest = components['schemas']['NightCommandRequest']
+type SchemaNightInterlockOverride = components['schemas']['NightInterlockOverride']
 type SchemaNightCommandResponse = components['schemas']['NightCommandResponse']
 type SchemaNightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
 type SchemaConfigNightSessionWrite = components['schemas']['ConfigNightSessionWrite']
 type SchemaNightSessionConfigResponse = components['schemas']['NightSessionConfigResponse']
 type SchemaConfigNightSessionActive = components['schemas']['ConfigNightSessionActive']
 type SchemaNightSessionActiveConfigResponse = components['schemas']['NightSessionActiveConfigResponse']
+type SchemaCurrentRunsResponse = components['schemas']['CurrentRunsResponse']
+type SchemaCurrentRunsChangedEvent = components['schemas']['CurrentRunsChangedEvent']
+// The three-level emergency stop and its hard-stop arm/fire deliberate-intent
+// gate (api/openapi.yaml's four /emergency-stop/* routes).
+type SchemaEmergencyStopRequest = components['schemas']['EmergencyStopRequest']
+type SchemaEmergencyStopResponse = components['schemas']['EmergencyStopResponse']
+type SchemaEmergencyStopArmRequest = components['schemas']['EmergencyStopArmRequest']
+type SchemaEmergencyStopArmResponse = components['schemas']['EmergencyStopArmResponse']
+type SchemaEmergencyStopFireRequest = components['schemas']['EmergencyStopFireRequest']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -309,6 +355,26 @@ const INITIAL_EVENTS_WINDOW = 100
  */
 const STREAM_IDLE_TIMEOUT_MS = 45_000
 
+/**
+ * ADR-024 decision 11's amendment (owner ruling, 2026-08-26): `Model.auditStore`
+ * is not part of the SSE snapshot/delta stream at all (no `Snapshot.auditStore`
+ * write ever triggers a change-stream event; the coordinator computes it
+ * fresh only when GET /api/v1/snapshot is actually called), so a dashboard
+ * left open across a whole show, on the SAME long-lived stream connection
+ * `applySnapshot` only ever runs against once, would otherwise show
+ * whatever `auditStore` value happened to be current at connect time,
+ * indefinitely. This client-side poll is what keeps it live instead:
+ * re-fetches GET /api/v1/snapshot on this interval and folds ONLY
+ * `auditStore` into the model, leaving every other field (nodes, fpp,
+ * macroRuns, ...) exactly as the delta stream already maintains them.
+ * UNMEASURED SHOWMESH HYPOTHESIS, picked the same way STREAM_IDLE_TIMEOUT_MS
+ * above was: frequent enough that an operator watching the dashboard
+ * learns of an audit-store outage within a show-relevant time, infrequent
+ * enough that it costs nothing next to the keepalive traffic already on
+ * this connection.
+ */
+const AUDIT_STORE_POLL_INTERVAL_MS = 30_000
+
 export interface ApiStoreOptions {
   /** Default '/api/v1' — same-origin per ADR-022. */
   baseUrl?: string
@@ -320,6 +386,8 @@ export interface ApiStoreOptions {
   streamIdleTimeoutMs?: number
   /** Override for tests only; production code relies on client.ts's DEFAULT_REQUEST_TIMEOUT_MS. */
   requestTimeoutMs?: number
+  /** Override for tests only; production code relies on AUDIT_STORE_POLL_INTERVAL_MS above. */
+  auditStorePollIntervalMs?: number
   /**
    * Override for tests only (see clock.ts). Drives BOTH the stream
    * idle-deadline below and, via the ApiClient this store constructs,
@@ -343,6 +411,7 @@ export class ApiStore {
   private readonly now: () => number
   private readonly backoffConfig: BackoffConfig
   private readonly streamIdleTimeoutMs: number
+  private readonly auditStorePollIntervalMs: number
   private readonly clock: Clock
 
   private model: Model = initialModel()
@@ -354,6 +423,7 @@ export class ApiStore {
   private attempt = 0
   private lastError: string | null = null
   private loopAbort: AbortController | null = null
+  private currentRunsUpdateCounter = 0
 
   /**
    * ADR-024: independent, short-lived requests this store makes outside
@@ -374,6 +444,7 @@ export class ApiStore {
     this.now = options.now ?? (() => Date.now())
     this.backoffConfig = options.backoff ?? DEFAULT_BACKOFF
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS
+    this.auditStorePollIntervalMs = options.auditStorePollIntervalMs ?? AUDIT_STORE_POLL_INTERVAL_MS
   }
 
   // -- useSyncExternalStore surface ------------------------------------
@@ -776,6 +847,48 @@ export class ApiStore {
   }
 
   /**
+   * `GET /api/v1/fallback-programs` (ADR-048, Track J's J1): metadata for
+   * every FPP host's last published fallback program — package id,
+   * revision, show, generation, and timestamps, never the signed payload
+   * itself. Open under `observation:read`, same posture as
+   * [listFPPPlaylistDefinitions] above.
+   */
+  async listFallbackPrograms(): Promise<SchemaFallbackProgramListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFallbackProgramListResponse>(
+        '/fallback-programs',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/fallback-programs/{fppInstanceId}` (ADR-048, Track J's
+   * J1): one FPP host's current fallback program, including publication
+   * and acknowledgement state. Behind `fpp:fallback`, the same
+   * admin/scheduler-only scope the installed FPP plugin itself uses to
+   * fetch and verify this program — an operator credential is commonly
+   * refused this read (403), distinct from `listFallbackPrograms`'s open
+   * `observation:read` posture above. `published: false` (with `program`
+   * and `signatureBase64` both absent) is a real, non-404 answer: this
+   * coordinator has never compiled a program for this host.
+   */
+  async getFallbackProgram(fppInstanceId: string): Promise<SchemaFallbackProgramResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFallbackProgramResponse>(
+        `/fallback-programs/${encodeURIComponent(fppInstanceId)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * `POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge`. Behind
    * `config:write` (an operator-authored inventory decision, not a
    * command sent to any device, api/openapi.yaml's own doc comment on
@@ -919,6 +1032,33 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fpp.mqtt/revisions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async getFPPConnectSettingsConfig(): Promise<SchemaFPPConnectSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPConnectSettingsConfigResponse>('/config/fppconnect.settings', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async putFPPConnectSettingsConfig(payload: SchemaConfigFPPConnectSettingsPayload): Promise<SchemaFPPConnectSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaFPPConnectSettingsConfigResponse>('/config/fppconnect.settings', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async getFPPConnectSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fppconnect.settings/revisions', controller.signal)
     } finally {
       this.endSideCall(controller)
     }
@@ -1318,22 +1458,26 @@ export class ApiStore {
   //
   // -- Second slice: prepare/start/advance/clear (no params) plus
   // seek/gain/gain.fade (each carrying operation-specific params the
-  // node itself validates -- AudioSessionCommandRequest.params is opaque
-  // to this coordinator by design). apply is the same shape as
-  // seek/gain: this coordinator passes params through verbatim without
-  // validating it, exactly as showmeshctl's own "params-json is passed
-  // through verbatim" positional argument does (cmd_audio_session.go).
+  // node itself validates -- each operation's own request schema's
+  // params is opaque to this coordinator by design). apply is the same
+  // shape as seek/gain: this coordinator passes params through verbatim
+  // without validating it, exactly as showmeshctl's own "params-json is
+  // passed through verbatim" positional argument does
+  // (cmd_audio_session.go).
 
   private async dispatchAudioSessionCommand(
     nodeId: string,
     sessionId: string,
     path: string,
-    revision: number,
+    revision: bigint,
     params?: Record<string, unknown>,
   ): Promise<AudioSessionCommandResult> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaAudioSessionCommandRequest = { revision, idempotencyKey: randomUUIDv4() }
+      const body: { revision: bigint; idempotencyKey: string; params?: SchemaAudioSessionParams } = {
+        revision,
+        idempotencyKey: randomUUIDv4(),
+      }
       if (params !== undefined) {
         body.params = params as Record<string, never>
       }
@@ -1350,47 +1494,47 @@ export class ApiStore {
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/pause`. Requires audio:command. */
-  async pauseAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async pauseAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'pause', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/resume`. Requires audio:command. */
-  async resumeAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async resumeAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'resume', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/stop`. Requires audio:command. */
-  async stopAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async stopAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'stop', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/mute`. Requires audio:command. */
-  async muteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async muteAudioSessionOutput(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/mute', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute`. Requires audio:command. */
-  async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/unmute', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare`. Requires audio:command. */
-  async prepareAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async prepareAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'prepare', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command. */
-  async startAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async startAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/advance`. Requires audio:command. */
-  async advanceAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async advanceAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'advance', revision)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/clear`. Requires audio:command. Releases the session entirely on the node; destructive, matching stop's own "never refused for want of node evidence" posture. */
-  async clearAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  async clearAudioSession(nodeId: string, sessionId: string, revision: bigint): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'clear', revision)
   }
 
@@ -1398,7 +1542,7 @@ export class ApiStore {
   async seekAudioSession(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     positionMs: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'seek', revision, { positionMs })
@@ -1408,7 +1552,7 @@ export class ApiStore {
   async setAudioSessionGain(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     gainDb: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gainDb })
@@ -1418,7 +1562,7 @@ export class ApiStore {
   async applyAudioSession(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     params?: Record<string, unknown>,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'apply', revision, params)
@@ -1428,14 +1572,14 @@ export class ApiStore {
   async fadeAudioSessionGain(
     nodeId: string,
     sessionId: string,
-    revision: number,
+    revision: bigint,
     targetGainDb: number,
-    durationMs: number,
+    durationMs?: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain/fade', revision, {
       targetGainDb,
-      durationMs,
       curve: 'linear',
+      ...(durationMs === undefined ? {} : { durationMs }),
     })
   }
 
@@ -1833,6 +1977,7 @@ export class ApiStore {
       | 'show.surface'
       | 'show.cue'
       | 'show.playlist'
+      | 'media.playlist'
       | 'night.session'
       // audio.node carries no show reference (its own list summary reports
       // programRoute as label instead) - `show` is simply never passed for it.
@@ -1844,6 +1989,32 @@ export class ApiStore {
       const query = kind !== 'show' && show !== undefined ? `?show=${encodeURIComponent(show)}` : ''
       return await this.client.getJson<SchemaConfigObjectsListResponse>(
         `/config/${kind}${query}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/observations`. A filter that matches nothing is a real
+   * 200 with an empty array, never a 404 — see the endpoint's own
+   * description. Requires observation:read.
+   */
+  async listObservations(
+    resourceKind?: 'node' | 'fpp' | 'coordinator' | 'resolume' | 'surface' | 'audio_session',
+    resourceId?: string,
+    signal?: string,
+  ): Promise<SchemaObservationsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const params = new URLSearchParams()
+      if (resourceKind !== undefined) params.set('resourceKind', resourceKind)
+      if (resourceId !== undefined) params.set('resourceId', resourceId)
+      if (signal !== undefined) params.set('signal', signal)
+      const query = params.toString()
+      return await this.client.getJson<SchemaObservationsResponse>(
+        `/observations${query === '' ? '' : `?${query}`}`,
         controller.signal,
       )
     } finally {
@@ -2003,6 +2174,27 @@ export class ApiStore {
         ACTION_INVOKE_REQUEST_TIMEOUT_MS,
       )
       return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/cues/{id}/activate`: fire one show.cue directly,
+   * on every node it resolves to - the same direct-fire path Live
+   * Control's Announcements control uses, never through a playlist or an
+   * FPP observation. Takes no body: every call is a fresh dispatch, never
+   * a retry-replay of an earlier one. Returns the coordinator's own
+   * per-node outcomes as-is, never inferred from this call's HTTP success.
+   */
+  async activateCue(cueId: string): Promise<SchemaCueActivateResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaCueActivateResponse>(
+        `/cues/${encodeURIComponent(cueId)}/activate`,
+        undefined,
+        controller.signal,
+      )
     } finally {
       this.endSideCall(controller)
     }
@@ -2223,6 +2415,67 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/config/media.playlist/{id}`. Throws (404) when no such media playlist exists. */
+  async getMediaPlaylist(id: string): Promise<SchemaMediaPlaylistConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaMediaPlaylistConfigResponse>(
+        `/config/media.playlist/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/media.playlist/{id}`. `config:write` only. Full
+   * replacement, same as [putShowPlaylist]. Validated and normalized
+   * server-side; a rejected payload (including an `items[]` entry of kind
+   * "cue", refused as not-yet-implemented) throws and appends no revision.
+   */
+  async putMediaPlaylist(id: string, payload: SchemaConfigMediaPlaylist): Promise<SchemaMediaPlaylistConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaMediaPlaylistConfigResponse>(
+        `/config/media.playlist/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/media.playlist/{id}/revisions`: revision history, newest first, metadata only. */
+  async getMediaPlaylistRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/media.playlist/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/config/media.playlist/{id}`. `config:write` only, a
+   * tombstone (D-019's typed-confirmation treatment gates the call in the
+   * screen, same pattern as [deleteNodeDeclaration]). Always sends
+   * `{"confirm":true}`, the server's own required body.
+   */
+  async deleteMediaPlaylist(id: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaConfigObjectDeleteRequest = { confirm: true }
+      await this.client.deleteJson(`/config/media.playlist/${encodeURIComponent(id)}`, body, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /**
    * `GET /api/v1/config/show.active` (ADR-027 decision 3). Throws (404)
    * when nothing has ever been activated.
@@ -2297,6 +2550,16 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/current-runs`: authoritative runner playback for the Dashboard. */
+  async getCurrentRuns(): Promise<SchemaCurrentRunsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaCurrentRunsResponse>('/current-runs', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/night/sessions/{id}` (Track F seam F2). Throws (404) when no session with this id has ever existed. */
   async getNightSessionById(id: string): Promise<SchemaNightSessionResponse> {
     const controller = this.beginSideCall()
@@ -2315,21 +2578,34 @@ export class ApiStore {
    * `night:command`. Answers `202`, never `200` — accepted and applied,
    * or recognized as an idempotent duplicate. `idempotencyKey` is
    * honored only by `prepare-site`; every other command ignores it.
-   * Throws a typed `ApiError` on the three distinguishable `409`s
-   * (`night-not-ready`, `night-state-rejected`, `night-ambiguous`) and
-   * the `503` (`night-command-refused-audit-unavailable`, `prepare-site`/
+   * `interlockOverrides` (Track F seam F6) is honored by every command
+   * except `request-final-show` and `end-session`, which REFUSE a
+   * non-empty one; each override is consulted only against a rule that
+   * declares `overridePolicy: authorized-operator` and only when the
+   * caller separately holds `night:override` — `night:command` alone
+   * never authorizes a bypass. `skipEnterShowLead` is honored only by
+   * `start-night`; sent only when true. Throws a typed `ApiError` on the
+   * three distinguishable `409`s (`night-not-ready`, `night-state-rejected`,
+   * `night-ambiguous`) and the `503`
+   * (`night-command-refused-audit-unavailable`, `prepare-site`/
    * `run-readiness`/`start-preshow`/`start-night` only) — see
-   * NightCommandButton.tsx for the caller that branches on
-   * `ApiError.problemType` to render each distinguishably rather than as
-   * one generic failure.
+   * ShowNight.tsx for the caller that branches on `ApiError.problemType`
+   * to render each distinguishably rather than as one generic failure.
    */
   async dispatchNightCommand(
     command: NightCommandName,
     idempotencyKey?: string,
+    interlockOverrides?: readonly SchemaNightInterlockOverride[],
+    skipEnterShowLead?: boolean,
   ): Promise<SchemaNightCommandResponse> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaNightCommandRequest = idempotencyKey === undefined ? {} : { idempotencyKey }
+      const body: SchemaNightCommandRequest = {}
+      if (idempotencyKey !== undefined) body.idempotencyKey = idempotencyKey
+      if (interlockOverrides !== undefined && interlockOverrides.length > 0) {
+        body.interlockOverrides = [...interlockOverrides]
+      }
+      if (command === 'start-night' && skipEnterShowLead === true) body.skipEnterShowLead = true
       return await this.client.postJson<SchemaNightCommandResponse>(
         `/night/commands/${encodeURIComponent(command)}`,
         body,
@@ -2529,6 +2805,22 @@ export class ApiStore {
   }
 
   /**
+   * `GET /api/v1/assets/{id}/content` (ADR-028), fetched into memory
+   * rather than navigated to — the "Make current" rollback control
+   * (Show Assets.dc.html) needs the superseded asset's own bytes to
+   * replay through [uploadAsset], not a browser download.
+   */
+  async getAssetContent(id: string): Promise<Blob> {
+    const controller = this.beginSideCall()
+    try {
+      const response = await this.client.request(`/assets/${encodeURIComponent(id)}/content`, controller.signal)
+      return await response.blob()
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * `GET /api/v1/assets/manifest` (ADR-028 seam E5): every declared
    * node's asset readiness, "what should it hold" versus "what does it
    * hold". `ready`/`not_ready`/`unknown` are three distinct states the
@@ -2552,6 +2844,27 @@ export class ApiStore {
         `/nodes/${encodeURIComponent(nodeId)}/assets`,
         controller.signal,
       )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/nodes/{nodeId}/assets/resync` (asset:write). Nudges the
+   * coordinator's existing asset-sync service to re-check this node now.
+   * Answers 202: acceptance only, never an outcome. The caller re-reads
+   * `getNodeAssetManifest` for evidence, never infers success from this
+   * call resolving.
+   */
+  async resyncNodeAssets(nodeId: string): Promise<ResyncNodeAssetsResult> {
+    const controller = this.beginSideCall()
+    try {
+      const resp = await this.client.postJson<SchemaResyncNodeAssetsResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/assets/resync`,
+        {},
+        controller.signal,
+      )
+      return resp.resync
     } finally {
       this.endSideCall(controller)
     }
@@ -2887,6 +3200,99 @@ export class ApiStore {
   }
 
   /**
+   * `POST /api/v1/emergency-stop/stop` (level 1). Mints its own
+   * idempotency key. Reuses [ACTION_INVOKE_REQUEST_TIMEOUT_MS]: the
+   * coordinator dispatches "Stop Now" to every configured FPP instance
+   * concurrently, then runs this level's own configured follow-up
+   * `show.action`s sequentially, and a follow-up dispatch shares
+   * `POST /actions/{id}/invocations`' own write budget.
+   */
+  async emergencyStop(): Promise<SchemaEmergencyStopResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaEmergencyStopResponse>(
+        '/emergency-stop/stop',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/emergency-stop/stop-power-down` (level 2): everything
+   * [emergencyStop] does, plus forcing an active night session straight
+   * into its own graceful-shutdown sequence. See that method's own doc
+   * comment for the shared request budget.
+   */
+  async emergencyStopPowerDown(): Promise<SchemaEmergencyStopResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaEmergencyStopResponse>(
+        '/emergency-stop/stop-power-down',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/emergency-stop/hard-stop/arm` (level 3, call 1 of 2).
+   * No side effect on the show; mints a single-use token the caller must
+   * present to [fireEmergencyStopHardStop] within `expiresAt`. Arming
+   * again before that deadline invalidates this token immediately, so a
+   * caller must not arm speculatively ahead of an operator's own
+   * deliberate act.
+   */
+  async armEmergencyStopHardStop(): Promise<SchemaEmergencyStopArmResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopArmRequest = { idempotencyKey: randomUUIDv4() }
+      return await this.client.postJson<SchemaEmergencyStopArmResponse>(
+        '/emergency-stop/hard-stop/arm',
+        body,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/emergency-stop/hard-stop/fire` (level 3, call 2 of 2).
+   * Requires the `armToken` [armEmergencyStopHardStop] returned, still
+   * unexpired and unconsumed: an unknown, expired, or already-consumed
+   * token is refused with a `409` (`ApiError`), which the caller must
+   * report rather than retry silently: this method never re-arms on the
+   * caller's behalf. See [emergencyStop]'s own doc comment for the
+   * shared request budget.
+   */
+  async fireEmergencyStopHardStop(armToken: string): Promise<SchemaEmergencyStopResponse['result']> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaEmergencyStopFireRequest = { idempotencyKey: randomUUIDv4(), armToken }
+      const resp = await this.client.postJson<SchemaEmergencyStopResponse>(
+        '/emergency-stop/hard-stop/fire',
+        body,
+        controller.signal,
+        ACTION_INVOKE_REQUEST_TIMEOUT_MS,
+      )
+      return resp.result
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
    * `DELETE /api/v1/nodes/{nodeId}/declaration`. The server itself
    * requires `{"confirm":true}` in the body (BUILD-PLAN Step 7 seam B
    * B2) — this method always sends it, so the UI-level confirmation
@@ -3194,6 +3600,14 @@ export class ApiStore {
         // for stream.start it always was, and a stream.reset whose body
         // failed to parse must not be read as "no reset happened".
         await this.reloadSnapshot(gen, signal)
+        // ADR-024 decision 11's amendment: auditStore carries no
+        // change-stream event of its own (see AUDIT_STORE_POLL_INTERVAL_MS's
+        // own doc comment for why), so this generation's own poll loop is
+        // what keeps it live for the rest of this connection. One loop
+        // per generation: a fresh stream.start/stream.reset starts a new
+        // one, and the old one's own gen check stops it on its very next
+        // tick without needing to be cancelled explicitly.
+        void this.pollAuditStoreLoop(gen, signal)
         return
       }
       case 'node.changed': {
@@ -3241,6 +3655,17 @@ export class ApiStore {
         this.applyResolumeChanged(payload.instance, payload.serverTime)
         return
       }
+      case 'resolumeRecovery.changed': {
+        // Track D seam D-3a: mirrors `nightSession.changed`'s own shape —
+        // this frame's schema (ResolumeRecoveryChangedEvent) carries
+        // `serverTime` as one of its OWN top-level fields, alongside the
+        // full current recovery state, never a delta. Parsed as the whole
+        // event, matching `nightSession.changed`'s own parsing below.
+        const payload = tryParse<SchemaResolumeRecoveryChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyResolumeRecoveryChanged(payload)
+        return
+      }
       case 'macroRun.changed': {
         // Unlike every case above, this frame's own schema (MacroRunChangedEvent)
         // carries serverTime as one of its OWN top-level fields rather than
@@ -3274,6 +3699,19 @@ export class ApiStore {
         )
         if (payload === null || gen !== this.generation) return
         this.applyFppPlaylistEntryChanged(payload.observation, payload.serverTime)
+        return
+      }
+      case 'currentRuns.changed': {
+        // This is a complete replacement, not a cursor or delta. A client
+        // already connected can apply it immediately; reconnects fetch the
+        // REST authority in reloadSnapshot below.
+        const payload = tryParse<SchemaCurrentRunsChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyCurrentRuns({
+          serverTime: payload.serverTime,
+          activeShow: payload.activeShow,
+          runs: payload.runs,
+        })
         return
       }
       default:
@@ -3314,6 +3752,17 @@ export class ApiStore {
     if (gen !== this.generation) return
     this.applyInitialEvents(events)
 
+    // GET /current-runs is the reconnect authority for playback. Keep a
+    // failed read visible as unknown while allowing the inventory stream to
+    // remain live; a transient current-runs failure must not reconnect the
+    // entire shell or make stale macro-run data masquerade as playback.
+    // Do not hold the inventory stream's live transition on this auxiliary
+    // projection. Older coordinators and a temporarily unavailable runner
+    // may leave this read pending, while the stream itself still provides a
+    // valid inventory baseline. The request remains tied to the connection
+    // signal and its result is applied only for this generation.
+    void this.fetchCurrentRuns(gen, signal)
+
     // ADR-024 decision 12: a reconnect is exactly the moment the coordinator
     // may have closed the PREVIOUS connection over a generation bump (decision
     // 5's "closes open streams and forces a re-fetch, so the stale window is
@@ -3329,6 +3778,42 @@ export class ApiStore {
     if (this.model.connection.kind !== 'live') {
       this.setConnection({ kind: 'live', connectedAt: this.now() })
     }
+  }
+
+  /**
+   * Keeps `Model.auditStore` live for the rest of this generation's
+   * connection: see AUDIT_STORE_POLL_INTERVAL_MS's own doc comment for
+   * why this exists at all (no change-stream event carries this field).
+   * Sleeps first: `reloadSnapshot` just fetched a fresh value moments
+   * ago, so an immediate re-fetch would be redundant. Every fetch and
+   * every wake-up re-checks `gen`/`signal` before touching the model or
+   * scheduling the next tick, so a reconnect or dispose() started by
+   * another generation stops this loop within one interval, without this
+   * loop needing its own cancellation token.
+   */
+  private async pollAuditStoreLoop(gen: number, signal: AbortSignal): Promise<void> {
+    for (;;) {
+      await this.sleep(this.auditStorePollIntervalMs)
+      if (signal.aborted || gen !== this.generation) return
+      try {
+        const snapshot = await this.client.getJson<Pick<SchemaSnapshot, 'auditStore'>>('/snapshot', signal)
+        if (signal.aborted || gen !== this.generation) return
+        this.setModel({ ...this.model, auditStore: snapshot.auditStore })
+      } catch {
+        // Best-effort: a failed poll fetch leaves the model's own
+        // auditStore at its last-known value and simply retries next
+        // tick. A connection genuinely gone stale or dead is the read
+        // loop's own idle-timeout/reconnect concern, not this loop's;
+        // duplicating that handling here would only race it.
+      }
+    }
+  }
+
+  /** this.clock-driven so store.test.ts can advance it deterministically, matching every other timer in this file. */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.clock.setTimeout(resolve, ms)
+    })
   }
 
   // -- model mutation -----------------------------------------------------
@@ -3349,6 +3834,7 @@ export class ApiStore {
 
   private applySnapshot(snapshot: SchemaSnapshot): void {
     const receivedAt = this.now()
+    this.currentRunsUpdateCounter += 1
     this.setModel({
       ...this.model,
       serverTime: snapshot.serverTime,
@@ -3368,11 +3854,19 @@ export class ApiStore {
       // bounded recently-finished tail), not a delta this store needs to
       // merge.
       macroRuns: snapshot.macroRuns,
+      currentRuns: null,
+      currentRunsReceivedAt: null,
+      currentRunsFetchFailed: false,
       // Track D seam D-4 (build contract §1.7): a plain wholesale replace,
       // exactly like `fpp` above — `Snapshot.resolume` is this
       // coordinator's own authoritative current list, never a delta this
       // store needs to merge.
       resolume: snapshot.resolume,
+      // ADR-024 decision 11's amendment (owner ruling, 2026-08-26): a plain
+      // wholesale replace, exactly like `resolume` above -- `Snapshot.auditStore`
+      // is this coordinator's own live, current signal, never a delta this
+      // store needs to merge.
+      auditStore: snapshot.auditStore,
       // Review finding 9: `Snapshot` carries no `nightSession` field
       // (domain.ts's own comment on Model.nightSession), so unlike every
       // field above this one is not being refreshed here, it is being
@@ -3389,6 +3883,13 @@ export class ApiStore {
       // re-establish ground truth rather than trusting a value this
       // connection has no evidence still holds.
       nightSession: null,
+      // Same "invalidate, do not carry forward" posture as `nightSession`
+      // immediately above, and for the identical reason: this is not part
+      // of `Snapshot` either (Model.resolumeRecovery's own comment), so a
+      // stale value from before a reconnect must not keep rendering as
+      // current across a generation boundary this connection cannot
+      // vouch for.
+      resolumeRecovery: null,
       // Same "invalidate, do not carry forward" posture as
       // `nightSession` immediately above, and for the identical reason:
       // this is not part of `Snapshot` either (Model.fppPlaylistEntryObservations's
@@ -3397,6 +3898,35 @@ export class ApiStore {
       // connection cannot vouch for.
       fppPlaylistEntryObservations: [],
     })
+  }
+
+  private applyCurrentRuns(currentRuns: CurrentRunsResponse): void {
+    this.currentRunsUpdateCounter += 1
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      currentRuns,
+      currentRunsReceivedAt: receivedAt,
+      currentRunsFetchFailed: false,
+      serverTime: currentRuns.serverTime,
+      clockSkewMs: this.computeClockSkewMs(currentRuns.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+    })
+  }
+
+  private async fetchCurrentRuns(gen: number, signal: AbortSignal): Promise<void> {
+    const updateCounter = this.currentRunsUpdateCounter
+    try {
+      const currentRuns = await this.client.getJson<SchemaCurrentRunsResponse>('/current-runs', signal)
+      // A full-frame SSE update received while this REST read was pending is
+      // newer than the request's starting point. Never let the older REST
+      // response roll the model back over that event.
+      if (gen !== this.generation || updateCounter !== this.currentRunsUpdateCounter) return
+      this.applyCurrentRuns(currentRuns)
+    } catch (err) {
+      if (isAbortError(err) || gen !== this.generation || updateCounter !== this.currentRunsUpdateCounter) return
+      this.setModel({ ...this.model, currentRunsFetchFailed: true })
+    }
   }
 
   /**
@@ -3572,6 +4102,35 @@ export class ApiStore {
       clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
       serverTimeReceivedAt: receivedAt,
       nightSession: event.session,
+    })
+  }
+
+  /**
+   * `resolumeRecovery.changed` (Track D seam D-3a) carries the recovery
+   * resource's COMPLETE current representation, matching
+   * [applyNightSessionChanged]'s exact same whole-object-replace posture
+   * and for the identical reason (no delta kind exists for this resource
+   * either, and it is not part of `Snapshot` — see `Model.resolumeRecovery`'s
+   * own comment). The event's own fields, minus `seq` (per-connection
+   * only, never a durable cursor), are exactly `ResolumeRecoveryResponse`'s
+   * shape.
+   */
+  private applyResolumeRecoveryChanged(event: SchemaResolumeRecoveryChangedEvent): void {
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime: event.serverTime,
+      clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      resolumeRecovery: {
+        serverTime: event.serverTime,
+        resolumeConfigured: event.resolumeConfigured,
+        autoRestoreEnabled: event.autoRestoreEnabled,
+        autoRestoreConfigured: event.autoRestoreConfigured,
+        settleDelaySeconds: event.settleDelaySeconds,
+        record: event.record,
+        lastRestore: event.lastRestore,
+      },
     })
   }
 

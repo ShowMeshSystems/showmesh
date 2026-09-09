@@ -45,7 +45,7 @@ On every run it also rebuilds the gitignored `mosquitto/acl.generated.conf` from
 
 `<node-id>` must be the exact node id that node's agent will present as `SHOWMESH_NODE_ID` — the script enforces the same character rule `pkg/mqttproto` validates a node id against (lowercase letters, digits, and internal hyphens only) before ever writing to the password file, because the broker username being provisioned is what the ACL's per-agent rules trust to equal the node's own id (see `mosquitto/acl.conf`'s header comment for exactly why that matters and what goes wrong if it is not enforced). The printed password is shown once; set it as that node's own `SHOWMESH_MQTT_USERNAME`/`SHOWMESH_MQTT_PASSWORD` (not in this bundle's `.env` — see "The full picture" below).
 
-**Access control**, not just authentication: `mosquitto/acl.conf` is the committed base for fixed roles, and the generated effective file adds a separate explicit block for each agent. Each agent may publish only to its own hello/lwt/observed/result topics (explicitly **excluding** its own `cmd` topic) and subscribe only to its own `cmd` topic; only the coordinator may publish to any node's `cmd` topic; the `fpp` role is confined to FPP's own status topics (`falcon/player/#` by default) with no access to any `showmesh/` topic at all; and the `healthcheck` principal can only read `$SYS`. Agent node IDs `coordinator`, `fpp`, and `healthcheck` are reserved and rejected by the provisioning script, because they name these fixed roles.
+**Access control**, not just authentication: `mosquitto/acl.conf` is the committed base for fixed roles, and the generated effective file adds a separate explicit block for each agent. Each agent may publish only to its own hello/lwt/observed/result topics (explicitly **excluding** its own `cmd` topic) and subscribe only to its own `cmd` topic; only the coordinator may publish to any node's `cmd` topic; the `fpp` role is confined to FPP's own status topics (`falcon/player/#` by default) with no access to any `showmesh/` topic at all; the coordinator additionally READS those same FPP status topics, which is what the `fpp.mqtt` collector needs and without which it subscribes and silently receives nothing; the optional `observer` role is read-only everywhere and is never created by default; and the `healthcheck` principal can only read `$SYS`. Agent node IDs `coordinator`, `fpp`, `healthcheck`, and `observer` are reserved and rejected by the provisioning script, because they name these fixed roles.
 
 **Upgrade sequence for a running older bundle:** older tooling allowed node IDs named `coordinator`, `fpp`, or `healthcheck`, even though those usernames also carried the fixed-role grants. The password file cannot reveal which meaning an operator intended, so migration deliberately refuses to guess. First confirm those three entries are the bundle's fixed roles and rename any legacy agent using one of those node IDs. Then run `./mosquitto/generate-credentials.sh --migrate-existing`; it preserves the passwords, renders explicit agent blocks for every other valid username, and writes a private migration marker distinct from the generated ACL itself. An empty or manually copied ACL file is therefore not mistaken for acknowledgement. Finally run `docker compose up -d --force-recreate mosquitto` once, because an older container bind-mounts the former single ACL path and cannot see the generated file. Future plain `generate-credentials.sh` and `add-agent-credential.sh` runs rebuild the ACL atomically and HUP a current directory-mounted Compose broker automatically; if the broker is not running, the next start reads the generated file.
 
@@ -165,7 +165,7 @@ Prefer the coordinator's own YAML export (ADR-009) for reviewable, secret-free c
 
 ## Upgrade and rollback
 
-No images are published yet (see ADR-012's consequences), so this bundle only ever builds the coordinator from source; `SHOWMESH_VERSION` currently does nothing but stamp the build's `-ldflags` version string, it does not select what gets built. `SHOWMESH_COMMIT` and `SHOWMESH_BUILD_DATE` are not meant to be set by hand at all: `make deploy-build`/`make deploy-up` (see Bring the stack up, above) derive them from the checked-out git ref automatically. Concretely, today, "upgrading" or "rolling back" means checking out the corresponding git ref and rebuilding:
+Building from source, as `docker-compose.yml` does by default, means `SHOWMESH_VERSION` only stamps the build's `-ldflags` version string; it does not select what gets built. `SHOWMESH_COMMIT` and `SHOWMESH_BUILD_DATE` are not meant to be set by hand at all: `make deploy-build`/`make deploy-up` (see Bring the stack up, above) derive them from the checked-out git ref automatically. Concretely, on the from-source path, "upgrading" or "rolling back" means checking out the corresponding git ref and rebuilding:
 
 ```sh
 git checkout <ref>          # the version you want running
@@ -176,7 +176,26 @@ The named data volume persists across this untouched. SQLite schema migrations i
 
 Do not set `SHOWMESH_VERSION` expecting it to select which code runs; it only labels whatever is in the working tree at build time, and `/version` will report that label even if it does not match the tree. `/version`'s `commit` field is not a label: `make deploy-build`/`make deploy-up` set it to the actual checked-out git ref, so it always matches the tree that was built.
 
-**Once published images exist** (not yet available), the intended workflow is a pure image-tag change: set `SHOWMESH_VERSION` in `.env` to the desired published tag, uncomment the `image:` line and remove/comment the `build:` block in `docker-compose.yml`, and run `docker compose up -d`. Rollback becomes setting `SHOWMESH_VERSION` back to the previous known-good tag and re-running the same command, still subject to the same forward-only migration constraint above. This paragraph describes intent, not current behavior; do not follow it until images are actually published.
+**Published images**, once a release tag has been pushed, are the alternative to the from-source path above: see "Running from published images" below. Rolling forward or back with published images is a pure image-tag change (set `SHOWMESH_RELEASE_VERSION` to the desired tag and re-run), still subject to the same forward-only migration constraint above.
+
+## Running from published images
+
+`.github/workflows/release.yml` publishes the coordinator and operator UI images to GHCR on every pushed `v<VERSION>` release tag: `ghcr.io/showmeshsystems/showmesh-coordinator` and `ghcr.io/showmeshsystems/showmesh-ui`, each tagged with the bare version (for example `0.1.0`) and the full commit SHA. See [`docs/RELEASING.md`](../docs/RELEASING.md) for what a release tag produces in full, including the node agent packages.
+
+To run the bundle from a published version instead of building from source, add the `docker-compose.published.yml` override, which replaces both services' `build:` with the matching `image:`:
+
+```sh
+make -C .. deploy-up-published SHOWMESH_RELEASE_VERSION=0.1.0
+```
+
+or directly with Compose:
+
+```sh
+SHOWMESH_RELEASE_VERSION=0.1.0 SHOWMESH_VERSION=unused SHOWMESH_COMMIT=unused SHOWMESH_BUILD_DATE=unused \
+  docker compose -f docker-compose.yml -f docker-compose.published.yml up -d
+```
+
+The three `unused` values are needed only because Compose validates each `-f` file's own required variables before merging them; the override's `build: !reset null` then drops the base file's build args from the merged configuration entirely, so nothing is ever built and those three values are never read. `docker-compose.yml` itself is unchanged and still builds from source by default; `make deploy-build` and `make deploy-up` keep working exactly as before.
 
 ## Preparing for an offline install
 

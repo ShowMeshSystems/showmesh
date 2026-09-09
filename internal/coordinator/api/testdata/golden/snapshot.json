@@ -78,7 +78,8 @@
       },
       "render": [],
       "audio": [],
-      "clock": []
+      "clock": [],
+      "fppConnect": []
     },
     {
       "nodeId": "shed-01",
@@ -148,7 +149,8 @@
       },
       "render": [],
       "audio": [],
-      "clock": []
+      "clock": [],
+      "fppConnect": []
     }
   ],
   "fpp": {
@@ -256,6 +258,14 @@
       ],
       "composition": null
     }
-  ]
+  ],
+  "auditStore": {
+    "state": "usable",
+    "reason": null
+  },
+  "audioConfigPush": {
+    "state": "usable",
+    "reason": null
+  }
 }
 

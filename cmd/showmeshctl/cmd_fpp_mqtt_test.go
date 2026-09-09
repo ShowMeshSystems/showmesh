@@ -79,8 +79,17 @@ func TestCmdFPPMQTTGetNotConfigured(t *testing.T) {
 func TestCmdFPPMQTTSetOnlySendsVisitedFields(t *testing.T) {
 	var gotBody map[string]json.RawMessage
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ShowMesh-API-Version", "1")
+			_, _ = fmt.Fprint(w, testFPPMQTTConfigResponse)
+			return
+		}
 		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/config/fpp.mqtt" {
 			t.Errorf("request = %s %s, want PUT /api/v1/config/fpp.mqtt", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("If-Match"); got != `"1"` {
+			t.Errorf("If-Match = %q, want %q (the revision the fresh read supplied)", got, `"1"`)
 		}
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -120,6 +129,12 @@ func TestCmdFPPMQTTSetOnlySendsVisitedFields(t *testing.T) {
 func TestCmdFPPMQTTSetPasswordSendsExplicitKey(t *testing.T) {
 	var gotBody map[string]json.RawMessage
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ShowMesh-API-Version", "1")
+			_, _ = fmt.Fprint(w, testFPPMQTTConfigResponse)
+			return
+		}
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read body: %v", err)
@@ -156,6 +171,12 @@ func TestCmdFPPMQTTSetPasswordSendsExplicitKey(t *testing.T) {
 func TestCmdFPPMQTTSetHostFlagRepeatable(t *testing.T) {
 	var gotBody map[string]json.RawMessage
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("ShowMesh-API-Version", "1")
+			_, _ = fmt.Fprint(w, testFPPMQTTConfigResponse)
+			return
+		}
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read body: %v", err)

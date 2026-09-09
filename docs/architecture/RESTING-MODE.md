@@ -335,6 +335,13 @@ For the reference installation, the existing MQTT/Node-RED response-contract act
 
 ## 11. Persistence, restart, and loss of coordination
 
+ADR-048 adds one bounded exception for an already scheduled show: a verified
+FPP fallback program may continue the package's pre-resolved Cue map after
+confirmed coordinator loss.  FPP remains the scheduler and playlist authority.
+The fallback program ends at its declared cutoff and recovery waits for the
+next normal scheduled-show boundary.  It does not authorize a new session,
+make a calendar decision, or allow arbitrary FPP commands.
+
 The night-session record persists at minimum:
 
 - session identity and pinned configuration revision;

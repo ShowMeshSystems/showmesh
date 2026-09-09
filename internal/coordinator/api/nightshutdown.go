@@ -41,8 +41,11 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 
 	// The enterShow cue definitions are the configured "bring presentation
 	// to black" list; fading out replays them under their own phase and
-	// waits on none of them, since there is no launch to gate.
-	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseFadeOut, payload.EnterShow.Cues, payload)
+	// waits on none of them, since there is no launch to gate. Announcement
+	// cues are excluded: RESTING-MODE.md section 7.1 stages an announcement
+	// after the blackout barrier as a show-start element, never as part of
+	// reaching black, so replaying one here greets an emptying site.
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseFadeOut, nightFadeOutCues(payload.EnterShow.Cues), payload)
 
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {
@@ -221,4 +224,17 @@ func (h *handlers) nightReachStopped(ctx context.Context, now time.Time, rec sto
 		}
 		return cur
 	})
+}
+
+// nightFadeOutCues is the subset of an enterShow cue list that fading out
+// replays: every role except announcement.
+func nightFadeOutCues(cues []config.NightSessionCue) []config.NightSessionCue {
+	out := make([]config.NightSessionCue, 0, len(cues))
+	for _, cue := range cues {
+		if cue.Role == config.NightSessionCueRoleAnnouncement {
+			continue
+		}
+		out = append(out, cue)
+	}
+	return out
 }

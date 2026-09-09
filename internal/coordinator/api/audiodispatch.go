@@ -42,51 +42,65 @@ import (
 // AUDIO-ENGINE.md.
 //
 // Insert-plus-dispatch-audit runs atomically via [identity.Service.
-// AuditedWrite], mirroring resolumeaction.go's identical shape: an
-// audit-write failure fails this dispatch closed (nothing was recorded,
-// nothing was dispatched) UNLESS the action is in
-// audioSafetyExemptActions, ADR-024 decision 11's safety-class exemption
-// — audio.session.stop/clear and audio.output.mute are this subsystem's
-// blackout, and a full audit disk must not leave an operator unable to
-// silence the show. Every other audio.* action fails closed.
+// AuditedWrite], mirroring resolumeaction.go's identical shape. ADR-024
+// decision 11, amended 2026-08-26 (owner ruling): an audit-write failure
+// never fails this dispatch closed for ANY audio.* action: every one
+// proceeds with degraded attribution. audioSafetyExemptActions
+// (audio.session.stop/clear, audio.output.mute, audio.node.silence) still
+// exists because it names this subsystem's own blackout-equivalent set
+// and still picks the
+// degradedAttributionReasonSafetyClassExemption justification for those
+// four actions specifically, distinct from
+// degradedAttributionReasonAuditNeverBlocks for every other one; it no
+// longer gates whether the dispatch proceeds at all.
 
 var scopeAudioCommand = identity.ScopeAudioCommand
 
-var audioSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+// A colon is admitted because this coordinator mints session ids that
+// carry one (pkg/cueactivation's four cue-activation ids); refusing it
+// here left those sessions addressable by the coordinator itself but by
+// no operator. The id reaches the node as a JSON params value on a
+// per-node topic, never as a path or topic segment.
+var audioSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$`)
 
-// audioSafetyExemptActions is ADR-024 decision 11's safety class for this
-// file: the audience-audio equivalent of blackout/stop/power-off. Muting
-// the output is this subsystem's blackout, so it is exempt alongside the
-// two ways to silence a session.
+// audioSafetyExemptActions is this file's own audience-audio equivalent of
+// ADR-024 decision 11's blackout/stop/power-off safety class: muting the
+// output is this subsystem's blackout, so it is grouped alongside the two
+// ways to silence a session. audio.node.silence (audionodesilence.go) is
+// the node-wide blackout, so it joins the set too. Since the 2026-08-26
+// amendment it no longer decides whether an audit-write failure blocks
+// dispatch (nothing does, for any audio.* action); it only picks
+// degradedAttributionReasonSafetyClassExemption over
+// degradedAttributionReasonAuditNeverBlocks as the reported reason, so an
+// investigator can still tell "this is the blackout-equivalent set" from
+// "this is every other action" in the record.
 var audioSafetyExemptActions = map[string]bool{
 	"audio.session.stop":  true,
 	"audio.session.clear": true,
 	"audio.output.mute":   true,
+	"audio.node.silence":  true,
 }
 
-// ProblemTypeAudioCommandRefusedAuditUnavailable mirrors
-// ProblemTypeFPPCommandRefusedAuditUnavailable/
-// ProblemTypeResolumeActionRefusedAuditUnavailable one file over: the
-// pre-dispatch write that must durably record a command before it is
-// dispatched could not be appended to this coordinator's audit store, so
-// nothing was recorded and nothing was dispatched.
-const ProblemTypeAudioCommandRefusedAuditUnavailable = problemBaseURI + "audio-command-refused-audit-unavailable"
-
-// audioCommandAuditUnavailableProblem is
-// [ProblemTypeAudioCommandRefusedAuditUnavailable]'s own constructor,
-// mirroring fppCommandAuditUnavailableProblem's identical reasoning
-// (problem.go) including its 503 status.
-func audioCommandAuditUnavailableProblem(action string, cause error) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeAudioCommandRefusedAuditUnavailable,
-		Title:  "Command refused: it could not be durably recorded",
-		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf(
-			"%q was refused before anything was sent to the node: it must be durably recorded before dispatch, and "+
-				"this coordinator's audit store is currently unavailable (%v). Nothing was recorded and nothing "+
-				"was dispatched; retry once the audit store is writable again.",
-			action, cause),
-	}
+// audioCommandDeadlineActions is a POSITIVE list: only an action named here
+// gets CmdPayload.Deadline populated. An action not on this list (including
+// one that does not exist yet, such as a future steady-playback re-affirm
+// riding through the same executeAudioSessionDispatch) gets no deadline and
+// behaves exactly as it did before this change: unclassified is safe by
+// default, not safe by someone remembering an exemption. Today's nine
+// audio.session.* actions are all in scope: advance, apply, clear, pause,
+// prepare, resume, seek, start, stop. audio.gain.* and audio.output.* are
+// deliberately excluded for now: they were not part of the staleness defect
+// this change closes, and adding them is a separate decision.
+var audioCommandDeadlineActions = map[string]bool{
+	"audio.session.advance": true,
+	"audio.session.apply":   true,
+	"audio.session.clear":   true,
+	"audio.session.pause":   true,
+	"audio.session.prepare": true,
+	"audio.session.resume":  true,
+	"audio.session.seek":    true,
+	"audio.session.start":   true,
+	"audio.session.stop":    true,
 }
 
 const (
@@ -96,6 +110,22 @@ const (
 	// MEASURED, matching renderCommandConfirmDeadline's identical
 	// posture one file over — no bench data exists yet for this path.
 	audioCommandConfirmDeadline = 15 * time.Second
+
+	// audioCommandWireDeadline bounds how stale a wire command in
+	// audioCommandDeadlineActions may be before the agent refuses it (see
+	// CmdPayload.Deadline and internal/agent/command.go's guard). It is
+	// deliberately generous, not tight: commands publish QoS 1 with
+	// Retain false, and the agent's autopaho config sets neither
+	// CleanStartOnInitialConnection nor SessionExpiryInterval, so a
+	// disconnected agent's MQTT session, and its subscriptions, end with
+	// the connection (an absent Session Expiry Interval is zero under
+	// MQTT 5). A queued, hours-old redelivery to an offline node does not
+	// happen today; the only real staleness this can catch is a command
+	// sitting behind other work on an already-connected agent, which is a
+	// scheduling-sized delay, not a network one. Sized to fire only on
+	// genuine pathology (e.g. a wedged agent goroutine), never to refuse a
+	// command whose only fault was arriving on a loaded machine.
+	audioCommandWireDeadline = 60 * time.Second
 
 	audioHandlerWriteDeadlineMargin = 10 * time.Second
 	maxAudioCommandRequestBodyBytes = 16 << 10
@@ -118,10 +148,14 @@ type AudioSessionPublisher interface {
 // [Dependencies.AudioSessions]'s doc comment. GetAudioSession lets a
 // dispatch merge a command's own params onto the session's prior desired
 // state rather than replacing it outright with one command's own
-// (commonly partial) params.
+// (commonly partial) params. GetAudioSession is scoped by node id (store
+// schemaV20): a session id such as the cue or blackAndSilence
+// session is a global constant, not unique per node, so an unscoped
+// lookup could merge onto a DIFFERENT node's desired state for a session
+// sharing the same id.
 type AudioSessionStore interface {
 	PutAudioSession(ctx context.Context, rec store.AudioSessionRecord) error
-	GetAudioSession(ctx context.Context, id string) (store.AudioSessionRecord, error)
+	GetAudioSession(ctx context.Context, nodeID, id string) (store.AudioSessionRecord, error)
 }
 
 // noAudioSessionPublisher is [Dependencies.AudioPublisher]'s no-op
@@ -148,7 +182,7 @@ func (noAudioSessionStore) PutAudioSession(context.Context, store.AudioSessionRe
 	return nil
 }
 
-func (noAudioSessionStore) GetAudioSession(context.Context, string) (store.AudioSessionRecord, error) {
+func (noAudioSessionStore) GetAudioSession(context.Context, string, string) (store.AudioSessionRecord, error) {
 	return store.AudioSessionRecord{}, store.ErrAudioSessionNotFound
 }
 
@@ -241,6 +275,12 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 		writeProblem(w, h.logger, now, *problem)
 		return
 	}
+	if action == "audio.session.apply" {
+		if problem := convertAudioApplyCeilingParamToLinear(params); problem != nil {
+			writeProblem(w, h.logger, now, *problem)
+			return
+		}
+	}
 	params["sessionId"] = sessionID
 
 	ac := authFromContext(ctx)
@@ -268,7 +308,7 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 	// every dispatch outright with "params.revision is required".
 	params["revision"] = body.Revision
 
-	result, problem, err := h.executeAudioSessionDispatch(ctx, now, audioDispatchInput{
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: action, NodeID: nodeID, SessionID: sessionID, Params: params,
 		Revision: body.Revision, IdempotencyKey: idempotencyKey,
 		IssuerID: issuerID, IssuerName: issuerName,
@@ -286,7 +326,11 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 	jsonWrite(w, v1.AudioSessionCommandResponse{ServerTime: formatTime(h.now()), Command: result})
 }
 
-type audioDispatchInput struct {
+// AudioDispatchInput is [handlers.executeAudioSessionDispatch]'s input,
+// exported so [AudioActionDispatcher.Dispatch] (audiodispatch_export.go)
+// can build one from another package, mirroring [FPPCommandInput]'s
+// identical exported-for-cross-package-dispatch role.
+type AudioDispatchInput struct {
 	Action         string
 	NodeID         string
 	SessionID      string
@@ -309,7 +353,7 @@ type audioDispatchInput struct {
 // error with a non-nil problem means "the request was refused"; a
 // non-nil error means an internal failure this coordinator cannot
 // attribute to the caller.
-func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Time, in audioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error) {
+func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Time, in AudioDispatchInput) (v1.AudioSessionCommandResult, *v1.Problem, error) {
 	if h.deps.Commands == nil {
 		return v1.AudioSessionCommandResult{}, nil, errors.New("no command store is configured")
 	}
@@ -347,13 +391,10 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		result, problem := resolveAudioSessionReplay(dup.Existing, in.Action, in.NodeID, in.SessionID, string(paramsJSON))
 		return result, problem, nil
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if !audioSafetyExemptActions[in.Action] {
-			// Fail closed: the transaction above already rolled back in
-			// full, so nothing is re-inserted and nothing is dispatched.
-			p := audioCommandAuditUnavailableProblem(in.Action, auditErr)
-			return v1.AudioSessionCommandResult{}, &p, nil
-		}
-		// Safety-class exemption (ADR-024 decision 11): redo the insert
+		// ADR-024 decision 11, amended 2026-08-26 (owner ruling): an
+		// audit-store outage never blocks a command dispatch, for any
+		// audio action, not only this file's own audioSafetyExemptActions
+		// (audio.session.stop/clear, audio.output.mute). Redo the insert
 		// through the plain, non-transactional store method and proceed
 		// with degraded attribution — mirroring dispatchFPPCommand's/
 		// resolumeaction.go's identical fallback.
@@ -364,7 +405,11 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 			}
 			return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("insert audio command: %w", err)
 		}
-		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedAttributionReasonSafetyClassExemption)
+		degradedReason := degradedAttributionReasonAuditNeverBlocks
+		if audioSafetyExemptActions[in.Action] {
+			degradedReason = degradedAttributionReasonSafetyClassExemption
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedReason)
 		dispatchDegraded = true
 	case auditErr != nil:
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("insert audio command: %w", auditErr)
@@ -384,6 +429,10 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		Target: mqttproto.CmdTarget{Kind: "node", ID: in.NodeID}, Params: in.Params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: in.IssuerID, PrincipalName: in.IssuerName},
 		ConfirmationMethod: "evidence",
+	}
+	if audioCommandDeadlineActions[in.Action] {
+		deadline := now.Add(audioCommandWireDeadline)
+		payload.Deadline = &deadline
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, in.NodeID, payload)
 	if err != nil {
@@ -533,10 +582,10 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 // commanded, never only of what was confirmed (see
 // [audioOutcomeShouldPersist]). The write is bounded so a locked store
 // cannot block this detached-completion path forever.
-func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in audioDispatchInput) {
+func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in AudioDispatchInput) {
 	ctx, cancel := context.WithTimeout(parent, dbWriteTimeout)
 	defer cancel()
-	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.SessionID)
+	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.NodeID, in.SessionID)
 	existingJSON := ""
 	if err == nil {
 		existingJSON = existing.DesiredJSON
@@ -690,7 +739,11 @@ func resolveAudioSessionReplay(existing store.CommandRecord, requestedAction, re
 // carrying a recognized outcome, the result is always "unconfirmable" —
 // never "started": a bare transport-level Confirmed with no evidence, or
 // an unrecognized outcome string, must not be reported as if the node's
-// own session layer had confirmed anything.
+// own session layer had confirmed anything. A recognized outcome that
+// [pkgaudio.OutcomeResult.Validate] says requires a reason keeps its own
+// outcome word even when the node left the reason blank; the reason is
+// replaced with the coordinator's own statement of that violation, never
+// left blank and never attributed to the node.
 func mapResultOutcome(res mqttproto.ResultPayload) (outcome, reason string) {
 	if res.Evidence != nil {
 		if v, ok := res.Evidence.Value.(map[string]any); ok {
@@ -699,6 +752,10 @@ func mapResultOutcome(res mqttproto.ResultPayload) (outcome, reason string) {
 					return string(pkgaudio.OutcomeUnconfirmable), fmt.Sprintf("node reported an outcome value this coordinator does not recognize: %q", o)
 				}
 				r, _ := v["reason"].(string)
+				result := pkgaudio.OutcomeResult{Outcome: pkgaudio.Outcome(o), Reason: r}
+				if err := result.Validate(); errors.Is(err, pkgaudio.ErrOutcomeReasonRequired) {
+					return o, fmt.Sprintf("node reported outcome %q with no reason; the coordinator did not receive one and the outcome requires one", o)
+				}
 				return o, r
 			}
 		}

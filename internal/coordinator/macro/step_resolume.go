@@ -144,6 +144,9 @@ func mapResolumeActionResult(result api.ResolumeActionResult) stepResult {
 		res.outcome = outcomeUnconfirmable
 		res.outcomeState = resolumeStateUnconfirmable
 	case api.ResolumeOutcomeRefused:
+		// Collapses to this package's own failed: OnFailure is the only
+		// per-step continuation policy a step has. The refusal itself
+		// survives for a human in outcomeReason, not the opaque outcomeState.
 		res.outcome = outcomeFailed
 		res.outcomeState = resolumeStateRefused
 	case api.ResolumeOutcomeFailed:

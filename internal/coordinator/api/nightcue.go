@@ -97,6 +97,16 @@ func nightCueConfirmable(target config.ShowActionTarget) bool {
 	}
 }
 
+// nightCueAllowedAsFirstOutwardCue reports whether action may sit at
+// §7.1.1's own commit boundary: either its adapter can confirm the effect
+// ([nightCueConfirmable]), or the action itself declares idempotent true.
+// A declared-false or undeclared idempotency never substitutes for
+// confirmability - see [config.ShowActionPayload.Idempotent]'s own doc
+// comment for why absent must never read as true.
+func nightCueAllowedAsFirstOutwardCue(action config.ShowActionPayload) bool {
+	return nightCueConfirmable(action.Target) || (action.Idempotent != nil && *action.Idempotent)
+}
+
 // nightCueRetryableByIdentity reports whether recovery may safely re-issue
 // target under the SAME identity after an unresolved crash. fpp and audio
 // both qualify: dispatchFPPCommand's and executeAudioSessionDispatch's own
@@ -122,10 +132,17 @@ type nightCueDispatchResult struct {
 
 // nightDispatchCueTarget dispatches target through its integration's own
 // adapter. It never inspects night_cue_outbox; the caller owns timing.
-// actionRevision is the cue's own pinned show.action revision (never the
-// live one) - only the audio branch currently needs it, to carry as
-// pkg/audio's own Revision.
-func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, actionRevision int64) nightCueDispatchResult {
+// dispatchRevision - only the audio branch currently needs it, to carry as
+// pkg/audio's own Revision - is normally the cue's own pinned show.action
+// revision (never the live one), EXCEPT for an announcement cue's own
+// audio.session.apply, whose caller (nightRunCue/nightResumeCueRow) instead
+// passes the audio-session-scoped floor value
+// [handlers.nightAnnouncementApplyDispatchRevision] computes, so it advances
+// in lockstep with that same announcement's clear and start. Either way,
+// the cue's own pinned CONFIGURATION revision is committed on the outbox
+// row's own ActionRevision by the caller before this runs, and is
+// unaffected by which value dispatchRevision carries.
+func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, dispatchRevision int64) nightCueDispatchResult {
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP:
 		return h.nightDispatchCueFPP(ctx, now, issuer, target, idemKey)
@@ -134,7 +151,7 @@ func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, is
 	case config.ShowActionIntegrationMQTT:
 		return h.nightDispatchCueMQTT(ctx, now, target)
 	case config.ShowActionIntegrationAudio:
-		return h.nightDispatchCueAudio(ctx, now, issuer, target, idemKey, actionRevision)
+		return h.nightDispatchCueAudio(ctx, now, issuer, target, idemKey, dispatchRevision)
 	default:
 		return nightCueDispatchResult{
 			dispatched: false, resolved: true,
@@ -269,12 +286,13 @@ func nightAudioCueOutcome(outcome string) string {
 // pkg/audio's own InvocationID, so a crash-recovery replay can never play
 // something twice (executeAudioSessionDispatch's own InsertCommand
 // duplicate-key path returns the first attempt's recorded outcome rather
-// than redispatching). actionRevision - the pinned show.action revision,
-// never the live one - becomes params["revision"]: pkg/audio's
+// than redispatching). dispatchRevision - see [nightDispatchCueTarget]'s
+// own doc comment for what it carries and why it is not always the pinned
+// config revision - becomes params["revision"]: pkg/audio's
 // RevisionState.Apply refuses to apply a revision that does not strictly
 // advance the session's own desired revision, so a delayed retry can
 // never rewind a newer command that has already landed.
-func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, actionRevision int64) nightCueDispatchResult {
+func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, dispatchRevision int64) nightCueDispatchResult {
 	params := make(map[string]any, len(target.Params)+3)
 	for k, v := range target.Params {
 		params[k] = v
@@ -283,14 +301,22 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 	// background-audio controller builds its own targets already linear.
 	// See audiogaindb.go for why converting only when a decibel key is
 	// present is right on this path and would be wrong on the HTTP one.
-	convertAuthoredAudioGainParams(target.AudioAction, params)
+	ConvertAuthoredAudioGainParams(target.AudioAction, params)
 	params["sessionId"] = target.AudioSessionID
 	params["invocationId"] = idemKey
-	params["revision"] = uint64(actionRevision)
+	params["revision"] = uint64(dispatchRevision)
 
-	result, problem, err := h.executeAudioSessionDispatch(ctx, now, audioDispatchInput{
-		Action: target.AudioAction, NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
-		Params: params, Revision: uint64(actionRevision), IdempotencyKey: idemKey,
+	// This generic single-target engine only ever reaches ONE node
+	// (nightAnnouncementDeclaredTarget's own doc comment): AudioNodeIDs[0]
+	// for every caller, since every caller either already carries exactly
+	// one node or has already been clamped to its own first.
+	nodeID := ""
+	if len(target.AudioNodeIDs) > 0 {
+		nodeID = target.AudioNodeIDs[0]
+	}
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: target.AudioAction, NodeID: nodeID, SessionID: target.AudioSessionID,
+		Params: params, Revision: uint64(dispatchRevision), IdempotencyKey: idemKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID, ClientAddr: issuer.ClientAddr,
 	})

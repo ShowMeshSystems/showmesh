@@ -104,15 +104,35 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 			action, a.SurfaceID, snap.Filename, act.CueID, act.CueRevision, out.Filename)
 	}
 
-	// Already exactly this Cue's resolved FSEQ, applied under exactly this
-	// authorization tuple, AND actually running: a redelivered/duplicate
-	// activation must not disturb a surface that is already correct (H4's
+	// Already exactly this Cue's resolved FSEQ, running under act's Show
+	// and Generation, AND actually running: a redelivered/duplicate
+	// activation, or a mid-show catalog deploy that resolved to unchanged
+	// content, must not disturb a surface that is already correct (H4's
 	// own "full state, idempotent" requirement) by re-opening and
 	// re-swapping a file that is already playing. o.hasRunningFrameWriter
 	// is real running state, not the persisted assignment alone — see
 	// surfaceAlreadyActivated's own doc comment for why a dark surface
 	// whose store already names the right file must still be repaired.
 	if surfaceAlreadyActivated(a, act, out, o.hasRunningFrameWriter(a.SurfaceID)) {
+		// surfaceAlreadyActivated deliberately ignores CatalogRevision, so
+		// this branch can be reached under a NEWER revision than the one
+		// persisted. If we simply returned nil here, the persisted
+		// assignment would keep naming the OLD CatalogRevision forever —
+		// not merely a cosmetic staleness: TRACK-H-H3-SPEC.md section 7's
+		// boot-clearing rule (internal/agent/bootresume.go) discards a
+		// resumed assignment whose Auth.CatalogRevision does not equal the
+		// node's currently held catalog revision. A node that reboots
+		// after this exact deploy-with-unchanged-content sequence would
+		// come up with this surface DARK — a currently-correct assignment
+		// wrongly discarded as unauthorized — purely because the on-disk
+		// record never caught up to the authorization that already
+		// verified it. Catching the persisted CatalogRevision up here,
+		// with no frame-writer restart, keeps the on-disk record honest
+		// about what actually authorized the content on the wall right
+		// now, without disturbing the wall itself.
+		if a.Auth.CatalogRevision != act.CatalogRevision {
+			return o.refreshAssignmentAuth(a, act, now)
+		}
 		return nil
 	}
 
@@ -169,13 +189,68 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	return nil
 }
 
+// refreshAssignmentAuth persists a's assignment again under act's
+// authorization tuple, with no frame-writer restart: the surface is
+// already drawing the right content (surfaceAlreadyActivated already
+// proved that), so nothing about the running pipeline changes here, only
+// the on-disk record of what currently authorizes it. See
+// activateSurfaceRender's call site for why leaving the persisted
+// CatalogRevision stale is a real hazard, not a cosmetic one.
+//
+// The persisted params map is updated alongside Auth (not just Auth
+// itself) so the two stay consistent: activateSurfaceRender's own
+// full-swap path always keeps params["show"]/["generation"]/
+// ["catalogRevision"] and the Assignment.Auth it persists in agreement,
+// and a reader inspecting RawParams directly should never see a
+// catalogRevision that disagrees with the Auth persisted alongside it.
+func (o *renderOperations) refreshAssignmentAuth(a pipeline.Assignment, act cueactivation.Activation, now func() time.Time) error {
+	const action = "cue.activate (render, catalog revision refresh)"
+
+	var params map[string]any
+	if err := json.Unmarshal(a.RawParams, &params); err != nil {
+		return fmt.Errorf("%s: surface %q: decoding persisted assignment params: %w", action, a.SurfaceID, err)
+	}
+	params["show"] = act.Show
+	params["generation"] = float64(act.Generation)
+	params["catalogRevision"] = act.CatalogRevision
+
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("%s: surface %q: encoding updated assignment params: %w", action, a.SurfaceID, err)
+	}
+	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
+	if err := o.store.Upsert(pipeline.Assignment{
+		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
+	}); err != nil {
+		return fmt.Errorf("%s: surface %q: persisting refreshed authorization: %w", action, a.SurfaceID, err)
+	}
+	return nil
+}
+
 // surfaceAlreadyActivated reports whether a's persisted assignment already
-// names out's resolved sequence and content hash, under exactly act's
-// authorization tuple, AND running is true — the "nothing to disturb" case
-// a redelivered activation must detect before touching a running surface.
-// A decode failure or a missing/mismatched authorization tuple is
+// names out's resolved sequence and content hash, under act's Show and
+// Generation, AND running is true — the "nothing to disturb" case a
+// redelivered activation, or a mid-show catalog deploy that resolves to
+// unchanged content, must detect before touching a running surface. A
+// decode failure or a missing/mismatched Show or Generation is
 // conservatively "not already activated" (never grandfathers a legacy or
 // foreign assignment into skipping the swap).
+//
+// CatalogRevision is deliberately NOT compared here, unlike Show and
+// Generation: an operator deploying a new catalog to a node mid-show mints
+// a new CatalogRevision on every activation that follows, even when the
+// deploy left this Cue's resolved sequence and content hash untouched.
+// Gating on CatalogRevision as well would restart the frame writer, and
+// therefore produce the stop-then-start swap's visible gap on the wall
+// (this file's own doc comment above), for a deploy that changed nothing
+// this surface is drawing. Show and Generation stay strict: either
+// differing means a genuinely different authorization, never merely a
+// newer revision of the same one, and conflating the two would let an
+// unrelated authorization slip past as "already activated." The caller
+// (activateSurfaceRender) still catches up the persisted assignment's
+// CatalogRevision when this returns true under a newer one — see its own
+// comment on why a stale persisted CatalogRevision is its own hazard, not
+// merely a cosmetic staleness.
 //
 // running must come from real running state
 // ([renderOperations.hasRunningFrameWriter]), never the store alone:
@@ -193,7 +268,7 @@ func surfaceAlreadyActivated(a pipeline.Assignment, act cueactivation.Activation
 	if a.Auth == nil {
 		return false
 	}
-	if a.Auth.Show != act.Show || a.Auth.Generation != act.Generation || a.Auth.CatalogRevision != act.CatalogRevision {
+	if a.Auth.Show != act.Show || a.Auth.Generation != act.Generation {
 		return false
 	}
 	var params map[string]any
@@ -202,5 +277,23 @@ func surfaceAlreadyActivated(a pipeline.Assignment, act cueactivation.Activation
 	}
 	filename, _ := params["fseqFilename"].(string)
 	hash, _ := params["fseqContentHash"].(string)
-	return filename == out.Filename && hash == firstAssetHash(out.AssetHashes)
+	wantHash := firstAssetHash(out.AssetHashes)
+	// An empty hash on EITHER side is a lack of evidence, never agreement:
+	// hash == "" happens when the persisted params carry no
+	// fseqContentHash key at all (a legacy assignment) or the key decoded
+	// to a non-string, and wantHash == "" happens when out.AssetHashes
+	// resolved none. Comparing two empty strings would read as "identical
+	// content" with nothing behind it — once CatalogRevision no longer
+	// gates this decision, that vacuous match is the only thing standing
+	// between two genuinely different deploys of the same runtime
+	// filename and a skipped restart the content actually needed. An
+	// unnecessary restart is a visible glitch; a skipped one here is a
+	// wall showing stale content while an operator believes the deploy
+	// landed, which is worse. So an absent hash on either side forces
+	// "not already activated," the same conservative default this
+	// function already gives a.Auth == nil or a mismatched Show/Generation.
+	if hash == "" || wantHash == "" {
+		return false
+	}
+	return filename == out.Filename && hash == wantHash
 }

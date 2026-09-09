@@ -305,14 +305,15 @@ func TestObservationsFilterParsedAndForwarded(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
 	}
-	if obsLister.gotFilter.ResourceKind == nil || *obsLister.gotFilter.ResourceKind != "fpp" {
-		t.Errorf("ResourceKind filter = %v, want \"fpp\"", obsLister.gotFilter.ResourceKind)
+	gotFilter := obsLister.lastFilter()
+	if gotFilter.ResourceKind == nil || *gotFilter.ResourceKind != "fpp" {
+		t.Errorf("ResourceKind filter = %v, want \"fpp\"", gotFilter.ResourceKind)
 	}
-	if obsLister.gotFilter.ResourceID == nil || *obsLister.gotFilter.ResourceID != "player-01" {
-		t.Errorf("ResourceID filter = %v, want \"player-01\"", obsLister.gotFilter.ResourceID)
+	if gotFilter.ResourceID == nil || *gotFilter.ResourceID != "player-01" {
+		t.Errorf("ResourceID filter = %v, want \"player-01\"", gotFilter.ResourceID)
 	}
-	if obsLister.gotFilter.Signal == nil || *obsLister.gotFilter.Signal != "fpp.multisync.enabled" {
-		t.Errorf("Signal filter = %v, want \"fpp.multisync.enabled\"", obsLister.gotFilter.Signal)
+	if gotFilter.Signal == nil || *gotFilter.Signal != "fpp.multisync.enabled" {
+		t.Errorf("Signal filter = %v, want \"fpp.multisync.enabled\"", gotFilter.Signal)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -28,17 +29,17 @@ import (
 // checking PlaylistReadiness actually reports it; the order tests below
 // prove (2) for every adjacent pair in that vocabulary.
 
-// TestPlaylistReadinessEveryClosedVocabularyConditionFires exercises all
-// eight conditions readiness.go's own const block currently declares. If a
-// future merge (or a hand resolution of one) drops an invocation from
-// PlaylistReadiness's body, the resolver it should have called still
-// compiles and its own unit tests (if any survive) may still pass in
-// isolation -- but the specific scenario below, driven through
-// PlaylistReadiness itself, stops reporting that condition and this test
-// catches it. The closing assertion pins the vocabulary itself: a ninth
-// condition landing on readiness.go without a matching case here is a gap
-// this file no longer closes, so the count check exists to make that
-// omission loud rather than silent.
+// TestPlaylistReadinessEveryClosedVocabularyConditionFires exercises the
+// nine conditions this table names. If a future merge (or a hand
+// resolution of one) drops an invocation from PlaylistReadiness's body,
+// the resolver it should have called still compiles and its own unit
+// tests (if any survive) may still pass in isolation -- but the specific
+// scenario below, driven through PlaylistReadiness itself, stops
+// reporting that condition and this test catches it. The closing
+// assertion pins this table's own vocabulary: a tenth entry landing in
+// `cases` without a matching name in `want` (or vice versa) is a gap this
+// file no longer closes, so the count check exists to make that omission
+// loud rather than silent.
 func TestPlaylistReadinessEveryClosedVocabularyConditionFires(t *testing.T) {
 	cases := []struct {
 		name string
@@ -169,6 +170,67 @@ func TestPlaylistReadinessEveryClosedVocabularyConditionFires(t *testing.T) {
 				return mustReadiness(t, st, p)
 			},
 		},
+		{
+			name: "assets-missing",
+			want: ReadinessAssetsMissing,
+			run: func(t *testing.T) Report {
+				st := openTestStore(t)
+				putShow(t, st, "show-1", "Show One")
+				putActiveShow(t, st, "show-1")
+				hash := hash64("a1")
+				// cue-1 (from singleEntryPlaylist) declares only render, for
+				// sequence "seq-cue-1" (putCue's default).
+				p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+				putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+				putPlaylist(t, st, "playlist-1", p)
+				declareNode(t, st, "node-1")
+				putSurface(t, st, "surface-1", "show-1", "node-1")
+				putSurfacePipelineState(t, st, "surface-1", "node-1", "running", time.Unix(1000, 0).UTC())
+
+				ctx := context.Background()
+
+				// An asset for cue-1's sequence genuinely exists in the
+				// store -- created BEFORE the catalog is resolved and
+				// acknowledged below, since the resolved catalog revision
+				// folds in each entry's own asset hashes and creating the
+				// asset afterward would silently invalidate the ack this
+				// case just wrote.
+				if _, _, err := st.CreateAsset(ctx, store.AssetRecord{
+					ID: "sha256:missing-node-node-1", ShowID: "show-1", SequenceID: "seq-cue-1",
+					TargetKind: store.AssetTargetKindNode, TargetID: "node-1", MediaType: "fseq",
+					ContentHash: "sha256:missing", RuntimeFilename: "Opening.fseq", SizeBytes: 1024,
+					Backend: "volume", StorageKey: "sha256:missing",
+				}); err != nil {
+					t.Fatalf("create asset: %v", err)
+				}
+
+				active, err := assetsync.ResolveActiveShow(ctx, st)
+				if err != nil {
+					t.Fatalf("ResolveActiveShow: %v", err)
+				}
+				catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "node-1")
+				if err != nil {
+					t.Fatalf("ResolveCueCatalog: %v", err)
+				}
+				if err := st.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
+					NodeID: "node-1", Revision: catalog.Revision, ShowID: "show-1", Generation: active.Generation,
+				}); err != nil {
+					t.Fatalf("put node cue catalog ack: %v", err)
+				}
+
+				// node-1's own reported inventory does not hold the asset
+				// above: this is Missing, never Gap (a sequence with no
+				// asset ever registered at all is a separate, separately
+				// tracked defect).
+				if err := st.ReplaceNodeAssetInventory(ctx, "node-1", nil, store.NodeAssetReportRecord{
+					ReportedAt: time.Now(), Complete: true,
+				}); err != nil {
+					t.Fatalf("replace node asset inventory: %v", err)
+				}
+
+				return mustReadiness(t, st, p)
+			},
+		},
 	}
 
 	seen := make(map[ReadinessCondition]bool, len(cases))
@@ -188,7 +250,7 @@ func TestPlaylistReadinessEveryClosedVocabularyConditionFires(t *testing.T) {
 	want := []ReadinessCondition{
 		ReadinessDefinitionMissing, ReadinessEntryNotInDefinition, ReadinessEntryFilenameMismatch,
 		ReadinessCueNotReady, ReadinessObservationHashMismatch, ReadinessNodeRenderUnassigned,
-		ReadinessExclusiveClaimConflict, ReadinessNodeCatalogStale,
+		ReadinessExclusiveClaimConflict, ReadinessNodeCatalogStale, ReadinessAssetsMissing,
 	}
 	if len(seen) != len(want) {
 		t.Fatalf("exercised %d distinct conditions, want exactly the %d ReadinessCondition currently declared", len(seen), len(want))

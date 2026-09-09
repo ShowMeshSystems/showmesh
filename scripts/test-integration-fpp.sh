@@ -55,24 +55,31 @@ cd "$ROOT_DIR"
 export SHOWMESH_REQUIRE_TEST_DEPS=broker,fpp
 
 COMPOSE_FILE="bench/fpp-multisync/docker-compose.yml"
-FPP_URL="${SHOWMESH_TEST_FPP_URL:-http://localhost:8090}"
+
+# docker-compose.yml has no fixed container_name for fpp-master, so
+# identity comes from the compose project (-p) instead; container_id
+# below always resolves it through `docker compose ... ps -q`.
+PROJECT_NAME="${SHOWMESH_TEST_FPP_PROJECT:-}"
+if { [ -n "$PROJECT_NAME" ] && [ -z "${SHOWMESH_TEST_FPP_HTTP_PORT:-}" ]; } || \
+   { [ -z "$PROJECT_NAME" ] && [ -n "${SHOWMESH_TEST_FPP_HTTP_PORT:-}" ]; }; then
+  echo "test-integration-fpp: SHOWMESH_TEST_FPP_PROJECT and SHOWMESH_TEST_FPP_HTTP_PORT must be set together, or neither; one alone either fights the default project for 8090 or silently skips the destructive stop/recreate test" >&2
+  exit 1
+fi
+export FPP_MASTER_HTTP_PORT="${SHOWMESH_TEST_FPP_HTTP_PORT:-8090}"
+FPP_URL="${SHOWMESH_TEST_FPP_URL:-http://localhost:${FPP_MASTER_HTTP_PORT}}"
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+if [ -n "$PROJECT_NAME" ]; then
+  COMPOSE_ARGS+=(-p "$PROJECT_NAME")
+  export SHOWMESH_TEST_FPP_COMPOSE_PROJECT="$PROJECT_NAME"
+fi
 if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
   PREBUILT_OVERRIDE="$ROOT_DIR/bench/fpp-multisync/docker-compose.prebuilt.yml"
   COMPOSE_ARGS+=(-f "$PREBUILT_OVERRIDE")
   export SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE="$PREBUILT_OVERRIDE"
 fi
 
-# docker-compose.yml no longer pins a fixed container_name for fpp-master
-# (see its own comment: a fixed name collides across the side-by-side
-# 9.5.3/10.0 projects README.md describes), so the actual container name
-# now depends on the compose project name. This script never passes -p, so
-# it always resolves within compose's own default project for this file,
-# the same single instance the CI workflow and every previous run of this
-# script already shared. container_id resolves it by service name instead
-# of by a literal string; fpp_master_container is a fixed label for log
-# messages only, not something passed to docker.
+# fpp_master_container is a label for log messages only, never passed to docker.
 fpp_master_container="fpp-master"
 container_id() {
   docker compose "${COMPOSE_ARGS[@]}" ps -a -q fpp-master
@@ -106,6 +113,9 @@ else
 fi
 
 CONTAINER_ID="$(container_id)"
+RUNNING_IMAGE_ID="$(docker inspect -f '{{.Image}}' "$CONTAINER_ID")"
+RUNNING_PROVENANCE="$(docker image inspect -f '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}{{.Id}}{{end}}' "$RUNNING_IMAGE_ID")"
+echo "test-integration-fpp: $fpp_master_container is container $CONTAINER_ID running $RUNNING_PROVENANCE (project ${PROJECT_NAME:-<default>})"
 
 # Prebuilt mode asserts what is RUNNING, not what is configured: a dropped
 # or misspelled SHOWMESH_FPP_TEST_PREBUILT would otherwise source-build and
@@ -205,14 +215,11 @@ EOF
 }'
 fi
 
-echo "test-integration-fpp: running against $FPP_URL (container $fpp_master_container)"
-# Only exported when the caller actually overrode it: the Go suite's
-# destructive container-recreate test (integration_test.go) treats a SET
-# SHOWMESH_TEST_FPP_URL as "an operator pointed this at something other
-# than our own bench container, never touch it" and skips itself — setting
-# it here unconditionally, even to the same default value, would trip that
-# guard and silently skip the one test that most needs to run.
-if [ -n "${SHOWMESH_TEST_FPP_URL:-}" ]; then
+echo "test-integration-fpp: running against $FPP_URL (container $fpp_master_container, project ${PROJECT_NAME:-<default>})"
+# The Go process needs the real URL whenever it differs from its own
+# hardcoded default; see integration_test.go's envTestFPPComposeProject
+# for how the destructive test stays trusted under an isolated port.
+if [ -n "${SHOWMESH_TEST_FPP_URL:-}" ] || [ -n "${SHOWMESH_TEST_FPP_HTTP_PORT:-}" ]; then
   export SHOWMESH_TEST_FPP_URL="$FPP_URL"
 fi
 go test -tags=integration -race -count=1 -timeout=5m -v ./internal/coordinator/collector/fpp/...

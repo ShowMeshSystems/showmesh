@@ -39,17 +39,43 @@ type FPPPlaylistEntryObservationRecord struct {
 	CoalescedSincePreviousAcknowledged int64
 	ReceivedAt                         time.Time
 
+	// PlaylistLoop is FPP's own mainPlaylist pass counter for the running
+	// playlist, as the plugin reported it (contract §1.2, §1.8), or nil
+	// when the plugin sent none. Nil and 0 are different: 0 is a real first
+	// pass, nil is a plugin that predates the field. schemaV32's column.
+	PlaylistLoop *int64
+
 	// EntryOccurrenceSequence is entry-START identity (schemaV18's own doc
 	// comment): stable across repeat ticks inside one entry occurrence,
 	// and strictly newer on every genuine re-entry, including a playlist
 	// looping back to an entry whose EntryKey is otherwise identical to
-	// its first visit. Computed at ingestion
-	// (fppobservations.go's handlePostFPPPlaylistEntryObservation), never
-	// read off the wire — the plugin never sends it.
-	// [cueactivate.activationID] hashes it precisely so two ticks inside
-	// one occurrence dedup to one dispatch while a loop's second lap
-	// dispatches again.
+	// its first visit.
+	//
+	// That property is provided by a different mechanism on each FPP major,
+	// and naming them is the point: FPP 9 fires the playlist "start" action
+	// and the action alone is sufficient there, while FPP 10 never fires it
+	// at all, so on FPP 10 the property rests entirely on PlaylistLoop
+	// changing. Before PlaylistLoop existed this comment claimed the
+	// property unconditionally, which was true when written and became
+	// false when FPP 10 shipped, with nothing connecting the two.
+	//
+	// Computed at ingestion (fppobservations.go's
+	// handlePostFPPPlaylistEntryObservation), never read off the wire: the
+	// plugin never sends it. [cueactivate.activationID] hashes it precisely
+	// so two ticks inside one occurrence dedup to one dispatch while a
+	// loop's second lap dispatches again.
 	EntryOccurrenceSequence int64
+
+	// EvidenceBrokenAt is schemaV29's own marker (see that migration's doc
+	// comment): nil whenever this instance's stored observation is believed
+	// to still be corroborated, and the moment a sequence-regression refusal
+	// was recorded for this instance otherwise. cueactivate.Decide reads
+	// this field directly, before routing on whatever fppreconcile.Reconcile
+	// computed from this same row, and never from the audit_log entry that
+	// same refusal separately (and best-effort) writes. Cleared on this
+	// instance's next accepted observation, never exclusively by the
+	// operator reset route — see schemaV29's own doc comment for why.
+	EvidenceBrokenAt *time.Time
 }
 
 // ErrFPPPlaylistEntryObservationNotFound is returned when no row matches.
@@ -74,21 +100,23 @@ const fppPlaylistEntryObservationColumns = `
 	playlist_name, playlist_hash, section, position, entry_key,
 	sequence_filename, media_filename, action, unavailable,
 	observed_at_millis, coalesced_since_previous_acknowledged, received_at,
-	entry_occurrence_sequence
+	entry_occurrence_sequence, evidence_broken_at_millis, playlist_loop
 `
 
 func scanFPPPlaylistEntryObservation(row interface{ Scan(dest ...any) error }) (FPPPlaylistEntryObservationRecord, error) {
 	var (
-		rec              FPPPlaylistEntryObservationRecord
-		observedAtMillis int64
-		receivedAt       string
+		rec                    FPPPlaylistEntryObservationRecord
+		observedAtMillis       int64
+		receivedAt             string
+		evidenceBrokenAtMillis sql.NullInt64
+		playlistLoop           sql.NullInt64
 	)
 	if err := row.Scan(
 		&rec.InstanceUUID, &rec.SchemaVersion, &rec.Sequence, &rec.BodyHash, &rec.ObservationJSON,
 		&rec.PlaylistName, &rec.PlaylistHash, &rec.Section, &rec.Position, &rec.EntryKey,
 		&rec.SequenceFilename, &rec.MediaFilename, &rec.Action, &rec.Unavailable,
 		&observedAtMillis, &rec.CoalescedSincePreviousAcknowledged, &receivedAt,
-		&rec.EntryOccurrenceSequence,
+		&rec.EntryOccurrenceSequence, &evidenceBrokenAtMillis, &playlistLoop,
 	); err != nil {
 		return FPPPlaylistEntryObservationRecord{}, err
 	}
@@ -96,6 +124,14 @@ func scanFPPPlaylistEntryObservation(row interface{ Scan(dest ...any) error }) (
 	var err error
 	if rec.ReceivedAt, err = dbToTime(receivedAt); err != nil {
 		return FPPPlaylistEntryObservationRecord{}, fmt.Errorf("store: parse fpp playlist entry observation received_at: %w", err)
+	}
+	if evidenceBrokenAtMillis.Valid {
+		t := time.UnixMilli(evidenceBrokenAtMillis.Int64).UTC()
+		rec.EvidenceBrokenAt = &t
+	}
+	if playlistLoop.Valid {
+		v := playlistLoop.Int64
+		rec.PlaylistLoop = &v
 	}
 	return rec, nil
 }
@@ -179,7 +215,7 @@ func putFPPPlaylistEntryObservation(ctx context.Context, q querier, rec FPPPlayl
 
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO fpp_playlist_entry_observations (`+fppPlaylistEntryObservationColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
 		ON CONFLICT(instance_uuid) DO UPDATE SET
 			schema_version    = excluded.schema_version,
 			sequence          = excluded.sequence,
@@ -197,18 +233,80 @@ func putFPPPlaylistEntryObservation(ctx context.Context, q querier, rec FPPPlayl
 			observed_at_millis = excluded.observed_at_millis,
 			coalesced_since_previous_acknowledged = excluded.coalesced_since_previous_acknowledged,
 			received_at       = excluded.received_at,
-			entry_occurrence_sequence = excluded.entry_occurrence_sequence
+			entry_occurrence_sequence = excluded.entry_occurrence_sequence,
+			evidence_broken_at_millis = NULL,
+			playlist_loop     = excluded.playlist_loop
 	`,
 		rec.InstanceUUID, rec.SchemaVersion, rec.Sequence, rec.BodyHash, rec.ObservationJSON,
 		rec.PlaylistName, rec.PlaylistHash, rec.Section, rec.Position, rec.EntryKey,
 		rec.SequenceFilename, rec.MediaFilename, rec.Action, rec.Unavailable,
 		rec.ObservedAt.UnixMilli(), rec.CoalescedSincePreviousAcknowledged, timeToDB(rec.ReceivedAt),
-		rec.EntryOccurrenceSequence,
+		// A nil *int64 binds as SQL NULL, which is what "the plugin sent no
+		// pass counter" has to store: a 0 here would be a first pass.
+		rec.EntryOccurrenceSequence, rec.PlaylistLoop,
 	)
 	if err != nil {
 		return fmt.Errorf("store: put fpp playlist entry observation %q: %w", rec.InstanceUUID, err)
 	}
 	return nil
+}
+
+// ErrFPPPlaylistEntryObservationNotFoundForEvidenceBroken is returned by
+// [Store.MarkFPPPlaylistEntryObservationEvidenceBroken]/[Tx.
+// MarkFPPPlaylistEntryObservationEvidenceBroken] when no row exists for the
+// named instance. A sequence-regression refusal (the only caller of this
+// method, contract §1.5) can only be reached by comparing rec.Sequence
+// against an EXISTING row's own stored sequence
+// (putFPPPlaylistEntryObservation's own existingSeq lookup), so reaching
+// this in production would mean the row was deleted between that read and
+// this write — reported rather than silently treated as a no-op, since a
+// caller that thinks it just recorded a discontinuity for an instance that
+// turned out to have no row at all needs to know its own view was already
+// stale.
+var ErrFPPPlaylistEntryObservationNotFoundForEvidenceBroken = errors.New("store: fpp playlist entry observation not found for evidence-broken marker")
+
+// markFPPPlaylistEntryObservationEvidenceBroken sets evidence_broken_at_millis
+// on instanceUUID's own row to brokenAt, unconditionally overwriting any
+// earlier value: a second regression while the marker is already set is
+// still evidence the discontinuity persists, and the caller's own dispatch
+// idempotency (a fresh episode key per brokenAt) is what keeps a repeat
+// refusal from re-dispatching, not a sticky "first one wins" rule here.
+func markFPPPlaylistEntryObservationEvidenceBroken(ctx context.Context, q querier, instanceUUID string, brokenAt time.Time) error {
+	res, err := q.ExecContext(ctx,
+		`UPDATE fpp_playlist_entry_observations SET evidence_broken_at_millis = ? WHERE instance_uuid = ?`,
+		brokenAt.UnixMilli(), instanceUUID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: mark fpp playlist entry observation %q evidence broken: %w", instanceUUID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: mark fpp playlist entry observation %q evidence broken: rows affected: %w", instanceUUID, err)
+	}
+	if n == 0 {
+		return ErrFPPPlaylistEntryObservationNotFoundForEvidenceBroken
+	}
+	return nil
+}
+
+// MarkFPPPlaylistEntryObservationEvidenceBroken is
+// [Tx.MarkFPPPlaylistEntryObservationEvidenceBroken]'s [Store] form, for
+// tests that do not need the same-transaction guarantee the production
+// ingestion path (identity.AuditedWrite) relies on.
+func (s *Store) MarkFPPPlaylistEntryObservationEvidenceBroken(ctx context.Context, instanceUUID string, brokenAt time.Time) error {
+	guardNotInTx(ctx, "Store.MarkFPPPlaylistEntryObservationEvidenceBroken")
+	return markFPPPlaylistEntryObservationEvidenceBroken(ctx, s.db, instanceUUID, brokenAt)
+}
+
+// MarkFPPPlaylistEntryObservationEvidenceBroken is
+// [Store.MarkFPPPlaylistEntryObservationEvidenceBroken]'s [Tx] form: the
+// production ingestion path's own sequence-regression refusal branch calls
+// this inside the SAME identity.AuditedWrite transaction as that refusal's
+// own audit entry, so the marker and its audit trail commit or fail
+// together — see schemaV29's own doc comment for why this must never be a
+// best-effort write the way auditRefusal's ordinary refusal audit is.
+func (t *Tx) MarkFPPPlaylistEntryObservationEvidenceBroken(ctx context.Context, instanceUUID string, brokenAt time.Time) error {
+	return markFPPPlaylistEntryObservationEvidenceBroken(ctx, t.tx, instanceUUID, brokenAt)
 }
 
 // PutFPPPlaylistEntryObservation upserts the latest observation for one

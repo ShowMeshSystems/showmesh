@@ -36,14 +36,15 @@ func cmdNodes(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 	defer cancel()
 
 	var resp nodesResponse
-	if err := c.getJSON(ctx, "/api/v1/nodes", nil, &resp); err != nil {
+	raw, err := c.getJSONKeepingRaw(ctx, "/api/v1/nodes", nil, &resp)
+	if err != nil {
 		return reportError(stderr, "nodes", err)
 	}
 
 	printClockSkew(stderr, resp.ServerTime, clock())
 
 	if g.output == outputJSON {
-		if err := printJSON(stdout, resp); err != nil {
+		if err := printJSONBody(stdout, raw); err != nil {
 			return reportError(stderr, "nodes", err)
 		}
 		return exitOK
@@ -91,8 +92,15 @@ func cmdNode(args []string, stdout, stderr io.Writer, clock func() time.Time) in
 	}
 	printClockSkew(stderr, serverTime, clock())
 
+	// --output json prints the response body AS THE COORDINATOR SENT IT
+	// (the owner ruling this package now follows): the wrapped
+	// {"serverTime":..., "node":{...}} shape contract section 6.10 pins,
+	// not the unwrapped node object this used to print. A script that
+	// read .id from this command's JSON output must now read .node.id --
+	// this is a deliberate, breaking re-nesting for existing scripted
+	// consumers, not merely new fields appearing.
 	if g.output == outputJSON {
-		if err := printJSON(stdout, n); err != nil {
+		if err := printJSONBody(stdout, body); err != nil {
 			return reportError(stderr, "node", err)
 		}
 		return exitOK

@@ -162,6 +162,7 @@ func cmdResolumeInstanceSet(args []string, stdout, stderr io.Writer, clock func(
 	var id, url string
 	fs.StringVar(&id, "id", "", "the instance id (required)")
 	fs.StringVar(&url, "url", "", "the Resolume REST base URL, e.g. http://host:8080 (required)")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl resolume instance set --id ID --url URL [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new resolume.instances configuration revision naming exactly")
@@ -170,6 +171,8 @@ func cmdResolumeInstanceSet(args []string, stdout, stderr io.Writer, clock func(
 		_, _ = fmt.Fprintln(stderr, "fpp.endpoints id, is rejected and appends no revision (ADR-009).")
 		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): the collector set")
 		_, _ = fmt.Fprintln(stderr, "follows within about ten seconds.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -196,9 +199,22 @@ func cmdResolumeInstanceSet(args []string, stdout, stderr io.Writer, clock func(
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/resolume.instances"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r resolumeInstancesConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "resolume instance set", err)
+	}
+
 	payload := resolumeInstancesPayload{Instances: []resolumeInstanceConfig{{ID: id, URL: url}}}
 	var resp resolumeInstancesConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/resolume.instances", payload, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, payload, &resp); err != nil {
 		return reportError(stderr, "resolume instance set", err)
 	}
 
@@ -222,12 +238,15 @@ func cmdResolumeInstanceSet(args []string, stdout, stderr io.Writer, clock func(
 // alone" or "wipe implicitly").
 func cmdResolumeInstanceRemove(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl resolume instance remove", stderr)
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl resolume instance remove [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new resolume.instances configuration revision naming zero")
 		_, _ = fmt.Fprintln(stderr, "instances (requires config:write, admin only).")
 		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): the collector set")
 		_, _ = fmt.Fprintln(stderr, "stops within about ten seconds.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
+		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -249,9 +268,22 @@ func cmdResolumeInstanceRemove(args []string, stdout, stderr io.Writer, clock fu
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/resolume.instances"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r resolumeInstancesConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "resolume instance remove", err)
+	}
+
 	payload := resolumeInstancesPayload{Instances: []resolumeInstanceConfig{}}
 	var resp resolumeInstancesConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/resolume.instances", payload, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, payload, &resp); err != nil {
 		return reportError(stderr, "resolume instance remove", err)
 	}
 

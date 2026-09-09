@@ -35,6 +35,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -623,6 +624,28 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 		return rec.Code, rec.Body.Bytes()
 	}
 
+	// reportDegradedAttribution (fppcommand_handler.go) writes its reason
+	// to os.Stderr directly, not through h.logger, so that is the only
+	// place this cross-package test can observe which reason fired.
+	doDispatchCapturingStderr := func(action, idemKey, paramsJSON string) (status int, body []byte, stderrOutput string) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("os.Pipe: %v", err)
+		}
+		orig := os.Stderr
+		os.Stderr = w
+		status, body = doDispatch(action, idemKey, paramsJSON)
+		os.Stderr = orig
+		if err := w.Close(); err != nil {
+			t.Fatalf("close stderr pipe writer: %v", err)
+		}
+		captured, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("read captured stderr: %v", err)
+		}
+		return status, body, string(captured)
+	}
+
 	// blackout: exempt. Must still be attempted (a 200, and a real
 	// disconnect-all request reaching Arena) despite the audit store
 	// failing — never refused for want of an audit write.
@@ -659,16 +682,48 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 		t.Errorf("arena never received the blackout dispatch (POST /api/v1/composition/disconnect-all); requests = %v", arena.requestLog())
 	}
 
-	// launchClip: NOT exempt. Must fail closed (503) with nothing sent to
-	// Arena — the default ADR-024 decision 11 rule, and the direction the
-	// safety-class translation must never accidentally exempt.
-	status, body = doDispatch("launchClip", "e2e-audit-launchclip-1", `{"clip":"E2E Clip","deck":"Deck One"}`)
-	if status != http.StatusServiceUnavailable {
-		t.Fatalf("launchClip (not exempt) status = %d, want 503 (fail closed on a failing audit store); body: %s", status, body)
+	// launchClip: NOT exempt, so it degrades rather than exempts. ADR-024
+	// decision 11's amendment (owner ruling, 2026-08-26) removed the
+	// fail-closed default this test used to assert for every non-exempt
+	// action: it must still dispatch (a 200, and a real connect request
+	// reaching Arena) with degraded attribution, and the reported reason
+	// must name audit unavailability, not the safety-class exemption
+	// blackout used above, since launchClip is not a member of that class.
+	status, body, stderrOutput := doDispatchCapturingStderr("launchClip", "e2e-audit-launchclip-1", `{"clip":"E2E Clip","deck":"Deck One"}`)
+	if status != http.StatusOK {
+		t.Fatalf("launchClip (not exempt) status = %d, want 200 despite the audit store failing; body: %s", status, body)
 	}
+	// The two substrings mirror api.degradedAttributionReasonAuditNeverBlocks
+	// and api.degradedAttributionReasonSafetyClassExemption, unexported and
+	// unreachable from this package, so duplicated rather than referenced.
+	if !strings.Contains(stderrOutput, "audit-unavailability-never-blocks rule") {
+		t.Errorf("launchClip (not exempt) degraded-attribution log did not name the audit-never-blocks reason; got: %s", stderrOutput)
+	}
+	if strings.Contains(stderrOutput, "safety class exemption") {
+		t.Errorf("launchClip (not exempt) degraded-attribution log named the safety-class exemption reason; it is not a member of that class: %s", stderrOutput)
+	}
+	var launchClipResp struct {
+		Result struct {
+			Outcome             string `json:"outcome"`
+			AttributionDegraded bool   `json:"attributionDegraded"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &launchClipResp); err != nil {
+		t.Fatalf("decode launchClip response: %v; body: %s", err, body)
+	}
+	if launchClipResp.Result.Outcome == "refused" {
+		t.Fatalf("launchClip (not exempt) outcome = refused; ADR-024 decision 11 amended must never refuse for an audit failure")
+	}
+	if !launchClipResp.Result.AttributionDegraded {
+		t.Errorf("launchClip (not exempt) attributionDegraded = false, want true (it proceeded on a failing audit store)")
+	}
+	foundConnect := false
 	for _, r := range arena.requestLog() {
 		if strings.Contains(r, "/connect") {
-			t.Errorf("arena received a connect request for launchClip despite the fail-closed 503; requests = %v", arena.requestLog())
+			foundConnect = true
 		}
+	}
+	if !foundConnect {
+		t.Errorf("arena never received a connect request for launchClip; requests = %v", arena.requestLog())
 	}
 }

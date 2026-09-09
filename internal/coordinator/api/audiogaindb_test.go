@@ -159,7 +159,7 @@ func TestAudioGainBoundaryUsesTheSharedSilenceFloor(t *testing.T) {
 // on the way to the node, exactly once.
 func TestAuthoredAudioGainParamsConvertDecibels(t *testing.T) {
 	params := map[string]any{"gainDb": -6.0206}
-	convertAuthoredAudioGainParams("audio.gain.set", params)
+	ConvertAuthoredAudioGainParams("audio.gain.set", params)
 	if _, present := params["gainDb"]; present {
 		t.Error("gainDb survived conversion; the node must receive linear")
 	}
@@ -169,7 +169,7 @@ func TestAuthoredAudioGainParamsConvertDecibels(t *testing.T) {
 	}
 
 	fade := map[string]any{"targetGainDb": pkgaudio.SilenceFloorDb, "durationMs": float64(500)}
-	convertAuthoredAudioGainParams("audio.gain.fade", fade)
+	ConvertAuthoredAudioGainParams("audio.gain.fade", fade)
 	if fade["targetGain"] != float64(0) || fade["durationMs"] != float64(500) {
 		t.Errorf("fade params = %v, want targetGain 0 and durationMs carried through", fade)
 	}
@@ -182,7 +182,7 @@ func TestAuthoredAudioGainParamsConvertDecibels(t *testing.T) {
 // silences the resting bed, so it is asserted rather than assumed.
 func TestAuthoredAudioGainParamsLeaveAlreadyLinearTargetsAlone(t *testing.T) {
 	params := map[string]any{"gain": 0.6}
-	convertAuthoredAudioGainParams("audio.gain.set", params)
+	ConvertAuthoredAudioGainParams("audio.gain.set", params)
 	if params["gain"] != 0.6 || len(params) != 1 {
 		t.Errorf("params = %v, want the already-linear gain untouched", params)
 	}
@@ -191,8 +191,103 @@ func TestAuthoredAudioGainParamsLeaveAlreadyLinearTargetsAlone(t *testing.T) {
 // Nothing else is a gain action, so nothing else is touched.
 func TestAuthoredAudioGainParamsIgnoreOtherActions(t *testing.T) {
 	params := map[string]any{"gainDb": -6.0}
-	convertAuthoredAudioGainParams("audio.session.apply", params)
+	ConvertAuthoredAudioGainParams("audio.session.apply", params)
 	if params["gainDb"] != -6.0 || len(params) != 1 {
 		t.Errorf("params = %v, want a non-gain action's params untouched", params)
+	}
+}
+
+// audio.session.apply's own ceiling field is OPTIONAL, unlike gainDb/
+// targetGainDb: an apply that omits ceilingDb must dispatch exactly as it
+// always has, so a deployed older agent that has never heard of a
+// ceiling sees nothing new.
+func TestAudioApplyCeilingConvertsDecibelsToLinearBeforeDispatch(t *testing.T) {
+	setup, token := gainDbTestSetup(t)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":1,"idempotencyKey":"k1","params":{"ceilingDb":-6.0206}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	if _, present := setup.pub.lastParams["ceilingDb"]; present {
+		t.Error("params.ceilingDb reached the node; the coordinator-to-agent wire must stay linear")
+	}
+	ceiling, ok := setup.pub.lastParams["ceiling"].(float64)
+	if !ok {
+		t.Fatalf("params.ceiling = %v, want the linear multiplier the agent's audio.session.apply accepts", setup.pub.lastParams["ceiling"])
+	}
+	if math.Abs(ceiling-0.5) > 1e-4 {
+		t.Errorf("params.ceiling = %v, want 0.5 (the linear value of -6.0206 dB)", ceiling)
+	}
+}
+
+// Omitting ceilingDb entirely must dispatch exactly as apply always has:
+// no ceiling key at all reaches the node, and the request is not refused
+// for lacking one, unlike gainDb, which audio.gain.set requires.
+func TestAudioApplyWithNoCeilingDispatchesUnchanged(t *testing.T) {
+	setup, token := gainDbTestSetup(t)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":1,"idempotencyKey":"k1","params":{"sourceRole":"background"}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if _, present := setup.pub.lastParams["ceiling"]; present {
+		t.Errorf("params.ceiling = %v present on an apply that never mentioned ceilingDb, want absent", setup.pub.lastParams["ceiling"])
+	}
+	if _, present := setup.pub.lastParams["ceilingDb"]; present {
+		t.Errorf("params.ceilingDb = %v leaked through to the node, want removed or absent", setup.pub.lastParams["ceilingDb"])
+	}
+}
+
+// The pre-change linear name is refused for apply's own ceiling exactly
+// as it is for gain, so a caller cannot silently send a linear multiplier
+// where a decibel value is expected.
+func TestAudioApplyCeilingRefusesPreDecibelParamName(t *testing.T) {
+	setup, token := gainDbTestSetup(t)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
+		`{"revision":1,"params":{"ceiling":0.5}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "ceilingDb") {
+		t.Errorf("refusal must name ceilingDb, got: %s", body)
+	}
+	if setup.pub.count() != 0 {
+		t.Error("apply was dispatched despite being refused")
+	}
+}
+
+// ceilingDb shares gainDb's own +12 dB typo guard.
+func TestAudioApplyCeilingRefusesOutOfRangeDecibelsAndNonNumbers(t *testing.T) {
+	for _, tc := range []struct{ name, body, wants string }{
+		{"too loud", `{"revision":1,"params":{"ceilingDb":40}}`, "12"},
+		{"not a number", `{"revision":1,"params":{"ceilingDb":"loud"}}`, "number"},
+	} {
+		setup, token := gainDbTestSetup(t)
+		api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+		req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply", tc.body, token)
+		resp, body := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400; body: %s", tc.name, resp.StatusCode, body)
+		}
+		var problem struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(body, &problem); err != nil {
+			t.Fatalf("%s: decode problem: %v", tc.name, err)
+		}
+		if !strings.Contains(problem.Detail, tc.wants) {
+			t.Errorf("%s: detail = %q, want it to mention %q", tc.name, problem.Detail, tc.wants)
+		}
 	}
 }

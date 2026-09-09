@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -56,6 +57,23 @@ type querier interface {
 type Tx struct {
 	tx *sql.Tx
 	s  *Store
+
+	// hooks queues the prune-trigger bookkeeping (an in-memory counter Add,
+	// or a last-prune-time Store) that appendEvent/appendAuditEntry/
+	// insertCommand/startDiscoveryRun/createMacroRun register instead of
+	// mutating those fields directly. InTx below runs the queue only after
+	// sqlTx.Commit succeeds, so a caller composing a write through this Tx
+	// and later returning an error (or the commit itself failing) leaves
+	// every counter and timestamp exactly where it was: see [commitHook]'s
+	// doc comment for why.
+	hooks pruneHooks
+}
+
+// after implements [commitHook]: Tx queues, it never runs immediately,
+// because the *sql.Tx it wraps is owned by whatever [Store.InTx] caller is
+// composing this write with others and is not yet known to have committed.
+func (t *Tx) after(fn func()) {
+	t.hooks.after(fn)
 }
 
 // inTxMarkerKey is the unexported context key [Store.InTx] stamps onto the
@@ -122,11 +140,26 @@ func (s *Store) InTx(ctx context.Context, fn func(context.Context, *Tx) error) (
 		return ferr
 	}
 	if cerr := sqlTx.Commit(); cerr != nil {
-		return fmt.Errorf("store: commit transaction: %w", cerr)
+		return fmt.Errorf("%w: %v", ErrCommitFailed, cerr)
 	}
 	committed = true
+	tx.hooks.run()
 	return nil
 }
+
+// ErrCommitFailed wraps a failure of the COMMIT statement itself, after fn
+// already returned nil (so every write fn made was accepted by the
+// database up to that point). This is a distinct failure mode from an
+// error fn returns directly: fn's own error means fn decided not to
+// proceed, or hit a problem making one specific write; ErrCommitFailed
+// means every write fn made was individually fine and the failure is in
+// making them durable together, atomically, e.g. a disk that fills
+// between the last write and the fsync COMMIT performs. A caller that
+// treats "the append inside fn failed" and "the whole transaction could
+// not be made durable at commit" as the same class of event (ADR-024
+// decision 11: neither can be attributed) checks for this with errors.Is,
+// the same way it already checks for a sentinel fn itself might return.
+var ErrCommitFailed = errors.New("store: commit failed")
 
 // guardNotInTx panics if ctx carries the in-transaction marker [Store.InTx]
 // stamps. See store.go's [Store.open] doc comment: db.SetMaxOpenConns(1)
@@ -165,6 +198,67 @@ func (s *Store) InTx(ctx context.Context, fn func(context.Context, *Tx) error) (
 // panics if anything ever calls the settings endpoint): this is a
 // programming error, not a runtime condition a caller could sensibly
 // recover from.
+// commitHook lets appendEvent/appendAuditEntry/insertCommand/
+// startDiscoveryRun/createMacroRun (events.go, audit.go, commands.go,
+// discovery.go, macro_runs.go) decide WHEN it is safe to mutate this
+// package's prune-trigger bookkeeping: the eventAppendCount/
+// lastPruneAtNanos style counter-and-timestamp pairs store.go declares one
+// per table.
+//
+// The defect this exists to close: that bookkeeping used to mutate at
+// append time, inside the same SQL transaction as the row insert and any
+// prune DELETE it triggered, but NOT rolled back with them (it is a
+// process-wide atomic, not part of the transaction). A caller whose
+// enclosing transaction later rolled back (identity.AuditedWrite and
+// identity.WriteAudit on an [ErrCommitFailed], or any [Tx]-form caller
+// that decides not to commit) left the counter and timestamp advanced for
+// an insert and a prune that were both undone: a prune trigger consumed
+// for nothing, and the age trigger's clock reset with no prune having
+// actually run. Two implementations close this two different ways:
+//
+//   - [*pruneHooks] (used by [Tx], and by every Store method that opens
+//     its OWN transaction, e.g. [Store.AppendEvent]) queues the mutation
+//     and only runs it after the SQL transaction performing the write has
+//     actually committed, so a rollback leaves the counter and timestamp
+//     untouched.
+//   - immediateHook (used by the Store methods that write straight
+//     against *sql.DB with no surrounding transaction at all, e.g.
+//     [Store.InsertCommand], [Store.StartDiscoveryRun]) runs the mutation
+//     right away: each ExecContext there is already its own committed,
+//     irreversible write by the time this package decides whether to
+//     prune, so there is nothing to roll back and nothing to defer.
+type commitHook interface {
+	after(fn func())
+}
+
+// pruneHooks is the zero-value-ready [commitHook] that queues instead of
+// running immediately. [Tx] embeds one (see its after method); a Store
+// method that manages its own transaction (e.g. [Store.AppendEvent])
+// declares a local pruneHooks, passes it to the shared append/insert body,
+// and calls run itself right after its own sqlTx.Commit succeeds.
+type pruneHooks struct {
+	fns []func()
+}
+
+func (h *pruneHooks) after(fn func()) {
+	h.fns = append(h.fns, fn)
+}
+
+// run executes every queued function, in the order they were queued. Only
+// ever called after the transaction that produced them has committed.
+func (h *pruneHooks) run() {
+	for _, fn := range h.fns {
+		fn()
+	}
+}
+
+// immediateHook is the [commitHook] for a write with no enclosing
+// transaction to roll back: see [commitHook]'s doc comment for exactly
+// which Store methods use it and why that is safe.
+type immediateHook struct{}
+
+func (immediateHook) after(fn func()) { fn() }
+
 func guardNotInTx(ctx context.Context, method string) {
 	if v, _ := ctx.Value(inTxMarkerKey{}).(bool); v {
 		hint := "use the equivalent (*Tx) method instead"

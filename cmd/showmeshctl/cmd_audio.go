@@ -29,6 +29,8 @@ type configAudioSettingsPayload struct {
 	DefaultFadeDurationMs      int     `json:"defaultFadeDurationMs"`
 	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
 	DuckTargetGainDb           float64 `json:"duckTargetGainDb"`
+	DuckFadeDurationMs         int     `json:"duckFadeDurationMs"`
+	DuckRestoreFadeDurationMs  int     `json:"duckRestoreFadeDurationMs"`
 	LTCFrameRate               string  `json:"ltcFrameRate"`
 	LTCDefaultStartOffset      string  `json:"ltcDefaultStartOffset"`
 }
@@ -50,12 +52,14 @@ type audioSettingsConfigResponse struct {
 // present but empty. Omitting the pair is how "this node emits no LTC"
 // is expressed on the wire.
 type configAudioNode struct {
-	ProgramRoute          string `json:"programRoute"`
-	LTCRoute              string `json:"ltcRoute,omitempty"`
-	ProgramChannels       []int  `json:"programChannels"`
-	LTCChannel            int    `json:"ltcChannel,omitempty"`
-	ClockDomain           string `json:"clockDomain"`
-	ClockDomainProvenance string `json:"clockDomainProvenance"`
+	ProgramRoute          string  `json:"programRoute"`
+	LTCRoute              string  `json:"ltcRoute,omitempty"`
+	ProgramChannels       []int   `json:"programChannels"`
+	LTCChannel            int     `json:"ltcChannel,omitempty"`
+	ClockDomain           string  `json:"clockDomain"`
+	ClockDomainProvenance string  `json:"clockDomainProvenance"`
+	Role                  string  `json:"role,omitempty"`
+	Zone                  *string `json:"zone,omitempty"`
 }
 
 type audioNodeConfigResponse struct {
@@ -90,6 +94,8 @@ func cmdAudio(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return cmdAudioGain(rest, stdout, stderr, clock)
 	case "output":
 		return cmdAudioOutput(rest, stdout, stderr, clock)
+	case "silence":
+		return cmdAudioSilence(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio: unknown subcommand %q\n\n", sub)
 		printAudioUsage(stderr)
@@ -120,6 +126,9 @@ Subcommands:
                                 "showmeshctl audio gain --help")
   output mute|unmute           dispatch audio.output.mute/audio.output.unmute
                                 (see "showmeshctl audio output --help")
+  silence <node-id>            dispatch audio.node.silence: the unconditional
+                                per-node emergency stop (see
+                                "showmeshctl audio silence --help")
 
 Run "showmeshctl audio <subcommand> --help" for flags specific to one
 subcommand.
@@ -164,6 +173,11 @@ duckTargetGainDb (how far a bed drops under an announcement, also in
 decibels: must be negative and at least -60 dB, where -60 dB is silence.
 The shipped value is PROVISIONAL and has never been heard on real
 speakers),
+duckFadeDurationMs (how long, in milliseconds, a bed takes to fade DOWN
+into a duck; must be positive),
+duckRestoreFadeDurationMs (how long a bed takes to fade back UP once its
+last ducker releases it; must be positive, and is deliberately longer
+than duckFadeDurationMs by default: fast down, slower back up),
 ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
 and ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
 ltcStartOffset overrides this).
@@ -240,6 +254,7 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 	fs, g := newFlagSet("showmeshctl audio settings set", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON file matching configAudioSettingsPayload; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio settings set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.settings configuration revision (requires config:write,")
@@ -248,6 +263,10 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"audio settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -265,6 +284,11 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 	if err != nil {
 		return reportError(stderr, "audio settings set", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
+	raw, err = unwrapConfigGetResponse(raw)
+	if err != nil {
+		return reportError(stderr, "audio settings set", newCLIError(exitUsage, "%v", err))
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return reportError(stderr, "audio settings set", newCLIError(exitUsage, "payload must be a JSON object matching configAudioSettingsPayload: %v", err))
@@ -277,8 +301,21 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const audioSettingsAPIPath = "/api/v1/config/audio.settings"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r audioSettingsConfigResponse
+		if err := c.getJSON(ctx, audioSettingsAPIPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "audio settings set", err)
+	}
+
 	var resp audioSettingsConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/audio.settings", json.RawMessage(raw), &resp); err != nil {
+	if err := c.putJSON(ctx, audioSettingsAPIPath, ifMatch, json.RawMessage(raw), &resp); err != nil {
 		return reportError(stderr, "audio settings set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -373,6 +410,8 @@ func cmdAudioNode(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		return cmdAudioNodeSet(rest, stdout, stderr, clock)
 	case "revisions":
 		return cmdAudioNodeRevisions(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdAudioNodeDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl audio node: unknown subcommand %q\n\n", sub)
 		printAudioNodeUsage(stderr)
@@ -401,6 +440,13 @@ positive, 1-based indices (1,2 for reference stereo, 1 for mono);
 --program-channels. Advertise the node first (the agent must be running
 and have probed its audio hardware) before configuring it here.
 
+--role (ADR-045) is one of "program", "program+ltc", or "zone"; omitted,
+the coordinator defaults it to "program+ltc" (the role every node had by
+implication before ADR-045). At most one node across the installation may
+carry "program+ltc" at a time — a second is refused, naming both node ids.
+--zone names the independent speaker zone this node drives and is accepted
+only when --role is "zone".
+
 Subcommands:
   list             enumerate audio.node objects (id is the node id)
   get <node-id>    show one node's full audio placement
@@ -408,6 +454,8 @@ Subcommands:
                    replacement)
   revisions <node-id>
                    list revision history, newest first
+  delete <node-id> tombstone this object (write, requires --confirm; a
+                   later "set" on the same id un-deletes it)
 
 Run "showmeshctl audio node <subcommand> --help" for flags specific to one
 subcommand.
@@ -500,7 +548,7 @@ func cmdAudioNodeGet(args []string, stdout, stderr io.Writer, clock func() time.
 
 func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audio node set", stderr)
-	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance string
+	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance, role, zone string
 	var ltcChannel int
 	fs.StringVar(&programRoute, "program-route", "", "the advertised output route to carry program audio (required)")
 	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC, must equal --program-route (omit with --ltc-channel for a program-only node)")
@@ -508,6 +556,9 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (omit with --ltc-route for a program-only node)")
 	fs.StringVar(&clockDomain, "clock-domain", "", "the operator's own name for the shared clock domain (required)")
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
+	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone (ADR-045); omitted, defaults to program+ltc")
+	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
@@ -521,6 +572,8 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
 		_, _ = fmt.Fprintln(stderr, "has no channel to spare for a discrete LTC signal. Passing one without")
 		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this node), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -541,10 +594,13 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	// the authority on rejecting, mirroring assets settings set's
 	// identical fs.Visit-over-zero-value pattern) is sent through rather
 	// than refused here as if it had been omitted.
-	ltcChannelSet := false
+	ltcChannelSet, zoneSet := false, false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "ltc-channel" {
+		switch f.Name {
+		case "ltc-channel":
 			ltcChannelSet = true
+		case "zone":
+			zoneSet = true
 		}
 	})
 	if programRoute == "" || programChannels == "" || clockDomain == "" || clockDomainProvenance == "" {
@@ -583,12 +639,28 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		ProgramRoute:    programRoute,
 		ProgramChannels: channels,
 		ClockDomain:     clockDomain, ClockDomainProvenance: clockDomainProvenance,
+		Role: role,
 	}
 	if wantLTC {
 		body.LTCRoute, body.LTCChannel = ltcRoute, ltcChannel
 	}
+	if zoneSet {
+		body.Zone = &zone
+	}
+	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
+		var r audioNodeConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "audio node set", err)
+	}
 	var resp audioNodeConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/audio.node/"+url.PathEscape(id), body, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "audio node set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -647,6 +719,58 @@ func cmdAudioNodeRevisions(args []string, stdout, stderr io.Writer, clock func()
 	return exitOK
 }
 
+// cmdAudioNodeDelete tombstones an audio.node object (DELETE
+// /api/v1/config/audio.node/{id}), mirroring cmdUndeclare's own
+// --confirm/deleteJSON shape (cmd_discovery.go): a mis-issued call cannot
+// quietly remove it, and this is the only path that removes one. Revision
+// history stays readable through "audio node revisions" afterward
+// (ADR-009); "audio node set" on the same id later un-deletes it.
+func cmdAudioNodeDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl audio node delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deleting this audio.node object")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node delete --confirm <node-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete an audio.node object (DELETE /api/v1/config/audio.node/{id}).")
+		_, _ = fmt.Fprintln(stderr, "A tombstone, not a hard delete: revision history stays readable through")
+		_, _ = fmt.Fprintln(stderr, "\"audio node revisions\", and a later \"audio node set\" on the same id")
+		_, _ = fmt.Fprintln(stderr, "un-deletes it. Requires config:write (admin only) and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "audio node delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "audio node delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/audio.node/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "audio node delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "audio.node %s deleted\n", id)
+	return exitOK
+}
+
 // --- printers ---
 
 func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
@@ -660,6 +784,8 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  defaultFadeDurationMs:      %d\n", resp.Payload.DefaultFadeDurationMs)
 	_, _ = fmt.Fprintf(w, "  defaultMaxBackgroundGainDb: %v dB\n", resp.Payload.DefaultMaxBackgroundGainDb)
 	_, _ = fmt.Fprintf(w, "  duckTargetGainDb:           %v dB\n", resp.Payload.DuckTargetGainDb)
+	_, _ = fmt.Fprintf(w, "  duckFadeDurationMs:         %d\n", resp.Payload.DuckFadeDurationMs)
+	_, _ = fmt.Fprintf(w, "  duckRestoreFadeDurationMs:  %d\n", resp.Payload.DuckRestoreFadeDurationMs)
 	_, _ = fmt.Fprintf(w, "  ltcFrameRate:               %s\n", resp.Payload.LTCFrameRate)
 	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
 }
@@ -680,6 +806,14 @@ func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 	}
 	_, _ = fmt.Fprintf(w, "Clock domain:           %s\n", p.ClockDomain)
 	_, _ = fmt.Fprintf(w, "Clock domain provenance: %s\n", p.ClockDomainProvenance)
+	role := p.Role
+	if role == "" {
+		role = "program+ltc (default)"
+	}
+	_, _ = fmt.Fprintf(w, "Role:                   %s\n", role)
+	if p.Zone != nil {
+		_, _ = fmt.Fprintf(w, "Zone:                   %s\n", *p.Zone)
+	}
 	_, _ = fmt.Fprintf(w, "Revision:               %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:                %s\n", resp.UpdatedAt.Format(time.RFC3339))
 	if resp.CreatedByPrincipalName != nil {

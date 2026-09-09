@@ -197,7 +197,7 @@ func decodeEchoFromCall(t *testing.T, call recordedPublish) mqttproto.AgentEchoP
 // every other signal in this system" requirement.
 func TestHandleMessageAgentEchoConfirmed(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)}
-	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := baseEchoCmd("cmd-1", "idem-1")
@@ -514,6 +514,57 @@ func TestHandleMessagePastDeadlineRefusedWithoutExecuting(t *testing.T) {
 	}
 }
 
+// TestHandleMessageDeadlineDoesNotAbortInFlightOperation proves a
+// deadline never aborts work already in flight: blockingOp holds the
+// operation open while the fake clock is advanced past it, deterministically.
+func TestHandleMessageDeadlineDoesNotAbortInFlightOperation(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)}
+	op := newBlockingOp()
+	h := newTestHandler(map[string]OperationFunc{"agent.echo": op.run}, clock)
+	pub := newFakePublisher()
+
+	deadline := clock.t.Add(time.Second) // valid at receipt
+	cmd := baseEchoCmd("cmd-1", "idem-1")
+	cmd.Deadline = &deadline
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.HandleMessage(context.Background(), pub, topic, payload)
+	}()
+
+	select {
+	case <-op.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for the operation to be entered (deadline guard should have let a valid-at-receipt deadline through)")
+	}
+
+	// The operation is now "holding the work": HandleMessage already
+	// passed its one-and-only deadline check and will never check again.
+	// Advancing the clock here simulates the deadline elapsing while the
+	// node is mid-operation.
+	clock.advance(2 * time.Second)
+	if !clock.t.After(deadline) {
+		t.Fatalf("test setup bug: clock.t = %v is not after deadline = %v", clock.t, deadline)
+	}
+
+	close(op.unblock)
+	<-done
+
+	if got := op.callCount(); got != 1 {
+		t.Fatalf("op.callCount() = %d, want 1 (the operation must run to completion, not be aborted)", got)
+	}
+	calls := pub.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("len(calls) = %d, want 2 (result + observed echo, the same as an ordinary confirmed run); calls = %+v", len(calls), calls)
+	}
+	result := decodeResultFromCall(t, calls[0])
+	if result.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("Outcome = %q, want %q (a deadline that elapses mid-operation must never turn a completed operation's own outcome into a refusal)", result.Outcome, mqttproto.OutcomeConfirmed)
+	}
+}
+
 // TestHandleMessageMalformedPayloadDropsWithNoPublish is the actual test
 // (not merely a comment) proving that a structurally malformed message —
 // invalid JSON, or a literal JSON `null` payload — is logged and dropped
@@ -564,7 +615,7 @@ func TestHandleMessageMalformedPayloadDropsWithNoPublish(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger, buf := capturingLogger()
-			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, clock.now, logger)
+			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, nil, clock.now, logger)
 			pub := newFakePublisher()
 
 			h.HandleMessage(context.Background(), pub, topic, tt.payload)
@@ -596,7 +647,7 @@ func TestHandleMessageAgentEchoMissingOrWrongTypeParamFails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+			h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
 			pub := newFakePublisher()
 
 			cmd := baseEchoCmd("cmd-1", "idem-"+tt.name)
@@ -627,7 +678,7 @@ func TestHandleMessageAgentEchoMissingOrWrongTypeParamFails(t *testing.T) {
 // unaddressable-message case in this file.
 func TestHandleMessageWrongTopicKindDropped(t *testing.T) {
 	clock := &fakeClock{t: time.Now()}
-	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := baseEchoCmd("cmd-1", "idem-1")
@@ -735,7 +786,7 @@ func TestHandleMessageAssetFetchEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	trigger := make(chan struct{}, 1)
 	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
-	h := newCommandHandler(testNodeID, dir, "", trigger, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", trigger, nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := mqttproto.CmdPayload{
@@ -784,6 +835,59 @@ func TestHandleMessageAssetFetchEndToEnd(t *testing.T) {
 	}
 }
 
+// TestHandleMessageAssetInventoryRequestEndToEnd proves
+// "asset.inventory.request" is reachable through the real allowlist (no
+// swapped-in test op), takes no params, touches nothing on disk, reports
+// OutcomeConfirmed, and signals the SAME asset inventory trigger channel
+// asset.fetch and asset.remove already do, so the coordinator's own
+// reconnect dispatch (broker.go's OnConnectionUp) makes a node republish
+// its inventory immediately rather than waiting for its next tick.
+func TestHandleMessageAssetInventoryRequestEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	trigger := make(chan struct{}, 1)
+	clock := &fakeClock{t: time.Date(2026, 9, 5, 4, 0, 0, 0, time.UTC)}
+	h := newCommandHandler(testNodeID, dir, "", trigger, nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	cmd := mqttproto.CmdPayload{
+		CommandID:          "cmd-inv-req-1",
+		IdempotencyKey:     "idem-inv-req-1",
+		Action:             "asset.inventory.request",
+		Target:             mqttproto.CmdTarget{Kind: "node", ID: testNodeID},
+		Issuer:             mqttproto.CmdIssuer{PrincipalID: "principal-1", PrincipalName: "operator"},
+		ConfirmationMethod: confirmationMethodEvidence,
+	}
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("len(calls) = %d, want 1", len(calls))
+	}
+	result := decodeResultFromCall(t, calls[0])
+	if result.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("Outcome = %q, want %q; reason = %q", result.Outcome, mqttproto.OutcomeConfirmed, result.Reason)
+	}
+	if result.Evidence == nil || result.Evidence.Signal != "node.asset.inventory_requested" {
+		t.Fatalf("Evidence = %+v, want Signal %q", result.Evidence, "node.asset.inventory_requested")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading asset dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("asset dir has %d entries, want 0: asset.inventory.request must never write to disk", len(entries))
+	}
+
+	select {
+	case <-trigger:
+	default:
+		t.Fatalf("assetFetchTrigger was not signalled after a completed asset.inventory.request")
+	}
+}
+
 // TestHandleMessageAssetFetchFailureCarriesReasonAndSignal pins this
 // seam's agent-side fix: a failed asset.fetch's published result must
 // carry BOTH the free-text Reason (err.Error(), already true before this
@@ -800,7 +904,7 @@ func TestHandleMessageAssetFetchFailureCarriesReasonAndSignal(t *testing.T) {
 
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
-	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := mqttproto.CmdPayload{

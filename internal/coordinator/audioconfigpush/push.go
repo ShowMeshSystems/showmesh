@@ -142,11 +142,13 @@ func pushSettings(ctx context.Context, cs ConfigStore, pub Publisher, now func()
 		// stored operator values are decibels and are converted here, at
 		// the coordinator's own boundary, so the agent and the engine
 		// below it never see a decibel.
-		"defaultMaxBackgroundGain": float64(pkgaudio.CeilingFromDb(payload.DefaultMaxBackgroundGainDb)),
-		"duckTargetGain":           float64(pkgaudio.GainFromDb(payload.DuckTargetGainDb)),
-		"ltcFrameRate":             payload.LTCFrameRate,
-		"ltcDefaultStartOffset":    payload.LTCDefaultStartOffset,
-		"revision":                 revision,
+		"defaultMaxBackgroundGain":  float64(pkgaudio.CeilingFromDb(payload.DefaultMaxBackgroundGainDb)),
+		"duckTargetGain":            float64(pkgaudio.GainFromDb(payload.DuckTargetGainDb)),
+		"duckFadeDurationMs":        payload.DuckFadeDurationMs,
+		"duckRestoreFadeDurationMs": payload.DuckRestoreFadeDurationMs,
+		"ltcFrameRate":              payload.LTCFrameRate,
+		"ltcDefaultStartOffset":     payload.LTCDefaultStartOffset,
+		"revision":                  revision,
 	}
 	idempotencyKey := fmt.Sprintf("audio.settings.configure/%s/rev-%d", nodeID, revision)
 	return publish(ctx, pub, now, nodeID, "audio.settings.configure", idempotencyKey, params)
@@ -164,6 +166,9 @@ func publish(ctx context.Context, pub Publisher, now func() time.Time, nodeID, a
 		return err
 	}
 	t := now()
+	// No CmdPayload.Deadline: IdempotencyKey is revision-keyed, and ToNode
+	// re-reads and re-pushes the current revision on this node's every
+	// future hello or write, correcting a regressed apply.
 	cmd := mqttproto.CmdPayload{
 		CommandID: uuid.NewString(), IdempotencyKey: idempotencyKey, Action: action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,

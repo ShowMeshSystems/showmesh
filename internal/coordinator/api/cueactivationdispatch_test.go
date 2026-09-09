@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +12,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
@@ -140,6 +144,7 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 
 	// CatalogRevision must be the coordinator's OWN resolution to pass
 	// Authorize's stale-catalog check — resolve it the same way
@@ -154,7 +159,7 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}
@@ -172,6 +177,41 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	}
 }
 
+// TestDispatchOneCueActivationSetsWireDeadline proves
+// dispatchOneCueActivation populates the dispatched command's
+// CmdPayload.Deadline, anchored to the dispatch clock by exactly
+// cueActivationWireDeadline, not merely non-nil.
+func TestDispatchOneCueActivationSetsWireDeadline(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if outcome.Err != nil {
+		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
+	}
+	if len(setup.pub.dispatched) != 1 {
+		t.Fatalf("dispatched count = %d, want 1", len(setup.pub.dispatched))
+	}
+	got := setup.pub.dispatched[0].Deadline
+	if got == nil {
+		t.Fatalf("Deadline = nil, want set")
+	}
+	want := now.Add(cueActivationWireDeadline)
+	if !got.Equal(want) {
+		t.Fatalf("Deadline = %v, want %v (now + cueActivationWireDeadline)", got, want)
+	}
+}
+
 // TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess
 // proves this seam's own defect fix directly: a node that refuses (e.g.
 // cross-show, or a stale catalog it independently detected) must NOT be
@@ -183,6 +223,7 @@ func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testi
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
 
 	// The fake publisher replies with the PUBLISH succeeding (Publish
@@ -196,7 +237,7 @@ func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testi
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
 
-	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
 	if outcome.Err != nil {
 		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
 	}
@@ -219,6 +260,326 @@ func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testi
 	}
 	if cmd.OutcomeState == mqttproto.OutcomeConfirmed {
 		t.Fatalf("persisted command OutcomeState = %q, must not read as confirmed", cmd.OutcomeState)
+	}
+}
+
+// putAuthorizedAudioAssetForTest creates a real asset record for the
+// sequence putAudioOnlyCueForTest's cueID names ("asset-"+cueID), targets
+// it at nodeID, and marks nodeID's own reported inventory as holding it —
+// turning cueActivationDispatchTestFixture's Cue, which otherwise names a
+// sequence nothing has ever uploaded (see putAudioOnlyCueForTest's own doc
+// comment), into one [cueactivate.Authorize] actually finds present. Before
+// this coordinator started refusing a never-uploaded sequence, that vacuous
+// "nothing uploaded" state passed Authorize on its own; a test
+// that needs a genuinely authorized activation must now build one for
+// real. Callers must call this BEFORE resolving CatalogRevision — the
+// asset's own hash is part of what the catalog revision covers
+// (cuecatalog.RevisionInput's own doc comment).
+func putAuthorizedAudioAssetForTest(t *testing.T, st *store.Store, showID, cueID, nodeID string, now time.Time) {
+	t.Helper()
+	contentHash := "sha256:authorized-" + cueID
+	filename := "Authorized-" + cueID + ".wav"
+	if _, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: contentHash + "-node-" + nodeID, ShowID: showID, SequenceID: "asset-" + cueID,
+		TargetKind: store.AssetTargetKindNode, TargetID: nodeID, MediaType: "audio",
+		ContentHash: contentHash, RuntimeFilename: filename,
+		SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
+	}); err != nil {
+		t.Fatalf("create authorized asset for %q: %v", cueID, err)
+	}
+	if err := st.ReplaceNodeAssetInventory(context.Background(), nodeID,
+		[]store.NodeAssetInventoryRecord{{NodeID: nodeID, ContentHash: contentHash, RuntimeFilename: filename, SizeBytes: 1024, VerifiedAt: now}},
+		store.NodeAssetReportRecord{NodeID: nodeID, ReportedAt: now, Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory for %q: %v", nodeID, err)
+	}
+}
+
+// cuePrepareAheadTestFixture builds a two-entry Playlist (cue-1 then
+// cue-2, both audio-only, both with a real node-inventoried asset) and an
+// Activation for cue-1 — the minimum dispatchPrepareAheadAudio needs to
+// find cue-2 as the next entry and stage its audio. Independent of
+// cueActivationDispatchTestFixture (rather than extending it) because
+// putConfigForTest always writes config revision 1: a second call against
+// the SAME playlist id to add cue-2's entry would collide with the first.
+func cuePrepareAheadTestFixture(t *testing.T, setup *audioDispatchTestSetup, now time.Time) (nodeID string, act cueactivation.Activation) {
+	t.Helper()
+	const showID, cue1ID, cue2ID, playlistID, instanceUUID = "halloween-2026", "cue-1", "cue-2", "playlist-1", "inst-1"
+	nodeID = "audio-01"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putAudioNodeForTest(t, setup.st, nodeID)
+	declareNodeForTest(t, setup.st, nodeID)
+	putFreshReportForTest(t, setup.st, nodeID, now)
+	putAudioOnlyCueForTest(t, setup.st, cue1ID, showID)
+	putAudioOnlyCueForTest(t, setup.st, cue2ID, showID)
+	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-1", Cue: cue1ID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+			{ID: "entry-2", Cue: cue2ID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
+		},
+	})
+	putActiveShowForTest(t, setup.st, showID)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, cue1ID, nodeID, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, cue2ID, nodeID, now)
+
+	act = cueactivation.Activation{
+		Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-prepare-ahead-1",
+		Show: showID, Generation: 1, CatalogRevision: resolvedCatalogRevisionForTest(t, setup.st, showID, nodeID),
+		Playlist: playlistID, PlaylistRevision: 1, EntryID: "entry-1",
+		CueID: cue1ID, CueRevision: 1, PositionMS: 0,
+		EvidenceAt: now,
+	}
+	return nodeID, act
+}
+
+// dispatchedActionsToSession filters setup's recorded dispatches down to
+// those against sessionID, in dispatch order.
+func dispatchedActionsToSession(setup *audioDispatchTestSetup, sessionID string) []dispatchedAudioCommand {
+	setup.pub.mu.Lock()
+	defer setup.pub.mu.Unlock()
+	var out []dispatchedAudioCommand
+	for _, d := range setup.pub.dispatched {
+		if s, _ := d.Params["sessionId"].(string); s == sessionID {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// TestDispatchPrepareAheadAudioStagesNextCue proves the coordinator's own
+// half of the video-leads-audio fix: at cue-1's activation, it must stage
+// cue-2's own audio (the ordered Playlist's next entry) under
+// [cueactivation.PrepareStagingSessionID] via audio.session.apply followed
+// by audio.session.prepare — and never against the playing show session
+// id, which staging on would tear down whatever is actually playing (see
+// [audio.Manager.Promote]'s own doc comment for why a separate id exists
+// at all).
+func TestDispatchPrepareAheadAudioStagesNextCue(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cuePrepareAheadTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchPrepareAheadAudio(context.Background(), now, nodeID, act, issuer)
+
+	staged := dispatchedActionsToSession(setup, cueactivation.PrepareStagingSessionID)
+	if len(staged) != 2 {
+		t.Fatalf("dispatched %d commands against the staging session, want 2 (apply, prepare); got %+v", len(staged), staged)
+	}
+	if staged[0].Action != "audio.session.apply" {
+		t.Fatalf("first staging dispatch action = %q, want audio.session.apply", staged[0].Action)
+	}
+	media, ok := staged[0].Params["media"].(map[string]any)
+	if !ok {
+		t.Fatalf("audio.session.apply params carried no media object: %+v", staged[0].Params)
+	}
+	if got := media["assetId"]; got != "asset-cue-2" {
+		t.Fatalf("staged media assetId = %v, want %q (cue-2's own, never cue-1's)", got, "asset-cue-2")
+	}
+	if got := media["contentHash"]; got != "sha256:authorized-cue-2" {
+		t.Fatalf("staged media contentHash = %v, want cue-2's own authorized asset hash", got)
+	}
+	if staged[1].Action != "audio.session.prepare" {
+		t.Fatalf("second staging dispatch action = %q, want audio.session.prepare", staged[1].Action)
+	}
+
+	// The staging id must never equal the playing show session id: staging
+	// there would tear down whatever cue-1 itself is actually playing.
+	if cueactivation.PrepareStagingSessionID == cueactivation.AudioSessionID {
+		t.Fatalf("PrepareStagingSessionID == AudioSessionID (%q); a prepare-ahead dispatch would target the playing show session", cueactivation.AudioSessionID)
+	}
+	for _, d := range setup.pub.dispatched {
+		if s, _ := d.Params["sessionId"].(string); s == cueactivation.AudioSessionID {
+			t.Fatalf("dispatchPrepareAheadAudio published against the playing show session id %q: %+v", cueactivation.AudioSessionID, d)
+		}
+	}
+}
+
+// TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently reproduces
+// dispatchPrepareAheadAudio's own idempotency defect: its idempotency keys
+// (act.ActivationID+":prepare-ahead-apply"/"-prepare") are stable for
+// act's whole lifetime, so a second tick over the SAME unchanged act must
+// present the SAME params under that SAME key. Before the fix, t was a
+// fresh wall-clock reading taken on every call, so the second tick's
+// revision differed from the first's even though the key did not, and
+// executeAudioSessionDispatch's own idempotency-store replay
+// (resolveAudioSessionReplay) refused it as a params conflict, breaking
+// this function's own doc comment's "answers from the replay path with no
+// publish and no await" promise. Two real, distinct wall-clock "now"
+// readings are passed to the two calls specifically to prove the
+// dispatched revision tracks act.EvidenceAt, never that per-call now.
+func TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cuePrepareAheadTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	var logBuf bytes.Buffer
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchPrepareAheadAudio(context.Background(), now, nodeID, act, issuer)
+	firstTick := dispatchedActionsToSession(setup, cueactivation.PrepareStagingSessionID)
+	if len(firstTick) != 2 {
+		t.Fatalf("first tick dispatched %d commands against the staging session, want 2 (apply, prepare); got %+v", len(firstTick), firstTick)
+	}
+	// Compared as float64, matching dispatchedAudioCommand's own params
+	// round trip through the fake publisher's JSON decode into
+	// map[string]any: both sides suffer the identical uint64-to-float64
+	// conversion, so an exact match here still proves the two computed
+	// revisions started out identical.
+	wantApplyRevision := float64(cueactivation.PrepareStagingSessionRevision(act.EvidenceAt, cueactivation.PrepareStagingSessionStepApply))
+	wantPrepareRevision := float64(cueactivation.PrepareStagingSessionRevision(act.EvidenceAt, cueactivation.PrepareStagingSessionStepPrepare))
+	if got := firstTick[0].Params["revision"]; got != wantApplyRevision {
+		t.Fatalf("first tick apply revision = %v, want %v (derived from act.EvidenceAt)", got, wantApplyRevision)
+	}
+	if got := firstTick[1].Params["revision"]; got != wantPrepareRevision {
+		t.Fatalf("first tick prepare revision = %v, want %v (derived from act.EvidenceAt)", got, wantPrepareRevision)
+	}
+
+	// A genuinely later, distinct wall-clock reading for the SECOND tick:
+	// the exact condition that produced a different revision, and so a
+	// params conflict, under the old bare-now derivation.
+	secondNow := now.Add(30 * time.Second)
+	h.dispatchPrepareAheadAudio(context.Background(), secondNow, nodeID, act, issuer)
+
+	secondTick := dispatchedActionsToSession(setup, cueactivation.PrepareStagingSessionID)
+	if len(secondTick) != len(firstTick) {
+		t.Fatalf("second tick over an unchanged act published %d commands beyond the first tick's %d; want no new publish (replay path)", len(secondTick)-len(firstTick), len(firstTick))
+	}
+	for i, d := range secondTick {
+		if !reflect.DeepEqual(d, firstTick[i]) {
+			t.Fatalf("second tick's replayed command %d = %+v, want byte-identical to the first tick's %+v", i, d, firstTick[i])
+		}
+	}
+	if logged := logBuf.String(); strings.Contains(logged, "refused") || strings.Contains(logged, "failed") {
+		t.Fatalf("second tick logged a refusal or failure, want a silent replay: %s", logged)
+	}
+}
+
+// TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds is the
+// prepare-ahead audio prepare's own stale-revision regression test: by
+// the time this dispatch's audio.session.prepare runs, the node's own
+// activateAudio has already consumed activationRevision(act,
+// activationStepStart) against THIS SAME staging session (Promote or
+// Clear, both keyed off act.EvidenceAt, see internal/agent/
+// cueactivationaudio.go's activationRevision). Both
+// PrepareStagingSessionStepApply and PrepareStagingSessionStepPrepare,
+// applied against a real [pkgaudio.RevisionState] that already holds that
+// consumed revision, must still be accepted: proof at the level that
+// actually matters, mirroring cueactivationloop_test.go's own
+// simulateNodeAudioSessionRevision pattern.
+func TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds(t *testing.T) {
+	evidenceAt := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	rs := pkgaudio.NewRevisionState(pkgaudio.SessionID(cueactivation.PrepareStagingSessionID))
+
+	consumed := pkgaudio.Revision(cueactivation.AudioSessionRevision(evidenceAt, cueactivation.AudioSessionStepStart))
+	if d := rs.Apply("promote-or-clear", consumed); !d.Accepted {
+		t.Fatalf("simulated node Promote/Clear step not accepted: %+v", d)
+	}
+
+	applyRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(evidenceAt, cueactivation.PrepareStagingSessionStepApply))
+	if d := rs.Apply("prepare-ahead-apply", applyRevision); !d.Accepted {
+		t.Fatalf("prepare-ahead apply revision %d refused against a staging session already holding %d: %+v", applyRevision, consumed, d)
+	}
+	prepareRevision := pkgaudio.Revision(cueactivation.PrepareStagingSessionRevision(evidenceAt, cueactivation.PrepareStagingSessionStepPrepare))
+	if d := rs.Apply("prepare-ahead-prepare", prepareRevision); !d.Accepted {
+		t.Fatalf("prepare-ahead prepare revision %d refused against a staging session that just accepted apply at %d: %+v", prepareRevision, applyRevision, d)
+	}
+}
+
+// TestDispatchPrepareAheadAudioSkipsOnLastPlaylistEntry proves
+// nextPlaylistEntryCueID's own "nothing to stage" case reaches
+// dispatchPrepareAheadAudio correctly: cue-1's own entry is the
+// Playlist's last, so there is no next Cue to guess at, and nothing must
+// be dispatched.
+func TestDispatchPrepareAheadAudioSkipsOnLastPlaylistEntry(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchPrepareAheadAudio(context.Background(), now, nodeID, act, issuer)
+
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (entry-1 is this Playlist's own last entry; there is nothing to prepare ahead)", setup.pub.count())
+	}
+}
+
+// TestDispatchPrepareAheadAudioSkipsWhenNextCueHasNoAudioOutput proves
+// dispatchPrepareAheadAudio never stages a Cue that declares no audio
+// output on this node — nothing for Promote to ever move, and a wasted
+// Apply/Prepare round trip this seam's own doc comment says to avoid.
+func TestDispatchPrepareAheadAudioSkipsWhenNextCueHasNoAudioOutput(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cuePrepareAheadTestFixture(t, setup, now)
+
+	// Overwrite cue-2 as render-only: this creates config revision 2 on
+	// the SAME cue-2 object, which putConfigForTest cannot do (it always
+	// writes revision 1) — so cue-2 is rebuilt as a fresh object instead,
+	// and the Playlist's own entry-2 is repointed at it.
+	putRenderOnlyCueForTest(t, setup.st, "cue-2-render-only", act.Show)
+	putPlaylistForTest(t, setup.st, "playlist-2", config.ShowPlaylistPayload{
+		Show: act.Show, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: act.RunnerInstance, PlaylistName: "Main2", PlaylistHash: hash64ForTest("a2")},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-1", Cue: act.CueID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+			{ID: "entry-2", Cue: "cue-2-render-only", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
+		},
+	})
+	act.Playlist = "playlist-2"
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchPrepareAheadAudio(context.Background(), now, nodeID, act, issuer)
+
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (cue-2-render-only declares no audio output; nothing to stage)", setup.pub.count())
+	}
+}
+
+// TestDispatchPrepareAheadAudioSkipsWhenEntryIDEmpty proves a directly-
+// activated announcement or a safeCue mismatch fallback (neither of which
+// advances through an ordered Playlist, so act.EntryID is always empty
+// for both — cueactivate/decide.go's own resolveActivationsForCue) never
+// triggers a prepare-ahead dispatch.
+func TestDispatchPrepareAheadAudioSkipsWhenEntryIDEmpty(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cuePrepareAheadTestFixture(t, setup, now)
+	act.EntryID = ""
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchPrepareAheadAudio(context.Background(), now, nodeID, act, issuer)
+
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (an empty EntryID names no Playlist position to advance from)", setup.pub.count())
 	}
 }
 

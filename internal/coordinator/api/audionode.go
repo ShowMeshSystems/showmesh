@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,7 +11,9 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
 // This file is the HTTP surface for the "audio.node" collection
@@ -65,6 +68,78 @@ func audioNodeRouteEvidence(ctx context.Context, nodes NodeLister, now time.Time
 		break
 	}
 	return programRoutes, ltcRoutes, nil
+}
+
+// audioNodeCapabilityEvidence is what a granular capability lookup needs
+// from one node's current inventory row, distinguishing genuine "the node
+// declared X" evidence from every case that is not that: never seen,
+// never advertised a Hello, or advertised one this coordinator can no
+// longer confirm is current. api/openapi.yaml's own NightReadinessCheck
+// description states the rule this exists to honour: missing evidence is
+// always "unknown", never "failed" ("failed" is reserved for a node
+// that DID advertise and genuinely lacks an ability).
+type audioNodeCapabilityEvidence struct {
+	// Capabilities is nv.Hello.Capabilities verbatim, or nil when this
+	// node has never advertised one. Only meaningful when Live is true;
+	// a caller must not treat a non-nil Capabilities here as current
+	// evidence on its own; Live is the guard.
+	Capabilities capability.Set
+	// NeverPublished is true when this node has never appeared in
+	// inventory at all, or has appeared but has never sent a Hello. An
+	// agent that predates this capability signal (or one this
+	// coordinator simply has never heard from) makes NO CLAIM about
+	// these capabilities at all, which is a different fact from a
+	// current agent whose Hello declares an empty or incomplete set: a
+	// caller must report that as not_verifiable, never as failed or
+	// unknown - reading silence as a negative claim is the same
+	// dishonesty this evidence struct exists to remove, pointed the
+	// other way. Never true at the same time as Live.
+	NeverPublished bool
+	// Live is true only when this node appeared in inventory with a
+	// Hello AND [inventory.NodeView.Liveness] reports
+	// [inventory.LivenessOnline]. A node this coordinator cannot
+	// currently confirm is online (offline, or simply never observed
+	// enough to say) still keeps its last retained Hello indefinitely
+	// (inventory never deletes a row), so Capabilities being non-nil is
+	// not, on its own, current evidence of what that node declares right
+	// now.
+	Live bool
+	// NotLiveReason explains why Live is false when NeverPublished is
+	// also false (a Hello exists but is not currently trustworthy):
+	// empty when Live is true or NeverPublished is true.
+	NotLiveReason string
+}
+
+// audioNodeCapabilitySet reads nodeID's complete, current Hello capability
+// evidence live from [Dependencies.Nodes], the same evidence source as
+// [audioNodeRouteEvidence], generalized past the two literal IDs that
+// function reads so a caller (item-transition confirmation, the
+// resting:background-audio-output-capabilities readiness check) can look
+// up any granular audio.playback/audio.mix/audio.transition ID against
+// it, and told plainly whether that evidence is trustworthy as current
+// (see [audioNodeCapabilityEvidence]'s own doc comment).
+func audioNodeCapabilitySet(ctx context.Context, nodes NodeLister, now time.Time, nodeID string) (audioNodeCapabilityEvidence, error) {
+	views, err := nodes.Snapshot(ctx, now)
+	if err != nil {
+		return audioNodeCapabilityEvidence{}, fmt.Errorf("api: snapshot nodes for audio.node capability evidence: %w", err)
+	}
+	for _, nv := range views {
+		if nv.NodeID != nodeID {
+			continue
+		}
+		if nv.Hello == nil {
+			return audioNodeCapabilityEvidence{NeverPublished: true}, nil
+		}
+		if nv.Liveness != inventory.LivenessOnline {
+			return audioNodeCapabilityEvidence{
+				Capabilities: nv.Hello.Capabilities,
+				NotLiveReason: fmt.Sprintf("this coordinator cannot currently confirm this audio.node is online (liveness %q: %s), so its retained capability advertisement cannot be trusted as current",
+					nv.Liveness, nv.LivenessReason),
+			}, nil
+		}
+		return audioNodeCapabilityEvidence{Capabilities: nv.Hello.Capabilities, Live: true}, nil
+	}
+	return audioNodeCapabilityEvidence{NeverPublished: true}, nil
 }
 
 // capabilityRoutesAttribute reads a capability's "routes" attribute as a
@@ -167,6 +242,11 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+	precondition, precondProblem := parseRevisionPrecondition(r)
+	if precondProblem != nil {
+		writeProblem(w, h.logger, now, *precondProblem)
+		return
+	}
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxAudioNodeConfigRequestBodyBytes+1))
 	if err != nil {
@@ -199,15 +279,33 @@ func (h *handlers) handlePutAudioNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ADR-045: at most one audio.node across the installation may carry
+	// role "program+ltc" (ADR-018's one clock domain, one LTC emitter).
+	// Read live on every write, matching the placement check above.
+	existingRoles, err := h.audioNodeRoles(r.Context())
+	if err != nil {
+		h.writeInternalError(w, now, "get audio.node roles", err)
+		return
+	}
+	if err := config.ValidateAudioNodeRoleUniqueness(id, payload, existingRoles); err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
+		return
+	}
+
 	payloadJSON, err := config.EncodeAudioNodePayload(payload)
 	if err != nil {
 		h.writeInternalError(w, now, "encode audio.node config payload", err)
 		return
 	}
 
-	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.AudioNodeConfigKind, id, payloadJSON,
+	activated, nextRevisionNo, writeErr := h.writeShowConfigRevision(r, now, ac, config.AudioNodeConfigKind, id, payloadJSON, precondition,
 		map[string]any{"programRoute": payload.ProgramRoute, "ltcRoute": payload.LTCRoute})
 	if writeErr != nil {
+		var conflict *errConfigRevisionPreconditionFailed
+		if errors.As(writeErr, &conflict) {
+			writeProblem(w, h.logger, now, configRevisionConflictProblem(conflict))
+			return
+		}
 		h.writeInternalError(w, now, "write audio.node config revision", writeErr)
 		return
 	}
@@ -234,6 +332,44 @@ func (h *handlers) handleGetAudioNodeRevisions(w http.ResponseWriter, r *http.Re
 	h.handleGetShowConfigRevisions(w, r, config.AudioNodeConfigKind)
 }
 
+// handleDeleteAudioNode serves DELETE /api/v1/config/audio.node/{id}: a
+// tombstone (showconfig.go's deleteConfigObjectRevision), not a hard
+// delete. This is the motivating case this whole seam exists for: an
+// operator who mis-declared a node's audio placement, or decommissioned a
+// node, can now remove it instead of it sitting in
+// "showmeshctl audio node list" forever at a live revision. Nothing else
+// in this codebase's own reference graph names an audio.node id from an
+// object OTHER than show.action's target.audioNodeId and show.cue's
+// outputs (config's own reference graph); this delete does not refuse
+// against either. A show.action or show.cue naming this id afterward
+// reports the gap through the existing ADR-029 binding-check surface
+// (actionbinding.go's checkAudioActionBinding, unchanged by this seam),
+// never a crash.
+func (h *handlers) handleDeleteAudioNode(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	ac := authFromContext(r.Context())
+	id := r.PathValue("id")
+	if verr := config.ValidateAudioNodeObjectID(id); verr != nil {
+		writeProblem(w, h.logger, now, mapValidationError(verr))
+		return
+	}
+	precondition, problem := parseDeleteRevisionPrecondition(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+	if problem := decodeConfigDeleteConfirmBody(r); problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
+	_, err := h.deleteConfigObjectRevision(r, now, ac, config.AudioNodeConfigKind, id, precondition, nil)
+	if h.writeConfigDeleteResponse(w, now, config.AudioNodeConfigKind, id, err) {
+		return
+	}
+	h.writeInternalError(w, now, "delete audio.node config object", err)
+}
+
 func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, p config.AudioNodePayload) v1.AudioNodeConfigResponse {
 	return v1.AudioNodeConfigResponse{
 		ServerTime: formatTime(now), Kind: config.AudioNodeConfigKind, ID: obj.ID, Revision: rev.Revision,
@@ -241,10 +377,45 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 			ProgramRoute: p.ProgramRoute, LTCRoute: p.LTCRoute,
 			ProgramChannels: p.ProgramChannels, LTCChannel: p.LTCChannel,
 			ClockDomain: p.ClockDomain, ClockDomainProvenance: p.ClockDomainProvenance,
+			Role: p.Role, Zone: p.Zone,
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                 rev.Source,
 	}
+}
+
+// audioNodeRoles reads every configured "audio.node" object's currently
+// active Role, keyed by node id — [config.ValidateAudioNodeRoleUniqueness]'s
+// own existingRoles parameter. An object with no active revision (created
+// but never written) is skipped, matching listAudioNodeSummaries' own
+// CurrentRevision > 0 filter.
+func (h *handlers) audioNodeRoles(ctx context.Context) (map[string]string, error) {
+	objs, err := h.deps.Config.ListConfigObjects(ctx, config.AudioNodeConfigKind)
+	if err != nil {
+		return nil, fmt.Errorf("list audio.node config objects: %w", err)
+	}
+	roles := make(map[string]string, len(objs))
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.AudioNodeConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return nil, fmt.Errorf("get active audio.node config revision for %q: %w", obj.ID, err)
+		}
+		var head struct {
+			Role string `json:"role"`
+		}
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+			return nil, fmt.Errorf("decode audio.node config payload head for %q: %w", obj.ID, err)
+		}
+		role := head.Role
+		if role == "" {
+			role = config.AudioNodeRoleDefault
+		}
+		roles[obj.ID] = role
+	}
+	return roles, nil
 }

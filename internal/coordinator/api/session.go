@@ -136,7 +136,7 @@ func (h *handlers) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// own doc comment for the property this restores. It is never applied
 	// per-principal: a correct password from a slowed source still
 	// succeeds, only later.
-	h.loginLimiter.delay(r.Context(), source)
+	h.loginLimiter.delayOnce(r.Context(), source)
 
 	if !h.loginLimiter.acquire(r.Context()) {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(h.loginLimiter.queueWait)))

@@ -2,6 +2,7 @@ package audioconfigpush
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -11,6 +12,22 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
+
+// wireRevision reads params["revision"] as the exact int64
+// mqttproto.DecodeCmdPayload now recovers it as (json.Number), failing
+// the test if it decoded as anything else.
+func wireRevision(t *testing.T, params map[string]any) int64 {
+	t.Helper()
+	n, ok := params["revision"].(json.Number)
+	if !ok {
+		t.Fatalf("params[\"revision\"] = %#v (%T), want json.Number", params["revision"], params["revision"])
+	}
+	rev, err := n.Int64()
+	if err != nil {
+		t.Fatalf("params[\"revision\"] = %q did not parse as an integer: %v", n, err)
+	}
+	return rev
+}
 
 // fakeConfigStore is an in-memory [ConfigStore] keyed by (kind, id).
 type fakeConfigStore struct {
@@ -113,9 +130,8 @@ func TestToNodePushesConfiguredAudioNode(t *testing.T) {
 	if params["programRoute"] != payload.ProgramRoute {
 		t.Errorf("programRoute = %v, want %v", params["programRoute"], payload.ProgramRoute)
 	}
-	rev, ok := params["revision"].(float64)
-	if !ok || int64(rev) != 3 {
-		t.Errorf("revision = %v, want 3", params["revision"])
+	if rev := wireRevision(t, params); rev != 3 {
+		t.Errorf("revision = %v (raw %#v, %T), want 3", rev, params["revision"], params["revision"])
 	}
 }
 
@@ -244,8 +260,8 @@ func TestToNodePushesDefaultAudioSettings(t *testing.T) {
 	if _, present := params["defaultMaxBackgroundGainDb"]; present {
 		t.Error("defaultMaxBackgroundGainDb reached the node; the coordinator-to-agent wire must stay linear")
 	}
-	if rev, _ := params["revision"].(float64); rev != 0 {
-		t.Errorf("revision = %v, want 0 (never written)", params["revision"])
+	if rev := wireRevision(t, params); rev != 0 {
+		t.Errorf("revision = %v (raw %#v, %T), want 0 (never written)", rev, params["revision"], params["revision"])
 	}
 }
 

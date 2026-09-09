@@ -466,7 +466,7 @@ func stringPtrToDB(s *string) any {
 // the server answers deletes an outcome from existence" lesson) returns
 // the existing run — even a still-running one — rather than being told its
 // own run is "already in flight."
-func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord, steps []MacroRunStepRecord, now time.Time) (MacroRunRecord, []MacroRunStepRecord, error) {
+func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord, steps []MacroRunStepRecord, now time.Time, hooks commitHook) (MacroRunRecord, []MacroRunStepRecord, error) {
 	switch {
 	case run.ID == "":
 		return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run: ID is empty")
@@ -639,8 +639,12 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 	}
 
 	// Same two independent prune triggers as insertCommand (commands.go):
-	// insert volume and elapsed wall-clock time since the last pass.
-	byCount := s.macroRunInsertCount.Add(1)%pruneEveryNMacroRuns == 0
+	// insert volume and elapsed wall-clock time since the last pass. See
+	// [commitHook]'s doc comment for why the mutation itself is queued
+	// through hooks (deferred to commit via [Store.CreateMacroRun]'s own
+	// managed transaction, or [Tx.CreateMacroRun]'s caller-owned one)
+	// rather than applied here directly.
+	byCount := (s.macroRunInsertCount.Load()+1)%pruneEveryNMacroRuns == 0
 	byAge := false
 	if !byCount {
 		last := s.lastMacroRunPruneAtNanos.Load()
@@ -650,8 +654,10 @@ func createMacroRun(ctx context.Context, q querier, s *Store, run MacroRunRecord
 		if err := s.pruneMacroRuns(ctx, q); err != nil {
 			return MacroRunRecord{}, nil, fmt.Errorf("store: create macro run %q: %w", run.ID, err)
 		}
-		s.lastMacroRunPruneAtNanos.Store(s.now().UnixNano())
+		prunedAt := s.now()
+		hooks.after(func() { s.lastMacroRunPruneAtNanos.Store(prunedAt.UnixNano()) })
 	}
+	hooks.after(func() { s.macroRunInsertCount.Add(1) })
 
 	return run, recSteps, nil
 }
@@ -681,13 +687,15 @@ func (s *Store) CreateMacroRun(ctx context.Context, run MacroRunRecord, steps []
 	}
 	defer func() { _ = sqlTx.Rollback() }() // no-op once Commit succeeds
 
-	rec, recSteps, err := createMacroRun(ctx, sqlTx, s, run, steps, s.now())
+	var hooks pruneHooks
+	rec, recSteps, err := createMacroRun(ctx, sqlTx, s, run, steps, s.now(), &hooks)
 	if err != nil {
 		return MacroRunRecord{}, nil, err
 	}
 	if err := sqlTx.Commit(); err != nil {
 		return MacroRunRecord{}, nil, fmt.Errorf("store: commit create macro run: %w", err)
 	}
+	hooks.run()
 	return rec, recSteps, nil
 }
 
@@ -696,7 +704,7 @@ func (s *Store) CreateMacroRun(ctx context.Context, run MacroRunRecord, steps []
 // write (e.g. an audit entry) in one transaction, the same reason every
 // other *Tx form in this package exists.
 func (t *Tx) CreateMacroRun(ctx context.Context, run MacroRunRecord, steps []MacroRunStepRecord) (MacroRunRecord, []MacroRunStepRecord, error) {
-	return createMacroRun(ctx, t.tx, t.s, run, steps, t.s.now())
+	return createMacroRun(ctx, t.tx, t.s, run, steps, t.s.now(), t)
 }
 
 func getMacroRunByIdempotencyKey(ctx context.Context, q querier, key string) (MacroRunRecord, error) {
@@ -1356,64 +1364,54 @@ func (t *Tx) ResolveMacroRunStepCommand(ctx context.Context, step MacroRunStepRe
 	return resolveMacroRunStepCommand(ctx, t.tx, step)
 }
 
-// macroRequestedRevisionPrefix marks a commands.requested_revision value as
-// having been formatted by [FormatMacroRunRequestedRevision] rather than
-// left at commands.go's own NOT NULL DEFAULT ” (what an operator-issued
-// command's dispatch leaves this column at today; see commands.go's
-// CommandRecord: nothing in this package has ever written a non-empty
-// RequestedRevision before Step 9). Any value beginning with this prefix is
-// a macro-issued dispatch; any other value (including "") is not.
-const macroRequestedRevisionPrefix = "macro:"
-
-// FormatMacroRunRequestedRevision is STEP-9-SPEC.md §6.1's store-side
-// support for "a step's dispatch writes desired state exactly as a single
-// command does, and requested_revision carries the pinned macro revision,
-// formatted so a macro-issued command is distinguishable from an
-// operator-issued one": it turns a run's pinned (macroObjectID,
-// macroRevision), the SAME two values [MacroRunRecord] itself pins at
-// submission, into the single string a caller (Wave 1b's dispatch seam,
-// via [Store.InsertCommand]'s existing CommandRecord.RequestedRevision
-// field, which needs no change to accept it) writes into commands so that
-// table alone can answer "which macro revision caused this dispatch"
-// without a join back to macro_run_steps.
+// FormatMacroRunCallerIntent is STEP-9-SPEC.md §6.1's store-side support
+// for "a step's dispatch writes desired state exactly as a single command
+// does, and requested_revision carries the pinned macro revision, formatted
+// so a macro-issued command is distinguishable from an operator-issued
+// one" (renamed from FormatMacroRunRequestedRevision alongside the column
+// itself, commands.caller_intent): it turns a run's
+// pinned (macroObjectID, macroRevision), the SAME two values
+// [MacroRunRecord] itself pins at submission, into the single string a
+// caller (Wave 1b's dispatch seam, via [Store.InsertCommand]'s
+// CommandRecord.CallerIntent field) writes into commands so that table
+// alone can answer "which macro revision caused this dispatch" without a
+// join back to macro_run_steps.
 //
-// The format is "macro:<macroObjectID>@<macroRevision>". "@" was chosen as
-// the id/revision separator specifically so this stays a genuinely
-// invertible round trip even for a macroObjectID that itself contains "@":
-// [ParseMacroRunRequestedRevision] splits on the LAST "@" in the string,
-// never the first, and a config object id can be anything this package's
-// generic (kind, id) config store accepts (see migrations.go's schemaV6 doc
+// The payload is "<macroObjectID>@<macroRevision>", tagged by
+// [FormatCallerIntent] with [CallerIntentMacroRun]. "@" was chosen as the
+// id/revision separator specifically so this stays a genuinely invertible
+// round trip even for a macroObjectID that itself contains "@":
+// [ParseMacroRunCallerIntent] splits on the LAST "@" in the string, never
+// the first, and a config object id can be anything this package's generic
+// (kind, id) config store accepts (see migrations.go's schemaV6 doc
 // comment: config_objects has no CHECK on id's charset), so "split on the
 // last separator, not the first" is the one rule that stays correct
 // regardless of what a future id validator does or does not forbid.
-func FormatMacroRunRequestedRevision(macroObjectID string, macroRevision int64) string {
-	return fmt.Sprintf("%s%s@%d", macroRequestedRevisionPrefix, macroObjectID, macroRevision)
+func FormatMacroRunCallerIntent(macroObjectID string, macroRevision int64) string {
+	return FormatCallerIntent(CallerIntentMacroRun, fmt.Sprintf("%s@%d", macroObjectID, macroRevision))
 }
 
-// ParseMacroRunRequestedRevision is [FormatMacroRunRequestedRevision]'s
-// inverse. ok is false for any value that was not produced by that
+// ParseMacroRunCallerIntent is [FormatMacroRunCallerIntent]'s inverse
+// (renamed from ParseMacroRunRequestedRevision alongside the column
+// itself). ok is false for any value that was not produced by that
 // function, including "" (an operator-issued command's untouched default)
-// and any value not beginning with macroRequestedRevisionPrefix, so a
-// caller can tell "this command was not macro-issued" apart from "this
-// command was macro-issued but the value is somehow malformed" only by
-// checking ok; this function deliberately does not distinguish those two
-// itself; a caller that needs to (e.g. to log a corrupted value as a
-// distinct condition from an ordinary operator-issued command) checks
-// strings.HasPrefix(s, macroRequestedRevisionPrefix); this file has no
-// exported way to do that named separately, since no caller inside this
-// package has needed one yet.
-func ParseMacroRunRequestedRevision(s string) (macroObjectID string, macroRevision int64, ok bool) {
-	rest, found := strings.CutPrefix(s, macroRequestedRevisionPrefix)
-	if !found {
+// and any value [CallerIntentPayload] cannot resolve to
+// [CallerIntentMacroRun]'s own tag, so a caller can tell "this command was
+// not macro-issued" apart from "this command was macro-issued but the
+// value is somehow malformed" only by checking ok; this function
+// deliberately does not distinguish those two itself.
+func ParseMacroRunCallerIntent(s string) (macroObjectID string, macroRevision int64, ok bool) {
+	payload, tagged := CallerIntentPayload(CallerIntentMacroRun, s)
+	if !tagged {
 		return "", 0, false
 	}
-	at := strings.LastIndex(rest, "@")
+	at := strings.LastIndex(payload, "@")
 	if at < 0 {
 		return "", 0, false
 	}
-	rev, err := strconv.ParseInt(rest[at+1:], 10, 64)
+	rev, err := strconv.ParseInt(payload[at+1:], 10, 64)
 	if err != nil {
 		return "", 0, false
 	}
-	return rest[:at], rev, true
+	return payload[:at], rev, true
 }

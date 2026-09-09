@@ -51,7 +51,7 @@ Reads require show:macro:run OR config:write.
 
 Subcommands:
   show <runId>   show one run, including every step's outcome
-  list           list runs, most recent first (filterable by macro id/state)
+  list           list runs, most recent first (filterable by macro id/state/show)
 
 Run "showmeshctl run <subcommand> --help" for flags specific to one
 subcommand.
@@ -141,9 +141,10 @@ func cmdRunShow(args []string, stdout, stderr io.Writer, clock func() time.Time)
 
 func cmdRunList(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl run list", stderr)
-	var macroID, state string
+	var macroID, show, state string
 	var limit int
 	fs.StringVar(&macroID, "macro", "", "filter to runs of this macro id")
+	fs.StringVar(&show, "show", "", "filter to runs of this show id")
 	fs.StringVar(&state, "state", "", `filter to "running" or "finished"`)
 	fs.IntVar(&limit, "limit", 0, "maximum number of runs to return (0 = server default)")
 	fs.Usage = func() {
@@ -182,6 +183,9 @@ func cmdRunList(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	query := url.Values{}
 	if macroID != "" {
 		query.Set("macroId", macroID)
+	}
+	if show != "" {
+		query.Set("show", show)
 	}
 	if state != "" {
 		query.Set("state", state)

@@ -167,7 +167,8 @@ var (
 	nightSessionShowPlaylistKeys   = map[string]bool{"fppInstanceId": true, "playlist": true}
 	nightSessionRestingKeys        = map[string]bool{"fppInstanceId": true, "playlist": true, "endOfNightPlaylist": true, "timelineAsset": true, "endOfNightRepeat": true, "backgroundAudio": true}
 	nightSessionAssetRefKeys       = map[string]bool{"show": true, "sequence": true, "target": true}
-	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true}
+	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true, "fadeOutMs": true, "fadeInMs": true}
+	nightSessionBackgroundRefKeys  = map[string]bool{"mediaPlaylist": true}
 	nightSessionBackgroundItemKeys = map[string]bool{"itemId": true, "show": true, "sequence": true, "target": true}
 	nightSessionTransitionKeys     = map[string]bool{"cues": true, "blackoutHoldMs": true}
 	nightSessionRestingTransKeys   = map[string]bool{"cues": true, "blackoutAfterShowMs": true}
@@ -268,11 +269,21 @@ func (i *NightSessionBackgroundAudioItem) UnmarshalJSON(b []byte) error {
 
 // NightSessionBackgroundAudio is night.session.resting.backgroundAudio,
 // present only when the deployment configures background audio at all.
-// Every item's own Asset.Target names the SAME audio.node id (enforced by
-// [DecodeNightSessionPayload]): the coordinator has no separate
-// "which output" field for background audio, so item.Asset.Target
-// (ADR-028's own per-target asset identity) doubles as the audio node
-// this whole playlist plays on. OutputNodeID exposes that shared value.
+// MediaPlaylist and Items are mutually exclusive alternatives: MediaPlaylist
+// names a media.playlist object whose own items/repeat/resume/gain/fade
+// fields govern the bed; Items is the original inline form. Exactly one is
+// ever populated - decodeNightSessionBackgroundAudio refuses both or neither.
+// The bed plays on every DISTINCT audio.node id its own items name - the
+// coordinator has no separate "which output(s)" field for background
+// audio, so item.Asset.Target (ADR-028's own per-target asset identity)
+// doubles as the set of audio nodes this playlist plays on.
+// OutputNodeIDs exposes that set (sorted, deduplicated); every item whose
+// Asset.Target equals one node is that node's own playlist, resolved and
+// dispatched independently of any other node's (see ItemsForTarget) - a
+// refused step on one node never blocks another's. A single-target
+// installation (every item sharing one target, the only shape this
+// package used to require) is the len(OutputNodeIDs())==1 case and
+// behaves exactly as it always has.
 // CrossfadeMs is a pointer, not a plain int with "omitempty": the
 // validator REQUIRES the key present (0 is a legal value - an immediate
 // cut) whenever ItemTransition is "crossfade" and requires it ABSENT
@@ -283,23 +294,87 @@ func (i *NightSessionBackgroundAudioItem) UnmarshalJSON(b []byte) error {
 // nil means "not applicable"; non-nil (including *CrossfadeMs == 0) means
 // "present on the wire", matching FadeDurationMs's existing pointer
 // pattern one field over.
+// FadeOutMs and FadeInMs are the show-boundary fade pair: FadeOutMs fades
+// the bed to silence before it is paused or stopped for a real show,
+// FadeInMs fades it back up to MaxGainDb after it resumes or restarts -
+// a duck-style DOWN/UP pair with two independent durations, following
+// audio.settings' own duckFadeDurationMs/duckRestoreFadeDurationMs
+// precedent (a fast duck and a slow restore are deliberately different
+// numbers). Both nil is a fully supported, unchanged-behavior
+// configuration: the boundary cuts instantly, exactly as before this
+// pair existed. They are validated to be configured together or not at
+// all - a bed faded down with no way to fade back up would stay silent
+// forever, matching CrossfadeMs's own present-together validation
+// pattern one field over.
 type NightSessionBackgroundAudio struct {
-	Items          []NightSessionBackgroundAudioItem `json:"items"`
-	Repeat         string                            `json:"repeat"`
-	Resume         string                            `json:"resume"`
-	ItemTransition string                            `json:"itemTransition"`
+	// MediaPlaylist is the reference form: a media.playlist object id.
+	// Empty when Items (the inline form) is populated instead.
+	MediaPlaylist  string                            `json:"mediaPlaylist,omitempty"`
+	Items          []NightSessionBackgroundAudioItem `json:"items,omitempty"`
+	Repeat         string                            `json:"repeat,omitempty"`
+	Resume         string                            `json:"resume,omitempty"`
+	ItemTransition string                            `json:"itemTransition,omitempty"`
 	CrossfadeMs    *int                              `json:"crossfadeMs,omitempty"`
-	MaxGainDb      float64                           `json:"maxGainDb"`
+	MaxGainDb      float64                           `json:"maxGainDb,omitempty"`
+	FadeOutMs      *int                              `json:"fadeOutMs,omitempty"`
+	FadeInMs       *int                              `json:"fadeInMs,omitempty"`
 }
 
-// OutputNodeID returns the audio.node id every item plays on (item 0's
-// own Asset.Target), or "" if Items is empty. DecodeNightSessionPayload
-// already enforces every item agrees, so any item's Target would do.
-func (b NightSessionBackgroundAudio) OutputNodeID() string {
-	if len(b.Items) == 0 {
-		return ""
+// MarshalJSON emits the reference form ({"mediaPlaylist"} alone) or the
+// inline form's original fixed shape, so an inline maxGainDb of exactly 0
+// (a legal ceiling) still round-trips - reflection "omitempty" would drop
+// it, the same class of bug crossfadeMs already hit once in this file.
+func (b NightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
+	if b.MediaPlaylist != "" {
+		return json.Marshal(struct {
+			MediaPlaylist string `json:"mediaPlaylist"`
+		}{MediaPlaylist: b.MediaPlaylist})
 	}
-	return b.Items[0].Asset.Target
+	return json.Marshal(struct {
+		Items          []NightSessionBackgroundAudioItem `json:"items"`
+		Repeat         string                            `json:"repeat"`
+		Resume         string                            `json:"resume"`
+		ItemTransition string                            `json:"itemTransition"`
+		CrossfadeMs    *int                              `json:"crossfadeMs,omitempty"`
+		MaxGainDb      float64                           `json:"maxGainDb"`
+		FadeOutMs      *int                              `json:"fadeOutMs,omitempty"`
+		FadeInMs       *int                              `json:"fadeInMs,omitempty"`
+	}{
+		Items: b.Items, Repeat: b.Repeat, Resume: b.Resume, ItemTransition: b.ItemTransition,
+		CrossfadeMs: b.CrossfadeMs, MaxGainDb: b.MaxGainDb, FadeOutMs: b.FadeOutMs, FadeInMs: b.FadeInMs,
+	})
+}
+
+// OutputNodeIDs returns every distinct audio.node id this bed plays on,
+// sorted: the set of every item's own Asset.Target. Empty if Items is
+// empty. A single-target installation (every item sharing one target)
+// returns a one-element slice, unchanged from OutputNodeID's old
+// contract.
+func (b NightSessionBackgroundAudio) OutputNodeIDs() []string {
+	seen := make(map[string]bool, len(b.Items))
+	var out []string
+	for _, item := range b.Items {
+		if !seen[item.Asset.Target] {
+			seen[item.Asset.Target] = true
+			out = append(out, item.Asset.Target)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ItemsForTarget returns, in their configured order, every item whose own
+// Asset.Target is nodeID - one node's own slice of the shared bed
+// playlist, resolved and dispatched independently of every other node's
+// (see [NightSessionBackgroundAudio]'s own doc comment).
+func (b NightSessionBackgroundAudio) ItemsForTarget(nodeID string) []NightSessionBackgroundAudioItem {
+	var out []NightSessionBackgroundAudioItem
+	for _, item := range b.Items {
+		if item.Asset.Target == nodeID {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // NightSessionCue is one entry of enterShow.cues or enterResting.cues.
@@ -350,6 +425,11 @@ func EncodeNightSessionPayload(p NightSessionPayload) (string, error) {
 // package (this file's own top doc comment).
 type AssetCurrent func(show, sequence, target string) bool
 
+// MediaPlaylistCurrent reports whether id names an existing, non-tombstoned
+// media.playlist object - resting.backgroundAudio's reference-form check,
+// caller-supplied like every cross-object reference in this package.
+type MediaPlaylistCurrent func(id string) bool
+
 // ActionResolver reports whether actionID names an existing show.action
 // object with an active revision and, when it does, the show it belongs
 // to. Caller-supplied, mirroring show.macro's resolveAction narrowed to
@@ -369,14 +449,17 @@ type ActionResolver func(actionID string) (show string, ok bool)
 // precedent); assetCurrent and actionResolver are seam F1's own
 // cross-object reference checks; interlockSignalResolver is seam F6's own
 // check for an interlock's "signal" (nil is only safe when the payload
-// configures no interlocks). Every cross-object reference this payload
+// configures no interlocks); mediaPlaylistCurrent is
+// resting.backgroundAudio's own reference-form check, an existence check
+// only (DecodeMediaPlaylistPayload's own showExists precedent), not a
+// show-scoped resolver. Every cross-object reference this payload
 // carries (cue actions, the resting timeline asset, every backgroundAudio
 // item, every siteControl action, and every interlock signal) must name
 // an object belonging to THIS session's own "show" (ADR-027: a Show is a
 // namespace precisely so that programming Christmas cannot break
 // Halloween); a reference into a different show is rejected with
 // [ValidationCodeCrossShowReference], not silently accepted.
-func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, actionResolver ActionResolver, interlockSignalResolver InterlockSignalResolver) (NightSessionPayload, *ValidationError) {
+func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, actionResolver ActionResolver, interlockSignalResolver InterlockSignalResolver, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionPayload, *ValidationError) {
 	if verr := scanNightSessionForbiddenKeys(raw); verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -421,7 +504,7 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 	if verr := rejectUnknownKeysUnder(restingFields, nightSessionRestingKeys, "resting"); verr != nil {
 		return NightSessionPayload{}, verr
 	}
-	resting, verr := decodeNightSessionResting(restingFields, show, endpoints, assetCurrent)
+	resting, verr := decodeNightSessionResting(restingFields, show, endpoints, assetCurrent, mediaPlaylistCurrent)
 	if verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -585,7 +668,7 @@ func decodeNightSessionAssetRef(fields map[string]json.RawMessage, path, session
 	return NightSessionAssetRef{Show: show, Sequence: sequence, Target: target}, nil
 }
 
-func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow string, endpoints []FPPEndpoint, assetCurrent AssetCurrent) (NightSessionResting, *ValidationError) {
+func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionResting, *ValidationError) {
 	instanceID, verr := decodeRequiredString(fields, "fppInstanceId", "resting.fppInstanceId")
 	if verr != nil {
 		return NightSessionResting{}, verr
@@ -639,7 +722,7 @@ func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow st
 		if verr != nil {
 			return NightSessionResting{}, verr
 		}
-		b, verr := decodeNightSessionBackgroundAudio(backgroundFields, sessionShow, assetCurrent)
+		b, verr := decodeNightSessionBackgroundAudio(backgroundFields, sessionShow, assetCurrent, mediaPlaylistCurrent)
 		if verr != nil {
 			return NightSessionResting{}, verr
 		}
@@ -652,7 +735,17 @@ func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow st
 	}, nil
 }
 
-func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessionShow string, assetCurrent AssetCurrent) (NightSessionBackgroundAudio, *ValidationError) {
+// decodeNightSessionBackgroundAudio decodes resting.backgroundAudio's two
+// mutually exclusive wire shapes: the reference form ({"mediaPlaylist"})
+// resolved here, or the inline form decoded exactly as before. A body
+// naming "mediaPlaylist" is validated as a reference and refuses every
+// inline-only key (including "items") as unknown, so a body naming both
+// is refused the same way a body naming neither already is.
+func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessionShow string, assetCurrent AssetCurrent, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionBackgroundAudio, *ValidationError) {
+	if _, referencesPlaylist := fields["mediaPlaylist"]; referencesPlaylist {
+		return decodeNightSessionBackgroundAudioRef(fields, mediaPlaylistCurrent)
+	}
+
 	if verr := rejectUnknownKeysUnder(fields, nightSessionBackgroundKeys, "resting.backgroundAudio"); verr != nil {
 		return NightSessionBackgroundAudio{}, verr
 	}
@@ -717,14 +810,11 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		items = append(items, NightSessionBackgroundAudioItem{ItemID: itemID, Asset: asset})
 	}
 
-	for i, item := range items {
-		if item.Asset.Target != items[0].Asset.Target {
-			return NightSessionBackgroundAudio{}, &ValidationError{
-				Code: ValidationCodeBackgroundAudioMixedTargets, Field: fmt.Sprintf("resting.backgroundAudio.items[%d].target", i),
-				Detail: fmt.Sprintf("item %d names target %q, but item 0 names %q; a background-audio playlist plays on exactly one audio output", i, item.Asset.Target, items[0].Asset.Target),
-			}
-		}
-	}
+	// Items are no longer required to share one target. Every distinct
+	// Asset.Target among them is its own audio.node the bed plays on
+	// (NightSessionBackgroundAudio.OutputNodeIDs/ItemsForTarget);
+	// this decoder validates only that each item's own asset reference
+	// resolves (above), not that items agree with each other.
 
 	repeat, verr := decodeDefaultedEnum(fields, "repeat", "resting.backgroundAudio.repeat", NightSessionBackgroundRepeatNone, nightSessionBackgroundRepeatValues)
 	if verr != nil {
@@ -736,47 +826,49 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		return NightSessionBackgroundAudio{}, verr
 	}
 
-	itemTransition, verr := decodeRequiredEnum(fields, "itemTransition", "resting.backgroundAudio.itemTransition", nightSessionItemTransitionValues)
+	itemTransition, crossfadeMs, verr := decodeBackgroundAudioItemTransition(fields,
+		"resting.backgroundAudio.itemTransition", "resting.backgroundAudio.crossfadeMs")
 	if verr != nil {
 		return NightSessionBackgroundAudio{}, verr
 	}
 
-	_, crossfadePresent := fields["crossfadeMs"]
-	var crossfadeMs *int
-	if itemTransition == NightSessionItemTransitionCrossfade {
-		if !crossfadePresent {
-			return NightSessionBackgroundAudio{}, &ValidationError{
-				Code: ValidationCodeFieldRequired, Field: "resting.backgroundAudio.crossfadeMs",
-				Detail: "resting.backgroundAudio.crossfadeMs is required when itemTransition is \"crossfade\"",
-			}
-		}
-		v, verr := decodeRequiredNonNegativeInt(fields, "crossfadeMs", "resting.backgroundAudio.crossfadeMs")
-		if verr != nil {
-			return NightSessionBackgroundAudio{}, verr
-		}
-		crossfadeMs = &v
-	} else if crossfadePresent {
-		return NightSessionBackgroundAudio{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.crossfadeMs",
-			Detail: "resting.backgroundAudio.crossfadeMs must be absent unless itemTransition is \"crossfade\"",
-		}
-	}
-
-	maxGainDb, verr := decodeRequiredNumber(fields, "maxGainDb", "resting.backgroundAudio.maxGainDb")
+	maxGainDb, verr := decodeBackgroundAudioMaxGainDb(fields, "resting.backgroundAudio.maxGainDb")
 	if verr != nil {
 		return NightSessionBackgroundAudio{}, verr
 	}
-	if maxGainDb > 0 {
-		return NightSessionBackgroundAudio{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "resting.backgroundAudio.maxGainDb",
-			Detail: "resting.backgroundAudio.maxGainDb must be <= 0",
-		}
+
+	fadeOutMs, fadeInMs, verr := decodeBackgroundAudioFadePair(fields,
+		"resting.backgroundAudio.fadeOutMs", "resting.backgroundAudio.fadeInMs")
+	if verr != nil {
+		return NightSessionBackgroundAudio{}, verr
 	}
 
 	return NightSessionBackgroundAudio{
 		Items: items, Repeat: repeat, Resume: resume, ItemTransition: itemTransition,
 		CrossfadeMs: crossfadeMs, MaxGainDb: maxGainDb,
+		FadeOutMs: fadeOutMs, FadeInMs: fadeInMs,
 	}, nil
+}
+
+// decodeNightSessionBackgroundAudioRef decodes the reference form: only
+// "mediaPlaylist" is a recognized key here, so an inline-only key present
+// alongside it (starting with "items") is refused as unknown, and a
+// missing or tombstoned playlist is refused at write time.
+func decodeNightSessionBackgroundAudioRef(fields map[string]json.RawMessage, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionBackgroundAudio, *ValidationError) {
+	if verr := rejectUnknownKeysUnder(fields, nightSessionBackgroundRefKeys, "resting.backgroundAudio"); verr != nil {
+		return NightSessionBackgroundAudio{}, verr
+	}
+	mediaPlaylist, verr := decodeRequiredString(fields, "mediaPlaylist", "resting.backgroundAudio.mediaPlaylist")
+	if verr != nil {
+		return NightSessionBackgroundAudio{}, verr
+	}
+	if !mediaPlaylistCurrent(mediaPlaylist) {
+		return NightSessionBackgroundAudio{}, &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: "resting.backgroundAudio.mediaPlaylist",
+			Detail: fmt.Sprintf("media.playlist %q is not a configured media.playlist object", mediaPlaylist),
+		}
+	}
+	return NightSessionBackgroundAudio{MediaPlaylist: mediaPlaylist}, nil
 }
 
 func decodeNightSessionEnterShow(fields map[string]json.RawMessage, show string, actionResolver ActionResolver) (NightSessionEnterShow, *ValidationError) {
@@ -932,6 +1024,101 @@ func decodeNightSessionCue(raw json.RawMessage, field, sessionShow string, actio
 		FadeDurationMs: fadeDurationMs, Barrier: barrier, OnFailure: onFailure,
 		AnnouncementPolicy: announcementPolicy,
 	}, nil
+}
+
+// --- Background-audio bed rules shared with media.playlist (mediaplaylist.go),
+// which promotes this same shape to its own per-object configuration kind.
+// Each function takes the field's own already-prefixed path(s) rather than
+// a bare key, so a caller nested under "resting.backgroundAudio" and one at
+// media.playlist's own top level get identical validation with the correct
+// path in every error. ---
+
+// decodeBackgroundAudioItemTransition decodes the required "itemTransition"
+// enum and its paired "crossfadeMs": crossfadeMs is required, and decoded,
+// only when itemTransition is "crossfade", and refused as present
+// otherwise.
+func decodeBackgroundAudioItemTransition(fields map[string]json.RawMessage, itemTransitionField, crossfadeField string) (string, *int, *ValidationError) {
+	itemTransition, verr := decodeRequiredEnum(fields, "itemTransition", itemTransitionField, nightSessionItemTransitionValues)
+	if verr != nil {
+		return "", nil, verr
+	}
+
+	_, crossfadePresent := fields["crossfadeMs"]
+	if itemTransition != NightSessionItemTransitionCrossfade {
+		if crossfadePresent {
+			return "", nil, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: crossfadeField,
+				Detail: fmt.Sprintf("%s must be absent unless itemTransition is \"crossfade\"", crossfadeField),
+			}
+		}
+		return itemTransition, nil, nil
+	}
+	if !crossfadePresent {
+		return "", nil, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: crossfadeField,
+			Detail: fmt.Sprintf("%s is required when itemTransition is \"crossfade\"", crossfadeField),
+		}
+	}
+	v, verr := decodeRequiredNonNegativeInt(fields, "crossfadeMs", crossfadeField)
+	if verr != nil {
+		return "", nil, verr
+	}
+	return itemTransition, &v, nil
+}
+
+// decodeBackgroundAudioMaxGainDb decodes the required "maxGainDb", refusing
+// a positive value: the bed's own ceiling, never a boost above unity.
+func decodeBackgroundAudioMaxGainDb(fields map[string]json.RawMessage, field string) (float64, *ValidationError) {
+	maxGainDb, verr := decodeRequiredNumber(fields, "maxGainDb", field)
+	if verr != nil {
+		return 0, verr
+	}
+	if maxGainDb > 0 {
+		return 0, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: field,
+			Detail: fmt.Sprintf("%s must be <= 0", field),
+		}
+	}
+	return maxGainDb, nil
+}
+
+// decodeBackgroundAudioFadePair decodes the optional "fadeOutMs"/"fadeInMs"
+// pair: both present and positive, or both absent, never one without the
+// other (see [NightSessionBackgroundAudio]'s own doc comment for why).
+func decodeBackgroundAudioFadePair(fields map[string]json.RawMessage, fadeOutField, fadeInField string) (*int, *int, *ValidationError) {
+	_, fadeOutPresent := fields["fadeOutMs"]
+	_, fadeInPresent := fields["fadeInMs"]
+	if fadeOutPresent != fadeInPresent {
+		return nil, nil, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: fadeOutField,
+			Detail: fmt.Sprintf("%s and fadeInMs must be configured together, or both omitted for no fade", fadeOutField),
+		}
+	}
+	if !fadeOutPresent {
+		return nil, nil, nil
+	}
+
+	v, verr := decodeRequiredNonNegativeInt(fields, "fadeOutMs", fadeOutField)
+	if verr != nil {
+		return nil, nil, verr
+	}
+	if v == 0 {
+		return nil, nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: fadeOutField,
+			Detail: fmt.Sprintf("%s must be positive when configured; omit fadeOutMs and fadeInMs together for no fade", fadeOutField),
+		}
+	}
+	v2, verr := decodeRequiredNonNegativeInt(fields, "fadeInMs", fadeInField)
+	if verr != nil {
+		return nil, nil, verr
+	}
+	if v2 == 0 {
+		return nil, nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: fadeInField,
+			Detail: fmt.Sprintf("%s must be positive when configured; omit fadeOutMs and fadeInMs together for no fade", fadeInField),
+		}
+	}
+	return &v, &v2, nil
 }
 
 // --- night.session-local decode helpers not already in showaction.go. ---

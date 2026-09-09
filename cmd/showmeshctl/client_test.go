@@ -407,6 +407,48 @@ func TestTokenNeverAppearsInURLOrErrorMessages(t *testing.T) {
 	}
 }
 
+// TestPutJSONSendsIfMatchHeaderVerbatim proves putJSON sends exactly the
+// ifMatch string it is given, as the If-Match header, and nothing else
+// when ifMatch is "".
+func TestPutJSONSendsIfMatchHeaderVerbatim(t *testing.T) {
+	var gotHeader string
+	var sawHeader bool
+	c, _ := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("If-Match")
+		_, sawHeader = r.Header["If-Match"]
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{}`)
+	})
+
+	if err := c.putJSON(context.Background(), "/api/v1/config/fpp.endpoints", `"7"`, map[string]string{"endpoints": "x"}, nil); err != nil {
+		t.Fatalf("putJSON: %v", err)
+	}
+	if !sawHeader || gotHeader != `"7"` {
+		t.Errorf("If-Match header = %q (present=%v), want %q", gotHeader, sawHeader, `"7"`)
+	}
+}
+
+// TestPutJSONSendsNoIfMatchHeaderWhenEmpty proves an empty ifMatch string
+// (force, or a path parseRevisionPrecondition does not guard) sends no
+// If-Match header at all, not an empty one.
+func TestPutJSONSendsNoIfMatchHeaderWhenEmpty(t *testing.T) {
+	var sawHeader bool
+	c, _ := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, sawHeader = r.Header["If-Match"]
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{}`)
+	})
+
+	if err := c.putJSON(context.Background(), "/api/v1/principals/p-1/role", "", map[string]string{"role": "operator"}, nil); err != nil {
+		t.Fatalf("putJSON: %v", err)
+	}
+	if sawHeader {
+		t.Error("If-Match header present, want none when ifMatch is \"\"")
+	}
+}
+
 func testServerWithToken(t *testing.T, token string, handler http.HandlerFunc) (*client, *httptest.Server) {
 	t.Helper()
 	ts := httptest.NewServer(handler)

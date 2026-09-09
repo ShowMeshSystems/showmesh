@@ -179,6 +179,65 @@ func TestCmdActionPutSendsTheFileContents(t *testing.T) {
 	}
 }
 
+// TestCmdActionPutAcceptsAFullActionShowResponse is the show.action half
+// of generalizing parseConfigSetPayload's fpp.endpoints-only round-trip
+// fix (cmd_config.go) to every config kind: feed "action put" the EXACT
+// bytes "action show --output json" prints (action/show/target nested
+// three levels down, under "payload", alongside kind/revision/updatedAt),
+// and prove the PUT body carries the bare payload object directly at the
+// top level, not still wrapped. A body that still had a top-level
+// "payload" key (rather than "target" at the top level) would mean the
+// wrapper reached the server unmodified — this is the same shape of
+// defect that once caused `config set` to wipe every configured
+// fpp.endpoints instance.
+func TestCmdActionPutAcceptsAFullActionShowResponse(t *testing.T) {
+	const showResponse = `{"serverTime":"2026-08-14T21:00:00Z","kind":"show.action","id":"stop-main","revision":1,
+		"payload":{"show":"halloween-2026","label":"Stop main show","description":"","safetyClass":"stop",
+			"target":{"integration":"fpp","instanceId":"fpp-main","primitive":"stopPlaylist"}},
+		"updatedAt":"2026-08-14T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, showResponse)
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "show-output.json")
+	// The EXACT shape `action show --output json` emits — not a hand-typed
+	// approximation of it.
+	if err := os.WriteFile(file, []byte(showResponse), 0o600); err != nil {
+		t.Fatalf("write payload file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAction([]string{"put", "--file", file, "--server", ts.URL, "--token", "t", "stop-main"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+
+	var sentTop map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &sentTop); err != nil {
+		t.Fatalf("PUT body was not a JSON object: %v; body=%s", err, gotBody)
+	}
+	if _, stillWrapped := sentTop["payload"]; stillWrapped {
+		t.Fatalf("PUT body = %s, still has a top-level \"payload\" key — the wrapper was sent unmodified, not unwrapped", gotBody)
+	}
+	if _, hasTarget := sentTop["target"]; !hasTarget {
+		t.Fatalf("PUT body = %s, want the show.action payload's own \"target\" key at the top level", gotBody)
+	}
+	var sentTarget showActionTarget
+	if err := json.Unmarshal(sentTop["target"], &sentTarget); err != nil {
+		t.Fatalf("PUT body's \"target\" did not decode: %v", err)
+	}
+	if sentTarget.InstanceID != "fpp-main" || sentTarget.Primitive != "stopPlaylist" {
+		t.Fatalf("PUT body target = %+v, want the target from the \"action show\" response — the round trip must survive", sentTarget)
+	}
+}
+
 func TestCmdActionPutRejectsInvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "bad.json")

@@ -503,7 +503,12 @@ func TestResolumeActionExemptDispatchesWhenAuditFails(t *testing.T) {
 	}
 }
 
-func TestResolumeActionNonExemptFailsClosedWhenAuditFails(t *testing.T) {
+// TestResolumeActionNonExemptRunsDegradedWhenAuditFails proves ADR-024
+// decision 11's amendment (owner ruling, 2026-08-26): a non-exempt
+// Resolume action no longer fails closed when the audit store is
+// unwritable. It still dispatches, with degraded attribution, exactly
+// like the exempt case above.
+func TestResolumeActionNonExemptRunsDegradedWhenAuditFails(t *testing.T) {
 	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
 	setup.dispatcher.results["launchClip"] = confirmedResult("clip connected")
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -514,18 +519,24 @@ func TestResolumeActionNonExemptFailsClosedWhenAuditFails(t *testing.T) {
 
 	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "key-non-exempt", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	resp, body := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (launchClip is NOT exempt; ADR-024 decision 11's default fail-closed rule); body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ADR-024 decision 11 amended 2026-08-26: audit unavailability never blocks "+
+			"an action, including launchClip, which is not exempt); body: %s", resp.StatusCode, body)
 	}
-	if setup.dispatcher.callCount() != 0 {
-		t.Errorf("dispatcher received %d calls, want 0 — a fail-closed refusal must dispatch nothing", setup.dispatcher.callCount())
+	if setup.dispatcher.callCount() != 1 {
+		t.Errorf("dispatcher received %d calls, want exactly 1 (the action must actually dispatch)", setup.dispatcher.callCount())
+	}
+	m := decodeMap(t, body)
+	result, _ := m["result"].(map[string]any)
+	if result["attributionDegraded"] != true {
+		t.Errorf("attributionDegraded = %v, want true (the audit write failed and this proceeded anyway)", result["attributionDegraded"])
 	}
 	rows, err := setup.st.ListCommands(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("list commands: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Errorf("commands rows = %d, want 0 — a fail-closed refusal must not create a commands row either", len(rows))
+	if len(rows) != 1 {
+		t.Errorf("commands rows = %d, want 1 (the command still runs and is still recorded)", len(rows))
 	}
 }
 

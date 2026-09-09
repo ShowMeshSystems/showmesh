@@ -163,6 +163,15 @@ func (noIdentityService) OldestAuditID(context.Context) (int64, bool, error) {
 	return 0, false, nil
 }
 
+// AuditWriteStatus reports "usable", matching WriteAudit's own trivial
+// success above: this stub has no real audit_log to probe or fail
+// against, so "usable" is the same "nothing here can fail" answer this
+// type gives everywhere else, not a claim about a real dependency's
+// health.
+func (noIdentityService) AuditWriteStatus(context.Context) (state, reason string) {
+	return "usable", ""
+}
+
 // sessionCookieName is the HttpOnly cookie ADR-024 decision 5 mints.
 const sessionCookieName = "showmesh_session"
 
@@ -356,7 +365,13 @@ func withIdentity(identitySvc identity.Service, limiter *loginLimiter, logger *s
 				// six audit rows in a few seconds).
 				source := loginSource(r)
 				if limiter != nil {
-					limiter.delay(r.Context(), source)
+					// delayOnce, not delay: the handler this request is
+					// on its way to may throttle the same source again
+					// (POST /api/v1/session, POST /api/v1/bootstrap), and
+					// paying maxDelay twice on one request overruns the
+					// HTTP server's WriteTimeout — see delayOnce's own
+					// doc comment for the 502 that produced.
+					r = r.WithContext(limiter.delayOnce(r.Context(), source))
 				}
 
 				entry := identity.AuditEntry{

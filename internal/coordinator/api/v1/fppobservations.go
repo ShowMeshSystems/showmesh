@@ -26,7 +26,12 @@ type FPPPlaylistEntryObservationRequest struct {
 	Sequence                           int64  `json:"sequence"`
 	ObservedAtMillis                   int64  `json:"observedAtMillis"`
 	CoalescedSincePreviousAcknowledged int64  `json:"coalescedSincePreviousAcknowledged"`
-	Unavailable                        string `json:"unavailable,omitempty"`
+	// PlaylistLoop is FPP's own mainPlaylist pass counter (§1.2, §1.8).
+	// *int for the same reason Position is, stated above: pass 0 is a real
+	// first pass, and a plugin that reports nothing must not compare equal
+	// to one reporting its first lap.
+	PlaylistLoop *int   `json:"playlistLoop,omitempty"`
+	Unavailable  string `json:"unavailable,omitempty"`
 }
 
 // FPPPlaylistEntryObservationResponse is POST's 200 response, contract
@@ -46,7 +51,38 @@ type FPPPlaylistEntryObservationResponse struct {
 	// Replay is Accepted's inverse, carried explicitly rather than left
 	// for a client to compute, matching this API's standing "state the
 	// fact, never make the client derive it" convention.
-	Replay     bool   `json:"replay"`
+	Replay bool `json:"replay"`
+
+	// Reconciliation is this instance's current reconciliation outcome
+	// (fppreconcile.Outcome's wire spelling), the same value GET
+	// .../reconciliation returns, computed through that identical
+	// resolution so the two routes cannot disagree. Additive and
+	// optional: an unchanged client sees a byte-identical response to
+	// before this field existed whenever it is empty. Carried on a
+	// replay too, not only on an accepted observation, because the
+	// plugin polls by re-posting and would otherwise be blind to the
+	// verdict on every request where nothing changed.
+	//
+	// Best effort: computed after the observation is already accepted and
+	// stored, so a failure resolving it never turns into an error response
+	// for a write that already succeeded. Both fields are left absent on
+	// that failure. Absent therefore means "unknown", never "resolved": a
+	// client must not read the absence of these fields as "no mismatch."
+	Reconciliation string `json:"reconciliation,omitempty"`
+	// OperatorInstruction is fppreconcile.OperatorMismatchInstruction,
+	// present only when Reconciliation is present and one of the four
+	// outcomes fppreconcile.Outcome.IsMismatch reports true for.
+	OperatorInstruction string `json:"operatorInstruction,omitempty"`
+
+	// IgnoredFields names the top-level members of the submitted body
+	// this coordinator does not know, sorted, absent when there were
+	// none. They did not stop the observation being accepted: an unknown
+	// member is ignored, because refusing it would make a plugin newer
+	// than its coordinator lose every observation. Present so a
+	// misspelled member is visible to whoever sent it instead of
+	// silently dropped, which is what strict decoding used to buy.
+	IgnoredFields []string `json:"ignoredFields,omitempty"`
+
 	ServerTime string `json:"serverTime"`
 }
 
@@ -70,7 +106,11 @@ type FPPPlaylistEntryObservation struct {
 	Unavailable                        string `json:"unavailable,omitempty"`
 	ObservedAt                         string `json:"observedAt"`
 	CoalescedSincePreviousAcknowledged int64  `json:"coalescedSincePreviousAcknowledged"`
-	ReceivedAt                         string `json:"receivedAt"`
+	// PlaylistLoop as submitted, absent when the plugin sent none. Rendered
+	// here because this type is the full stored record, and a stored field
+	// this view omitted would make that claim false.
+	PlaylistLoop *int   `json:"playlistLoop,omitempty"`
+	ReceivedAt   string `json:"receivedAt"`
 
 	// EndpointID is the configured fpp.endpoints id whose most
 	// recently observed instance uuid matches InstanceUUID, resolved

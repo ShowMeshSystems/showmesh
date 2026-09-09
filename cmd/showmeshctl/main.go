@@ -70,8 +70,12 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdCue(rest, stdout, stderr, clock)
 	case "playlist":
 		return cmdPlaylist(rest, stdout, stderr, clock)
+	case "media-playlist":
+		return cmdMediaPlaylist(rest, stdout, stderr, clock)
 	case "night":
 		return cmdNight(rest, stdout, stderr, clock)
+	case "emergency-stop":
+		return cmdEmergencyStop(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
 	case "render":
@@ -80,6 +84,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdAudio(rest, stdout, stderr, clock)
 	case "node-clock":
 		return cmdNodeClock(rest, stdout, stderr, clock)
+	case "fppconnect":
+		return cmdFPPConnect(rest, stdout, stderr, clock)
 	case "fpp-mqtt":
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
@@ -183,8 +189,11 @@ Commands:
   macro run <id> [--follow]           submit a macro run (write, 202 accepted; asynchronous unless --follow)
   macro put <id>                      write a new show.macro revision (write, full replacement,
                                        requires config:write)
+  macro delete --confirm <id>         tombstone this macro (write); revision history preserved
+                                       server-side
   run show <runId> [--follow]         show one macro run, including every step's outcome
-  run list [--macro <id>] [--state]   list macro runs, most recent first
+  run list [--macro <id>] [--show <id>] [--state]
+                                       list macro runs, most recent first
   action list                         enumerate show.action objects
   action show <id>                    show one action's full definition
   action put <id>                     write a new show.action revision (write, full replacement,
@@ -193,10 +202,15 @@ Commands:
                                        exits 29 if any checked binding is broken (read)
   action invoke <id>                  invoke one stored action outside of a macro run (write,
                                        requires show:action:invoke)
+  action delete --confirm <id>        tombstone this action (write); revision history preserved
+                                       server-side
   show list                           enumerate show objects
   show get <id>                       show one show's full definition
   show set <id>                       write a new show revision (write, full replacement)
   show revisions <id>                 list show revision history, newest first
+  show delete --confirm <id>          tombstone this show (write); refused 409 while "show
+                                       active" names it; never cascades to objects still
+                                       naming this show id
   show active                         print the currently active show (404 if none set)
   show activate <id>                  make <id> the active show (write, full replacement)
   show mode                           print the installation-wide operating mode, program or
@@ -208,19 +222,35 @@ Commands:
   surface get <id>                    show one surface's full definition
   surface set <id>                    write a new surface revision (write, full replacement)
   surface revisions <id>              list surface revision history, newest first
+  surface delete --confirm <id>       tombstone this surface (write); revision history stays
+                                       readable via "surface revisions"
   cue list [--show <id>]              enumerate show.cue objects, optionally by show
   cue get <id>                        show one cue's full definition
   cue set <id>                        write a new cue revision (write, full replacement)
   cue revisions <id>                  list cue revision history, newest first
+  cue delete --confirm <id>           tombstone this cue (write); revision history stays
+                                       readable via "cue revisions"
+  cue activate <id>                   fire this cue directly, on every node it resolves to
   playlist list [--show <id>]         enumerate show.playlist objects, optionally by show
   playlist get <id>                   show one playlist's full definition
   playlist set <id>                   write a new playlist revision (write, full replacement)
   playlist revisions <id>             list playlist revision history, newest first
+  playlist delete --confirm <id>      tombstone this playlist (write); revision history stays
+                                       readable via "playlist revisions"
+  media-playlist list [--show <id>]   enumerate media.playlist objects, optionally by show
+  media-playlist get <id>             show one media playlist's full definition
+  media-playlist set <id>             write a new media playlist revision (write, full replacement)
+  media-playlist revisions <id>       list media playlist revision history, newest first
+  media-playlist delete --confirm <id>
+                                       tombstone this media playlist (write); revision history
+                                       stays readable via "media-playlist revisions"
   night list                          enumerate night.session objects
   night get <id>                      show one night session's full definition
   night set <id>                      write a new night.session revision (write, full replacement)
   night revisions <id>                list night.session revision history, newest first
   night revision <id> <n>             show one past revision's full payload
+  night delete --confirm <id>         tombstone this session (write); refused 409 while "night
+                                       active" names it
   night active                        print the currently active night session (404 if none set)
   night activate <id>                 make <id> the active night session (write, full replacement)
   night deactivate                    clear the active night session back to unset (write)
@@ -243,6 +273,19 @@ Commands:
                                        without clearing its degraded record (write, requires
                                        night:command; the only lifecycle command accepted while
                                        degraded besides the three above)
+  emergency-stop stop                 stop playout immediately on every configured FPP instance
+                                       (write, requires show:emergencystop:invoke)
+  emergency-stop stop-power-down      stop playout immediately, then force the active night
+                                       session's own standard graceful shutdown to start now (write)
+  emergency-stop hard-stop arm        arm the hard stop: mint a single-use token, no effect on
+                                       the show by itself (write)
+  emergency-stop hard-stop fire       fire the hard stop using --arm-token from "arm": immediate stop,
+                                       abandon the active night session with no wait (write; never
+                                       chained with "arm" by one command; see cmd_emergency_stop.go)
+  emergency-stop config get           show each level's own optional follow-up action list
+  emergency-stop config set           write a new show.emergencystop revision from a JSON payload
+                                       (write, full replacement, requires config:write)
+  emergency-stop config revisions     list show.emergencystop revision history, newest first
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports
@@ -281,6 +324,14 @@ Commands:
   assets manifest [--node <id>] [--require-ready]
                            what each node should hold for the active show,
                            versus what it actually holds (Track E seam E5)
+  assets unused <nodeId>  which of this node's held assets no Cue in its
+                           resolved catalog references
+  assets remove <nodeId> <contentHash>
+                           remove one asset from a node (write, requires
+                           asset:write); refused (409) if a Cue still
+                           references it
+  assets resync <nodeId>  ask the coordinator to re-check this node now
+                           (write, requires asset:write); accepted only
   assets settings get     show the active assets.settings configuration (Track G seam G-4,
                            ADR-039)
   assets settings set     write a new assets.settings revision; only the flags passed are
@@ -323,6 +374,10 @@ Commands:
                                         replacement; refused unless the node has already
                                         advertised both routes, requires config:write)
   audio node revisions <nodeId>        list audio.node revision history, newest first
+  audio node delete --confirm <nodeId> tombstone this object (write); a later "audio node
+                                       set" on the same id un-deletes it
+  audio session show [sessionId]        show a session's audio_session.* observations (read,
+                                        open, no node scope); all sessions if id omitted
   audio session apply <nodeId> <sessionId> [params-json]
                                         dispatch audio.session.apply (write, requires audio:command)
   audio session prepare <nodeId> <sessionId> [params-json]
@@ -349,11 +404,22 @@ Commands:
                                         dispatch audio.output.mute (write, requires audio:command)
   audio output unmute <nodeId> <sessionId>
                                         dispatch audio.output.unmute (write, requires audio:command)
+  audio silence <nodeId>
+                                        dispatch audio.node.silence: the unconditional
+                                        per-node emergency stop (write, requires audio:command)
   node-clock list                      enumerate node.clock objects (id is the node id)
   node-clock get <nodeId>              show one node's clock configuration
   node-clock set <nodeId>              write a new node.clock revision (write, full
                                         replacement, requires config:write)
   node-clock revisions <nodeId>        list node.clock revision history, newest first
+  fppconnect settings get              show the active fppconnect.settings configuration
+                                        (ADR-044; never 404s, reports the built-in default)
+  fppconnect settings set              write a new fppconnect.settings revision (write,
+                                        full replacement, requires config:write)
+  fppconnect settings revisions        list fppconnect.settings revision history, newest first
+  fppconnect status <node-id>          show one node's most recently pushed FPP Connect
+                                        channel-range outcome: formatted, empty because no
+                                        surface is configured, or dropped and why (read)
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields

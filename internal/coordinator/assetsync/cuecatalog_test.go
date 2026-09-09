@@ -655,7 +655,7 @@ func TestCueCatalogAudioOutputResolvesHashesBySequenceIDNotAssetRowID(t *testing
 	putActiveShow(t, st, "halloween-2026")
 
 	const contentHash = "deadbeef00000000000000000000000000000000000000000000000000ab"
-	rec := createAsset(t, st, "halloween-2026", "thriller-audio", store.AssetTargetKindShow, "", contentHash, "thriller-audio.wav")
+	rec := createAssetWithMediaType(t, st, "halloween-2026", "thriller-audio", store.AssetTargetKindShow, "", "audio", contentHash, "thriller-audio.wav")
 	if rec.ID == contentHash {
 		t.Fatalf("test fixture's asset row id %q must differ from its content hash %q, or this test cannot distinguish a SequenceID lookup from an AssetID lookup", rec.ID, contentHash)
 	}
@@ -682,6 +682,68 @@ func TestCueCatalogAudioOutputResolvesHashesBySequenceIDNotAssetRowID(t *testing
 	if out.Audio.Filename != "thriller-audio.wav" {
 		t.Fatalf("ResolveCueCatalog entries[0].Outputs.Audio.Filename = %q, want %q (the runtime filename a node must actually open, not the logical asset id)",
 			out.Audio.Filename, "thriller-audio.wav")
+	}
+}
+
+// TestCueCatalogResolvesFSEQAndAudioSeparatelyForOneSequenceID reproduces,
+// at the catalog-resolution layer, the defect ADR-028 decision 1's
+// amendment fixes: a Cue whose render output's Sequence and whose audio
+// output's Asset name the IDENTICAL sequence id ("opener"), the same
+// collision an FSEQ and its own audio registered under one sequence id
+// produce, with both an fseq-media-type asset and an audio-media-type
+// asset current for that sequence. Before the amendment, resolveAssetFor
+// consulted no media type at all: it sorted every current asset for the
+// sequence by content hash and returned whichever won that sort for BOTH
+// outputs, so which output got which filename depended on hash order, not
+// on what the output declared. This proves both outputs resolve
+// deterministically to the CORRECT file: the render output gets the fseq
+// filename and the audio output gets the audio filename, never swapped,
+// regardless of which content hash sorts first.
+func TestCueCatalogResolvesFSEQAndAudioSeparatelyForOneSequenceID(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "media-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putSurface(t, st, "wall-1", "halloween-2026", "media-01")
+	putAudioNode(t, st, "media-01")
+	putCue(t, st, "opener-cue", "halloween-2026", config.ShowCuePayload{
+		Name: "Opener",
+		Outputs: config.ShowCueOutputs{
+			Render: &config.ShowCueRenderOutput{Sequence: "opener"},
+			Audio:  &config.ShowCueAudioOutput{Asset: "opener"},
+		},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "opener-cue"))
+	putActiveShow(t, st, "halloween-2026")
+
+	// The audio content hash ("zzz...") deliberately sorts AFTER the fseq
+	// content hash ("aaa..."), so a media-type-blind resolver picking
+	// hashes[0] for both outputs would hand the fseq filename to BOTH the
+	// render and the audio output, proving this test actually exercises
+	// the media-type filter rather than passing by coincidence of sort
+	// order.
+	createAssetWithMediaType(t, st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "fseq",
+		"sha256:"+strings.Repeat("a", 64), "Opener.fseq")
+	createAssetWithMediaType(t, st, "halloween-2026", "opener", store.AssetTargetKindShow, "", "audio",
+		"sha256:"+strings.Repeat("z", 64), "Opener.wav")
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := ResolveCueCatalog(ctx, st, active, "media-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	out, ok := cueOutputsByID(catalog.Entries, "opener-cue")
+	if !ok {
+		t.Fatalf("catalog entries = %+v, want opener-cue present", catalog.Entries)
+	}
+	if out.Render == nil || out.Render.Filename != "Opener.fseq" {
+		t.Fatalf("Render output = %+v, want Filename=Opener.fseq (the fseq asset, never the audio one)", out.Render)
+	}
+	if out.Audio == nil || out.Audio.Filename != "Opener.wav" {
+		t.Fatalf("Audio output = %+v, want Filename=Opener.wav (the audio asset, never the fseq one)", out.Audio)
 	}
 }
 

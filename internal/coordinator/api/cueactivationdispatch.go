@@ -45,6 +45,19 @@ import (
 // exactly the "did this node actually see and refuse it" evidence H3
 // spec section 6 exists to preserve.
 
+// BrokerConnectionState is [Dependencies.BrokerConnection]'s own
+// dependency shape: this coordinator's own MQTT broker connection, reduced
+// to the one fact [cueactivate.Authorize]'s reconnect-staleness allowance
+// needs. *broker.BrokerManager satisfies this directly via its own
+// ConnectedSince method, no adapter needed, matching RenderPublisher and
+// AudioSessionPublisher's identical "the real dependency already has this
+// method" wiring immediately below in this file.
+type BrokerConnectionState interface {
+	// ConnectedSince returns the last time this coordinator's own broker
+	// connection came up, or the zero time if it has never connected.
+	ConnectedSince() time.Time
+}
+
 // cueActivationConfirmDeadline bounds how long a cue.activate dispatch
 // waits for the node's own result-topic reply — mirrors
 // cueCatalogDeployConfirmDeadline's identical role and reasoning one file
@@ -52,6 +65,11 @@ import (
 // can shrink it deterministically; no runtime configuration ever
 // reassigns it.
 var cueActivationConfirmDeadline = 15 * time.Second
+
+// cueActivationWireDeadline bounds how stale a cue.activate may be before
+// the agent refuses it: a late activation directly desyncs show-visible
+// playback from operator/timeline intent.
+const cueActivationWireDeadline = 60 * time.Second
 
 // cueActivationNodeOutcomeAuthorized is the exact string
 // internal/agent/cueactivationops.go's activate reports (in its
@@ -138,18 +156,30 @@ type cueActivationDispatchOutcome struct {
 // simply skipped (recorded in its own outcome); it never blocks dispatch
 // to the other nodes — H4's envelope is per-node, so a refusal for one
 // node is not evidence about any other.
-func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer) []cueActivationDispatchOutcome {
+func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
 	out := make([]cueActivationDispatchOutcome, 0, len(activations))
 	for nodeID, act := range activations {
-		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer)
+		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, pin)
 		out = append(out, outcome)
+		// Best-effort, independent of cue N's own outcome above — see
+		// dispatchPrepareAheadAudio's own doc comment (cueactivationloop.go)
+		// for why a wrong or stale guess here costs nothing. Cue N's own
+		// activation, above, has already been dispatched (or refused) by
+		// the time this runs, so nothing past this point may affect it —
+		// including a panic: this whole method runs on runTick's own
+		// detached goroutine (cueactivationloop.go's Run), so an unrecovered
+		// panic here would not just skip a prepare-ahead cycle, it would
+		// crash this entire coordinator process. h.safeDispatchPrepareAheadAudio
+		// makes best-effort mean genuinely total.
+		h.safeDispatchPrepareAheadAudio(ctx, now, nodeID, act, issuer)
 	}
 	return out
 }
 
-func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) cueActivationDispatchOutcome {
+func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) cueActivationDispatchOutcome {
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
-	refusalOutcome, refusalReason, cueOutputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act)
+	reconnectedAt := h.deps.BrokerConnection.ConnectedSince()
+	refusalOutcome, refusalReason, cueOutputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, reconnectedAt, nodeID, act, pin)
 	if err != nil {
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("authorize cue activation for node %q: %w", nodeID, err)}
 	}
@@ -212,11 +242,13 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 	if err != nil {
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("build result topic for node %q: %w", nodeID, err)}
 	}
+	deadline := now.Add(cueActivationWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: act.ActivationID, Action: "cue.activate",
 		Target: mqttproto.CmdTarget{Kind: "node", ID: nodeID}, Params: params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName},
 		ConfirmationMethod: "evidence",
+		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, nodeID, payload)
 	if err != nil {

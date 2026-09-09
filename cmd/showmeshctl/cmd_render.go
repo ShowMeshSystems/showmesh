@@ -452,14 +452,15 @@ func cmdRenderSettingsGet(args []string, stdout, stderr io.Writer, clock func() 
 // REPLACEMENT (unlike "config set"'s fpp.endpoints, this kind never merges
 // against a previous revision) — every field of the payload is required,
 // including every member of restartPolicy. The payload is read from
-// --file, or from stdin when --file is not given, and parsed directly as
-// configRenderSettingsPayload: unlike fpp.endpoints, there is no second
-// "config get"-shaped envelope to tolerate, because the coordinator's own
-// PUT body IS the bare {"idleOutput":...,"restartPolicy":{...}} shape.
+// --file, or from stdin when --file is not given. unwrapConfigGetResponse
+// (cmd_config.go) strips the "render settings get --output json" envelope
+// when present, so parseRenderSettingsSetPayload below only ever sees the
+// bare {"idleOutput":...,"restartPolicy":{...}} shape either way.
 func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl render settings set", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON file matching {\"idleOutput\":string,\"restartPolicy\":{...}}; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl render settings set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new render.settings configuration revision (requires config:write,")
@@ -468,6 +469,10 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 		_, _ = fmt.Fprintln(stderr, "silently defaulted or carried forward from the previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"render settings get --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
+		_, _ = fmt.Fprintln(stderr, "409 if the configuration changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -485,6 +490,11 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	if err != nil {
 		return reportError(stderr, "render settings set", newCLIError(exitUsage, "%v", err))
 	}
+	payloadRevision, _ := wrapperRevision(raw)
+	raw, err = unwrapConfigGetResponse(raw)
+	if err != nil {
+		return reportError(stderr, "render settings set", newCLIError(exitUsage, "%v", err))
+	}
 
 	payload, err := parseRenderSettingsSetPayload(raw)
 	if err != nil {
@@ -498,8 +508,21 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	const apiPath = "/api/v1/config/render.settings"
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r renderSettingsConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "render settings set", err)
+	}
+
 	var resp renderSettingsConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/render.settings", payload, &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, payload, &resp); err != nil {
 		return reportError(stderr, "render settings set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -516,14 +539,12 @@ func cmdRenderSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 }
 
 // parseRenderSettingsSetPayload decodes raw directly as
-// configRenderSettingsPayload. Unlike parseConfigSetPayload
-// (cmd_config.go), there is no second "config get"-response envelope to
-// tolerate: "render settings get --output json" prints the FULL response
-// object (revision, source, etc.), and this command does not accept that
-// shape back — piping one into the other is not a supported round trip for
-// this kind, because the coordinator's own PUT body is exactly the bare
-// {"idleOutput":...,"restartPolicy":{...}} object, with nothing nested
-// three levels down the way fpp.endpoints' "payload.endpoints" was.
+// configRenderSettingsPayload. By the time raw reaches here,
+// cmdRenderSettingsSet has already run it through unwrapConfigGetResponse
+// (cmd_config.go), so raw is always the bare
+// {"idleOutput":...,"restartPolicy":{...}} shape — whether the operator's
+// file held that shape directly, or the full "render settings get" object
+// it was unwrapped from.
 func parseRenderSettingsSetPayload(raw []byte) (configRenderSettingsPayload, error) {
 	var p configRenderSettingsPayload
 	if err := json.Unmarshal(raw, &p); err != nil {

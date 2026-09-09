@@ -79,6 +79,15 @@ A pre-show script wants to branch on that difference. Track E seam E7's
 invoke verb reuses 9 and 11 to 13 unchanged — the ADR-020 outcome vocabulary
 does not fork per surface.
 
+**Lane 17a SM-129 mints no new exit code for the hard-stop arm/fire gate**
+(orchestrator ruling): `showmeshctl emergency-stop hard-stop fire` reuses
+`exitActionRefused` (13) for a refused arm (never armed, the wrong token,
+or the token expired, all one class since the remedy is identical: "arm
+again, then fire promptly"), and `exitConflict` (10) for the compare-and-
+swap-race case, an arm token already consumed by an earlier fire. A new
+code would add vocabulary without adding discrimination a script could
+actually branch on.
+
 ## Configuration kinds
 
 `config_objects.kind` and `config_revisions.kind`, used verbatim as the
@@ -105,8 +114,10 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `audio.node` | operator-chosen (the node id) | shipped | Track C seam C1b |
 | `night.session` | operator-chosen | reserved | Track F seam F1 |
 | `night.session.active` | `default` singleton | reserved | Track F seam F1 |
-| `fppconnect.settings` | `default` singleton | reserved | Track E phase 2 seam FC1a |
+| `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
 | `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
+| `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
+| `media.playlist` | operator-chosen | shipped | SM-524 / SM-457 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -224,6 +235,19 @@ Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
 (ADR-032), and the path shape differs deliberately.
 
+**`show.emergencystop` (Lane 17a SM-129) holds only the three emergency-stop
+levels' own optional, per-level follow-up action lists**: an ordered list
+of existing `show.action` ids per level, invoked best-effort after that
+level's own immediate stop. It is the shared-pool-with-per-level-selection
+design: `show.action` is already the namespace-scoped, validated authoring
+surface, so this kind adds no new way to author an action's own target, only
+which already-authored actions each level's own list names. Field names
+(`stop`, `stopPowerDown`, `hardStop`) match the wire level names in
+`/api/v1/emergency-stop/*` and this build's own audit action strings below
+exactly. Referenced `show.action` ids are validated to exist at write time,
+of ANY show: this kind is installation-wide, never scoped to whichever show
+happens to be active, unlike `night.session`'s own action references.
+
 ### show.action target integrations
 
 `show.action.target.integration`, defined in
@@ -272,6 +296,9 @@ bundles of these (ADR-024).
 | `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
 | `night:override` | shipped | Track F seam F6: interlock override where a rule declares `authorized-operator` (force-power-off instead reuses `show:action:invoke`, see RESTING-MODE.md §10.4) |
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
+| `fpp:fallback` | shipped | Track J seam J1: an FPP host fetches its current fallback program and posts its acknowledgement |
+| `show:emergencystop:invoke` | shipped | Lane 17a SM-129: the four emergency-stop trigger routes (stop, stop-power-down, hard-stop arm/fire) |
+| `cue:activate` | shipped | Lane 2 SM-364: an operator hand-firing one Cue directly from Live Control's Announcements control, outside the automatic FPP-observation-driven activation loop |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -315,6 +342,148 @@ reintroduce the binding the ADR exists to hide. The grant to watch is
 therefore `config:write`, which decides what an action may be bound to, not
 this one.
 
+**`show:emergencystop:invoke` (Lane 17a SM-129) is `show:action:invoke`'s own
+umbrella-authority precedent, applied to the same problem one layer up.** A
+principal holding it may stop playout, force the active night session's own
+existing shutdown sequence, and invoke every follow-up action configured for
+whichever level it triggers, without separately holding `fpp:command`,
+`night:command`, or `show:action:invoke`. It is granted to `RoleOperator`
+(the console operator during a live show is exactly who must be able to
+reach this without first being handed the individual scopes those actions
+would otherwise need), the same reasoning that already puts
+`show:action:invoke` in `operatorActionScopes`. It is the ONLY scope check on
+all four emergency-stop routes; the dispatch primitives underneath authorize
+nothing of their own for an in-process caller.
+
+## Node capability identifiers
+
+`capability.ID` in `pkg/capability/id.go`: what a node advertises it can
+actually do, read by the coordinator and rendered by the Operator UI. The
+syntax is two or more lowercase dot-separated segments, each starting with a
+letter (`idPattern`), so no underscores and no digits in a leading position.
+
+**This section did not exist until 2026-08-30**, which is why the vocabulary
+in `knownIDs` was never reserved anywhere. ADR-002 makes an unknown identifier
+valid, so nothing fails loudly when two branches mint two spellings for one
+ability; that is the same silent condition the audit action strings section
+above was added for.
+
+| Capability | Status | Owner |
+|---|---|---|
+| `matrix.render` | shipped | ARCHITECTURE section 6 |
+| `video.playback` | shipped | ARCHITECTURE section 6 |
+| `media.cache` | shipped | ARCHITECTURE section 6 |
+| `display.hdmi` | shipped | ARCHITECTURE section 6 |
+| `transport.ndi.send` | shipped | ARCHITECTURE section 6 |
+| `transport.ndi.receive` | shipped | ARCHITECTURE section 6 |
+| `audio.engine` | shipped | ARCHITECTURE section 6 |
+| `audio.output.local` | shipped | ARCHITECTURE section 6 |
+| `audio.output.fm` | shipped | ARCHITECTURE section 6 |
+| `audio.output.ltc` | shipped | ARCHITECTURE section 6 |
+| `audio.output.dante` | shipped | ARCHITECTURE section 6 |
+| `timecode.ltc.observe` | shipped | ARCHITECTURE section 6 |
+| `process.supervise` | shipped | ARCHITECTURE section 6 |
+| `audio.playback.background` | shipped | Lane 17a SM-201 |
+| `audio.playback.announcement` | shipped | Lane 17a SM-201 |
+| `audio.playback.playlist` | shipped | Lane 17a SM-201 |
+| `audio.playback.loop` | shipped | Lane 17a SM-201 |
+| `audio.playback.gain` | shipped | Lane 17a SM-201 |
+| `audio.playback.fade` | shipped | Lane 17a SM-201 |
+| `audio.playback.seek` | shipped | Lane 17a SM-201 |
+| `audio.playback.position` | shipped | Lane 17a SM-201 |
+| `audio.playback.ceiling` | shipped | Lane 17a SM-201 |
+| `audio.mix.concurrent` | shipped | Lane 17a SM-201 |
+| `audio.mix.duck` | shipped | Lane 17a SM-201 |
+| `audio.mix.interrupt` | shipped | Lane 17a SM-201 |
+| `audio.transition.sequential` | shipped | Lane 17a SM-201 |
+| `audio.transition.gapless` | reserved | Lane 17a SM-201 |
+| `audio.transition.crossfade` | reserved | Lane 17a SM-201 |
+
+**`audio.playback`, `audio.multichannel`, `audio.dante` and
+`timecode.ltc.generate` are withdrawn**, recorded in `withdrawnIDs` and
+still syntactically valid so a node advertising one fails informatively
+rather than being dropped. They are not free to re-mint.
+
+**The fourteen Lane 17a rows are RESTING-MODE section 13's own vocabulary,
+one identifier per ability it names.** That section requires a configured
+audio output to declare the background, announcement, playlist, mix, duck,
+interrupt, loop, gain, fade, seek, position and requested item-transition
+abilities a night session needs. Twelve of the fourteen ship: a node
+advertises them alongside `audio.engine` whenever its bound session engine
+reports itself available (`internal/agent/audiocapabilities.go`), and
+`internal/coordinator/api/nightaudioreadiness.go` reports
+`resting:background-audio-output-capabilities:<node>` as `not_verifiable`,
+`unknown`, `failed`, or `healthy` against that real advertisement,
+narrowed to what a configured `resting.backgroundAudio` session
+concretely needs on its own output node
+(`audio.playback.background`/`playlist`/`gain` always, `loop` only when
+a repeat mode is configured). `not_verifiable` (excluded from the
+aggregate outcome, same as before this PR) is for a node that has never
+published a Hello at all, or never appeared in inventory: an agent built
+before this signal existed makes no claim either way, and reading that
+as a negative claim would be the identical dishonesty this whole change
+exists to remove, aimed the other way. `unknown` covers every other case
+this coordinator cannot currently confirm: a node whose Hello exists but
+is not currently online, AND a node that is online with an empty
+capability set but this coordinator's own independent
+`node.audio.engine.state` observation (`internal/coordinator/collector/
+nodeaudio`) either confirms the session engine usable right now (still
+probing: the Hello capability cycle can take up to 120s to catch up
+after a binding change) or offers no current evidence either way yet
+(this node's own audioreport can land 60-90s after connect on real
+hardware, and evidence that cannot exist yet is not evidence of
+absence). `failed` names whichever abilities a currently-confirmed
+node's own live advertisement genuinely omits, or, for the empty-set
+case above, only fires when `node.audio.engine.state` POSITIVELY,
+CURRENTLY confirms the engine unavailable. `healthy` once a live node
+declares every one. `audio.transition.gapless` and
+`audio.transition.crossfade` remain reserved and unshipped: no engine
+this repository binds ever eliminates the inter-item gap
+`Session.advanceLocked` measures, so no node can honestly confirm
+either, and `resting:background-audio-item-transition` (the separate,
+pre-existing check for the requested item-transition ability) reports
+`not_verifiable` for an output that has never published a Hello at all,
+`unknown` for one whose Hello exists but is not currently confirmed
+online, and `failed` for a currently-confirmed live output whose
+advertisement genuinely omits the requested ability, never a blanket
+refusal (this check does not consult `node.audio.engine.state`: neither
+`audio.transition.gapless` nor `audio.transition.crossfade` ever ships
+regardless of engine availability, so there is no "still probing" story
+for it to distinguish). `audio.mix.concurrent` is
+the section's bare "mix": whether the output can carry more than one
+session at once, which is a different statement from `audio.mix.duck`.
+
+**`audio.mix.concurrent` ships identically to the other eleven shipped
+rows above, but rests on a different kind of evidence, and that
+difference is not visible from the table alone.** The other eleven are
+Manager-level behavior (`internal/agent/audio`'s session/mix/engine code)
+implemented once against the `Engine` interface, true for any bound
+engine. `audio.mix.concurrent` is a claim about one specific Engine
+implementation, `internal/agent/audio/gstengine` (concurrent sessions
+mixed onto one physical sink by a single audiomixer, per that package's
+own doc comment), asserted whenever ANY engine reports itself available,
+because `agent.go`'s own real wiring only ever binds `newGstEngine` to
+that one implementation. Nothing in code enforces that: no type or
+runtime check ties "available" to gstengine specifically, and a test
+double reporting itself available gets this identifier too, proven
+directly by a test in this codebase
+(`TestInstallAudioCapabilityRepublishRepublishesOnRebuild`,
+`internal/agent/audioengine_test.go`). This is a build-time assumption a
+second real `Engine` implementation would require re-examining before
+`audio.mix.concurrent` keeps shipping unconditionally.
+
+**They are split across three namespaces deliberately.** `audio.playback.*`
+is what one session can be asked to do, `audio.mix.*` is what happens when
+two sessions meet on one output, and `audio.transition.*` is the closed
+`pkg/audio.ItemTransition` vocabulary `ValidateItemTransitionSupport` already
+gates on. A single flat `audio.*` list would have made the item-transition
+members indistinguishable from the per-session abilities, and the transition
+check is the one with a caller that refuses today.
+
+**A builder ships the rows its declaration actually supports and leaves the
+rest reserved**, on the rule the observation signals section states: releasing
+a name only to re-mint it later is how a spelling drifts.
+
 ## Collector source ids
 
 The `source` field on an observation and the id in `GET /api/v1/snapshot`'s
@@ -349,6 +518,8 @@ after shipping a breaking change to stored history.
 |---|---|---|
 | `agent.echo` | shipped | Track B seam B1 |
 | `asset.fetch` | shipped | Track E |
+| `asset.remove` | shipped | SM-306: delete one held asset from a node's disk, by verified content hash, so an operator can remove an asset no Cue references (`GET`/`POST /api/v1/nodes/{nodeId}/assets/unused`\|`/remove`, `api/openapi.yaml`). Result signal `node.asset.removed` is not its own register row: it falls under the already-shipped `node`/`node.*` observation namespace below, matching `node.asset.held`/`node.asset.fetch_failed`, neither of which has an individual row either |
+| `asset.inventory.request` | shipped | SM-521: no params; ask a node to republish its asset inventory immediately rather than waiting for its own next scheduled interval. The coordinator dispatches this once, fire and forget, to every declared node from `internal/coordinator/broker/broker.go`'s own reconnect handling, so a node that rode out a broker outage cleanly gets to prove its inventory is current sooner than the ordinary tick would. Result signal `node.asset.inventory_requested` is not its own register row, matching `asset.remove`'s identical reasoning for `node.asset.removed` immediately above |
 | `render.surface.apply` | shipped | Track B seam B2 |
 | `render.surface.clear` | shipped | Track B seam B2 |
 | `render.pipeline.restart` | shipped | Track B seam B2 |
@@ -370,9 +541,12 @@ after shipping a breaking change to stored history.
 | `audio.media.probe` | reserved | Track C seam C2 |
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
+| `audio.node.silence` | shipped | SM-494: the installation-wide emergency stop's node-scoped, unconditional per-node audio silence, no sessionId, no revision |
+| `node.clock.configure` | reserved | Track I seam I1: the coordinator pushing the node's `node.clock` object over the existing MQTT command path, on write and on hello, exactly as `audio.node.configure` does. Payload schema string `showmesh.node.clock.config/v1` (ADR-044); the retained `observed/clock` payload is `showmesh.node.clock/v1` |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
-| `fppconnect.configure` | reserved | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
+| `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
+| `fallback.program.deploy` | released | Track J seam J1 landed WITHOUT it, which is the condition its own reservation named. The plugin fetches over the HTTP paths under `/api/v1/fallback-programs`; the coordinator never pushes. Free to reuse |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
 `announce` and `duck` mint no operation of their own.** §14 permits combining
@@ -433,10 +607,17 @@ register entry comes from the code and never from a plan.
 | `asset.upload` | shipped | Track E |
 | `asset.fetch` | shipped | Track E |
 | `asset.rollback` | shipped | Track E, ADR-028 decision 10 |
+| `asset.remove` | shipped | SM-306: `POST /api/v1/nodes/{nodeId}/assets/remove`'s own audit entries (Kind distinguishes dispatch from outcome), the same action string the Agent operation names table above reserves for the MQTT command itself |
 | `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 | `fpp.instance_uuid.acknowledge` | shipped | per-endpoint observed FPP instance uuid conflict acknowledgment |
 | `cuecatalog.acknowledge` | shipped | Track H seam H3: a node's cue-catalog acknowledgement |
+| `fallback.program.publish` | shipped | Track J seam J1: the coordinator building and signing a new fallback-program revision |
+| `fallback.program.refuse` | shipped | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
+| `fallback.program.acknowledge` | shipped | Track J seam J1: an FPP host acknowledging the installed package |
 | `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
+| `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
+| `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
+| `show.emergencystop.hard_stop` | shipped | Lane 17a SM-129: level 3 (hard-stop) dispatch, only after fire consumes its own arm token |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -444,6 +625,17 @@ the verb (`principal.reset_password`, `fpp.stop_playlist_gracefully`).
 `credential_in_url` has no noun segment at all. Renaming any of them
 rewrites the meaning of history that is already stored, so the rule going
 forward is `<noun>.<verb>`, and the existing outliers stay.
+
+**The three `show.emergencystop.*` names above apply this rule, not the
+orchestrator's own first guess.** Lane 17a SM-129 was handed
+`show.emergencystop.stop-power-down`/`hard-stop` (hyphenated) as a semantic
+placeholder and asked to check this section's own convention before
+committing to a spelling; this section's own words above are unambiguous
+(underscore inside a multi-word verb, matching `stop_playlist_gracefully`
+and `reset_password`), so the shipped spellings use `stop_power_down` and
+`hard_stop` instead. The noun segments (`show.emergencystop`, three dots
+deep) mirror `fallback.program.*`'s own noun.subnoun.verb shape rather than
+inventing a fourth pattern.
 
 **Four of these names are shared with other namespaces, deliberately and
 harmlessly.** `asset.fetch`, the four `render.*` names, and `cue.activate`
@@ -470,6 +662,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
 | `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
+| `fallback_program` | `fallback_program.*` | shipped | Track J seam J1 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -496,6 +689,16 @@ rows were wrong because they were written from a plan. The resource id is the
 night-session identity, not the `night.session` configuration object id,
 because one definition is activated many times and a signal keyed on the
 definition could not distinguish tonight's session from last night's.
+
+**Track J's `fallback_program` kind is reserved with its namespace and
+without its individual signal rows**, for the reason the paragraph above
+gives: the rows get written from the code when seam J1 lands, never from
+this plan. The resource id is the FPP host identity, not the program's own
+package id, because a host holds one current program at a time and an
+operator asking whether that host can survive a coordinator outage is asking
+about the host. ADR-048 names the reported facts (package id, revision,
+verification result, installed time, age) and makes a missing, stale,
+mismatched, or unacknowledged package a readiness failure before showtime.
 
 Adding a resource kind is not only a constant: `internal/coordinator/api/
 handlers.go:301` switches over the allowed kinds and silently rejects any
@@ -669,24 +872,49 @@ whole value of the signal is that a green alignment light means measured
 rather than configured, and only the hardware work can make it say
 anything else.
 
-**Five more node-level `node.audio.engine.*` signals, proposed but NOT
-owner-confirmed, added on the real-node audio acceptance bench review
-fold.** They carry gstengine's bus-level glitch evidence (ALSA
+**Seven node-level `node.audio.engine.*` signals, owner-confirmed
+2026-08-26.** Five of them were added on the real-node audio acceptance
+bench review fold and carry gstengine's bus-level glitch evidence (ALSA
 xrun/underrun-class and clock-drift WARNING messages, bucketed by GError
 domain, and QOS-class dropped-buffer counts) into an observation for the
 first time; before this they were counted in the agent process and
-discarded before reaching the coordinator. The spellings below are the
-builder's own naming, not the owner's: flagged for confirmation rather
-than reserved, per this section's no-additions-without-the-owner rule for
-the sibling LTC block above.
+discarded before reaching the coordinator. The spellings were the
+builder's own naming and were flagged for confirmation, per this section's
+no-additions-without-the-owner rule for the sibling LTC block above. The
+owner confirmed all five as they stand and ruled that further
+`node.audio.engine.*` signals may be added later without another ruling.
+`state` and `reason` shipped with the same collector and are recorded here
+alongside them.
 
 | Signal | Status | Owner |
 |---|---|---|
-| `node.audio.engine.started_at` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.stream` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.resource` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.other` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.qos_drops` | proposed, unconfirmed | flagged for Eric |
+| `node.audio.engine.state` | shipped | C6/C7 |
+| `node.audio.engine.reason` | shipped | C6/C7 |
+| `node.audio.engine.started_at` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.stream` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.resource` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.other` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.qos_drops` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.restore.state` | shipped | SM-384 (`idle`/`scheduled`/`exhausted`; a node with a delivered `audio.node` binding and no persisted session has nothing in the per-session `audio_session.restore.*` fields, so this is its only remaining wire evidence that the automatic retry driver gave up) |
+| `node.audio.engine.restore.attempts` | shipped | SM-384 (node-level counterpart to `audio_session.restore.attempts`) |
+| `node.audio.engine.restore.next_attempt_ms` | shipped | SM-384 (node-level counterpart to `audio_session.restore.next_attempt_ms`; not_collected, not zero, once the state is not `scheduled`) |
+| `node.audio.engine.restore.last_reason` | shipped | SM-384 (node-level counterpart to `audio_session.restore.last_reason`) |
+
+**The four `node.audio.engine.restore.*` rows close a gap the widened
+retry driver opened, 2026-09-03.** `Manager.SetRestoreRetryStatus` only
+ever writes to sessions currently in `m.pendingEngineRestore`, so a node
+holding a delivered `audio.node` binding with NO persisted session has
+zero entries to write to: the driver's attempts, its countdown, and its
+eventual exhaustion all land in an empty map and are silently dropped,
+leaving only a `logger.Warn` line on the node as evidence that eight
+automatic attempts over roughly nineteen minutes ran and failed. `state`
+is a three-value string, not a countdown or a boolean, for the same
+reason `audio_session.restore.next_attempt_ms`'s own doc comment already
+gives: 0 means both "before the driver's first attempt" and "the bounded
+schedule is exhausted", and a boolean cannot separate "never started"
+from "gave up" either. All four fields on
+`mqttproto.AudioPayload` are optional; an agent built before they existed
+omits them, and an absent `engineRestoreState` reads as `idle`.
 
 **None of the five is confirmed to identify an ALSA xrun/underrun
 specifically.** alsasink logs a recovered xrun via `GST_WARNING_OBJECT`,
@@ -696,6 +924,101 @@ closest-available bucket, not verified evidence. `qos_drops` is live
 evidence once the sink's `qos` property is enabled (done as part of this
 change), independent of the xrun question. See gstengine's own
 `classifyWarningDomain` doc comment.
+
+**One more node-level signal, SM-494.** `audio.node.silence`'s own
+result reports a per-session outcome and count directly in its
+`OperationResult.Value`, not through a retained observation, so it mints
+no per-session signal of its own; this is the operation's node-level
+report signal only.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.silence` | shipped | SM-494 |
+
+**Lane 18a signal reservations, 2026-08-28.** Reserved by the lane before
+its builders start, so that two branches cannot mint two spellings for the
+same fact. A builder ships the rows its chosen shape needs and leaves the
+rest reserved rather than released.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.gain.effective_db` | reserved | Lane 18a (dB companion to `audio_session.gain.effective`) |
+| `audio_session.gain.ceiling_db` | reserved | Lane 18a (dB companion to `audio_session.gain.ceiling`) |
+| `audio_session.ltc.claim.state` | shipped | Lane 18a (`held`, `refused` or `none`: whether this session drives the node's one LTC run) |
+| `audio_session.ltc.claim.reason` | shipped | Lane 18a (why a claim was refused; required whenever the state is `refused`) |
+| `node.audio.ltc.owner_session_id` | reserved | Lane 18a (which session holds the node's single LTC run, so a mismatch is legible from node-level evidence) |
+
+**A refused LTC claim's own shape, 2026-08-28.** The session-level pair
+above ships; `node.audio.ltc.owner_session_id` stays reserved. A session
+whose claim on this node's one LTC run is refused now carries that fact
+itself (`audio_session.ltc.claim.state` = `refused`, with `.reason`
+naming the session that holds the run) — legible from the refused
+session's own evidence, not only inferable by cross-referencing which
+session started the node's LTC generator. The node-level owner id would
+answer the same question from the other direction and remains available
+to a future builder who needs it; shipping both was not required to make
+the refusal itself observable.
+
+**The two gain rows are companions, not replacements.** Operators enter
+gain in decibels, so the observation must read in decibels; whether that
+is a new pair beside the linear values or a conversion of the existing two
+signals is the builder's call. If the existing signals are converted in
+place, these two rows stay reserved and unshipped, because releasing a
+name only to re-mint it later is how a spelling drifts.
+
+**Lane 18b reservations, 2026-08-28.** Reserved by the lane before its
+builders start. SM-295 needs a way to say "a restore is queued and nothing
+is playing" and SM-296 needs the automatic retry to be visible without
+opening the node log; both are one design, so both names are minted here
+rather than by whichever branch lands first.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.restore.attempts` | reserved | Lane 18b SM-296 (how many automatic restore attempts this session has made) |
+| `audio_session.restore.next_attempt_ms` | reserved | Lane 18b SM-296 (milliseconds until the next backed-off attempt) |
+| `audio_session.restore.last_reason` | reserved | Lane 18b SM-296 (why the last attempt did not build an engine) |
+
+`pkg/audio.State` value `restore_pending` is reserved for Lane 18b SM-295.
+SM-295 leaves the choice of shape to its builder: a new `State` member or a
+documented state-plus-fault combination. If the builder takes the
+combination, this value stays reserved and unshipped rather than released,
+on the same rule the gain rows above follow. Either shape changes what
+`audio_session.state` can report, so it is an API change and is recorded on
+SM-310.
+
+**Lane 18b coordinator reservation, 2026-08-28.** A coordinator that cannot
+decode its stored `audio.settings` stops pushing audio configuration to every
+node and says so only in one Warn line. Making that legible needs a name, and
+the shape is the builder's call: a coordinator-level signal, a readiness
+condition, or a refusal surfaced through the API. The signal pair is reserved
+here so the choice does not also mint a spelling.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `coordinator.audio.config.push.state` | reserved | Lane 18b SM-357 (whether the coordinator can use its stored `audio.settings` to configure nodes) |
+| `coordinator.audio.config.push.reason` | reserved | Lane 18b SM-357 (why it cannot; required whenever the state is not usable) |
+
+If the builder takes the readiness-condition or API-refusal shape instead,
+both rows stay reserved and unshipped rather than being released.
+
+**Lane 17a reservation, 2026-08-30, shipped 2026-08-30.** SM-86 makes
+audit-store unavailability stop refusing actions, which means the condition
+has to be legible somewhere other than the refusal it removes. Shipped as a
+field on an existing response, not an observation: `GET /api/v1/snapshot`'s
+`auditStore.state`/`auditStore.reason`, live from
+`identity.Service.AuditWriteStatus()`, rendered by a new Operator UI banner.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `coordinator.audit.store.state` | shipped | Lane 17a SM-86 (whether the coordinator can write to its audit store; `GET /api/v1/snapshot`'s `auditStore.state`) |
+| `coordinator.audit.store.reason` | shipped | Lane 17a SM-86 (why it cannot; required whenever the state is not usable; `auditStore.reason`) |
+
+No new audit action string, no new exit code, no new API path (the field
+lives on the existing snapshot response): SM-86 removes the fail-closed
+refusal on every non-exempt request path ADR-024 decision 11 governed -
+direct action invoke, audio session commands, FPP commands, Resolume
+actions, and the four night-session admission commands - and records
+`attributionDegraded` the way safety-class actions already did.
 
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
@@ -780,11 +1103,19 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `definition-superseded` | reserved | Lane 16, SM-290 |
 | `evidence-unavailable` | reserved | Lane 16, SM-290 |
 | `node-render-unassigned` | shipped | Lane 16, SM-281 (merged `main` at `533bbf2`, PR #156) |
-| `assets-missing` | reserved | Lane 16, SM-285 |
+| `assets-missing` | shipped | Lane 20.1, SM-329 |
 | `node-catalog-stale` | reserved | Lane 16, SM-285 |
 | `output-policy-unsupported` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
 | `exclusive-claim-conflict` | reserved | Lane 16, SM-285 |
 | `plugin-capability-ungated` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
+| `audio-ltc-emitter-ambiguous` | shipped | Lane 20.1, SM-314 |
+| `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
+| `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
+
+**Lane 20.1's three audio-target conditions are registered here after the
+fact.** SM-314 shipped them on `dev/multi-audio` (PR #210) without a
+register row; `internal/coordinator/fppreconcile/readiness.go` already
+declares all three. This is bookkeeping for that omission, not new work.
 
 **`definition-superseded` and `observation-hash-mismatch` answer different
 questions and must not be merged.** The shipped condition compares the
@@ -818,12 +1149,10 @@ assigns either one to Authoring, Readiness, Activation or Dispatch. The
 reservation stands so the name is not minted differently by Lane 20's
 SM-314, which shares the per-node readiness resolution.
 
-**`assets-missing` is reserved and not built, for a different reason: its
-dependency merged after SM-285 was cut.** The condition needs SM-287's
-narrowing of `ExpectedAssetsForNode` (`NodeCueSequenceIDs`), which reached
-`main` at `f6923ed` (PR #158) roughly ninety minutes after SM-285's last
-commit — there was nothing to build the readiness condition against at the
-time SM-285 was written.
+**`assets-missing` is now built.** Its dependency, SM-287's narrowing of
+`ExpectedAssetsForNode` (`NodeCueSequenceIDs`, merged to `main` at `f6923ed`,
+PR #158), reached `main` after SM-285 was cut, leaving nothing to build the
+condition against at the time. SM-329 builds it on `dev/multi-audio`.
 
 ## MQTT topics
 
@@ -842,6 +1171,8 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 | `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
 | `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
+| `showmesh/fpp/<instance-id>/fallback/program` (retained) | released | Track J seam J1 landed without it. Free to reuse, and the `showmesh/fpp/` prefix is no longer claimed |
+| `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -860,9 +1191,49 @@ ingest switch (`internal/coordinator/inventory/inventory.go:315`) drops any
 subpath it has no `case` for, at Debug level, silently. `observed/agent/echo`
 is being dropped that way today.
 
+**Track J's two rows are RELEASED and `showmesh/fpp/` is no longer claimed.**
+They were reserved defensively, on the expectation that the plugin's outbound
+HTTP would carry the program and its acknowledgement instead of a broker topic.
+J1 shipped on 2026-08-31 and did exactly that, so the condition the reservation
+itself named is met and both rows are free. The next work that needs a
+non-node top-level prefix may take `showmesh/fpp/`, and should note that an FPP
+host is not a node agent, which is why the node topic space did not fit here.
+
+**A defensive reservation is only worth keeping if someone actually releases
+it.** These two, and `fallback.program.deploy`, cost nothing to reserve and
+would have cost a rename across a whole branch to get wrong. What makes that
+trade honest is checking afterwards. All three were released by grepping merged
+`main` for each identifier and finding zero uses outside this file.
+
 **Never publish on `falcon/player/<host>/command/run` or any other
 `falcon/` topic against the live fleet.** FPP acts on it. This is a safety
 rule, not a naming convention, and it is in CLAUDE.md for the same reason.
+
+## Configuration field names
+
+**This section is deliberately narrow, and the scope statement comes before
+the rows because without it this becomes a mirror of every configuration
+struct and stops being read.** Record a settings field name here only when it
+meets one of two tests:
+
+1. a migration backfills it into stored revisions, so two branches adding
+   different fields under the same schema version collide; or
+2. a wire boundary requires it, so a field name disagreeing across the API,
+   the agent and the UI is a runtime failure rather than a compile error.
+
+Every other configuration field is an ordinary code identifier. It is not
+scarce, a collision in one is a merge conflict rather than a silent wrong
+value, and it does not belong here.
+
+| Field | Status | Owner and meaning |
+| --- | --- | --- |
+| `duckFadeDurationMs` | shipped | how long the duck ramp takes when an announcement bed starts. Backfilled into every stored `audio.settings` revision by schema v24, which is what puts it in scope for this section |
+| `duckRestoreFadeDurationMs` | shipped | how long the restore ramp takes when the bed ends. Backfilled by the same v24 migration |
+
+**Both rows are recorded after the fact, which is the exception and not the
+pattern.** v24 shipped before this section existed. Anything meeting the two
+tests above is reserved before the work begins, like every other identifier in
+this file.
 
 ## Schema versions
 
@@ -878,15 +1249,55 @@ The store schema version, bumped by migrations in
 | v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox filled by seam F4) |
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
-| v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
+| v13 | released | reserved 2026-08-19 for the `commands.requested_revision` rename and never built; that work runs as v22 |
 | v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
 | v15 | shipped | Track H seam H2: FPP playlist definition storage (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3) |
 | v16 | shipped | per-endpoint observed FPP instance uuid history (`fpp_instance_uuid_observations`), closing the gap FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5 recorded between `fpp.endpoints`, the plugin's `instanceUuid`, and `node_declarations` |
 | v17 | shipped | Track H seam H3: per-node cue-catalog acknowledgement storage (TRACK-H-H3-SPEC.md §4) |
 | v18 | shipped | Track H seam H4 defect fix: `entry_occurrence_sequence` on `fpp_playlist_entry_observations`, the entry-start identity a looping FPP playlist needs to re-activate its Cues |
 | v19 | shipped | operator-facing audio gain moves to decibels: every stored `audio.settings` revision's `defaultMaxBackgroundGain`/`duckTargetGain` is rewritten to `defaultMaxBackgroundGainDb`/`duckTargetGainDb` so an existing revision reads back at the same audible level |
-| v20 | reserved | Lane 20 seam SM-312 on `dev/multi-audio`: re-key `audio_sessions` from `id` alone to `(node_id, id)` so two nodes dispatching the same session id keep separate desired state and revision; existing rows migrated in place. Reserved here so Lanes 16 and 17 cannot mint it; the migration lands with the SM-312 fold |
-| v21+ | unallocated | free |
+| v20 | shipped | every stored `audio.settings` revision is backfilled with any of the seven currently-required top-level keys it is missing, using each field's own stated default, so a revision written before `ltcFrameRate`, `ltcDefaultStartOffset` and `duckTargetGainDb` joined the required set still decodes and can be pushed |
+| v21 | released, dead | was the multi-node audio branch's `audio_sessions` re-key. Released 2026-08-31: v24 shipped, so v21 is at or below the stamped maximum and a migration numbered here can never run. The re-key renumbers to v27 when `dev/multi-audio` takes `main` |
+| v22 | released, dead | was Lane 17a SM-111's `commands.requested_revision` rename. Released 2026-08-31 for the same reason as v21. The rename moves to v26 |
+| v23 | released, dead | was Track J seam J1's fallback-program storage. Released 2026-08-31 for the same reason as v21 and v22. J1 takes v25 |
+| v24 | shipped | every stored `audio.settings` revision is backfilled with `duckFadeDurationMs`/`duckRestoreFadeDurationMs` when either is missing, using each field's own stated default, so a revision written before a duck fade (rather than an instant step) existed still decodes and can be pushed |
+| v25 | shipped | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, `fallback_programs` and `fallback_program_acknowledgements` (ADR-048, TRACK-J-fpp-fallback.md J1). Renumbered from v23 |
+| v26 | shipped | Lane 17a SM-111: renaming `commands.requested_revision` and formalizing its per-family discriminator (owner, 2026-08-19). Renumbered from v22, which was renumbered from v13 |
+| v27 | shipped | re-key `audio_sessions` from `id TEXT PRIMARY KEY` to a composite `(node_id, id)` primary key, so two nodes dispatching the same session id no longer share one row and one node's revision guard silently drops the other's write. Renumbered from v21: a number at or below main's shipped maximum can never run |
+| v28 | shipped | widens both `assets_current` and `assets_identity` to key on `media_type` as well as show/sequence/target, so an FSEQ and an audio asset may both be current for one sequence at once instead of the second upload superseding the first, and identical bytes registered under two different media types are a new identity rather than a raw constraint violation (ADR-028 decision 1's amendment). A pure widening for both indexes: every pre-v28 row already holds exactly one media type per tuple, so no data fix runs |
+| v29 | shipped | adds `fpp_playlist_entry_observations.evidence_broken_at_millis`, a nullable marker recording a persisted sequence-regression discontinuity for one instance, read directly by `cueactivate.Decide` (owner ruling 2026-09-02, cue-deactivate-on-jump). NULL/absent leaves the row unaffected for every earlier row; nothing sets it retroactively |
+| v30 | shipped | SM-72: adds `config_objects.deleted_at`, a nullable tombstone marker for delete on the eight per-object configuration kinds (audio.node, show, show.surface, show.action, show.macro, show.cue, show.playlist, night.session). `config_revisions` is untouched: a delete never removes or rewrites a revision, only marks the owning object gone. A pure addition: every pre-v30 row's `deleted_at` is implicitly NULL, so every existing object reads back live, unchanged, with no data fix |
+| v31+ | unallocated | free |
+
+**v23 was taken while v22 was still free, deliberately.** Lane 17a was
+holding v22 unregistered, so J1 took the next number rather than the lowest
+free one. That follows this file's own rule at the top: reserving costs
+nothing and a collision costs a rename across a whole branch. v22 is now
+registered to SM-111 in the row above, so the gap is closed rather than
+standing.
+
+**v21, v22 and v23 are released as dead, and nothing at or below the shipped
+maximum is ever reserved again.** v24 shipped on 2026-08-31. `migrate()` targets
+the MAXIMUM version across the slice and returns early when the database's
+stored version already equals that maximum, so a migration numbered at or below
+an already-shipped number can never run on a store a prior binary has stamped:
+the runner reports the database current, because by its own rule it is, and the
+tables the migration would have created are simply never created. Nothing
+errors. That is why these three moved rather than waiting: a reservation below
+the stamp is not a reservation, it is a migration that will silently do nothing.
+
+This is the rule to apply next time, not just the record of this one. Reserve
+the next number ABOVE the current maximum, never the lowest free one, and
+re-check the maximum before the branch lands rather than when it was written.
+Three reservations went stale here because `main` took a number underneath them
+while they were unmerged, which is ordinary and will happen again.
+
+**SM-111 moves from v13 to v22, and v13 is released.** The rename was
+reserved as v13 on 2026-08-19 and never built; v14 through v21 were taken by
+other work in the eleven days since, so the number is long past. v13's own
+sequencing note below still records why the rename waited, and it is kept
+because it names the three writers a rename has to see at once. The number it
+runs as is v22.
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are
@@ -898,9 +1309,10 @@ and break when the other two land. Merge first, then rename with every
 writer visible.
 
 Note the column already carries an informal discriminator: values written by
-a macro run begin with `macro:` (`macroRequestedRevisionPrefix`,
-`store/macro_runs.go`). Three shapes now share the column, so v13 should
-formalize that convention rather than leave a fourth reader guessing.
+a macro run begin with `macro:` (`store/macro_runs.go`; formalized as
+`store.CallerIntentMacroRun` when v26 landed). Three shapes now share the
+column, so v13 should formalize that convention rather than leave a fourth
+reader guessing.
 
 **v12 is reserved defensively and may well come back.** SM-100's lifecycle
 state and SM-102's durable dispatch and outcome attribution may fit in the
@@ -913,6 +1325,11 @@ reservation costs nothing.
 **Track B took no schema version.** Its render state travels through the
 existing observations table via a collector `Sink`, so the v7 it had reserved
 was released and went to Step 9.
+
+**media.playlist took no schema version.** The v30 tombstone-delete path in
+`internal/coordinator/store/config.go` is kind-agnostic, so media.playlist
+joins the same delete-by-tombstone set v30 already gave every other
+per-object configuration kind with no migration of its own.
 
 A track that needs a schema change requests the next version number here
 before writing the migration. Two branches writing migration `v7`
@@ -944,6 +1361,22 @@ is the only thing that would, and that is a change to the store's contract
 rather than a merge-week edit. Discard and recreate branch dev databases.
 The deployed local dev stack is at v8 and is unaffected: a merged binary
 sees 8 and applies v9 then v10 in order.
+
+## FPP plugin warning messages
+
+What the ShowMesh FPP plugin passes to FPP's `WarningHolder` when it raises a
+warning into the player's own notification center. FPP's numeric warning ids
+are FPP's, defined in its `warnings-definitions.json`; a plugin has no
+allocation authority there and raises under the unknown-warning id `0`, the
+same way FPP's own ad hoc plugin-sourced warnings do. FPP deduplicates and
+clears on the exact `(id, message, plugin)` triple, so with the id fixed at
+`0` and the plugin name constant, the MESSAGE string is the identity. Two
+features sharing a message would clear each other's warnings, so message
+strings are registered here.
+
+| Warning message | Status | Owner |
+|---|---|---|
+| the coordinator's operator mismatch instruction (`fppreconcile.OperatorMismatchInstruction`, one constant shared by the raise and the clear) | reserved | pre-release notice: the bound playlist's on-disk content changed after it started; raised under id `0`, plugin name constant, C++ constant `ShowMesh_PlaylistMismatch` names the id in the plugin source |
 
 ## Change stream event kinds
 
@@ -1000,6 +1433,50 @@ to call them. They are excluded from `api/openapi.yaml` by intent per
 [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 2,
 specified in [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md), and tested
 there. They reserve nothing here and collide with nothing here.
+
+**Track J seam J1 owns every path under `/api/v1/fallback-programs`.**
+That prefix is recorded here rather than the individual paths, because
+`api/openapi.yaml` remains the register for the paths themselves. J1 is
+expected to add a listing, a per-FPP-host current-program read, and an
+acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
+
+**Lane 17a SM-129 owns every path under `/api/v1/emergency-stop`**, plus
+`/api/v1/config/show.emergencystop` and its `/revisions`. Recorded here on
+the identical `/api/v1/fallback-programs` precedent immediately above;
+`api/openapi.yaml` remains the register for the paths themselves. Its own
+schema components (`EmergencyStop*`, `ConfigEmergencyStop*`) follow the
+existing `<Domain><Verb>Request`/`Response` naming precedent
+(`IssueTokenRequest`/`Response`, `RenderApplyRequest`) rather than a new
+shape.
+
+**Lane 17a wave 1 component and field reservations, 2026-08-30.** Schema
+component names and response field names are not otherwise tracked here,
+for the reason this section already gives: two branches editing
+`api/openapi.yaml` collide visibly. These four are recorded anyway because
+Lane 20.1's SM-315 is editing the night-session API on `dev/multi-audio` at
+the same time, so the names have to be agreed before the fold rather than at
+it.
+
+| Name | Status | Owner |
+|---|---|---|
+| `AudioSessionCommandParams` (discriminated on `command`) | superseded | Lane 17a SM-259: a shared request schema keyed only by which endpoint a caller happened to call let one operation's body validate against another's; replaced by the five per-operation request schemas below (2026-08-30 review) |
+| `AudioSessionApplyParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionSeekParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionGainParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionGainFadeParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionApplyRequest` | reserved | Lane 17a SM-259 |
+| `AudioSessionSeekRequest` | reserved | Lane 17a SM-259 |
+| `AudioGainSetRequest` | reserved | Lane 17a SM-259 |
+| `AudioGainFadeRequest` | reserved | Lane 17a SM-259 |
+| `AudioSessionNoParamsRequest` | reserved | Lane 17a SM-259 |
+| `pinnedMaxGainDb` on `NightSessionState.backgroundAudio` | reserved | Lane 17a SM-202 |
+
+**`pinnedMaxGainDb` is named apart from the configured `maxGainDb`
+deliberately.** `ConfigNightSessionBackgroundAudio.maxGainDb` is what the
+configuration currently says; this field is the ceiling the running session
+pinned when it started, and the 2026-08-28 ruling turns on the two differing
+across a revision. Reusing the one name for both values would make the read
+side unable to say which it meant.
 
 **The one thing that does not conflict visibly is a shared `enum`.** Track D
 and Track E both added a kind to `ConfigRevisionsResponse` and the union

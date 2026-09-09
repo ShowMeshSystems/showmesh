@@ -44,6 +44,8 @@ func cmdAction(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		return cmdActionCheck(rest, stdout, stderr, clock)
 	case "invoke":
 		return cmdActionInvoke(rest, stdout, stderr, clock)
+	case "delete":
+		return cmdActionDelete(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl action: unknown subcommand %q\n\n", sub)
 		printActionUsage(stderr)
@@ -72,6 +74,13 @@ Subcommands:
                 29 if any checked binding is broken, 0 otherwise
   invoke <id>   invoke one stored action by id, outside of a macro run;
                 requires show:action:invoke
+  delete --confirm <id>
+                tombstone this action (write); its revision history is
+                preserved server-side (this command group has no
+                "revisions" subcommand yet to read it back). A show.macro
+                step, night.session action binding, or show.emergencystop
+                naming this id afterward is not refused here; each
+                reports the gap where it is actually used
 
 "action put" accepts a full show.action JSON payload (show, label,
 safetyClass, target) for any integration, including "resolume" — the
@@ -194,6 +203,7 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	fs, g := newFlagSet("showmeshctl action put", stderr)
 	var file string
 	fs.StringVar(&file, "file", "", "path to a JSON show.action payload; reads stdin if not given")
+	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action put [flags] <action-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.action configuration revision")
@@ -201,6 +211,10 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "The payload is a full show.action object: show, label, safetyClass, and")
 		_, _ = fmt.Fprintln(stderr, "target. Validated before activation: an invalid payload, or a reference")
 		_, _ = fmt.Fprintln(stderr, "that does not resolve, is rejected and appends no revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"action show --output json\" prints.")
+		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
+		_, _ = fmt.Fprintln(stderr, "is \"action show --output json\"'s own shape, otherwise a fresh read), refusing")
+		_, _ = fmt.Fprintln(stderr, "with a 409 if the action changed since it was read.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -217,6 +231,11 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	id := rest[0]
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "action put", newCLIError(exitUsage, "%v", err))
+	}
+	payloadRevision, _ := wrapperRevision(raw)
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "action put", newCLIError(exitUsage, "%v", err))
 	}
@@ -237,8 +256,21 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	apiPath := "/api/v1/config/show.action/" + url.PathEscape(id)
+	ifMatchRevision, ifMatchSet := ifMatchFlag()
+	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, payloadRevision, func() (int64, error) {
+		var r showActionConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return 0, err
+		}
+		return r.Revision, nil
+	})
+	if err != nil {
+		return reportError(stderr, "action put", err)
+	}
+
 	var resp showActionConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/show.action/"+url.PathEscape(id), json.RawMessage(raw), &resp); err != nil {
+	if err := c.putJSON(ctx, apiPath, ifMatch, json.RawMessage(raw), &resp); err != nil {
 		return reportError(stderr, "action put", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())
@@ -502,4 +534,56 @@ func exitCodeForActionInvocation(result actionInvocationResult) int {
 	default:
 		return exitCommandUnconfirmed
 	}
+}
+
+// cmdActionDelete mirrors cmdSurfaceDelete's own shape (cmd_surface.go):
+// --confirm is required and checked locally before any request is sent. A
+// tombstone, not a hard delete: this object's revision history is
+// preserved server-side. Deleting an action does not refuse against a
+// show.macro step, night.session action binding, or show.emergencystop
+// still naming it; each already resolves a show.action id at the point it
+// is actually used and reports the gap there.
+func cmdActionDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl action delete", stderr)
+	var confirm bool
+	fs.BoolVar(&confirm, "confirm", false, "required: confirms deletion of this action")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl action delete --confirm <action-id>")
+		_, _ = fmt.Fprintln(stderr, "\nDelete a show.action object (DELETE /api/v1/config/show.action/{id}).")
+		_, _ = fmt.Fprintln(stderr, "A tombstone, not a hard delete: its revision history is preserved")
+		_, _ = fmt.Fprintln(stderr, "server-side. Requires config:write (admin only) and --confirm.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "action delete", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	id := rest[0]
+
+	if !confirm {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl action delete: refusing to delete "+id+" without --confirm")
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "action delete", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := configObjectDeleteRequest{Confirm: true}
+	if err := c.deleteJSON(ctx, "/api/v1/config/show.action/"+url.PathEscape(id), body, nil); err != nil {
+		return reportError(stderr, "action delete", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "action %s deleted\n", id)
+	return exitOK
 }

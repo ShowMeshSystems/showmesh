@@ -45,7 +45,19 @@ func TestRenderTransportProbeReachesObservationsAndCLI(t *testing.T) {
 	// this test's probe against it can mean anything.
 	applyCmd := echoCmd(nodeID, "cmd-transport-apply-1", "idem-transport-apply-1", "")
 	applyCmd.Action = "render.surface.apply"
-	applyCmd.Params = map[string]any{"surfaceId": "garage"}
+	// This test plays the coordinator's own dispatcher role (this file's
+	// own doc comment), and every real dispatch sends a surface's complete
+	// geometry regardless of whether a sequence is assigned yet
+	// (internal/coordinator/api/renderdispatch.go); buildFSEQAssignment
+	// now refuses a bare or partial-geometry apply outright rather than
+	// silently accepting the "not yet consumed" shape this hand-rolled
+	// payload used to send.
+	applyCmd.Params = map[string]any{
+		"surfaceId":    "garage",
+		"channelRange": map[string]any{"startChannel": 1, "channelCount": 12},
+		"geometry":     map[string]any{"width": 2, "height": 2, "pixelFormat": "rgb"},
+		"frameRate":    40,
+	}
 	dispatchCmd(t, cli, nodeID, applyCmd)
 	applyResult := waitForResult(t, w, applyCmd.CommandID, 15*time.Second)
 	if applyResult.Outcome != "confirmed" {

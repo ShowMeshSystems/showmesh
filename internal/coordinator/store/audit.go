@@ -78,7 +78,60 @@ type AuditRecord struct {
 // only used for its clock and its retention counters/bounds, never for a
 // second connection — appending through s.db here (instead of q) would
 // silently defeat the whole point of a caller passing a [Tx] in.
-func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord) (int64, error) {
+func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord, hooks commitHook) (int64, error) {
+	id, err := insertAuditRow(ctx, q, s, rec)
+	if err != nil {
+		return 0, err
+	}
+
+	// Same two independent triggers as AppendEvent (events.go): insert
+	// volume, which alone bounds row count correctly, and elapsed
+	// wall-clock time since the last prune pass, which alone bounds age
+	// correctly under a low write rate. See pruneEveryNAuditEntries and
+	// pruneCheckInterval's (shared with events) doc comments in
+	// retention.go for why both are needed rather than either alone.
+	//
+	// auditAppendCount and lastAuditPruneAtNanos are process-wide,
+	// in-memory state, and their mutation is queued through hooks rather
+	// than applied here directly: it must land only once q's transaction
+	// has actually committed (see [commitHook]), never before, or a
+	// caller whose transaction later rolls back (identity.AuditedWrite
+	// and identity.WriteAudit on an [ErrCommitFailed] being the confirmed
+	// case, [Store.ProbeAuditWrite] always rolling back being the other)
+	// would leave both advanced for an append and a prune that never
+	// happened. byCount is therefore predicted from auditAppendCount's
+	// current, already-committed value; see [appendEvent]'s identical
+	// comment in events.go for what that trades away (nothing on the
+	// eventual count, an approximation only on prune TIMING, and only for
+	// a caller appending to this table more than once inside one
+	// still-open transaction, which no caller does today). ProbeAuditWrite
+	// itself never reaches this function at all: it calls
+	// [insertAuditRow] directly, exactly as before this fix.
+	byCount := (s.auditAppendCount.Load()+1)%pruneEveryNAuditEntries == 0
+	byAge := false
+	if !byCount {
+		last := s.lastAuditPruneAtNanos.Load()
+		byAge = last == 0 || s.now().Sub(time.Unix(0, last)) >= pruneCheckInterval
+	}
+	if byCount || byAge {
+		if err := s.pruneAudit(ctx, q); err != nil {
+			return 0, fmt.Errorf("store: append audit entry: %w", err)
+		}
+		prunedAt := s.now()
+		hooks.after(func() { s.lastAuditPruneAtNanos.Store(prunedAt.UnixNano()) })
+	}
+	hooks.after(func() { s.auditAppendCount.Add(1) })
+
+	return id, nil
+}
+
+// insertAuditRow is appendAuditEntry's own INSERT statement, factored out
+// so [Store.ProbeAuditWrite] can exercise the identical write production
+// uses without appendAuditEntry's retention bookkeeping riding along -
+// see appendAuditEntry's own doc comment on auditAppendCount/
+// lastAuditPruneAtNanos for why that bookkeeping cannot tolerate a
+// caller whose transaction rolls back.
+func insertAuditRow(ctx context.Context, q querier, s *Store, rec AuditRecord) (int64, error) {
 	if rec.Kind == "" {
 		return 0, fmt.Errorf("store: append audit entry: Kind is empty")
 	}
@@ -119,26 +172,6 @@ func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord)
 	if err != nil {
 		return 0, fmt.Errorf("store: append audit entry: read assigned id: %w", err)
 	}
-
-	// Same two independent triggers as AppendEvent (events.go): insert
-	// volume, which alone bounds row count correctly, and elapsed
-	// wall-clock time since the last prune pass, which alone bounds age
-	// correctly under a low write rate. See pruneEveryNAuditEntries and
-	// pruneCheckInterval's (shared with events) doc comments in
-	// retention.go for why both are needed rather than either alone.
-	byCount := s.auditAppendCount.Add(1)%pruneEveryNAuditEntries == 0
-	byAge := false
-	if !byCount {
-		last := s.lastAuditPruneAtNanos.Load()
-		byAge = last == 0 || s.now().Sub(time.Unix(0, last)) >= pruneCheckInterval
-	}
-	if byCount || byAge {
-		if err := s.pruneAudit(ctx, q); err != nil {
-			return 0, fmt.Errorf("store: append audit entry: %w", err)
-		}
-		s.lastAuditPruneAtNanos.Store(s.now().UnixNano())
-	}
-
 	return id, nil
 }
 
@@ -166,7 +199,8 @@ func (s *Store) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, e
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	id, err := appendAuditEntry(ctx, tx, s, rec)
+	var hooks pruneHooks
+	id, err := appendAuditEntry(ctx, tx, s, rec, &hooks)
 	if err != nil {
 		return 0, err
 	}
@@ -174,6 +208,7 @@ func (s *Store) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, e
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("store: commit append audit entry: %w", err)
 	}
+	hooks.run()
 	return id, nil
 }
 
@@ -183,7 +218,56 @@ func (s *Store) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, e
 // together with whatever state change t's caller composed it with. See
 // store/tx.go's [Tx] doc comment.
 func (t *Tx) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, error) {
-	return appendAuditEntry(ctx, t.tx, t.s, rec)
+	return appendAuditEntry(ctx, t.tx, t.s, rec, t)
+}
+
+// errAuditProbeRollback is the sentinel [Store.ProbeAuditWrite]'s own
+// InTx closure returns unconditionally after a successful insert,
+// forcing InTx to roll back rather than commit: this probe must never
+// leave a synthetic row in the append-only audit log.
+var errAuditProbeRollback = errors.New("store: audit write probe (deliberately rolled back)")
+
+// ProbeAuditWrite attempts a real INSERT into audit_log, inside a
+// transaction it always rolls back, and reports whether that INSERT
+// itself succeeded. Unlike [Store.Readiness]'s plain connection ping,
+// this exercises the SAME INSERT statement [Store.AppendAuditEntry]/
+// [Tx.AppendAuditEntry] run in production (via [insertAuditRow], the two
+// paths' shared body), so it catches a failure mode a ping cannot: the
+// connection is reachable and every other table can still be written,
+// but this specific write fails (a full disk mid write, a corrupted
+// index on this one table), which is ADR-024 decision 11's own named
+// trigger for the condition [identity.Service.AuditWriteStatus] reports.
+// Computed fresh on every call, never cached, matching this
+// coordinator's own audioConfigPushStatus precedent (audiosettings.go,
+// internal/coordinator/api) for a standing, request-time-computed health
+// signal.
+//
+// Deliberately calls [insertAuditRow], never [Tx.AppendAuditEntry]:
+// review round 5 finding 2. appendAuditEntry's retention bookkeeping
+// (auditAppendCount, lastAuditPruneAtNanos) is process-wide, in-memory
+// state a rolled-back transaction cannot undo. Going through
+// AppendAuditEntry here would let every probe permanently consume a
+// prune trigger while the prune itself (the DELETE, run inside this
+// transaction) rolled back with it: the count trigger firing on
+// probes that throw the prune away, and the age trigger defeated
+// outright, since a probe would keep refreshing lastAuditPruneAtNanos
+// after a prune that never happened. Net effect on a coordinator with
+// an open dashboard (which polls this every 30s): audit_log grows
+// unbounded, the exact failure this probe exists to help detect.
+func (s *Store) ProbeAuditWrite(ctx context.Context) error {
+	err := s.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		if _, aerr := insertAuditRow(ctx, tx.tx, tx.s, AuditRecord{
+			Kind: "probe", Action: "coordinator.audit.store.probe",
+			OutcomeReason: "live audit-store write probe; always rolled back, never committed",
+		}); aerr != nil {
+			return aerr
+		}
+		return errAuditProbeRollback
+	})
+	if errors.Is(err, errAuditProbeRollback) {
+		return nil
+	}
+	return err
 }
 
 const auditColumns = `

@@ -58,6 +58,23 @@ func mustTime(t *testing.T, s string) time.Time {
 	return parsed.UTC()
 }
 
+// TestOpenPinsMaxOpenConnsToOne asserts open still caps the pool at one
+// connection. assets.go's createAsset relies on that cap: with only one
+// connection, a second concurrent writer blocks in the database/sql pool
+// before its own identity read, so it observes the first writer's commit
+// inside its own transaction and returns AssetIdentityExistsError instead of
+// racing to a UNIQUE constraint violation (see assets.go's insert). Raising
+// the pool size back to a value database/sql defaults to would silently
+// reopen that race without failing any test until a concurrent upload hit
+// intermittent UNIQUE constraint failures in production.
+func TestOpenPinsMaxOpenConnsToOne(t *testing.T) {
+	st := openTestStore(t, nil)
+
+	if got := st.db.Stats().MaxOpenConnections; got != 1 {
+		t.Errorf("db.Stats().MaxOpenConnections = %d, want 1: createAsset's read-guard-then-insert sequence in assets.go is only race-free under a single-connection pool", got)
+	}
+}
+
 // TestOpenAppliesPragmas asserts the pragmas open's DSN requests actually
 // took effect, rather than trusting that they did because the DSN string
 // looks right. open builds the DSN using modernc.org/sqlite's

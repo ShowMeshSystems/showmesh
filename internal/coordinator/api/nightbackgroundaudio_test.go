@@ -2,18 +2,43 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Track F seam F5: resting.backgroundAudio's own continuous session
 // lifecycle (nightbackgroundaudio.go), distinct from the cue dispatch path
 // nightcue_audio_test.go already proves.
+
+// TestNightBackgroundAudioSessionID_SatisfiesAudioSessionIDPattern guards
+// against this class of defect recurring: nightBackgroundAudioSessionID
+// once minted "night-bg:" + rec.ID, and the colon does not match
+// audioSessionIDPattern (audiodispatch.go), the same pattern every
+// operator surface (showmeshctl, the API, the Operator UI) enforces
+// against sessionId - so a night session's own bed became a session no
+// operator could ever address again. Asserted against
+// audioSessionIDPattern ITSELF, never a copied regex, so the two can
+// never drift apart.
+func TestNightBackgroundAudioSessionID_SatisfiesAudioSessionIDPattern(t *testing.T) {
+	rec := store.NightSessionRecord{ID: "8047b0c8-9c1e-4b1a-8a3f-example-uuid"}
+	sessionID := nightBackgroundAudioSessionID(rec)
+	if !audioSessionIDPattern.MatchString(sessionID) {
+		t.Fatalf("nightBackgroundAudioSessionID(%q) = %q, which does not match audioSessionIDPattern %s; no operator surface could ever address this session", rec.ID, sessionID, audioSessionIDPattern.String())
+	}
+}
 
 // nightBackgroundAudioTestHandlers wires a real store, a real
 // identity.Service, and a fakeAudioPublisher, plus a real asset store
@@ -33,7 +58,7 @@ func nightBackgroundAudioTestHandlers(t *testing.T) (*handlers, *store.Store, *f
 	deps := Dependencies{
 		NightSessions: st, Config: st, Commands: st, Identity: svc,
 		AudioPublisher: pub, AudioSessions: st, Assets: st, Observations: obsLister,
-		ResolumeActions: &fakeResolumeActionDispatcher{},
+		ResolumeActions: &fakeResolumeActionDispatcher{}, Nodes: &fakeNodeLister{}, Audio: &fakeNodeAudioLister{},
 	}.withDefaults()
 	return &handlers{deps: deps, clock: fixedClock(testNow), logger: testLogger()}, st, pub, obsLister
 }
@@ -109,6 +134,49 @@ func mustCreateRestingSessionWithBackgroundAudio(t *testing.T, st *store.Store, 
 	return rec
 }
 
+// mustCreateMediaPlaylist creates id's first media.playlist revision (or,
+// if id already exists, its next one) with payload and activates it,
+// returning the activated revision number - resting.backgroundAudio's own
+// reference-form owner triple under test.
+func mustCreateMediaPlaylist(t *testing.T, st *store.Store, id string, payload config.MediaPlaylistPayload) int64 {
+	t.Helper()
+	ctx := context.Background()
+	raw, err := config.EncodeMediaPlaylistPayload(payload)
+	if err != nil {
+		t.Fatalf("encode media.playlist payload: %v", err)
+	}
+	nextRevision := int64(1)
+	if obj, err := st.GetConfigObject(ctx, config.MediaPlaylistConfigKind, id); err == nil {
+		nextRevision = obj.CurrentRevision + 1
+	} else if _, cerr := st.CreateConfigObject(ctx, config.MediaPlaylistConfigKind, id); cerr != nil {
+		t.Fatalf("create media.playlist object: %v", cerr)
+	}
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.MediaPlaylistConfigKind, ObjectID: id, Revision: nextRevision, PayloadJSON: raw,
+		CreatedByPrincipalID: "test", CreatedByPrincipalName: "test", Source: "api",
+	}); err != nil {
+		t.Fatalf("create media.playlist revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.MediaPlaylistConfigKind, id, nextRevision); err != nil {
+		t.Fatalf("activate media.playlist revision: %v", err)
+	}
+	return nextRevision
+}
+
+// twoItemMediaPlaylistPayload mirrors twoItemBackgroundAudioConfig's own
+// two-item shape, as a media.playlist object's payload instead of an
+// inline resting.backgroundAudio block.
+func twoItemMediaPlaylistPayload(show, node, repeat, resume, itemTransition string) config.MediaPlaylistPayload {
+	return config.MediaPlaylistPayload{
+		Label: "shared bed", Show: show,
+		Items: []config.MediaPlaylistItem{
+			{Kind: config.MediaPlaylistItemKindAsset, Asset: config.NightSessionAssetRef{Show: show, Sequence: "bg-1", Target: node}},
+			{Kind: config.MediaPlaylistItemKindAsset, Asset: config.NightSessionAssetRef{Show: show, Sequence: "bg-2", Target: node}},
+		},
+		Repeat: repeat, Resume: resume, ItemTransition: itemTransition, MaxGainDb: -10,
+	}
+}
+
 func confirmedResultForAction(action, sessionID string, outcome string) mqttproto.ResultPayload {
 	return mqttproto.ResultPayload{
 		Outcome: mqttproto.OutcomeConfirmed,
@@ -151,6 +219,17 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	if !ok {
 		t.Fatalf("params.playlist = %v, want a JSON object", pub.lastParams["playlist"])
 	}
+	// The inline form's own owner triple, unchanged from before the
+	// reference form existed: the night.session config object itself.
+	if playlist["ownerKind"] != nightBackgroundAudioOwnerKindSession {
+		t.Fatalf("playlist.ownerKind = %v, want %q", playlist["ownerKind"], nightBackgroundAudioOwnerKindSession)
+	}
+	if playlist["ownerId"] != rec.ConfigObjectID {
+		t.Fatalf("playlist.ownerId = %v, want %q", playlist["ownerId"], rec.ConfigObjectID)
+	}
+	if playlist["ownerRevision"] != float64(rec.ConfigRevision) {
+		t.Fatalf("playlist.ownerRevision = %v, want %v", playlist["ownerRevision"], rec.ConfigRevision)
+	}
 	if playlist["repeat"] != config.NightSessionBackgroundRepeatPlaylist {
 		t.Fatalf("playlist.repeat = %v, want %q", playlist["repeat"], config.NightSessionBackgroundRepeatPlaylist)
 	}
@@ -177,6 +256,262 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	}
 	if items[1]["itemId"] != "track-2" || items[1]["assetId"] != "asset-2" {
 		t.Fatalf("playlist.items[1] = %v, want track-2/asset-2", items[1])
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_ReferenceFormPinsToMediaPlaylist proves
+// the reference form's own dispatch rule: a session whose
+// resting.backgroundAudio names a media.playlist dispatches an apply
+// pinning ownerKind "media.playlist", that object's own id and revision,
+// and its own items - never the session's own identity, and never an
+// empty playlist.
+func TestNightAdvanceBackgroundAudio_ReferenceFormPinsToMediaPlaylist(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	revision := mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action = %q, want audio.session.apply", pub.lastAction)
+	}
+	playlist, ok := pub.lastParams["playlist"].(map[string]any)
+	if !ok {
+		t.Fatalf("params.playlist = %v, want a JSON object", pub.lastParams["playlist"])
+	}
+	if playlist["ownerKind"] != config.MediaPlaylistConfigKind {
+		t.Fatalf("playlist.ownerKind = %v, want %q", playlist["ownerKind"], config.MediaPlaylistConfigKind)
+	}
+	if playlist["ownerId"] != "planetary-bed" {
+		t.Fatalf("playlist.ownerId = %v, want %q (never the night.session's own id %q)", playlist["ownerId"], "planetary-bed", rec.ConfigObjectID)
+	}
+	if playlist["ownerRevision"] != float64(revision) {
+		t.Fatalf("playlist.ownerRevision = %v, want %v", playlist["ownerRevision"], revision)
+	}
+	itemsAny, ok := playlist["items"].([]any)
+	if !ok || len(itemsAny) != 2 {
+		t.Fatalf("playlist.items = %v, want 2 items from the referenced media.playlist", playlist["items"])
+	}
+	items := make([]map[string]any, len(itemsAny))
+	for i, it := range itemsAny {
+		m, ok := it.(map[string]any)
+		if !ok {
+			t.Fatalf("playlist.items[%d] = %v, want a JSON object", i, it)
+		}
+		items[i] = m
+	}
+	if items[0]["assetId"] != "asset-1" || items[1]["assetId"] != "asset-2" {
+		t.Fatalf("playlist.items = %v, want asset-1 then asset-2", items)
+	}
+}
+
+// TestNightResolveBackgroundAudio_EditingPlaylistChangesResolutionWithoutSessionWrite
+// proves editing the referenced media.playlist alone - a second config
+// revision on the SAME object, the night.session never rewritten - changes
+// what the next apply would dispatch: a new owner revision and new items.
+func TestNightResolveBackgroundAudio_EditingPlaylistChangesResolutionWithoutSessionWrite(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-3", "node-a", "asset-3")
+	rev1 := mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	resolvedBefore, ownerBefore, ok := h.nightResolveBackgroundAudio(context.Background(), rec, ba)
+	if !ok {
+		t.Fatalf("resolve before edit: ok = false, want true")
+	}
+	if ownerBefore.Revision != rev1 || len(resolvedBefore.Items) != 2 {
+		t.Fatalf("resolved before edit = %+v (owner %+v), want revision %d and 2 items", resolvedBefore, ownerBefore, rev1)
+	}
+
+	editedPayload := twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	editedPayload.Items = append(editedPayload.Items, config.MediaPlaylistItem{
+		Kind: config.MediaPlaylistItemKindAsset, Asset: config.NightSessionAssetRef{Show: "halloween", Sequence: "bg-3", Target: "node-a"},
+	})
+	rev2 := mustCreateMediaPlaylist(t, st, "planetary-bed", editedPayload)
+	if rev2 != rev1+1 {
+		t.Fatalf("rev2 = %d, want %d", rev2, rev1+1)
+	}
+
+	sessionObjBefore, err := st.GetConfigObject(context.Background(), config.NightSessionConfigKind, rec.ConfigObjectID)
+	if err != nil {
+		t.Fatalf("get night.session object: %v", err)
+	}
+
+	resolvedAfter, ownerAfter, ok := h.nightResolveBackgroundAudio(context.Background(), rec, ba)
+	if !ok {
+		t.Fatalf("resolve after edit: ok = false, want true")
+	}
+	if ownerAfter.Revision != rev2 {
+		t.Fatalf("ownerAfter.Revision = %d, want %d (the edited playlist's own new revision)", ownerAfter.Revision, rev2)
+	}
+	if len(resolvedAfter.Items) != 3 {
+		t.Fatalf("resolvedAfter.Items = %+v, want 3 items after the edit", resolvedAfter.Items)
+	}
+
+	sessionObjAfter, err := st.GetConfigObject(context.Background(), config.NightSessionConfigKind, rec.ConfigObjectID)
+	if err != nil {
+		t.Fatalf("get night.session object after edit: %v", err)
+	}
+	if sessionObjAfter.CurrentRevision != sessionObjBefore.CurrentRevision {
+		t.Fatalf("night.session CurrentRevision changed from %d to %d; editing the referenced playlist must never write the session",
+			sessionObjBefore.CurrentRevision, sessionObjAfter.CurrentRevision)
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_SendsCeilingWhenNodeConfirmsCapability
+// proves the SEND side of the capability gate: ba.MaxGainDb (-10,
+// twoItemBackgroundAudioConfig's own fixed value) travels on this SAME
+// apply as a linear ceiling only once node-a's own live capability
+// advertisement declares audio.playback.ceiling, so the node enforces it
+// on every path gain takes effect, not only at the moments this
+// controller happens to compute and send a gain.
+func TestNightAdvanceBackgroundAudio_SendsCeilingWhenNodeConfirmsCapability(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithGenericCapabilities("node-a", audioPlaybackCeilingCapabilityID),
+	})
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	ceiling, ok := pub.lastParams["ceiling"].(float64)
+	if !ok {
+		t.Fatalf("params.ceiling = %v, want the linear ceiling derived from maxGainDb", pub.lastParams["ceiling"])
+	}
+	if wantCeiling := float64(pkgaudio.CeilingFromDb(-10)); math.Abs(ceiling-wantCeiling) > 1e-9 {
+		t.Fatalf("params.ceiling = %v, want %v (the linear value of maxGainDb -10)", ceiling, wantCeiling)
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_OmitsCeilingWhenNodeDoesNotConfirmCapability
+// is the OMIT side, and the load-bearing case: sending "ceiling"
+// unconditionally to a node that has never advertised
+// audio.playback.ceiling would fail the whole apply at that agent's own
+// rejectUnknownKeys (internal/agent/audiosessionops.go), never merely
+// leave the ceiling unenforced, so the params map must have NO "ceiling"
+// KEY at all here, not a zero or null value, for a node this coordinator
+// cannot currently confirm anything about (the default fixture: no Hello
+// ever published for node-a).
+func TestNightAdvanceBackgroundAudio_OmitsCeilingWhenNodeDoesNotConfirmCapability(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if _, present := pub.lastParams["ceiling"]; present {
+		t.Fatalf("params has a \"ceiling\" key (%v) for a node that has never confirmed audio.playback.ceiling, want the key absent entirely", pub.lastParams["ceiling"])
+	}
+}
+
+// twoNodeBackgroundAudioConfig builds a resting.backgroundAudio config
+// whose two items name DIFFERENT target nodes - the list-of-targets
+// shape, one item per node.
+func twoNodeBackgroundAudioConfig(nodeA, nodeB string) *config.NightSessionBackgroundAudio {
+	return &config.NightSessionBackgroundAudio{
+		Items: []config.NightSessionBackgroundAudioItem{
+			{ItemID: "track-a", Asset: config.NightSessionAssetRef{Show: "halloween", Sequence: "bg-a", Target: nodeA}},
+			{ItemID: "track-b", Asset: config.NightSessionAssetRef{Show: "halloween", Sequence: "bg-b", Target: nodeB}},
+		},
+		Repeat: config.NightSessionBackgroundRepeatPlaylist, Resume: config.NightSessionBackgroundResumeRestart,
+		ItemTransition: config.NightSessionItemTransitionSequential, MaxGainDb: -10,
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_TwoNodesIndependentProgress is the
+// acceptance proof at unit level: two nodes both play the bed
+// (OutputNodeIDs derives both from the items' own distinct targets), and
+// a refused step on one node is reported against that node while the
+// other's own progress is completely unaffected - never blocked,
+// corrupted, or silently retried on the other's behalf.
+func TestNightAdvanceBackgroundAudio_TwoNodesIndependentProgress(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-a", "node-a", "asset-a")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-b", "node-b", "asset-b")
+	ba := twoNodeBackgroundAudioConfig("node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a": confirmedResultForAction("apply", sessionID, "position"),
+		"node-b": {
+			Outcome: mqttproto.OutcomeRefused, Reason: "node-b refuses this apply",
+			Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "refused", "reason": "node-b refuses this apply"}},
+		},
+	}
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	nodeASteps := nightBackgroundAudioStepsForNode(history, "node-a")
+	nodeBSteps := nightBackgroundAudioStepsForNode(history, "node-b")
+	if len(nodeASteps) != 1 || nodeASteps[0].Row.State != nightCueStateResolved || nodeASteps[0].Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-a steps = %+v, want exactly one resolved/confirmed apply", nodeASteps)
+	}
+	if len(nodeBSteps) != 1 || nodeBSteps[0].Row.State != nightCueStateResolved || nodeBSteps[0].Row.Outcome != nightCueOutcomeRefused {
+		t.Fatalf("node-b steps = %+v, want exactly one resolved/refused apply", nodeBSteps)
+	}
+
+	// A second tick: node-a advances to gain (its own apply confirmed).
+	// node-b's refused apply is left for an operator, never auto-retried
+	// (nightAdvanceBackgroundAudioForNode's "apply did not confirm; not
+	// auto-retrying" rule) - and, crucially, dealing with node-b never
+	// touches node-a's own already-advancing state.
+	before := pub.count()
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.gain.set" {
+		t.Fatalf("second tick's last dispatched action = %q, want audio.gain.set (node-a's own next step)", pub.lastAction)
+	}
+	if got := pub.count() - before; got != 1 {
+		t.Fatalf("second tick dispatched %d command(s), want exactly 1 (node-a's own gain; node-b's refused apply must not be retried)", got)
+	}
+
+	history, err = h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	nodeASteps = nightBackgroundAudioStepsForNode(history, "node-a")
+	nodeBSteps = nightBackgroundAudioStepsForNode(history, "node-b")
+	if len(nodeASteps) != 2 || nodeASteps[1].Step.Kind != nightBGStepGain {
+		t.Fatalf("node-a steps after its second tick = %+v, want apply then gain", nodeASteps)
+	}
+	if len(nodeBSteps) != 1 {
+		t.Fatalf("node-b steps after node-a's own second tick = %+v, want still exactly 1 (unaffected by node-a's own progress)", nodeBSteps)
+	}
+
+	// GET /night/session's own wire mapping: every node reports through
+	// backgroundAudio.steps[] with its own nodeId (owner ruling: uniform
+	// reporting, no first-node exception).
+	wire := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	nodeIDs := map[string]int{}
+	for _, step := range wire.Steps {
+		if step.Sequence != v1.NightAudioSequenceBackground {
+			continue
+		}
+		nodeIDs[step.NodeID]++
+	}
+	if nodeIDs["node-a"] != 2 {
+		t.Fatalf("wire steps tagged node-a = %d, want 2 (apply, gain)", nodeIDs["node-a"])
+	}
+	if nodeIDs["node-b"] != 1 {
+		t.Fatalf("wire steps tagged node-b = %d, want 1 (its own refused apply, isolated from node-a's)", nodeIDs["node-b"])
 	}
 }
 
@@ -323,6 +658,146 @@ func TestNightAdvanceBackgroundAudio_NoFurtherActionOncePlaying(t *testing.T) {
 	}
 }
 
+// TestNightAdvanceBackgroundAudio_InitialApplyCarriesExpiry proves the
+// very first apply already carries an expiry, so a session that dies
+// before its first steady-state refresh is not left with no deadline at
+// all.
+func TestNightAdvanceBackgroundAudio_InitialApplyCarriesExpiry(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action = %q, want audio.session.apply", pub.lastAction)
+	}
+	ms, ok := pub.lastParams["expiresInMs"].(float64)
+	if !ok || ms != float64(nightBackgroundAudioExpiryTTL.Milliseconds()) {
+		t.Fatalf("params.expiresInMs = %v, want %v", pub.lastParams["expiresInMs"], nightBackgroundAudioExpiryTTL.Milliseconds())
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_RefreshesExpiryWhenDue proves the
+// steady-playback re-affirm: once nightBackgroundAudioExpiryRefreshInterval
+// has genuinely elapsed since the last confirmed step, one further tick
+// dispatches audio.session.apply carrying ONLY expiresInMs (and the three
+// common fields) - never a playlist or media reference, so this can never
+// reload the engine or perturb playback (Manager.Apply merges rather than
+// replaces; see nightBackgroundAudioRefreshExpiry's own doc comment).
+func TestNightAdvanceBackgroundAudio_RefreshesExpiryWhenDue(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	countAfterStart := pub.count()
+	notYetDue := testNow.Add(nightBackgroundAudioExpiryRefreshInterval - time.Second)
+	h.nightAdvanceBackgroundAudio(context.Background(), notYetDue, rec)
+	if pub.count() != countAfterStart {
+		t.Fatalf("publish count before the refresh interval elapsed = %d, want unchanged at %d", pub.count(), countAfterStart)
+	}
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
+	due := testNow.Add(nightBackgroundAudioExpiryRefreshInterval + time.Second)
+	h.nightAdvanceBackgroundAudio(context.Background(), due, rec)
+
+	if pub.count() != countAfterStart+1 {
+		t.Fatalf("publish count once due = %d, want %d", pub.count(), countAfterStart+1)
+	}
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("refresh action = %q, want audio.session.apply", pub.lastAction)
+	}
+	for _, forbidden := range []string{"playlist", "media", "sourceRole", "mixPolicy"} {
+		if _, present := pub.lastParams[forbidden]; present {
+			t.Fatalf("refresh params carried %q; want expiresInMs only, so a refresh can never reload the engine - params=%v", forbidden, pub.lastParams)
+		}
+	}
+	if _, ok := pub.lastParams["expiresInMs"]; !ok {
+		t.Fatalf("refresh params missing expiresInMs, params=%v", pub.lastParams)
+	}
+}
+
+// TestNightBackgroundAudioExpiryRefreshDue covers
+// nightBackgroundAudioExpiryRefreshDue's own two clauses directly: an
+// unresolved latest is never due (its own retry path handles that
+// separately), and a resolved latest is due only once the interval has
+// genuinely elapsed.
+func TestNightBackgroundAudioExpiryRefreshDue(t *testing.T) {
+	resolvedAt := testNow
+	cases := []struct {
+		name     string
+		now      time.Time
+		resolved *time.Time
+		wantDue  bool
+	}{
+		{"unresolved is never due", testNow.Add(time.Hour), nil, false},
+		{"just under the interval is not due", testNow.Add(nightBackgroundAudioExpiryRefreshInterval - time.Millisecond), &resolvedAt, false},
+		{"at or past the interval is due", testNow.Add(nightBackgroundAudioExpiryRefreshInterval), &resolvedAt, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			latest := nightBackgroundAudioHistoryRow{Row: store.NightCueOutboxRecord{ResolvedAt: tc.resolved}}
+			if got := nightBackgroundAudioExpiryRefreshDue(tc.now, latest); got != tc.wantDue {
+				t.Fatalf("nightBackgroundAudioExpiryRefreshDue = %v, want %v", got, tc.wantDue)
+			}
+		})
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSessionForNode_AbandonPathsDoNotTouchExpiry
+// covers two of the three abandon paths nightClearBackgroundAudioAtEndSessionForNode
+// itself distinguishes (a dispatch error, and a resolved-but-not-confirmed
+// outcome) and proves both are inert with respect to the expiry
+// mechanism: neither dispatches an apply/refresh, so a clear failure can
+// never accidentally extend a session's deadline. The third path, a
+// structural refusal (problem != nil from executeAudioSessionDispatch),
+// is not independently exercised here - its own source is the same
+// logWarn-then-return shape as the other two with no branch that could
+// diverge, so this file records that as read, not as a fourth reproduced
+// case; the property "an end-session clear failure never dispatches
+// anything except the clear itself" is the actual guarantee under test.
+func TestNightClearBackgroundAudioAtEndSessionForNode_AbandonPathsDoNotTouchExpiry(t *testing.T) {
+	t.Run("dispatch error", func(t *testing.T) {
+		h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+		putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+		putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+		ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+		rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+		playThroughApplyGainStart(t, h, pub, rec)
+
+		rec.State = nightStateStopped
+		pub.beforePublishErr = errors.New("dial tcp: no route to host")
+		h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+		if got := countActionDispatches(pub, "audio.session.apply"); got != 1 {
+			t.Fatalf("audio.session.apply dispatch count after a clear dispatch error = %d, want unchanged at 1", got)
+		}
+	})
+
+	t.Run("unconfirmed outcome", func(t *testing.T) {
+		h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+		putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+		putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+		ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+		rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+		playThroughApplyGainStart(t, h, pub, rec)
+
+		rec.State = nightStateStopped
+		pub.result = refusedResultForAction("clear", "node refused")
+		h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+		if got := countActionDispatches(pub, "audio.session.apply"); got != 1 {
+			t.Fatalf("audio.session.apply dispatch count after an unconfirmed clear = %d, want unchanged at 1", got)
+		}
+	})
+}
+
 // TestNightStopBackgroundAudioIfRunning_ResumePolicyPauses proves resume
 // policy "resume" pauses (not stops) on the way out, and a refused pause
 // is retried rather than accepted as done - HIGH 4's fix.
@@ -428,6 +903,264 @@ func TestNightAdvanceBackgroundAudio_ReappliesAfterStop(t *testing.T) {
 	}
 }
 
+// twoItemBackgroundAudioConfigWithFade is [twoItemBackgroundAudioConfig]
+// plus a configured fadeOutMs/fadeInMs pair, for the show-boundary fade
+// tests below.
+func twoItemBackgroundAudioConfigWithFade(node, repeat, resume, itemTransition string, fadeOutMs, fadeInMs int) *config.NightSessionBackgroundAudio {
+	ba := twoItemBackgroundAudioConfig(node, repeat, resume, itemTransition)
+	ba.FadeOutMs = &fadeOutMs
+	ba.FadeInMs = &fadeInMs
+	return ba
+}
+
+// fadeStateObservation builds an audio_session.fade.state observation for
+// sessionID, exactly as internal/coordinator/collector/nodeaudio's own
+// collector reports it (this package must never import that collector
+// package - see nightBackgroundAudioFadeSettled's own doc comment - so
+// this is hand-built here, mirroring nightaudioreadiness_test.go's own
+// nodeAudioEngineStateObservation one file over). collectedAt is separate
+// from observedAt on purpose: it is what nightBackgroundAudioFadeSettled's
+// own notBefore fence reads, exactly like the node's real report time.
+func fadeStateObservation(sessionID, value string, observedAt, collectedAt time.Time) observation.Observation {
+	return observation.Observation{
+		Resource:    observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: sessionID},
+		Signal:      "audio_session.fade.state",
+		Value:       value,
+		ObservedAt:  &observedAt,
+		CollectedAt: collectedAt,
+	}
+}
+
+// TestNightStopBackgroundAudioIfRunning_FadesDownBeforePausing proves the
+// trap this lane exists to close: dispatching audio.gain.fade and
+// immediately dispatching audio.session.pause still cuts the audio dead,
+// because a fade's own dispatch outcome confirms the instant the ramp is
+// accepted, never when it finishes. This asserts the ORDER (fadedown
+// dispatched first, pause withheld while the node still reports the fade
+// in_progress) and the AWAITED completion (pause dispatched only once
+// fade state reads something other than in_progress) - never only "a
+// fade command was sent", which a broken implementation could still
+// pass.
+func TestNightStopBackgroundAudioIfRunning_FadesDownBeforePausing(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, 200, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.gain.fade" {
+		t.Fatalf("dispatched action = %q, want audio.gain.fade (fadedown before any pause/stop)", pub.lastAction)
+	}
+	if got := pub.lastParams["targetGain"]; got != 0.0 {
+		t.Fatalf("fadedown targetGain = %v, want 0.0 (silence)", got)
+	}
+	if got := pub.lastParams["durationMs"]; got != 200.0 {
+		t.Fatalf("fadedown durationMs = %v, want 200 (the configured fadeOutMs)", got)
+	}
+	countAfterFadeDispatch := pub.count()
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "in_progress", testNow, testNow)})
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if pub.count() != countAfterFadeDispatch {
+		t.Fatalf("publish count while fade state is still in_progress = %d, want unchanged at %d (pause must never race the ramp)", pub.count(), countAfterFadeDispatch)
+	}
+
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.result = confirmedResultForAction("pause", sessionID, "started")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if pub.count() != countAfterFadeDispatch+1 {
+		t.Fatalf("publish count once fade state reads settled = %d, want %d (exactly one more dispatch)", pub.count(), countAfterFadeDispatch+1)
+	}
+	if pub.lastAction != "audio.session.pause" {
+		t.Fatalf("dispatched action once the fade settled = %q, want audio.session.pause", pub.lastAction)
+	}
+}
+
+// TestNightStopBackgroundAudioIfRunning_NoObservationYetWithholdsPause
+// proves the conservative default: a fade dispatched but never yet
+// reported on by the node's own telemetry (no observation at all, not
+// merely a stale one) is treated as NOT settled, never as "no news is
+// good news".
+func TestNightStopBackgroundAudioIfRunning_NoObservationYetWithholdsPause(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, 200, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // dispatches fadedown
+	countAfterFadeDispatch := pub.count()
+
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // no observation reported at all yet
+	if pub.count() != countAfterFadeDispatch {
+		t.Fatalf("publish count with no fade-state observation reported = %d, want unchanged at %d", pub.count(), countAfterFadeDispatch)
+	}
+}
+
+// TestNightStopBackgroundAudioIfRunning_StaleFadeStateEvidenceWithholdsPause
+// reproduces the rig defect directly: the node audio collector
+// (internal/coordinator/collector/nodeaudio) holds only a node's single
+// most recent report, so between dispatching a fade and the node's next
+// report arriving, the held report still PREDATES the fade and its own
+// fade.state reads whatever it was before - "none" here, exactly as the
+// rig's own pre-fade evidence read. Before nightBackgroundAudioFadeSettled's
+// notBefore fence, that stale "none" was indistinguishable from genuine
+// settlement and let the pause race a fade a single tick old; this proves
+// it is withheld until evidence collected at or after the fade's own
+// dispatch instant arrives. Run against the code before this fence
+// existed, this test fails at its first assertion.
+func TestNightStopBackgroundAudioIfRunning_StaleFadeStateEvidenceWithholdsPause(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // dispatches the fadedown, at testNow
+	countAfterFadeDispatch := pub.count()
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	staleAt := testNow.Add(-1 * time.Second)
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", staleAt, staleAt)})
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if pub.count() != countAfterFadeDispatch {
+		t.Fatalf("publish count with only pre-dispatch fade-state evidence = %d, want unchanged at %d (stale evidence must never read as settled)", pub.count(), countAfterFadeDispatch)
+	}
+
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.result = confirmedResultForAction("pause", sessionID, "started")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if pub.count() != countAfterFadeDispatch+1 {
+		t.Fatalf("publish count once fresh post-dispatch evidence reads settled = %d, want %d", pub.count(), countAfterFadeDispatch+1)
+	}
+	if pub.lastAction != "audio.session.pause" {
+		t.Fatalf("dispatched action once settled = %q, want audio.session.pause", pub.lastAction)
+	}
+}
+
+// TestNightStopBackgroundAudioIfRunning_FadeOutMsUnconfiguredCutsImmediately
+// proves the compatibility requirement directly at this controller's own
+// exit path: with no fade configured, pause is dispatched immediately,
+// exactly as it was before fadeOutMs/fadeInMs existed - no fadedown step
+// appears on the wire at all.
+func TestNightStopBackgroundAudioIfRunning_FadeOutMsUnconfiguredCutsImmediately(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	pub.result = confirmedResultForAction("pause", nightBackgroundAudioSessionID(rec), "started")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.session.pause" {
+		t.Fatalf("dispatched action = %q, want audio.session.pause (no fadedown when fadeOutMs is not configured)", pub.lastAction)
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_FadesUpAfterResume proves the UP half of
+// the pair: resume lands first (silent, at whatever gain the prior
+// fadedown left it at), and only after resume confirms does this
+// controller dispatch the fadeup toward maxGainDb - never the reverse
+// order, which would ramp a still-paused session.
+func TestNightAdvanceBackgroundAudio_FadesUpAfterResume(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, 200, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // fadedown
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.result = confirmedResultForAction("pause", sessionID, "started")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // pause, now that the fade settled
+
+	// Resume resolves confirmed within this SAME call (the fake publisher
+	// answers immediately), so the fade-up must chain in immediately too
+	// - never left for a separate tick to notice, which is audible as an
+	// extra beat of silence on real hardware.
+	pub.result = confirmedResultForAction("resume", sessionID, "started")
+	countBeforeResume := pub.count()
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	if got := pub.count(); got != countBeforeResume+2 {
+		t.Fatalf("publish count after one advance = %d, want %d (resume, then the chained fadeup, in the same call)", got, countBeforeResume+2)
+	}
+	if pub.lastAction != "audio.gain.fade" {
+		t.Fatalf("dispatched action = %q, want audio.gain.fade (the chained fadeup)", pub.lastAction)
+	}
+	if got := pub.lastParams["durationMs"]; got != 800.0 {
+		t.Fatalf("fadeup durationMs = %v, want 800 (the configured fadeInMs)", got)
+	}
+	if got, ok := pub.lastParams["targetGain"].(float64); !ok || got != 0.31622776601683794 {
+		t.Fatalf("fadeup targetGain = %v, want 0.31622776601683794 (the linear amplitude for -10 dB)", pub.lastParams["targetGain"])
+	}
+
+	// A further advance does nothing more: nothing else is due.
+	countAfterFadeUp := pub.count()
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	if got := pub.count(); got != countAfterFadeUp {
+		t.Fatalf("publish count after a further advance = %d, want unchanged at %d", got, countAfterFadeUp)
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_GainBeforeStartIsSilentWhenFadeInConfigured
+// proves the entry-side half of the compatibility split: with fadeInMs
+// configured, the gain step sent before start targets silence (never the
+// configured maxGainDb directly), so the bed is never audible before its
+// own fadeup ramps it - the same "never audible before the intended
+// level" rule TestNightAdvanceBackgroundAudio_GainBeforeStart already
+// proves for the no-fade case, at the opposite gain.
+func TestNightAdvanceBackgroundAudio_GainBeforeStartIsSilentWhenFadeInConfigured(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 200, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // apply
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // gain
+
+	if pub.lastAction != "audio.gain.set" {
+		t.Fatalf("dispatched action = %q, want audio.gain.set", pub.lastAction)
+	}
+	if got := pub.lastParams["gain"]; got != 0.0 {
+		t.Fatalf("gain before start = %v, want 0.0 (silence; fadeup ramps it up only after start confirms)", got)
+	}
+
+	pub.result = confirmedResultForAction("start", sessionID, "started")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // start
+	if pub.lastAction != "audio.session.start" {
+		t.Fatalf("dispatched action = %q, want audio.session.start", pub.lastAction)
+	}
+
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // fadeup, once start confirms
+	if pub.lastAction != "audio.gain.fade" {
+		t.Fatalf("dispatched action after start confirmed = %q, want audio.gain.fade", pub.lastAction)
+	}
+	if got, ok := pub.lastParams["targetGain"].(float64); !ok || got != 0.31622776601683794 {
+		t.Fatalf("fadeup targetGain = %v, want 0.31622776601683794 (the linear amplitude for -10 dB)", pub.lastParams["targetGain"])
+	}
+}
+
 // TestNightBackgroundAudioRevisionState_RestoresCurrentFromHistory proves
 // RestoreRevisionState reconstructs "current" as the highest CONFIRMED
 // revision in history.
@@ -496,7 +1229,7 @@ func TestNightAdvanceBackgroundAudio_CrashAfterCommitBeforeDispatch(t *testing.T
 	if pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 (crash landed before dispatch)", pub.count())
 	}
-	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackground, "bg-0001-apply")
+	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackgroundNode("node-a"), "bg-0001-apply")
 	if err != nil {
 		t.Fatalf("GetNightCueOutboxRow: %v", err)
 	}
@@ -538,7 +1271,7 @@ func TestNightAdvanceBackgroundAudio_CrashAfterDispatchBeforePersist(t *testing.
 	pub.result = confirmedResultForAction("apply", sessionID, "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 
-	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackground, "bg-0001-apply")
+	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackgroundNode("node-a"), "bg-0001-apply")
 	if err != nil {
 		t.Fatalf("GetNightCueOutboxRow: %v", err)
 	}
@@ -609,6 +1342,906 @@ func TestNightTick_LiveStopsBackgroundAudio(t *testing.T) {
 	}
 }
 
+// TestNightTick_BackgroundAudioFadeDownScheduledToCompleteByE is the
+// owner's own "start time minus fade time" applied to the bed, PADDED by
+// [nightBackgroundAudioFadeDownDispatchMargin]: this is a tick-driven
+// check, so the fade-down must be due one whole tick's worth of slack
+// EARLIER than E minus fadeOutMs alone, or a tick that only just missed
+// the unpadded threshold would dispatch late enough to run past E - the
+// exact rig defect this margin closes. Table-driven over fadeOutMs and
+// how far before E the tick lands, against the PADDED boundary: one tick
+// short of the padded lead must not fire yet, and the padded lead instant
+// itself (or later) must.
+func TestNightTick_BackgroundAudioFadeDownScheduledToCompleteByE(t *testing.T) {
+	e := time.Date(2026, 10, 31, 20, 5, 0, 0, time.UTC)
+	dispatchedAt := e.Add(-300 * time.Second)
+	margin := nightBackgroundAudioFadeDownDispatchMargin
+
+	for _, tc := range []struct {
+		name      string
+		fadeOutMs int
+		beforeE   time.Duration
+		wantDue   bool
+	}{
+		{name: "1s before the padded 2s lead point: not yet due", fadeOutMs: 2000, beforeE: 2*time.Second + margin + time.Second, wantDue: false},
+		{name: "exactly at the padded 2s lead point: due", fadeOutMs: 2000, beforeE: 2*time.Second + margin, wantDue: true},
+		{name: "1s past the padded 2s lead point: due", fadeOutMs: 2000, beforeE: 2*time.Second + margin - time.Second, wantDue: true},
+		{name: "1ms before the padded 200ms lead point: not yet due", fadeOutMs: 200, beforeE: 200*time.Millisecond + margin + time.Millisecond, wantDue: false},
+		{name: "exactly at the padded 200ms lead point: due", fadeOutMs: 200, beforeE: 200*time.Millisecond + margin, wantDue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, pub, obs := nightBackgroundAudioTestHandlers(t)
+			putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+			putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+			ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, tc.fadeOutMs, 800)
+			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+			playThroughApplyGainStart(t, h, pub, rec)
+
+			now := e.Add(-tc.beforeE)
+			anchor := nightContentAnchor{
+				Purpose: nightAnchorPurposeRestingOneShot, FPPInstanceID: "fpp-main", Playlist: "halloween-resting",
+				Item: "halloween-resting.fseq", DurationMS: 300000, PositionSeconds: 0, PositionMS: 0, PositionMSKnown: true,
+				DispatchedAt: dispatchedAt, ObservedAt: dispatchedAt,
+			}
+			rec.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+			rec.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &e})
+			if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+				t.Fatalf("UpdateNightSession: %v", err)
+			}
+			obs.setObs([]observation.Observation{
+				statusObservation("fpp-main", fppStatusValuePlaying, now),
+				playlistNameObservation("fpp-main", "halloween-resting", now),
+				positionMSObservation("fpp-main", 0, now),
+			})
+
+			pub.result = confirmedResultForAction("gain", nightBackgroundAudioSessionID(rec), "gain")
+			h.nightTick(context.Background(), now)
+
+			got, ok, err := st.GetCurrentNightSession(context.Background())
+			if err != nil || !ok {
+				t.Fatalf("get current session: ok=%v err=%v", ok, err)
+			}
+			if got.State != nightStateRestingIntershow {
+				t.Fatalf("state = %q at %v, want still %q (E itself is %v away)", got.State, now, nightStateRestingIntershow, tc.beforeE)
+			}
+
+			// The forward advance chain also dispatches audio.gain.fade once
+			// the earlier "start" step confirms, since fadeInMs is
+			// configured too (the fade-up half of the pair) - so "due" and
+			// "not due" are told apart by targetGain (0.0 for the fade-down
+			// this test is about), never by action name alone.
+			isFadeDown := pub.lastAction == "audio.gain.fade" && pub.lastParams["targetGain"] == 0.0
+			if tc.wantDue {
+				if !isFadeDown {
+					t.Fatalf("dispatched action at E-%v (lead %dms) = %q targetGain=%v, want audio.gain.fade targetGain=0.0 (the fade-down)", tc.beforeE, tc.fadeOutMs, pub.lastAction, pub.lastParams["targetGain"])
+				}
+				if got := pub.lastParams["durationMs"]; got != float64(tc.fadeOutMs) {
+					t.Fatalf("fade-down durationMs = %v, want %d (the configured fadeOutMs)", got, tc.fadeOutMs)
+				}
+			} else if isFadeDown {
+				t.Fatalf("dispatched action at E-%v (lead %dms) = fade-down (targetGain 0.0), want no fade-down yet", tc.beforeE, tc.fadeOutMs)
+			}
+		})
+	}
+}
+
+// TestNightTick_BackgroundAudioFadeDownSurvivesRealTickPhase drives the
+// fade-down decision through repeated, realistic 1-second night-loop
+// ticks landing at a FIXED sub-second phase unrelated to E - exactly how
+// [NightLoop.Run]'s own ticker behaves in production, and exactly the
+// shape behind the rig defect: a due check that only fires on the next
+// tick to land can be up to one whole interval late. The phase here
+// (988ms past each whole second) reproduces the rig's own recorded fade
+// dispatch, which landed roughly one second after its computed threshold.
+// Run against the code before nightBackgroundAudioFadeDownDispatchMargin
+// existed, the dispatch this test observes completes AFTER e, and this
+// test fails.
+func TestNightTick_BackgroundAudioFadeDownSurvivesRealTickPhase(t *testing.T) {
+	e := time.Date(2026, 10, 31, 20, 5, 0, 0, time.UTC)
+	dispatchedAt := e.Add(-300 * time.Second)
+	fadeOutMs := 2000
+
+	h, st, pub, obs := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, fadeOutMs, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	anchor := nightContentAnchor{
+		Purpose: nightAnchorPurposeRestingOneShot, FPPInstanceID: "fpp-main", Playlist: "halloween-resting",
+		Item: "halloween-resting.fseq", DurationMS: 300000, PositionSeconds: 0, PositionMS: 0, PositionMSKnown: true,
+		DispatchedAt: dispatchedAt, ObservedAt: dispatchedAt,
+	}
+	rec.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+	rec.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &e})
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("gain", nightBackgroundAudioSessionID(rec), "gain")
+
+	// Ticks land 988ms past every whole second, entirely independent of
+	// e's own instant - matching a real ticker's arbitrary phase, and the
+	// rig's own recorded fade dispatch offset.
+	offset := 988 * time.Millisecond
+	start := e.Add(-8 * time.Second).Truncate(time.Second).Add(offset)
+	var dispatchAt time.Time
+	for tick := start; tick.Before(e); tick = tick.Add(time.Second) {
+		obs.setObs([]observation.Observation{
+			statusObservation("fpp-main", fppStatusValuePlaying, tick),
+			playlistNameObservation("fpp-main", "halloween-resting", tick),
+			positionMSObservation("fpp-main", 0, tick),
+		})
+		before := pub.count()
+		h.nightTick(context.Background(), tick)
+		if pub.count() > before && pub.lastAction == "audio.gain.fade" && pub.lastParams["targetGain"] == 0.0 {
+			dispatchAt = tick
+			break
+		}
+	}
+
+	if dispatchAt.IsZero() {
+		t.Fatalf("fade-down was never dispatched across ticks from %v to %v (phase %v past each second)", start, e, offset)
+	}
+	completesAt := dispatchAt.Add(time.Duration(fadeOutMs) * time.Millisecond)
+	if completesAt.After(e) {
+		t.Fatalf("fade-down dispatched at %v completes at %v, %v after the show launch instant %v - PR #343's rule requires completion BY e", dispatchAt, completesAt, completesAt.Sub(e), e)
+	}
+}
+
+// TestNightTick_ReturnToRestingFadesUpExactlyOnceNoFadeDownRemainderStacked
+// checks the owner's report that coming out of a show back to resting
+// plays "the rest of the fade out" and THEN fades back in - two ramps
+// where there should be one transition. This drives the WHOLE round
+// trip through nightTick itself (never calling a background-audio handler
+// directly), exactly as the real night loop would: steady resting
+// playback, into live (fade-down dispatched, withheld from pausing while
+// the node still reports it in_progress, paused only once settled), into
+// transition-to-resting (idempotently still paused - nothing to stack
+// here), back into resting-intershow (resume, then fade-up). The full
+// dispatched sequence is asserted verbatim, so a stacked extra fade-down
+// (or a second fade-down/fade-up pair) immediately before the final
+// fade-up would show up as an unexpected entry, not just a wrong count.
+func TestNightTick_ReturnToRestingFadesUpExactlyOnceNoFadeDownRemainderStacked(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential, 200, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+
+	// Reach steady, faded-up resting playback: apply, gain(silence), start,
+	// fade-up to maxGainDb - the entry-side half of the SAME pair this test
+	// is about, already proven in isolation by
+	// TestNightAdvanceBackgroundAudio_GainBeforeStartIsSilentWhenFadeInConfigured.
+	playThroughApplyGainStart(t, h, pub, rec)
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightTick(context.Background(), testNow) // fade-up (fadeInMs configured)
+
+	// Leave resting for a show: fade-down dispatched, withheld from pausing
+	// while still ramping, paused only once the node reports it settled.
+	rec.State = nightStateLive
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightTick(context.Background(), testNow) // fade-down dispatched
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "in_progress", testNow, testNow)})
+	h.nightTick(context.Background(), testNow) // withheld: still ramping
+	countBeforeSettle := pub.count()
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.result = confirmedResultForAction("pause", sessionID, "started")
+	h.nightTick(context.Background(), testNow) // pause, now that it settled
+	if pub.count() != countBeforeSettle+1 {
+		t.Fatalf("publish count once settled = %d, want %d (exactly one more dispatch: the pause)", pub.count(), countBeforeSettle+1)
+	}
+
+	// The show runs its course, then transition-to-resting: nothing to do
+	// here (already paused and confirmed) - proves this state never
+	// re-triggers a fade-down of its own.
+	rec.State = nightStateTransitionToResting
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	countBeforeReturn := pub.count()
+	h.nightTick(context.Background(), testNow)
+	if pub.count() != countBeforeReturn {
+		t.Fatalf("publish count during transition-to-resting = %d, want unchanged at %d (already paused; nothing to redo)", pub.count(), countBeforeReturn)
+	}
+
+	// Back to resting: resume, then (chained within the SAME tick, once
+	// resume confirms) fade-up - ONE transition, not a fade-down
+	// remainder stacked before it, and not a tick of silence between
+	// resume and the ramp beginning.
+	rec.State = nightStateRestingIntershow
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	countBeforeResumeReturn := pub.count()
+	pub.result = confirmedResultForAction("resume", sessionID, "started")
+	h.nightTick(context.Background(), testNow) // resume, then the chained fade-up
+	if got := pub.count(); got != countBeforeResumeReturn+2 {
+		t.Fatalf("publish count on return to resting = %d, want %d (resume, then the chained fadeup, in the same tick)", got, countBeforeResumeReturn+2)
+	}
+	if pub.lastAction != "audio.gain.fade" {
+		t.Fatalf("dispatched action on return to resting = %q, want audio.gain.fade (the chained fadeup)", pub.lastAction)
+	}
+
+	var gotActions []string
+	var gotGains []any
+	for _, d := range pub.dispatched {
+		gotActions = append(gotActions, d.Action)
+		if d.Action == "audio.gain.fade" {
+			gotGains = append(gotGains, d.Params["targetGain"])
+		}
+	}
+	wantActions := []string{
+		"audio.session.apply", "audio.gain.set", "audio.session.start", "audio.gain.fade", // entry: apply, silence, start, fade-up
+		"audio.gain.fade", "audio.session.pause", // exit: fade-down, pause
+		"audio.session.resume", "audio.gain.fade", // return: resume, fade-up - exactly once, nothing stacked before it
+	}
+	if len(gotActions) != len(wantActions) {
+		t.Fatalf("dispatched action sequence = %v, want %v (length mismatch: %d vs %d)", gotActions, wantActions, len(gotActions), len(wantActions))
+	}
+	for i, want := range wantActions {
+		if gotActions[i] != want {
+			t.Fatalf("dispatched action[%d] = %q, want %q; full sequence = %v", i, gotActions[i], want, gotActions)
+		}
+	}
+	// The three audio.gain.fade dispatches, in order: fade-up (entry),
+	// fade-down (exit, targetGain 0), fade-up (return). A stacked
+	// fade-out remainder before the return fade-up would show up as a
+	// FOURTH fade dispatch (an extra 0.0 immediately before the last
+	// entry), which the length check above already catches; this also
+	// pins the exact three gain values so a fade-down that silently
+	// targeted the wrong level would not pass by coincidence.
+	if len(gotGains) != 3 {
+		t.Fatalf("audio.gain.fade dispatch count = %d, want 3 (entry fade-up, exit fade-down, return fade-up)", len(gotGains))
+	}
+	wantGains := []any{0.31622776601683794, 0.0, 0.31622776601683794}
+	for i, want := range wantGains {
+		if gotGains[i] != want {
+			t.Fatalf("audio.gain.fade[%d] targetGain = %v, want %v", i, gotGains[i], want)
+		}
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_ClearsNotStops proves
+// end-session's own bed cleanup issues audio.session.clear, never
+// stop/pause: a stop or pause would leave the node's persisted session
+// record in place for the agent's own RestoreAll to resurrect the bed at
+// its next start, which end-session (a promise of no resume, ADR-038)
+// must never allow.
+func TestNightClearBackgroundAudioAtEndSession_ClearsNotStops(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_TombstonedReferencedPlaylistStillClearsDispatchedNode
+// is half 2's own bypass proof: the playlist is tombstoned
+// DIRECTLY through the store, never through handleDeleteMediaPlaylist, so
+// half 1's refuse branch is never even reached, let alone consulted - this
+// proves the fix, not the guard. With the referenced media.playlist gone,
+// end-session's own bed cleanup must still reach the node this controller's
+// OWN dispatch history shows the bed was actually applied to, deriving that
+// node list from nightBackgroundAudioDispatchedNodeIDs rather than from the
+// (now-missing) playlist's own OutputNodeIDs.
+func TestNightClearBackgroundAudioAtEndSession_TombstonedReferencedPlaylistStillClearsDispatchedNode(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	mustCreateMediaPlaylist(t, st, "planetary-bed", twoItemMediaPlaylistPayload("halloween", "node-a",
+		config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential))
+	ba := &config.NightSessionBackgroundAudio{MediaPlaylist: "planetary-bed"}
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countBeforeTombstone := pub.count()
+
+	// The bypass: tombstones the config object directly through the store,
+	// never through handleDeleteMediaPlaylist (mediaplaylist.go) - half 1's
+	// refuseIfActive guard is never on this call path at all.
+	if _, err := st.TombstoneConfigObject(context.Background(), config.MediaPlaylistConfigKind, "planetary-bed"); err != nil {
+		t.Fatalf("tombstone media.playlist directly through the store: %v", err)
+	}
+	if _, _, ok := h.nightResolveBackgroundAudio(context.Background(), rec, ba); ok {
+		t.Fatalf("nightResolveBackgroundAudio still resolves planetary-bed after tombstoning it; the bypass did not take")
+	}
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if got := pub.count(); got != countBeforeTombstone+1 {
+		t.Fatalf("publish count after end-session with a tombstoned referenced playlist = %d, want %d (the bed on node-a must still be cleared)", got, countBeforeTombstone+1)
+	}
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_InlineBackgroundAudioClearsUnaffectedByHistoryDerivedNodeList
+// is half 2's own no-regression proof: inline resting.backgroundAudio (no
+// media.playlist reference at all - the shape every existing installation
+// uses) still clears exactly as before now that the node list comes from
+// dispatch history rather than ba.OutputNodeIDs().
+func TestNightClearBackgroundAudioAtEndSession_InlineBackgroundAudioClearsUnaffectedByHistoryDerivedNodeList(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countBeforeEndSession := pub.count()
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if got := pub.count(); got != countBeforeEndSession+1 {
+		t.Fatalf("publish count after end-session for inline backgroundAudio = %d, want %d", got, countBeforeEndSession+1)
+	}
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+}
+
+// countActionDispatches counts every command pub actually put on the wire
+// (never one that failed before publish) whose action is action.
+func countActionDispatches(pub *fakeAudioPublisher, action string) int {
+	n := 0
+	for _, d := range pub.dispatched {
+		if d.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
+// TestNightClearBackgroundAudioAtEndSession_RepeatedCallDoesNotRedispatch
+// documents the exact defect this review finding fixed, and is kept
+// deliberately as a regression guard rather than discarded once the fix
+// landed: end-session's own clear (nightClearBackgroundAudioAtEndSession)
+// keeps ONE constant, per-session idempotency key by design (its own doc
+// comment). Calling it a SECOND time after a pre-wire failure does NOT
+// retry against the node - executeAudioSessionDispatch's own idempotency-
+// first replay (audiodispatch.go's InsertCommand duplicate-key path)
+// answers the second call with the first attempt's own cached, failed
+// outcome instead of dispatching again. That is exactly why nightTick's
+// stopped-state retry never calls this function a second time and mints
+// its own fresh, per-attempt key instead
+// ([nightEndSessionClearIdempotencyKey], nightRetryEndSessionClear). If a
+// future change ever gives THIS function a per-attempt key of its own,
+// this test starts failing - on purpose, so that change is deliberate,
+// not a silent reintroduction of the bug the retry above exists to fix.
+func TestNightClearBackgroundAudioAtEndSession_RepeatedCallDoesNotRedispatch(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	pub.beforePublishErr = errors.New("dial tcp: no route to host")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	before := countActionDispatches(pub, "audio.session.clear")
+
+	pub.beforePublishErr = nil
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if got := countActionDispatches(pub, "audio.session.clear"); got != before {
+		t.Fatalf("audio.session.clear dispatch count after a repeated call to nightClearBackgroundAudioAtEndSession = %d, want unchanged at %d - if this function now retries under its own key, nightTick's stopped-state retry may have become redundant; that is a deliberate design change to make, not an accident", got, before)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_WithholdsClearUntilFadeSettles
+// proves the fix: end-session's own synchronous clear must never race
+// a fade-down still ramping from the ordinary resting-exit path. The clear
+// is withheld while the node reports the fade in_progress, and dispatched
+// once it reports settled.
+func TestNightClearBackgroundAudioAtEndSession_WithholdsClearUntilFadeSettles(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	// The ordinary resting-exit fade-down dispatches (and confirms
+	// accepted) before end-session ever runs, exactly as the rig's own
+	// recorded timeline showed - the guard now anchors to THIS dispatch,
+	// not to stateEnteredAt.
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "in_progress", testNow, testNow)})
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear dispatched while the fade was still in_progress, want 0, got %d", got)
+	}
+
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action once the fade settled = %q, want audio.session.clear", pub.lastAction)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_NoFadeOutMsClearsImmediately
+// proves the compatibility requirement directly on the new guard: a session
+// with no fadeOutMs configured still clears on the very first attempt,
+// unchanged from today.
+func TestNightClearBackgroundAudioAtEndSession_NoFadeOutMsClearsImmediately(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear on the first attempt (no fadeOutMs configured)", pub.lastAction)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_DispatchesAfterBoundEvenWithoutObservation
+// proves the safety bound: a node that never reports the fade's own state at
+// all (nightBackgroundAudioFadeSettled answers false for it forever) must
+// never hold end-session open indefinitely. The clear stays withheld right
+// up to stateEnteredAt+fadeOutMs+nightEndSessionClearFadeGuardMargin (the
+// real bound, not a mocked one) and lands the instant that bound is
+// reached.
+func TestNightClearBackgroundAudioAtEndSession_DispatchesAfterBoundEvenWithoutObservation(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	// The fade-down dispatches at testNow - the bound below is measured
+	// from THIS instant, not from stateEnteredAt.
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	bound := time.Duration(*ba.FadeOutMs)*time.Millisecond + nightEndSessionClearFadeGuardMargin
+
+	// No observation is ever reported for this session: never settled.
+	justBefore := testNow.Add(bound - time.Millisecond)
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), justBefore, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear dispatched before the bound elapsed, want 0, got %d", got)
+	}
+
+	atBound := testNow.Add(bound)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), atBound, rec)
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action once the bound elapsed = %q, want audio.session.clear", pub.lastAction)
+	}
+}
+
+// TestNightTick_StoppedRetryWithholdsEndSessionClearUntilFadeSettles proves
+// the tick-based retry path (nightRetryEndSessionClear) honors the same
+// fade-settled guard as the synchronous clear above: in the reported
+// defect it was the RETRY key ("night-end-session-clear-retry:...") that
+// actually won the race and cut the fade, not the synchronous
+// "night-end-session-clear:..." key, so both dispatch paths need the same
+// guard.
+func TestNightTick_StoppedRetryWithholdsEndSessionClearUntilFadeSettles(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // dispatches the fade-down the retry must anchor to
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "in_progress", testNow, testNow)})
+
+	// The synchronous first attempt never lands: the node is unreachable.
+	pub.beforePublishErr = errors.New("dial tcp: no route to host")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	pub.beforePublishErr = nil
+
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("the tick-based retry dispatched audio.session.clear while the fade was still in_progress, want 0, got %d", got)
+	}
+
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 1 {
+		t.Fatalf("audio.session.clear dispatch count once the fade settled = %d, want 1", got)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_StaleFadeStateEvidenceWithholdsClear
+// is the end-of-night clear path's own version of the rig defect: the node
+// audio collector holds only a single most recent report, so evidence
+// collected before the fade's own dispatch instant must never read as
+// settled. Run against the code before nightEndSessionClearMayProceed
+// threaded a real dispatch instant through (it disabled the notBefore
+// fence at this call site entirely), this test fails at its first
+// assertion.
+func TestNightClearBackgroundAudioAtEndSession_StaleFadeStateEvidenceWithholdsClear(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec) // dispatches the fade-down, at testNow
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	audio := h.deps.Audio.(*fakeNodeAudioLister)
+	staleAt := testNow.Add(-1 * time.Second)
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", staleAt, staleAt)})
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear dispatched with only pre-dispatch fade-state evidence, want 0 (stale evidence must never read as settled)")
+	}
+
+	audio.setObservations("node-a", []observation.Observation{fadeStateObservation(sessionID, "none", testNow, testNow)})
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 1 {
+		t.Fatalf("audio.session.clear dispatch count once fresh post-dispatch evidence reads settled = %d, want 1", got)
+	}
+}
+
+// TestNightTick_StoppedRetryDoesNotUseStateEnteredAtEscapeHatch reproduces
+// the rig's own 455ms end-of-night truncation directly: a session that has
+// already been sitting in stopped, retrying, for well over the fade's own
+// bound gets a FRESH fade-down dispatched only shortly before this retry
+// runs (the rig's own recorded gap, 455ms). nightEndSessionClearMayProceed's
+// escape hatch must measure from the fade's own dispatch instant, never
+// from stateEnteredAt: anchored to stateEnteredAt, elapsed retry time
+// alone satisfies the bound regardless of the fade's real progress. Run
+// against the code before this fix, this test fails: the escape hatch
+// fires immediately off ten elapsed seconds of stateEnteredAt and the
+// clear cuts the 455ms-old fade off.
+func TestNightTick_StoppedRetryDoesNotUseStateEnteredAtEscapeHatch(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfigWithFade("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential, 2000, 800)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	// stateEnteredAt is 10s in the past: fadeOutMs (2s) + margin (1s) = a
+	// 3s bound this alone already exceeds, many times over.
+	rec.State = nightStateStopped
+	rec.StateEnteredAt = testNow.Add(-10 * time.Second)
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	// The fade-down dispatches only now.
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	got, ok, err := st.GetCurrentNightSession(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("get current session: ok=%v err=%v", ok, err)
+	}
+	now := testNow.Add(455 * time.Millisecond)
+	h.nightRetryEndSessionClear(context.Background(), now, got)
+	if n := countActionDispatches(pub, "audio.session.clear"); n != 0 {
+		t.Fatalf("audio.session.clear dispatch count 455ms after the fade-down = %d, want 0 (the fade has had no real time to settle)", n)
+	}
+}
+
+// TestNightTick_StoppedRetriesEndSessionClearUntilNodeReturns is this
+// review finding's own end-to-end proof: nightTick's stopped-state case
+// must RETRY end-session's own clear, not do nothing, when the node was
+// unreachable when it first ran. It drives the unreachable case end to
+// end - the clear fails, the bed is still resident, ticks while stopped
+// retry it, the node returns, a clear lands - and asserts convergence
+// specifically: the session record is released AND no further tick
+// dispatches anything more, not merely that a retry was attempted.
+func TestNightTick_StoppedRetriesEndSessionClearUntilNodeReturns(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	// 1. end-session runs and its own synchronous clear FAILS: the node
+	// is unreachable.
+	pub.beforePublishErr = errors.New("dial tcp: no route to host")
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear reached the wire on the failed first attempt, want 0, got %d", got)
+	}
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	// 2. The bed is still resident: nothing released it. No clear anchor
+	// has confirmed.
+	cur, ok, err := st.GetCurrentNightSession(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetCurrentNightSession: ok=%v err=%v", ok, err)
+	}
+	if anchor, has := decodeNightContentAnchor(cur.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeEndSessionClear && !anchor.ObservedAt.IsZero() {
+		t.Fatalf("a clear is already confirmed before any retry ran")
+	}
+
+	// 3. Ticks occur while the session is stopped and the node is still
+	// unreachable: the clear is retried, but nothing lands.
+	h.nightTick(context.Background(), testNow)
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 0 {
+		t.Fatalf("audio.session.clear reached the wire while the node was still unreachable, want 0, got %d", got)
+	}
+
+	// 4. The node returns: the very next tick's retry dispatches the
+	// clear again, under a fresh idempotency key, and this time it lands.
+	pub.beforePublishErr = nil
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+	h.nightTick(context.Background(), testNow)
+
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
+	}
+	cur, ok, err = st.GetCurrentNightSession(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("GetCurrentNightSession: ok=%v err=%v", ok, err)
+	}
+	anchor, has := decodeNightContentAnchor(cur.ContentAnchorJSON)
+	if !has || anchor.Purpose != nightAnchorPurposeEndSessionClear || anchor.ObservedAt.IsZero() {
+		t.Fatalf("anchor = %+v (has=%v), want a confirmed end-session-clear anchor - the session record was never released", anchor, has)
+	}
+
+	// Convergence, not just an attempt: further ticks dispatch NOTHING.
+	landedCount := countActionDispatches(pub, "audio.session.clear")
+	h.nightTick(context.Background(), testNow)
+	h.nightTick(context.Background(), testNow)
+	if got := countActionDispatches(pub, "audio.session.clear"); got != landedCount {
+		t.Fatalf("audio.session.clear dispatch count after confirming = %d, want unchanged at %d (no further dispatch once released)", got, landedCount)
+	}
+}
+
+// TestNightTick_StoppedDoesNotRedispatchClearOnceConfirmed proves the
+// concern the original review comment raised for the success case: once
+// end-session's own clear confirms (whether on its first synchronous
+// attempt or a later retry), further ticks while stopped never mint
+// another redundant clear.
+func TestNightTick_StoppedDoesNotRedispatchClearOnceConfirmed(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+
+	h.nightTick(context.Background(), testNow) // the stopped-state retry dispatches and confirms.
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 1 {
+		t.Fatalf("audio.session.clear dispatch count after the first stopped tick = %d, want exactly 1", got)
+	}
+
+	for i := 0; i < 5; i++ {
+		h.nightTick(context.Background(), testNow)
+	}
+	if got := countActionDispatches(pub, "audio.session.clear"); got != 1 {
+		t.Fatalf("audio.session.clear dispatch count after 5 more stopped ticks = %d, want still 1 (no endless redundant traffic)", got)
+	}
+}
+
+// TestNightTick_PreshowStartsBackgroundAudio proves preshow runs the
+// same apply/gain/start path resting-intershow already uses: the bed is
+// not withheld until the first inter-show resting period.
+func TestNightTick_PreshowStartsBackgroundAudio(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	_ = mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action = %q, want audio.session.apply", pub.lastAction)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("publish count = %d, want 1", pub.count())
+	}
+}
+
+// TestNightTick_PreshowToRestingIntershowDoesNotRestartBackgroundAudio
+// proves requirement 2: the bed already applied, gained, and started
+// during preshow is left alone at the preshow -> resting-intershow
+// boundary. The step history is keyed by the session's own stable
+// nightBackgroundAudioSessionID, not by state, so the state change alone
+// commits no new apply/start step.
+func TestNightTick_PreshowToRestingIntershowDoesNotRestartBackgroundAudio(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countAfterStart := pub.count()
+
+	rec.State = nightStateRestingIntershow
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.count() != countAfterStart {
+		t.Fatalf("publish count = %d after entering resting-intershow, want unchanged at %d (must not re-apply/restart)", pub.count(), countAfterStart)
+	}
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("nightBackgroundAudioHistory: %v", err)
+	}
+	steps := nightBackgroundAudioSteps(history)
+	if len(steps) != 3 {
+		t.Fatalf("steps = %d, want 3 (apply, gain, start only - no duplicate apply/start across the boundary)", len(steps))
+	}
+	if steps[len(steps)-1].Step.Kind != nightBGStepStart {
+		t.Fatalf("latest step = %q, want %q", steps[len(steps)-1].Step.Kind, nightBGStepStart)
+	}
+}
+
+// TestNightTick_PreshowNoBackgroundAudioConfiguredDoesNothing proves
+// requirement 4: a preshow session with no resting.backgroundAudio
+// configured behaves unchanged - nightAdvanceBackgroundAudio's existing
+// ba == nil early return covers preshow exactly as it already covers the
+// resting states.
+func TestNightTick_PreshowNoBackgroundAudioConfiguredDoesNothing(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	_ = mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", nil, nightStatePreshow)
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (no background audio configured)", pub.count())
+	}
+}
+
+// TestNightTick_LeavingPreshowForShowStopsBackgroundAudio proves
+// requirement 3: leaving preshow for a show still stops the bed exactly
+// as leaving resting-intershow does, and transition-to-show still takes
+// no action of its own (the deliberate no-op this switch's own comment
+// documents).
+func TestNightTick_LeavingPreshowForShowStopsBackgroundAudio(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStatePreshow)
+	playThroughApplyGainStart(t, h, pub, rec)
+	countAfterStart := pub.count()
+
+	rec.State = nightStateTransitionToShow
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.count() != countAfterStart {
+		t.Fatalf("publish count = %d after entering transition-to-show, want unchanged at %d (must not hard-stop here)", pub.count(), countAfterStart)
+	}
+
+	rec.State = nightStateLive
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	pub.result = confirmedResultForAction("stop", nightBackgroundAudioSessionID(rec), "stopped")
+
+	h.nightTick(context.Background(), testNow)
+
+	if pub.lastAction != "audio.session.stop" {
+		t.Fatalf("dispatched action = %q, want audio.session.stop", pub.lastAction)
+	}
+}
+
 // mutation target: nightBackgroundAudioHistory keeping rows it cannot
 // parse, and nightNextBackgroundAudioRevision counting them. Drop an
 // unrecognized row at the store read and this fails: the next revision
@@ -660,5 +2293,261 @@ func TestNightBackgroundAudioRevisionNeverRewindsPastAnUnrecognizedRow(t *testin
 	applyRow := pub.dispatched[len(pub.dispatched)-1]
 	if applyRow.Params["revision"].(float64) <= 99 {
 		t.Fatalf("apply dispatched at revision %v, want above the legacy row's 99", applyRow.Params["revision"])
+	}
+}
+
+// TestMapNightBackgroundAudio_PinnedMaxGainDb proves the owner ruling
+// (2026-08-28) directly: the GET /night/session projection reports the
+// maxGainDb the RUNNING session pinned at its own configRevision, and
+// keeps reporting that value unchanged after a later revision
+// reconfigures the ceiling - never the value night.session.resting's
+// config currently holds.
+func TestMapNightBackgroundAudio_PinnedMaxGainDb(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+		t.Fatalf("PinnedMaxGainDb = %v, want -10", got.PinnedMaxGainDb)
+	}
+
+	// A later revision reconfigures the ceiling. The running session stays
+	// pinned to revision 1, so the response must not move.
+	reconfigured := *ba
+	reconfigured.MaxGainDb = -3
+	payload := config.NightSessionPayload{
+		Show: "halloween", Label: "Halloween main loop",
+		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "fpp-main", Playlist: "halloween-show"},
+		Resting: config.NightSessionResting{
+			FPPInstanceID: "fpp-main", Playlist: "halloween-resting",
+			TimelineAsset:   config.NightSessionAssetRef{Show: "halloween", Sequence: "resting-loop", Target: "fpp-main"},
+			BackgroundAudio: &reconfigured,
+		},
+		EnterShow:                 config.NightSessionEnterShow{Cues: nil, BlackoutHoldMs: 0},
+		EnterResting:              config.NightSessionEnterResting{Cues: nil, BlackoutAfterShowMs: 0},
+		AnnouncementDefaultPolicy: config.NightSessionAnnouncementPolicyDefault,
+	}
+	raw, err := config.EncodeNightSessionPayload(payload)
+	if err != nil {
+		t.Fatalf("encode revision 2 payload: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.NightSessionConfigKind, ObjectID: "halloween-main", Revision: 2, PayloadJSON: raw,
+		CreatedByPrincipalID: "test", CreatedByPrincipalName: "test", Source: "api",
+	}); err != nil {
+		t.Fatalf("create night.session revision 2: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.NightSessionConfigKind, "halloween-main", 2); err != nil {
+		t.Fatalf("activate night.session revision 2: %v", err)
+	}
+
+	got = mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+		t.Fatalf("PinnedMaxGainDb after reconfiguration = %v, want still -10 (the pinned revision), not the newly configured -3", got.PinnedMaxGainDb)
+	}
+
+	// No session running: the field is absent, never a fallback value.
+	if none := mapNightBackgroundAudio(ctx, h.deps, store.NightSessionRecord{}, true); none.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb with no session = %v, want nil", none.PinnedMaxGainDb)
+	}
+}
+
+// TestMapNightBackgroundAudio_NoBackgroundAudioConfigured proves a session
+// pinned to a revision that configures no backgroundAudio at all reports
+// State "recorded" (a legitimate reading, not a read failure) with
+// PinnedMaxGainDb nil rather than a defaulted or fallback value, and a
+// non-empty Reason naming why (found by review: an earlier version left
+// Reason empty here, breaking the OpenAPI description's own promise that
+// state and reason say why the field is absent).
+func TestMapNightBackgroundAudio_NoBackgroundAudioConfigured(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", nil, nightStateRestingIntershow)
+
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	if got.State != v1.NightEvidenceRecorded {
+		t.Fatalf("state with no backgroundAudio configured = %q, want recorded", got.State)
+	}
+	if got.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb with no backgroundAudio configured = %v, want nil", got.PinnedMaxGainDb)
+	}
+	if got.Reason == "" {
+		t.Fatalf("Reason with no backgroundAudio configured = %q, want a non-empty explanation", got.Reason)
+	}
+}
+
+// TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates proves the
+// owner-ruled gate directly, on the CURRENT-session side only
+// (current=true, GET /night/session and its siblings): pinnedMaxGainDb is
+// nil for a session record that exists but is not in a running state
+// (preparing, or stopped), even though its pinned revision configures a
+// real ceiling - so that endpoint never reports the last night's ceiling
+// as live before the session has started or after it has ended.
+func TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates(t *testing.T) {
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+
+	for _, state := range []string{nightStatePreparing, nightStateStopped} {
+		t.Run(state, func(t *testing.T) {
+			h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, state)
+			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+			if got.State != v1.NightEvidenceRecorded {
+				t.Fatalf("state %q: reported state = %q, want recorded", state, got.State)
+			}
+			if got.PinnedMaxGainDb != nil {
+				t.Fatalf("state %q: PinnedMaxGainDb = %v, want nil (not a running state, current=true)", state, got.PinnedMaxGainDb)
+			}
+		})
+	}
+}
+
+// TestMapNightBackgroundAudio_ByIDIgnoresRunningState proves the owner
+// ruling's other half (2026-08-30), on the BY-ID side (current=false, GET
+// /night/sessions/{id}): a stopped session's own pinned revision still
+// reports its pinnedMaxGainDb, because the value there is already scoped
+// to the specific historical record the caller asked for, never a live
+// claim. Paired with TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates,
+// which proves the opposite for current=true on the same states.
+func TestMapNightBackgroundAudio_ByIDIgnoresRunningState(t *testing.T) {
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+
+	for _, state := range []string{nightStatePreparing, nightStateStopped} {
+		t.Run(state, func(t *testing.T) {
+			h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, state)
+			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, false)
+			if got.State != v1.NightEvidenceRecorded {
+				t.Fatalf("state %q: reported state = %q, want recorded", state, got.State)
+			}
+			if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+				t.Fatalf("state %q: PinnedMaxGainDb = %v, want -10 (by-id reports the record's own pinned ceiling regardless of state)", state, got.PinnedMaxGainDb)
+			}
+		})
+	}
+}
+
+// TestMapNightBackgroundAudio_PinnedGainReadFailureKeepsStepsRecorded
+// proves finding 1 directly: a failure reading the pinned night.session
+// revision for pinnedMaxGainDb must never hide the step log an operator
+// needs to see a stuck or refused announcement clear. State stays
+// "recorded", the steps already read are still reported, and only
+// PinnedMaxGainDb is nil, with its own Reason - never the whole block
+// flipped to Unknown with the steps dropped (the bug this test guards
+// against: an earlier version did exactly that for a read failure on
+// this strictly additive field).
+func TestMapNightBackgroundAudio_PinnedGainReadFailureKeepsStepsRecorded(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	// A real step, so there is genuine evidence to lose if this regresses.
+	ctx := context.Background()
+	if err := st.InsertNightCueOutboxRow(ctx, store.NightCueOutboxRecord{
+		ID: "row-apply", SessionID: rec.ID, Cycle: rec.Cycle,
+		Phase: nightPhaseRestingBackgroundNode("node-a"), CueName: nightBackgroundAudioCueNameApply(1),
+		ActionRevision: 1, State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed,
+	}, testNow); err != nil {
+		t.Fatalf("insert apply row: %v", err)
+	}
+
+	// Point the session at a config revision that does not exist, so the
+	// pinned-config read fails while the outbox reads above are
+	// untouched: a real "config read fails, evidence already read is
+	// still reported" case, not a simulated error.
+	rec.ConfigRevision = 99
+
+	got := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	if got.State != v1.NightEvidenceRecorded {
+		t.Fatalf("state = %q, want recorded (a pinnedMaxGainDb read failure must not hide the step log)", got.State)
+	}
+	if got.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb = %v, want nil on a pinned-config read failure", got.PinnedMaxGainDb)
+	}
+	if got.Reason == "" {
+		t.Fatalf("Reason = %q, want a non-empty explanation of the pinnedMaxGainDb read failure", got.Reason)
+	}
+	if len(got.Steps) != 1 || got.Steps[0].CueName != nightBackgroundAudioCueNameApply(1) {
+		t.Fatalf("Steps = %+v, want the one apply step still reported despite the pinned-config read failure", got.Steps)
+	}
+}
+
+// TestNightPinnedBackgroundMaxGainDb_EmptyConfigObjectID proves finding
+// 2 directly: an empty rec.ConfigObjectID (mapNightCues already guards
+// this; this call site did not) is answered as "nothing pinned yet" -
+// nil gain, no reason, no error - never a doomed GetConfigRevision call
+// against an empty object id.
+func TestNightPinnedBackgroundMaxGainDb_EmptyConfigObjectID(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	gain, reason, err := nightPinnedBackgroundMaxGainDb(context.Background(), h.deps, store.NightSessionRecord{ID: "sess-1", State: nightStateRestingIntershow})
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if gain != nil {
+		t.Fatalf("gain = %v, want nil", gain)
+	}
+	if reason != "" {
+		t.Fatalf("reason = %q, want empty", reason)
+	}
+}
+
+// nightPinnedMaxGainDbFromResponse decodes just the one field this test
+// package cares about out of a real NightSessionResponse body.
+func nightPinnedMaxGainDbFromResponse(t *testing.T, body []byte) (id string, pinnedMaxGainDb *float64) {
+	t.Helper()
+	var decoded struct {
+		Session struct {
+			ID              string `json:"id"`
+			BackgroundAudio struct {
+				PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb"`
+			} `json:"backgroundAudio"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode NightSessionResponse: %v; body=%s", err, body)
+	}
+	return decoded.Session.ID, decoded.Session.BackgroundAudio.PinnedMaxGainDb
+}
+
+// TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint exercises
+// handleGetNightLifecycle and handleGetNightLifecycleByID directly, not
+// just the mapper, so a wiring mistake in either handler's own `current`
+// argument fails here even if every mapper-level test still passes. A
+// stopped session stays the store's "current" row, exactly the case the
+// owner ruling (2026-08-30) is about.
+func TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := identity.NewService(st, fixedClock(testNow), filepath.Join(dir, "data"), identity.WithLogger(testLogger()))
+	deps := Dependencies{
+		NightSessions: st, Config: st, Commands: st, Identity: svc,
+		AudioPublisher: &fakeAudioPublisher{}, AudioSessions: st, Assets: st, Observations: &dynamicObservationLister{},
+		ResolumeActions: &fakeResolumeActionDispatcher{},
+	}.withDefaults()
+	nightAPI := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateStopped)
+
+	_, byIDBody := doRequest(t, nightAPI.Handler, "GET", "/api/v1/night/sessions/"+rec.ID, nil)
+	byIDID, byIDGain := nightPinnedMaxGainDbFromResponse(t, byIDBody)
+	if byIDID != rec.ID {
+		t.Fatalf("GET /night/sessions/{id}: id = %q, want %q; body=%s", byIDID, rec.ID, byIDBody)
+	}
+	if byIDGain == nil || *byIDGain != -10 {
+		t.Fatalf("GET /night/sessions/{id} on a stopped session: pinnedMaxGainDb = %v, want -10 (the record's own pinned ceiling, regardless of state)", byIDGain)
+	}
+
+	_, curBody := doRequest(t, nightAPI.Handler, "GET", "/api/v1/night/session", nil)
+	curID, curGain := nightPinnedMaxGainDbFromResponse(t, curBody)
+	if curID != rec.ID {
+		t.Fatalf("GET /night/session did not return the stopped session as current: id = %q, want %q; body=%s", curID, rec.ID, curBody)
+	}
+	if curGain != nil {
+		t.Fatalf("GET /night/session on a stopped session: pinnedMaxGainDb = %v, want nil (never a dead session's ceiling reported as live)", curGain)
 	}
 }

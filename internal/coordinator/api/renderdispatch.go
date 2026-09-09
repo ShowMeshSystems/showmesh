@@ -81,6 +81,11 @@ var renderCommandConfirmDeadline = 15 * time.Second
 // test-only-override rule as renderCommandConfirmDeadline.
 var renderCommandPollInterval = 250 * time.Millisecond
 
+// renderCommandWireDeadline bounds how stale a wire render command may be
+// before the agent refuses it (CmdPayload.Deadline): a late apply would
+// visibly diverge from operator intent, so this stays generous but set.
+const renderCommandWireDeadline = 60 * time.Second
+
 const (
 	// renderHandlerWriteDeadlineMargin is added to
 	// renderCommandConfirmDeadline for the HTTP response write deadline,
@@ -301,23 +306,28 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve expected assets for node %q in show %q: %w", nodeID, base.Active.ShowID, err)
 	}
-	var matches []assetsync.ExpectedAsset
+	var sequenceMatches, fseqMatches []assetsync.ExpectedAsset
 	for _, a := range expected.Assets {
-		if a.SequenceID == sequenceID {
-			matches = append(matches, a)
+		if a.SequenceID != sequenceID {
+			continue
+		}
+		sequenceMatches = append(sequenceMatches, a)
+		if a.MediaType == "fseq" {
+			fseqMatches = append(fseqMatches, a)
 		}
 	}
-	switch len(matches) {
-	case 0:
+	switch {
+	case len(sequenceMatches) == 0:
 		p := invalidParameterProblem(fmt.Sprintf("no asset found for surface %q (sequence %q) in show %q", surfaceID, sequenceID, base.Active.ShowID))
 		return nil, &p, nil
-	default:
-		if len(matches) > 1 {
-			p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(matches), sequenceID, nodeID, base.Active.ShowID))
-			return nil, &p, nil
-		}
+	case len(fseqMatches) == 0:
+		p := invalidParameterProblem(fmt.Sprintf("no fseq asset found for surface %q (sequence %q) in show %q; %d current asset(s) exist for that sequence but none is an fseq", surfaceID, sequenceID, base.Active.ShowID, len(sequenceMatches)))
+		return nil, &p, nil
+	case len(fseqMatches) > 1:
+		p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current fseq assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(fseqMatches), sequenceID, nodeID, base.Active.ShowID))
+		return nil, &p, nil
 	}
-	asset := matches[0]
+	asset := fseqMatches[0]
 
 	raw, err := json.Marshal(renderApplyParamsPayload{
 		SurfaceID: surfaceID, Show: base.Payload.Show, Name: base.Payload.Name, Node: base.Payload.Node,
@@ -421,13 +431,14 @@ func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surface
 // Omitting fseqFilename/fseqContentHash entirely (never sending them
 // empty) is what makes this a valid render.surface.apply request at all:
 // [renderApplyKnownKeys]' own doc comment (internal/agent/renderops.go)
-// already states "an assignment with no FSEQ information is still a valid
-// request," and buildFSEQAssignment's ok==false branch is exactly the
-// "declared, no content yet" state this half needed and did not have to
-// invent — the agent falls back to its own test-pattern pipeline with no
-// frame writer, which is what draws render.settings.idleOutput until the
-// first activateSurfaceRender (internal/agent/cueactivationrender.go)
-// swaps a real FSEQ onto it.
+// already states an assignment with no FSEQ content is a valid request,
+// and buildFSEQAssignment's ok==false branch is exactly the "declared, no
+// content yet" state this half needed and did not have to invent: the
+// agent starts a [pipeline.NewIdleFrameWriter] with no sequence, which
+// actually draws (and reports, through surface.output.mode/idleMode) this
+// surface's configured render.settings.idleOutput until the first
+// activateSurfaceRender (internal/agent/cueactivationrender.go) swaps a
+// real FSEQ onto it.
 type renderEstablishParamsPayload struct {
 	SurfaceID       string                         `json:"surfaceId"`
 	Show            string                         `json:"show"`
@@ -646,8 +657,8 @@ type renderDispatchInput struct {
 }
 
 // renderRequestIdentity is the caller's own unresolved request shape,
-// stored in commands.requested_revision — never in the mutable params_json
-// a resolution produces.
+// stored in commands.caller_intent tagged store.CallerIntentRenderRequest,
+// never in the mutable params_json a resolution produces.
 type renderRequestIdentity struct {
 	Action     string `json:"action"`
 	NodeID     string `json:"node"`
@@ -691,7 +702,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		ID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 		TargetKind: "node", TargetID: in.NodeID, ParamsJSON: paramsJSON,
 		IssuerPrincipalID: in.IssuerID, IssuerPrincipalName: in.IssuerName,
-		RequestedRevision:  string(identityJSON),
+		CallerIntent:       store.FormatCallerIntent(store.CallerIntentRenderRequest, string(identityJSON)),
 		ConfirmationMethod: "evidence", State: "pending",
 	}
 	inserted, err := h.deps.Commands.InsertCommand(ctx, rec)
@@ -708,11 +719,13 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 	if err != nil {
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("build cmd topic: %w", err)
 	}
+	deadline := now.Add(renderCommandWireDeadline)
 	payload := mqttproto.CmdPayload{
 		CommandID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 		Target: mqttproto.CmdTarget{Kind: "node", ID: in.NodeID}, Params: in.Params,
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: in.IssuerID, PrincipalName: in.IssuerName},
 		ConfirmationMethod: "evidence",
+		Deadline:           &deadline,
 	}
 	env, err := mqttproto.NewCmdEnvelope(func() time.Time { return now }, in.NodeID, payload)
 	if err != nil {
@@ -1151,8 +1164,13 @@ func (h *handlers) resolveRenderCommandReplay(ctx context.Context, now time.Time
 	want := renderRequestIdentityFor(in)
 	var got renderRequestIdentity
 	matched := false
-	if existing.RequestedRevision != "" {
-		if err := json.Unmarshal([]byte(existing.RequestedRevision), &got); err == nil {
+	// existing.Action/TargetID are already checked above, so this row's
+	// caller_intent can only be this route's own render-request family:
+	// [store.CallerIntentPayload] strips the store.CallerIntentRenderRequest
+	// tag when present and falls back to the raw value for a row written
+	// before this tagging scheme existed.
+	if payload, _ := store.CallerIntentPayload(store.CallerIntentRenderRequest, existing.CallerIntent); payload != "" {
+		if err := json.Unmarshal([]byte(payload), &got); err == nil {
 			matched = got == want
 		}
 	}

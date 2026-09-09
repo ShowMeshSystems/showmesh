@@ -238,7 +238,7 @@ func cmdNodeClockSet(args []string, stdout, stderr io.Writer, clock func() time.
 		ExternalUDSAddress: externalUDSAddress, FPPBaseURL: fppBaseURL,
 	}
 	var resp nodeClockConfigResponse
-	if err := c.putJSON(ctx, "/api/v1/config/node.clock/"+url.PathEscape(id), body, &resp); err != nil {
+	if err := c.putJSON(ctx, "/api/v1/config/node.clock/"+url.PathEscape(id), "", body, &resp); err != nil {
 		return reportError(stderr, "node-clock set", err)
 	}
 	printClockSkew(stderr, resp.ServerTime, clock())

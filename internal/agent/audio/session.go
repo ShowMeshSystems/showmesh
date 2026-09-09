@@ -236,6 +236,15 @@ type Session struct {
 	faultAt     time.Time
 	lastProbe   MediaItemResult
 
+	// ltcClaimState and ltcClaimReason are this session's own standing
+	// relationship to this node's one LTC run (audio_session.ltc.claim.
+	// state/.reason) — set only by [Manager.startLTCLocked]'s and
+	// [Manager.stopLTCLocked]'s own claim/release calls, never inferred
+	// from Fault or State. See [LTCClaimState]'s own doc comment for why
+	// this exists.
+	ltcClaimState  LTCClaimState
+	ltcClaimReason string
+
 	// lastObservedAt is when [Engine.Observe] (or an equivalent
 	// state-changing call) last returned a genuine reading, engine-clock
 	// time — never the coordinator's or this process's own wall-clock
@@ -495,6 +504,69 @@ type dispatchedResult struct {
 // result cached under invocation and persisted before returning. exec
 // runs with the session already locked and must not itself lock it.
 func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.Revision, exec func() pkgaudio.OutcomeResult) dispatchedResult {
+	return s.dispatchLocked(invocation, revision, false, exec)
+}
+
+// dispatchExemptFromStaleRevision is [Session.dispatch] for
+// [Manager.Clear] only: identical except that a refusal whose reason is
+// specifically [pkgaudio.ReasonStaleRevision] is treated as accepted
+// instead of being returned to the caller. invalid_invocation and
+// invocation_revision_mismatch still refuse exactly as dispatch's own
+// callers see them: both are caller integrity bugs (an empty id, or one
+// id reused for two different revisions), never an ordering symptom, and
+// waiving them would hide a real defect while buying no recovery.
+//
+// THE TRADE: a clear delayed past the coordinator's own await deadline
+// (audioCommandConfirmDeadline in internal/coordinator/api/audiodispatch.go)
+// can now land after a newer start already re-established this session,
+// tearing the newer session down. For a clear that arrives as a DISPATCHED
+// command over the wire, that window is now bounded rather than
+// open-ended: audio.session.clear is one of the actions listed in
+// audioCommandDeadlineActions (internal/coordinator/api/audiodispatch.go),
+// so the command carries its own wire deadline and internal/agent/
+// command.go's deadline-already-elapsed check refuses it once that
+// deadline passes. This is a separate protection from the stale-revision
+// exemption below, not a replacement for it: an IN-PROCESS caller of
+// Manager.Clear never goes through command.go at all, so this wire
+// deadline does not apply to it, and the exemption remains necessary,
+// on its own terms, for that path. This agent still handles one goroutine
+// per inbound PUBLISH with no ordering promise across them, so a
+// dispatched clear that lands within its deadline can still arrive after
+// a newer start. What orders the common case is a coordinator-side
+// property, not a wire one: the coordinator publishes and awaits one
+// command's result before publishing the next for that session, so the
+// only realistic window is a clear whose confirmation timed out while
+// the command itself was still live between the broker and this agent.
+//
+// The trade is bounded and self-healing regardless: a clear that lands
+// destroys this session's revState along with the session object (see
+// Manager.Clear), so the very next command for this id starts a fresh
+// RevisionState at zero and is accepted. The damage is one announcement
+// or bed stopped, recoverable by the next apply, never a session no
+// later command can reach again, which is what keeping the gate would
+// leave behind.
+//
+// WHY NOT CONDITIONAL ON SESSION STATE: the divergence that produces a
+// stale-but-still-wanted clear happens on the coordinator's side (a
+// swallowed persist failure after dispatch can leave the coordinator's
+// own notion of this session's floor behind the node's), never
+// something this session can observe about itself. A guard keyed on
+// local state has no signal that would ever tell a genuinely stale
+// clear apart from a legitimately wanted one, so refusing to gate at
+// all is the choice that never silently leaves a wedge standing.
+//
+// BREADTH: the exemption is on the command type audio.session.clear,
+// not on a caller or a session role. The night controller only ever
+// issues this clear for an announcement session, but the operator HTTP
+// route can clear any session, background audio included, and that path
+// is ungated too as a direct consequence. That is judged acceptable: an
+// operator clear is a deliberate, synchronous action, not a queued
+// controller step racing its own later commands.
+func (s *Session) dispatchExemptFromStaleRevision(invocation pkgaudio.InvocationID, revision pkgaudio.Revision, exec func() pkgaudio.OutcomeResult) dispatchedResult {
+	return s.dispatchLocked(invocation, revision, true, exec)
+}
+
+func (s *Session) dispatchLocked(invocation pkgaudio.InvocationID, revision pkgaudio.Revision, exemptFromStaleRevision bool, exec func() pkgaudio.OutcomeResult) dispatchedResult {
 	if invocation == "" {
 		return dispatchedResult{outcome: pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeRefused, Reason: "invocation id is required",
@@ -508,7 +580,9 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 	// Checking executedResults first would let the mismatch case slip
 	// through as a plain cache hit.
 	decision := s.revState.Apply(invocation, revision)
-	if !decision.Accepted {
+	staleButExempt := exemptFromStaleRevision && !decision.Accepted &&
+		decision.Result != nil && decision.Result.Reason == pkgaudio.ReasonStaleRevision
+	if !decision.Accepted && !staleButExempt {
 		return dispatchedResult{outcome: *decision.Result}
 	}
 	if cached, ok := s.executedResults[invocation]; ok {
@@ -517,23 +591,25 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 
 	result := exec()
 	s.rememberExecutedResultLocked(invocation, result)
-	// A command that ran but could not be durably recorded must not be
-	// reported as if it had: on the next crash, this session recovers
-	// from whatever the LAST successful persist held, which is not this
-	// outcome, so telling the caller it succeeded would be a claim this
-	// process cannot back up. The command may well have
-	// taken effect (e.g. the engine actually started) — that evidence is
-	// not erased — but the OUTCOME reported, and cached for a replay of
-	// this same invocation, is the persistence failure, not a success
-	// this store cannot survive.
+	result = s.persistOrFailLocked(result)
+	s.rememberExecutedResultLocked(invocation, result)
+	return dispatchedResult{outcome: result, executed: true}
+}
+
+// persistOrFailLocked persists s's current state and, on failure,
+// rewrites outcome to Failed: a command that ran but could not be
+// durably recorded must not be reported as if it had, since a later
+// crash recovers only whatever the last successful persist held.
+// Shared by [Session.dispatchLocked] and [Manager.SilenceAll]. Caller
+// holds s.mu.
+func (s *Session) persistOrFailLocked(outcome pkgaudio.OutcomeResult) pkgaudio.OutcomeResult {
 	if err := s.persistLocked(); err != nil {
-		result = pkgaudio.OutcomeResult{
+		return pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeFailed,
 			Reason:  "operation executed but could not be durably persisted: " + err.Error(),
 		}
-		s.rememberExecutedResultLocked(invocation, result)
 	}
-	return dispatchedResult{outcome: result, executed: true}
+	return outcome
 }
 
 // prepareLocked probes item's readiness — a missing, changed, or
@@ -890,6 +966,14 @@ type SessionSnapshot struct {
 	Fault       pkgaudio.SessionFault
 	FaultReason string
 
+	// LTCClaimState and LTCClaimReason are this session's own standing
+	// relationship to this node's one LTC run
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.ltc.claim.state
+	// / .reason) — see [LTCClaimState]'s own doc comment. LTCClaimReason
+	// is only ever meaningful when LTCClaimState is [LTCClaimRefused].
+	LTCClaimState  LTCClaimState
+	LTCClaimReason string
+
 	// GapKnown, Gap, GapReason, and GapObservedAt are the measured
 	// interval between the previous playlist item's natural completion
 	// and this item's confirmed start (docs/build/IDENTIFIER-REGISTER.md
@@ -901,6 +985,28 @@ type SessionSnapshot struct {
 	Gap           time.Duration
 	GapReason     string
 	GapObservedAt time.Time
+
+	// RestorePending is [Manager.sessionPendingRestore]'s own verbatim
+	// answer: this session currently has a restore queued
+	// (m.pendingEngineRestore), whether or not the automatic retry
+	// driver has made an attempt on its behalf yet. This is the
+	// authoritative gate for the three fields below — RestoreAttempts
+	// starting at 0 is genuinely ambiguous between "nothing queued" and
+	// "queued, no attempt yet", and only RestorePending resolves that.
+	RestorePending bool
+
+	// RestoreAttempts, RestoreNextAttempt, and RestoreLastReason are
+	// internal/agent's own automatic restore-retry driver's status for
+	// this specific session (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.restore.attempts/.next_attempt_ms/.last_reason) —
+	// only ever populated while RestorePending is true, zero otherwise.
+	// RestoreNextAttempt is zero both before the driver's first attempt
+	// and after its bounded schedule is exhausted; RestoreAttempts alone
+	// does not distinguish those two — see the driver's own doc comment
+	// (internal/agent/audiorestoreretry.go) for how it marks exhaustion.
+	RestoreAttempts    int
+	RestoreNextAttempt time.Duration
+	RestoreLastReason  string
 
 	// CollectedAt is when this snapshot's own fields were captured --
 	// distinct from ObservedAt, which is specifically Position's engine
@@ -925,20 +1031,31 @@ type SessionSnapshot struct {
 // treatment) and leaves PositionKnown false, never a stale reading
 // presented as current.
 //
-// Open question, not yet decided: a session restore.go's
-// queueForRetryLocked deferred (no engine bound yet, or a retry-path
-// engine failure) reports State exactly as persisted — Playing,
-// Preparing, or Paused — with PositionKnown left false and Fault/
-// FaultReason naming why. That state value is part of this package's
-// public [pkgaudio.State] vocabulary, so changing what gets reported
-// for this specific case is a caller-visible contract question, not an
-// internal implementation detail; nothing here decides it unilaterally.
+// A session with a restore queued reports State as
+// [pkgaudio.StateRestorePending] here, snapshot only — s.state itself is
+// never set to that value (see queueForRetryLocked's own doc comment).
 func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
+	reportedState := s.state
+	if s.mgr.sessionHasQueuedRestore(s.id) {
+		reportedState = pkgaudio.StateRestorePending
+	}
 	snap := SessionSnapshot{
-		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
+		ID: s.id, State: reportedState, DesiredRevision: s.revState.Current(),
 		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
+		LTCClaimState: s.ltcClaimState, LTCClaimReason: s.ltcClaimReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
 		CollectedAt: s.mgr.now(),
+	}
+
+	// Gated on m.pendingEngineRestore membership, not on s.state: this
+	// branch is cut independently of the sibling PR that changes what
+	// State itself reports for a pending restore, so it must not depend
+	// on a State value that PR alone introduces. Once both land, a
+	// pending session satisfies both this check and that PR's own
+	// State == RestorePending.
+	snap.RestorePending = s.mgr.sessionPendingRestore(s.id)
+	if snap.RestorePending {
+		snap.RestoreAttempts, snap.RestoreNextAttempt, snap.RestoreLastReason = s.mgr.RestoreRetryStatus(s.id, snap.CollectedAt)
 	}
 
 	if s.desired.SourceRole != nil {

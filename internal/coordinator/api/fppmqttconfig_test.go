@@ -506,3 +506,47 @@ func TestPutFPPMQTTConfigNullBodyRejected(t *testing.T) {
 		t.Fatalf("status = %d, want 400 (a null body is not an object); body: %s", resp.StatusCode, body)
 	}
 }
+
+// TestPutFPPMQTTConfigRevisionPreconditionWiring is a smoke test proving
+// handlePutFPPMQTTConfig actually threads the shared revision precondition
+// through to its own call site - checked AFTER the still-set-env-var
+// refusal and BEFORE the body is read, exactly like every other singleton
+// kind. The full behavioural matrix lives once, on the representative
+// kind fpp.endpoints (config_test.go).
+func TestPutFPPMQTTConfigRevisionPreconditionWiring(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	deps, _ := fppMQTTConfigTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	put := func(brokerURL string, headers map[string]string) (*http.Response, []byte) {
+		h := map[string]string{"Authorization": "Bearer " + adminToken}
+		for k, v := range headers {
+			h[k] = v
+		}
+		body := `{"brokerURL":"` + brokerURL + `","hosts":{"player-01":"FPP-Player"}}`
+		req := newJSONRequest(t, http.MethodPut, "/api/v1/config/fpp.mqtt", body, h)
+		return doRawRequest(t, api.Handler, req)
+	}
+
+	if resp, body := put("tcp://10.0.1.5:1883", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("unconditional write: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if resp, body := put("tcp://10.0.1.6:1883", map[string]string{"If-Match": `"1"`}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("matching If-Match: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	resp, body := put("tcp://10.0.1.7:1883", map[string]string{"If-Match": `"1"`})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale If-Match: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/fpp.mqtt", map[string]string{"Authorization": "Bearer " + adminToken})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d; body: %s", getResp.StatusCode, getBody)
+	}
+	payload, _ := decodeMap(t, getBody)["payload"].(map[string]any)
+	if payload["brokerURL"] != "tcp://10.0.1.6:1883" {
+		t.Errorf("payload.brokerURL = %v, want the matching-If-Match writer's value, which must have survived the refused stale write; body: %s", payload["brokerURL"], getBody)
+	}
+}

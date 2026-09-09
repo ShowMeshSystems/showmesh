@@ -170,10 +170,14 @@ func TestOpenAPIResolumeActionLaunchClipMissingBothDeckAndPersistentIsRefusedNot
 }
 
 // TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse
-// proves the 503 fail-closed refusal (launchClip, not exempt) validates
-// against the shared Problem schema and carries the new
-// resolume-action-refused-audit-unavailable type this task added to the
-// document's Problem.type enum.
+// proved the 503 fail-closed refusal (launchClip, not exempt) until
+// ADR-024 decision 11 was amended 2026-08-26 (owner ruling): this
+// endpoint no longer refuses on an audit-store failure, so
+// resolume-action-refused-audit-unavailable is no longer produced and was
+// removed from api/openapi.yaml's Problem.type enum in the same change.
+// This test now proves the replacement behavior's response still matches
+// ResolumeActionResponse (a normal `200`, not a `Problem`), with
+// attributionDegraded true.
 func TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	setup := newResolumeActionTestSetup(t, fixedClock(testNow))
@@ -187,14 +191,16 @@ func TestOpenAPIResolumeActionAuditUnavailableResponseMatchesRealResponse(t *tes
 
 	req := newResolumeActionRequest(t, resolumeActionBody("launchClip", "conf-key-audit-unavailable", `{"clip":"clip-1","deck":"deck-1"}`), token)
 	resp, body := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ADR-024 decision 11 amended 2026-08-26: audit unavailability never blocks "+
+			"a Resolume action dispatch); body: %s", resp.StatusCode, body)
 	}
-	assertMatchesSchema(t, c, "Problem", body)
+	assertMatchesSchema(t, c, "ResolumeActionResponse", body)
 
 	m := decodeMap(t, body)
-	if m["type"] != ProblemTypeResolumeActionRefusedAuditUnavailable {
-		t.Errorf("type = %v, want %v", m["type"], ProblemTypeResolumeActionRefusedAuditUnavailable)
+	result, _ := m["result"].(map[string]any)
+	if result["attributionDegraded"] != true {
+		t.Errorf("attributionDegraded = %v, want true", result["attributionDegraded"])
 	}
 }
 

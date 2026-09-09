@@ -7,10 +7,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
+	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
@@ -76,6 +81,24 @@ func fppObservationEntryKeyMismatchProblem(derived, submitted string) v1.Problem
 	}
 }
 
+// playlistLoopChanged reports whether FPP's playlist pass counter moved
+// between two observations (contract §1.8). Absent on both sides is NOT a
+// change: a plugin that never reports the counter must behave exactly as it
+// did before the field existed, so every plugin already installed keeps
+// working against a coordinator that understands it. Absent on one side only
+// IS a change, because a plugin that starts or stops reporting has told us
+// something. And nil is never treated as 0, since 0 is a real first pass.
+func playlistLoopChanged(incoming, stored *int64) bool {
+	switch {
+	case incoming == nil && stored == nil:
+		return false
+	case incoming == nil || stored == nil:
+		return true
+	default:
+		return *incoming != *stored
+	}
+}
+
 func fppObservationConflictProblem(detail string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
@@ -110,17 +133,25 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		return
 	}
 
-	// Step 4: decode and canonicalize. Malformed JSON, an unknown field,
-	// trailing content, or a duplicate member name is refused but NOT
-	// audited (contract §1.6: only step 5 onward is audited). Canonicalizing
-	// here, not later, is what puts a duplicate member name at this
-	// unaudited step: encoding/json.Decoder accepts one silently (last
-	// value wins) and does not check dec.More(), so without this the
-	// coordinator's own parser would be the first thing to notice, after
-	// schema and identity validation had already run and been audited.
+	// Step 4: decode and canonicalize. Malformed JSON, trailing content, or
+	// a duplicate member name is refused but NOT audited (contract §1.6:
+	// only step 5 onward is audited). Canonicalizing here, not later, is
+	// what puts a duplicate member name at this unaudited step:
+	// encoding/json.Decoder accepts one silently (last value wins) and does
+	// not check dec.More(), so without this the coordinator's own parser
+	// would be the first thing to notice, after schema and identity
+	// validation had already run and been audited.
+	//
+	// A member this coordinator does not know is IGNORED, not refused, and
+	// is reported back in ignoredFields. Refusing it made upgrade order
+	// fatal: a plugin sending a field its coordinator predates would have
+	// every observation rejected, the coordinator would see no playlist
+	// entries, and no Cue would fire. The reverse order was always safe.
+	// Reporting the names is what keeps the thing strict decoding actually
+	// bought, which is that a misspelled member is visible rather than
+	// silently dropped.
 	var req v1.FPPPlaylistEntryObservationRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: "+err.Error()))
 		return
@@ -129,6 +160,7 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: trailing content after the JSON value"))
 		return
 	}
+	ignoredFields := unknownFPPObservationMembers(raw)
 	// bodyHash is the canonical form's hash, reused below both for the
 	// stored record and for step 9's replay comparison; contract §1.3:
 	// replay detection is over the canonical form of what was sent, not
@@ -283,6 +315,12 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 	if req.Position != nil {
 		rec.Position = int64(*req.Position)
 	}
+	// Carried, not defaulted: absent stays absent so it compares equal to
+	// another absent, and 0 stays a real first pass (contract §1.8).
+	if req.PlaylistLoop != nil {
+		v := int64(*req.PlaylistLoop)
+		rec.PlaylistLoop = &v
+	}
 
 	// Step 9-10: sequence comparison and store, inside one transaction
 	// see [FPPObservationStore]'s own doc comment for why the read that
@@ -313,18 +351,27 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 				}
 				return store.ErrFPPPlaylistEntryObservationSequenceConflict
 			}
-			// schemaV18's own rule: a fresh occurrence begins whenever this
-			// observation reports action "start" (FPP entering an entry,
-			// whether for the first time or looping back into one it
-			// already visited — EntryKey alone cannot tell those apart,
-			// since a loop's second visit derives the identical key) or
-			// names a different entry than the one last accepted. Anything
-			// else — an ordinary "playing" tick, "stop", "query_next", or
-			// "unknown" for the SAME entry — carries the prior occurrence
-			// forward unchanged, so repeat ticks inside one occurrence keep
-			// deriving the same [cueactivate] ActivationID and dedup to one
-			// dispatch.
-			if action == fppidentity.ActionStart || rec.EntryKey != existing.EntryKey {
+			// A fresh occurrence begins on any of three signals, and each
+			// covers a case the others cannot (contract §1.8):
+			//
+			//   1. action "start", FPP entering an entry. Fires on FPP 9.
+			//      FPP 10 never sends it at all, so it is dead there, but it
+			//      is correct on the major the fleet runs today and removing
+			//      it would break that major.
+			//   2. a different entry than the one last accepted.
+			//   3. a different playlist pass counter. This is the only one
+			//      that catches a playlist looping back into an entry it
+			//      already visited, because that visit derives the identical
+			//      EntryKey and, on FPP 10, arrives with no "start".
+			//
+			// Anything else, an ordinary "playing" tick, "stop",
+			// "query_next", or "unknown" for the SAME entry on the SAME
+			// pass, carries the prior occurrence forward unchanged, so
+			// repeat ticks inside one occurrence keep deriving the same
+			// [cueactivate] ActivationID and dedup to one dispatch.
+			if action == fppidentity.ActionStart ||
+				rec.EntryKey != existing.EntryKey ||
+				playlistLoopChanged(rec.PlaylistLoop, existing.PlaylistLoop) {
 				rec.EntryOccurrenceSequence = rec.Sequence
 			} else {
 				rec.EntryOccurrenceSequence = existing.EntryOccurrenceSequence
@@ -335,7 +382,45 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 
 	switch {
 	case errors.Is(txErr, store.ErrFPPPlaylistEntryObservationStale):
-		auditRefusal("sequence regression: last accepted sequence was " + formatInt64(lastAcceptedSequence))
+		// Owner ruling 2026-09-02 (cue-deactivate-on-jump): a sequence
+		// regression is contract §1.5's own named signature of a plugin/host
+		// restart, a genuine reorder, or a replayed/forged observation — the
+		// exact discontinuity [cueactivate.Decide] must be able to see, so
+		// this refusal's evidence, unlike every other refusal audited on
+		// this route, is recorded through a marker on the instance's own row
+		// (schemaV29), not only in audit_log. It is written here, through
+		// [identity.Service.AuditedWrite], in the SAME transaction as its
+		// own audit entry, deliberately never through auditRefusal's
+		// best-effort WriteAudit: that write's own error is logged and
+		// swallowed, correct for a forensic record and disqualifying for a
+		// control input, because on a write failure the discontinuity would
+		// silently degrade back into looking like true silence, exactly
+		// when the store is already unhealthy.
+		//
+		// A failure here is logged loudly (logError, not the ordinary
+		// best-effort warn) and does NOT change the response below: contract
+		// §1.7 fixes "Sequence regression | 409 | conflict" unconditionally,
+		// and this refusal is real and correct regardless of whether the
+		// coordinator also managed to record its own internal marker for
+		// it. The underlying condition (this instance's sequence is still
+		// regressed) persists until cleared, so the plugin's own next post
+		// retries this identical branch and gets another chance to record
+		// it — bounding a transient failure's blind spot to roughly one
+		// posting interval rather than leaving it permanently unrecorded.
+		reason := "sequence regression: last accepted sequence was " + formatInt64(lastAcceptedSequence)
+		if markErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+			if err := tx.MarkFPPPlaylistEntryObservationEvidenceBroken(ctx, req.InstanceUUID, now); err != nil {
+				return identity.AuditEntry{}, err
+			}
+			return identity.AuditEntry{
+				Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+				Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+				Action: auditActionFPPObservePlaylistEntry, Target: req.InstanceUUID,
+				Kind: identity.AuditOutcome, OutcomeReason: reason,
+			}, nil
+		}); markErr != nil {
+			h.logError("failed to record fpp playlist entry observation evidence-broken marker", "instanceUuid", req.InstanceUUID, "error", markErr)
+		}
 		writeProblem(w, h.logger, now, fppObservationConflictProblem(
 			"sequence "+formatInt64(rec.Sequence)+" is lower than the last accepted sequence "+formatInt64(lastAcceptedSequence)+
 				" for this instance; this refusal leaves the stored observation untouched"))
@@ -366,15 +451,50 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		h.deps.CueActivationNudger.Nudge()
 	}
 
+	// Resolve the SAME reconciliation verdict GET .../reconciliation
+	// computes (mapFPPPlaylistEntryReconciliation, fppreconciliation.go),
+	// reusing that route's resolution rather than a second one that could
+	// disagree. Read the just-written row back rather than reconciling rec
+	// directly, so a replay (which does not carry EntryOccurrenceSequence
+	// or EvidenceBrokenAt) reconciles from the same stored state GET does.
+	//
+	// Best effort, deliberately: the observation is already accepted and
+	// stored above, and the cue-activation nudger has already fired, so a
+	// failure here must never turn into a 500 for a write that already
+	// succeeded. Log and leave both fields at their zero value (omitted on
+	// the wire) instead: the same "coordinator unreachable or receipt aged
+	// out" shape the plugin already has to tolerate.
+	var reconciliation, operatorInstruction string
+	if stored, err := h.deps.FPPObservations.GetFPPPlaylistEntryObservation(ctx, rec.InstanceUUID); err != nil {
+		h.logWarn("failed to read back fpp playlist entry observation for reconciliation", "instanceUuid", rec.InstanceUUID, "error", err)
+	} else if result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, stored); err != nil {
+		h.logWarn("failed to reconcile fpp playlist entry observation", "instanceUuid", rec.InstanceUUID, "error", err)
+	} else {
+		reconciliation = string(result.Outcome)
+		if result.Outcome.IsMismatch() {
+			operatorInstruction = fppreconcile.OperatorMismatchInstruction
+		}
+	}
+
 	jsonWrite(w, v1.FPPPlaylistEntryObservationResponse{
-		SchemaVersion: req.SchemaVersion,
-		InstanceUUID:  rec.InstanceUUID,
-		Sequence:      rec.Sequence,
-		EntryKey:      rec.EntryKey,
-		Accepted:      !replay,
-		Replay:        replay,
-		ServerTime:    formatTime(now),
+		SchemaVersion:       req.SchemaVersion,
+		InstanceUUID:        rec.InstanceUUID,
+		Sequence:            rec.Sequence,
+		EntryKey:            rec.EntryKey,
+		Accepted:            !replay,
+		Replay:              replay,
+		Reconciliation:      reconciliation,
+		OperatorInstruction: operatorInstruction,
+		IgnoredFields:       ignoredFields,
+		ServerTime:          formatTime(now),
 	})
+	// Logged here, on the way out of a 200, and not at the decode above:
+	// the warning says the members "were ignored", which is only true of an
+	// observation that was actually accepted. A body refused for a
+	// duplicate member name or for a missing identity field had nothing
+	// ignored, it had everything refused, and saying otherwise would be an
+	// operator reading a warning about the wrong problem.
+	h.logNewUnknownFPPObservationMembers(rec.InstanceUUID, ignoredFields)
 }
 
 // handleListFPPPlaylistEntryObservations serves
@@ -474,6 +594,10 @@ func mapFPPPlaylistEntryObservation(rec store.FPPPlaylistEntryObservationRecord,
 		pos := int(rec.Position)
 		out.Position = &pos
 	}
+	if rec.PlaylistLoop != nil {
+		loop := int(*rec.PlaylistLoop)
+		out.PlaylistLoop = &loop
+	}
 	if endpointID != "" {
 		out.EndpointID = &endpointID
 	}
@@ -536,4 +660,106 @@ func (h *handlers) handleDeleteFPPPlaylistEntryObservation(w http.ResponseWriter
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// maxReportedUnknownFPPObservationMembers bounds how many unknown member
+// names one response repeats back. The body is already bounded at 16 KiB,
+// so this is not the only bound, but a caller should not be able to choose
+// how large the coordinator's reply and log line are by sending a hundred
+// junk members. A plugin with more than this many unknown members has a
+// problem the first few names already describe.
+const maxReportedUnknownFPPObservationMembers = 8
+
+// fppObservationKnownMembers is every JSON member name
+// [v1.FPPPlaylistEntryObservationRequest] declares, read from the struct
+// tags rather than listed here, so adding a field to that type cannot
+// leave this behind reporting the new field as unknown.
+var fppObservationKnownMembers = sync.OnceValue(func() map[string]struct{} {
+	t := reflect.TypeOf(v1.FPPPlaylistEntryObservationRequest{})
+	known := make(map[string]struct{}, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			known[name] = struct{}{}
+		}
+	}
+	return known
+})
+
+// unknownFPPObservationMembers returns the sorted names of raw's top-level
+// members that [v1.FPPPlaylistEntryObservationRequest] does not declare,
+// capped at [maxReportedUnknownFPPObservationMembers]. Nil when there are
+// none, which is the ordinary case, so the response omits the field
+// entirely for every well-formed observation.
+//
+// raw has already decoded into the request struct by the time this runs,
+// so it is a JSON object and re-parsing it cannot fail in a way the caller
+// has to handle; an error here is reported as "no unknown members" rather
+// than turning a request that already parsed into a refusal.
+func unknownFPPObservationMembers(raw []byte) []string {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil
+	}
+	known := fppObservationKnownMembers()
+	var unknown []string
+	for name := range members {
+		if _, ok := known[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if unknown == nil {
+		return nil
+	}
+	slices.Sort(unknown)
+	if len(unknown) > maxReportedUnknownFPPObservationMembers {
+		unknown = unknown[:maxReportedUnknownFPPObservationMembers]
+	}
+	return unknown
+}
+
+// unknownMemberLog remembers the last set of unknown member names logged
+// for each instance so a plugin posting a misspelled field several times a
+// second produces one log line, not a flood. Keyed by instance uuid and
+// bounded by the number of instances, which is the fleet size.
+type unknownMemberLog struct {
+	mu   sync.Mutex
+	last map[string]string
+}
+
+// shouldLog reports whether names differs from what was last logged for
+// instanceUUID, and records names as the new last. An instance that stops
+// sending unknown members and later starts again logs again, which is the
+// intent: the transition is the event worth a line.
+func (l *unknownMemberLog) shouldLog(instanceUUID string, names []string) bool {
+	joined := strings.Join(names, ",")
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last == nil {
+		l.last = make(map[string]string)
+	}
+	if l.last[instanceUUID] == joined {
+		return false
+	}
+	l.last[instanceUUID] = joined
+	return true
+}
+
+// logNewUnknownFPPObservationMembers writes one warning the first time an
+// instance's set of unknown member names appears, and nothing on the
+// repeats. Warning rather than error: the observation was accepted, and a
+// coordinator running in front of a newer plugin is an ordinary upgrade
+// state, not a fault.
+func (h *handlers) logNewUnknownFPPObservationMembers(instanceUUID string, names []string) {
+	if len(names) == 0 {
+		// Still recorded, so an instance that stops sending them and
+		// starts again logs the second time too.
+		h.fppUnknownMembers.shouldLog(instanceUUID, names)
+		return
+	}
+	if !h.fppUnknownMembers.shouldLog(instanceUUID, names) {
+		return
+	}
+	h.logWarn("fpp playlist entry observation carried members this coordinator does not know; they were ignored",
+		"instanceUuid", instanceUUID, "ignoredFields", strings.Join(names, ","))
 }

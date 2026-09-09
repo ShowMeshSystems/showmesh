@@ -57,6 +57,23 @@ type Manager struct {
 	// no engine handle and no persisted Failed record to explain why.
 	pendingEngineRestore map[pkgaudio.SessionID]struct{}
 
+	// restoreRetryStatusBySession is internal/agent's own automatic
+	// restore-retry driver's status, per session, never written by this
+	// package itself — see restoreretry.go's
+	// SetRestoreRetryStatus/ClearRestoreRetryStatus and
+	// RestoreRetryStatus. A session in pendingEngineRestore reads its own
+	// entry back on its own snapshot; nil or a missing entry reports all
+	// zero.
+	restoreRetryStatusBySession map[pkgaudio.SessionID]restoreRetryStatus
+
+	// nodeRestoreRetry is internal/agent's own automatic restore-retry
+	// driver's status for this node as a whole -- see restoreretry.go's
+	// SetNodeRestoreRetryStatus/ClearNodeRestoreRetryStatus and
+	// NodeRestoreRetryStatus. Unlike restoreRetryStatusBySession, this is
+	// never empty-by-construction on a node with no pending restore: the
+	// zero value already reads as EngineRestoreIdle.
+	nodeRestoreRetry nodeRestoreRetryStatus
+
 	// rebindMu makes invalidate-Set-retry one atomic unit across
 	// concurrent RebindEngine calls. Two audio.node.configure commands
 	// delivered back to back produce genuinely concurrent calls (MQTT
@@ -281,7 +298,7 @@ func (m *Manager) gateAvailability(outcome pkgaudio.OutcomeResult) pkgaudio.Outc
 // evidenced
 // by the resulting desired state, not by an engine transition — apply
 // never touches the engine.
-func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, req pkgaudio.ApplyRequest) pkgaudio.OutcomeResult {
+func (m *Manager) Apply(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, req pkgaudio.ApplyRequest) pkgaudio.OutcomeResult {
 	s := m.getOrCreate(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -305,6 +322,14 @@ func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkg
 		}
 		if s.state == pkgaudio.StateUnknown {
 			s.state = pkgaudio.StateReady
+		}
+		// A session that just stopped being a show session (or never was
+		// one) must not keep reporting a stale LTC claim it no longer
+		// earns — the same clear-on-exit stopLTCLocked applies to a
+		// commanded stop, whether or not this session ever actually held
+		// the run.
+		if !isShowSessionLocked(s) && s.ltcClaimState != LTCClaimNone && s.ltcClaimState != "" {
+			m.stopLTCLocked(ctx, s)
 		}
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomePosition})
 	})
@@ -452,6 +477,159 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	// announcement at the same time.
 	if started {
 		m.submitToActivePolicies(ctx, id, role)
+	}
+	return res.outcome
+}
+
+// Promote moves the already-loaded engine handle from fromID onto toID
+// and starts it there, skipping the load Start would otherwise do. It
+// exists for exactly one case: a session prepared ahead of time under a
+// temporary staging id, once the cue it was staged for is confirmed to
+// be the one actually activating, needs to become the well-known show
+// session (cueActivationAudioSessionID) without repeating the media
+// load that staging already paid for.
+//
+// toID must already exist — the caller's own Apply against toID (which
+// creates it if needed, see getOrCreate's own doc comment) must run
+// before Promote, exactly as it already must before Prepare or Start.
+// Promote itself calls m.get, never m.getOrCreate, for both fromID and
+// toID: it moves a handle between two sessions that already exist, and
+// creates neither. getOrCreate's single caller remains Apply.
+//
+// fromID must be Ready with a loaded handle whose identity matches
+// toID's own current desired item (itemIdentity, the same comparison
+// Start already makes against its own prior handle). A mismatch —
+// wrong guess, or a fresher Apply landed on toID after fromID was
+// staged — refuses without touching either session's engine state; the
+// caller falls back to Prepare+Start on toID exactly as it would if
+// nothing had been staged, and Clear on fromID to discard the stale
+// stage (see internal/agent/cueactivationops.go's own bookkeeping).
+//
+// Never acquires fromID's and toID's session locks at the same time.
+// Every other cross-session operation in this file (duckLowerPriority,
+// interruptLowerPriority, submitToActivePolicies) holds that same
+// invariant, releasing s.mu before locking another session — see
+// Manager.duckLowerPriority's own doc comment. Promote's two sessions
+// are both fixed, well-known ids, never chosen at runtime, so a
+// consistent lock order between them is trivial to state and hold: to
+// first (read-only), then from, then to again (the mutating dispatch).
+// This is documented here because it is the one place in this file
+// that locks two sessions in the same call, and it must never be
+// extended to lock them concurrently without re-deriving this
+// argument.
+//
+// Promote reads and writes neither session's owner field. That field
+// is coordinator-stamped desired state, not agent mechanics, and an
+// absent owner is what lets a session retire on its own — clearing
+// fromID's own owner here would make the emptied staging session
+// permanently unretirable instead.
+func (m *Manager) Promote(ctx context.Context, fromID, toID pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
+	to, ok := m.get(toID)
+	if !ok {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
+	}
+	from, ok := m.get(fromID)
+	if !ok {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no session staged for promotion"}
+	}
+
+	to.mu.Lock()
+	item, ok := to.currentItemLocked()
+	if !ok {
+		to.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media to promote onto"}
+	}
+	wantIdentity := itemIdentity(item)
+	to.mu.Unlock()
+
+	from.mu.Lock()
+	switch {
+	case from.state != pkgaudio.StateReady:
+		from.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session is not ready"}
+	case !from.handleLoaded:
+		from.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session holds no loaded handle"}
+	case from.loadedIdentity != wantIdentity:
+		from.mu.Unlock()
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "staged session's content no longer matches what toID now desires"}
+	}
+	handle := from.handle
+	capturedIdentity := from.loadedIdentity
+	from.handle = ""
+	from.handleLoaded = false
+	from.loadedIdentity = ""
+	from.state = pkgaudio.StateStopped
+	from.timingKnown = false
+	from.persistBestEffortLocked("promoted to show session")
+	from.mu.Unlock()
+
+	to.mu.Lock()
+	res := to.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+		item, ok := to.currentItemLocked()
+		if !ok || itemIdentity(item) != wantIdentity {
+			relCtx, relCancel := boundedObserveContext(ctx)
+			if err := m.engine.Release(relCtx, handle); err != nil {
+				m.logf("audio session %s: engine release of an orphaned promoted handle failed: %v", toID, err)
+			}
+			relCancel()
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "toID's desired content changed while promoting; the staged session was already released — retry with an ordinary Prepare and Start"}
+		}
+		to.handle = handle
+		to.handleLoaded = true
+		to.loadedIdentity = capturedIdentity
+		position, err := to.resolveBookmarkPositionLocked(item)
+		if err != nil {
+			to.bookmark = nil
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+		}
+		dispatchedAt := m.now()
+		obs, err := to.mgr.engine.Start(ctx, to.handle, position)
+		if err != nil {
+			to.state = pkgaudio.StateFailed
+			to.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			to.releaseEngineLocked(ctx)
+			m.stopLTCLocked(ctx, to)
+			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+		}
+		to.state = pkgaudio.StatePlaying
+		to.timingKnown = true
+		to.bookmark = nil
+		to.lastObservedAt = obs.ObservedAt
+		m.startLTCLocked(ctx, to, position)
+		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
+	})
+
+	// duck/interrupt resolution needs to lock OTHER sessions, so it must
+	// run after to.mu is released — see [Manager.duckLowerPriority]'s doc
+	// comment on why this can never hold two sessions' locks at once. The
+	// same shape Start's own tail uses: read to's own state/desired here,
+	// while to.mu is still held, never after Unlock.
+	started := res.executed && to.state == pkgaudio.StatePlaying
+	duck := res.executed && to.state == pkgaudio.StatePlaying && to.desired.MixPolicy != nil && *to.desired.MixPolicy == pkgaudio.MixPolicyDuck
+	interrupt := res.executed && to.state == pkgaudio.StatePlaying && to.desired.MixPolicy != nil && *to.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
+	var role pkgaudio.SourceRole
+	if to.desired.SourceRole != nil {
+		role = *to.desired.SourceRole
+	}
+	to.mu.Unlock()
+
+	if !res.executed {
+		relCtx, relCancel := boundedObserveContext(ctx)
+		if err := m.engine.Release(relCtx, handle); err != nil {
+			m.logf("audio session %s: engine release of an unpromoted staged handle failed: %v", toID, err)
+		}
+		relCancel()
+	}
+
+	if duck {
+		m.duckLowerPriority(ctx, toID, role)
+	}
+	if interrupt {
+		m.interruptLowerPriority(ctx, toID, role)
+	}
+	if started {
+		m.submitToActivePolicies(ctx, toID, role)
 	}
 	return res.outcome
 }
@@ -636,13 +814,19 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 // engine evidence (ADR-024 decision 7): an idle or unloaded session
 // still reports Stopped, and a loaded one always attempts the engine
 // call. But a failed Engine.Stop or Release is not silently treated as
-// success either: the handle stays loaded — never released
-// — so a retried Stop can still address it, and the outcome is
-// Unconfirmable with the failure's reason, the same "declared, not
-// refused, not fabricated" shape ADR-024 decision 7's other exempt
-// safety actions use. A duck this session imposed on others is released
-// once the stop is attempted, engine confirmation or not; a session left
-// in StateStopping is re-resolved by [Session.checkStopCompletionLocked].
+// success either: the outcome is Unconfirmable with the failure's
+// reason, the same "declared, not refused, not fabricated" shape
+// ADR-024 decision 7's other exempt safety actions use. A duck this
+// session imposed on others is released once the stop is attempted,
+// engine confirmation or not. A failed Engine.Stop leaves the handle
+// loaded — never released — so a retried Stop can still address it,
+// and a session left in StateStopping that way is re-resolved by
+// [Session.checkStopCompletionLocked] once engine evidence confirms it.
+// A failed Engine.Release is different: Release always discards the
+// handle at the engine regardless of its own outcome, so that evidence
+// can never arrive, and this resolves the session immediately instead
+// of stranding it in StateStopping behind a poll that can never
+// succeed.
 func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -651,48 +835,7 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 	s.mu.Lock()
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
-		if !s.handleLoaded {
-			// A fade can be left pending here too: invalidateActiveSessions
-			// (an engine rebind after a route change) clears handleLoaded
-			// without resolving one. Same hazard as the loaded branch
-			// below, reached a different way.
-			s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
-			s.state = pkgaudio.StateStopped
-			s.bookmark = nil
-			s.setGapUnknownLocked("session is stopped")
-			m.stopLTCLocked(ctx, s)
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
-		}
-		s.state = pkgaudio.StateStopping
-		// Stopped on the attempt, not on confirmation — the same
-		// "declared, not refused, not fabricated" rule this method's own
-		// doc comment states for the ducks it releases.
-		m.stopLTCLocked(ctx, s)
-		_, stopErr := s.mgr.engine.Stop(ctx, s.handle)
-		var releaseErr error
-		if stopErr == nil {
-			releaseErr = s.mgr.engine.Release(ctx, s.handle)
-		}
-		err := stopErr
-		if err == nil {
-			err = releaseErr
-		}
-		if err != nil {
-			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
-			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
-		}
-		// A fade this Stop interrupted has no engine handle left to
-		// report its own completion against (checkFadeCompletionLocked
-		// requires handleLoaded), so it must resolve here or it never
-		// resolves at all: fadePending would stay true and the
-		// invocation that dispatched it would never receive an outcome.
-		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
-		s.handleLoaded = false
-		s.loadedIdentity = ""
-		s.state = pkgaudio.StateStopped
-		s.bookmark = nil
-		s.setGapUnknownLocked("session is stopped")
-		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
+		return m.stopExecLocked(ctx, s, noEngineCallBound)
 	})
 	// Released on the attempt, not on confirmation: a stuck duck is
 	// audible all night, and the outcome carries the engine evidence.
@@ -706,16 +849,104 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 	return res.outcome
 }
 
+// engineCallBound wraps one engine call's context, matching
+// [boundedEngineCallContext]'s own per-call shape: a fresh derived
+// context and its cancel, called immediately before that one call.
+type engineCallBound func(context.Context) (context.Context, context.CancelFunc)
+
+// noEngineCallBound is [Manager.Stop]'s own bound: ctx passed through
+// unmodified, preserving its long-standing unbounded behavior exactly.
+// [Manager.Stop] is out of scope for a wedge fix; only [Manager.
+// SilenceAll] passes [boundedEngineCallContext] instead.
+func noEngineCallBound(ctx context.Context) (context.Context, context.CancelFunc) {
+	return ctx, func() {}
+}
+
+// stopExecLocked is the engine teardown and state transition a commanded
+// stop performs: the exec closure [Manager.Stop] runs through its
+// revision ledger, and the one [Manager.SilenceAll] runs directly and
+// unconditionally, kept in exactly one place instead of two hand-synced
+// copies. bound wraps the Engine.Stop and Engine.Release calls
+// individually, called fresh before each: see [noEngineCallBound] and
+// [Manager.SilenceAll] for the two callers' differing choices. Caller
+// holds s.mu.
+func (m *Manager) stopExecLocked(ctx context.Context, s *Session, bound engineCallBound) pkgaudio.OutcomeResult {
+	if !s.handleLoaded {
+		// A fade can be left pending here too: invalidateActiveSessions
+		// (an engine rebind after a route change) clears handleLoaded
+		// without resolving one. Same hazard as the loaded branch below,
+		// reached a different way.
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+		s.state = pkgaudio.StateStopped
+		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
+		m.stopLTCLocked(ctx, s)
+		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
+	}
+	s.state = pkgaudio.StateStopping
+	// Stopped on the attempt, not on confirmation: the same "declared,
+	// not refused, not fabricated" rule this method's own doc comment
+	// states for the ducks it releases.
+	m.stopLTCLocked(ctx, s)
+	stopCtx, stopCancel := bound(ctx)
+	_, stopErr := s.mgr.engine.Stop(stopCtx, s.handle)
+	stopCancel()
+	var releaseErr error
+	if stopErr == nil {
+		relCtx, relCancel := bound(ctx)
+		releaseErr = s.mgr.engine.Release(relCtx, s.handle)
+		relCancel()
+	}
+	err := stopErr
+	if err == nil {
+		err = releaseErr
+	}
+	if err != nil {
+		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+		if releaseErr != nil {
+			// Release already discarded the handle at the engine before
+			// attempting teardown, success or not (see [gstengine.Engine.
+			// Release]), so no later Observe will ever find it again:
+			// resolving here is the only way out, since leaving state at
+			// StateStopping would strand the session behind [Session.
+			// checkStopCompletionLocked], which requires handleLoaded and
+			// can never re-confirm a handle the engine has already
+			// forgotten.
+			s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+			s.handleLoaded = false
+			s.loadedIdentity = ""
+			s.state = pkgaudio.StateStopped
+			s.bookmark = nil
+			s.setGapUnknownLocked("session is stopped")
+		}
+		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
+	}
+	// A fade this Stop interrupted has no engine handle left to report
+	// its own completion against (checkFadeCompletionLocked requires
+	// handleLoaded), so it must resolve here or it never resolves at
+	// all: fadePending would stay true and the invocation that
+	// dispatched it would never receive an outcome.
+	s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+	s.handleLoaded = false
+	s.loadedIdentity = ""
+	s.state = pkgaudio.StateStopped
+	s.bookmark = nil
+	s.setGapUnknownLocked("session is stopped")
+	return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
+}
+
 // Clear releases the session entirely: engine resources, desired state,
 // and its persisted record. Like Stop, never refused for want of
-// evidence.
+// evidence, and never refused as stale either: see
+// [Session.dispatchExemptFromStaleRevision]'s doc comment for why a
+// teardown must always land regardless of the requested revision.
 func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped}
 	}
 	s.mu.Lock()
-	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+	res := s.dispatchExemptFromStaleRevision(invocation, revision, func() pkgaudio.OutcomeResult {
 		m.stopLTCLocked(ctx, s)
 		s.releaseEngineLocked(ctx)
 		// Same hazard Stop resolves: a fade this Clear interrupted has no

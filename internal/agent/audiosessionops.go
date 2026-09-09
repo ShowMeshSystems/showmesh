@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -50,12 +52,27 @@ func parseAudioSessionCommon(action string, params map[string]any) (pkgaudio.Ses
 	if !ok {
 		return "", "", 0, fmt.Errorf("%s: params.revision is required", action)
 	}
-	revF, ok := rawRev.(float64)
-	if !ok || revF < 0 {
+	// A wire revision decodes as json.Number (mqttproto.DecodeCmdPayload);
+	// ParseUint rejects a negative, fractional, or out-of-range literal.
+	// float64 stays valid for a caller building params without the wire.
+	var rev uint64
+	switch v := rawRev.(type) {
+	case json.Number:
+		parsed, err := strconv.ParseUint(v.String(), 10, 64)
+		if err != nil {
+			return "", "", 0, fmt.Errorf("%s: params.revision must be a non-negative whole number, got %v", action, rawRev)
+		}
+		rev = parsed
+	case float64:
+		if v < 0 {
+			return "", "", 0, fmt.Errorf("%s: params.revision must be a non-negative number, got %v", action, rawRev)
+		}
+		rev = uint64(v)
+	default:
 		return "", "", 0, fmt.Errorf("%s: params.revision must be a non-negative number, got %v", action, rawRev)
 	}
 
-	return pkgaudio.SessionID(sessionID), pkgaudio.InvocationID(invocation), pkgaudio.Revision(revF), nil
+	return pkgaudio.SessionID(sessionID), pkgaudio.InvocationID(invocation), pkgaudio.Revision(rev), nil
 }
 
 // audioSessionOperations builds the nine allowlist entries against mgr.
@@ -105,12 +122,8 @@ func sessionOp(mgr *audio.Manager, exec sessionExec) OperationFunc {
 			return OperationResult{}, fmt.Errorf("audio session operation produced an invalid outcome: %w", err)
 		}
 
-		confirmed := outcome.Outcome != pkgaudio.OutcomeRefused &&
-			outcome.Outcome != pkgaudio.OutcomeFailed &&
-			outcome.Outcome != pkgaudio.OutcomeUnconfirmable
-
 		return OperationResult{
-			Confirmed: confirmed,
+			Confirmed: outcomeConfirmed(outcome),
 			Signal:    signal,
 			Value: map[string]any{
 				"sessionId": string(id),
@@ -121,6 +134,18 @@ func sessionOp(mgr *audio.Manager, exec sessionExec) OperationFunc {
 			ObservedAt: now(),
 		}, nil
 	}
+}
+
+// outcomeConfirmed reports whether outcome is a genuine success:
+// Unconfirmable, Refused, and Failed are all Confirmed:false, matching
+// OperationResult's own "read-back evidence corroborates the request"
+// contract. Shared by every audio.session.* operation and by
+// audio.node.silence, which reports its own Confirmed as true only when
+// every session it touched individually confirms this way.
+func outcomeConfirmed(outcome pkgaudio.OutcomeResult) bool {
+	return outcome.Outcome != pkgaudio.OutcomeRefused &&
+		outcome.Outcome != pkgaudio.OutcomeFailed &&
+		outcome.Outcome != pkgaudio.OutcomeUnconfirmable
 }
 
 func applySession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, error) {
@@ -178,15 +203,27 @@ func clearSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // audio.media.probe's own field names), playlist (ownerKind, ownerId,
 // ownerRevision, repeat, resume, requestedTransition, items — items reuse
 // the exact object shape audio.media.probe's params.items already
-// defines), outputs (a string array), and mixPolicy. media and playlist
-// are mutually exclusive, matching [pkgaudio.SessionDesiredState.Validate].
-// Gain, ceiling, fade, and bookmark are not wired here: the first three
-// belong to the separate audio.gain.set/audio.gain.fade surface,
-// and a bookmark is session-internal state this package manages itself
-// (Pause writes one; nothing here accepts one from a caller).
+// defines), outputs (a string array), mixPolicy, and ceiling (a linear
+// [pkgaudio.Ceiling], optional; a caller that omits it leaves the
+// session's ceiling exactly as it was). This agent's own
+// rejectUnknownKeys refuses the WHOLE apply, not merely the ceiling
+// field, if a caller sends "ceiling" against an agent build that
+// predates this key: the coordinator's own safety net against that is
+// capability-gated, never sending "ceiling" to a node whose live
+// advertisement does not confirm "audio.playback.ceiling"
+// (internal/coordinator/api/nightbackgroundaudio.go's
+// audioNodeConfirmsCeiling), not anything enforced here. Gain, fade, and
+// bookmark are not wired here: gain and fade belong to the separate
+// audio.gain.set/audio.gain.fade surface, and a bookmark is
+// session-internal state this package manages itself (Pause writes one;
+// nothing here accepts one from a caller). expiresInMs additionally
+// refreshes the session's retirement deadline
+// ([pkgaudio.SessionDesiredState.Expiry]) to this agent's own now() plus
+// the given duration: a coordinator-stamped field an operator need not
+// send.
 var audioSessionApplyKnownKeys = map[string]bool{
 	"sourceRole": true, "media": true, "playlist": true, "outputs": true,
-	"ltcStartOffset": true, "mixPolicy": true,
+	"ltcStartOffset": true, "mixPolicy": true, "expiresInMs": true, "ceiling": true,
 }
 
 func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequest, error) {
@@ -279,6 +316,31 @@ func parseApplyRequest(action string, params map[string]any) (pkgaudio.ApplyRequ
 			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ltcStartOffset: %w", action, err)
 		}
 		req.LTCStartOffset = pkgaudio.SetField(tc)
+	}
+
+	if raw, ok := body["ceiling"]; ok {
+		f, ok := raw.(float64)
+		if !ok {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ceiling must be a number, got %T", action, raw)
+		}
+		ceiling := pkgaudio.Ceiling(f)
+		if err := ceiling.Validate(); err != nil {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.ceiling: %w", action, err)
+		}
+		req.Ceiling = pkgaudio.SetField(ceiling)
+	}
+
+	if raw, ok := body["expiresInMs"]; ok {
+		ms, ok := raw.(float64)
+		if !ok || ms <= 0 {
+			return pkgaudio.ApplyRequest{}, fmt.Errorf("%s: params.expiresInMs must be a positive number, got %T", action, raw)
+		}
+		// The deadline is computed HERE, on the agent's own clock, and
+		// carried onward as an absolute value: the coordinator sends a
+		// relative TTL so neither side's clock has to agree with the
+		// other's, but nothing downstream (Merge included) touches a
+		// clock again once this line has run.
+		req.Expiry = pkgaudio.SetField(time.Now().Add(time.Duration(ms) * time.Millisecond))
 	}
 
 	return req, nil

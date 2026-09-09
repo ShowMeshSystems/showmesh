@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --t-display: 700 25px/1.15 Archivo, sans-serif;
+  --t-heading: 600 20px/1.2 Archivo, sans-serif;
+  --t-subhead: 600 15px/1.3 Archivo, sans-serif;
+  --t-body: 400 14px/1.5 Archivo, sans-serif;
+  --t-small: 400 12.5px/1.45 Archivo, sans-serif;
+  --t-meta: 600 11px/1.35 'JetBrains Mono', monospace;
+  --t-data: 500 13px/1.4 'JetBrains Mono', monospace;
+  --bg: #080c0e;
+  --surface: #0c1215;
+  --raised: #111a1d;
+  --sunken: #050809;
+  --border: #26343a;
+  --border-strong: #3b4d54;
+  --text: #eef5f3;
+  --text-muted: #a5b5b9;
+  --text-faint: #96a5a2;
+  --hatch: #26343a;
+  --accent: oklch(0.845 0.112 181);
+  --accent-hover: oklch(0.90 0.115 181);
+  --accent-active: oklch(0.76 0.105 181);
+  --accent-bg: oklch(0.26 0.045 181);
+  --accent-border: oklch(0.42 0.075 181);
+  --on-accent: #05191a;
+  --focus: oklch(0.88 0.09 181);
+  --good-fg: oklch(0.82 0.13 158);
+  --good-bg: oklch(0.255 0.045 158);
+  --good-border: oklch(0.42 0.07 158);
+  --warn-fg: oklch(0.845 0.135 80);
+  --warn-bg: oklch(0.26 0.05 80);
+  --warn-border: oklch(0.43 0.08 80);
+  --bad-fg: oklch(0.755 0.145 24);
+  --bad-bg: oklch(0.26 0.06 24);
+  --bad-border: oklch(0.43 0.10 24);
+  --unk-fg: oklch(0.775 0.012 210);
+  --unk-bg: oklch(0.255 0.012 210);
+  --unk-border: oklch(0.40 0.014 210);
+}
+[data-theme='light'] {
+  --bg: #f2f5f4; --surface: #ffffff; --raised: #ffffff; --sunken: #e8edeb;
+  --border: #ccd7d4; --border-strong: #a5b5b1; --text: #101a1a;
+  --text-muted: #43514f; --text-faint: #4f5d5a; --hatch: #d4dedb;
+  --accent: oklch(0.50 0.09 181); --accent-hover: oklch(0.44 0.09 181);
+  --accent-active: oklch(0.38 0.08 181); --accent-bg: oklch(0.958 0.024 181);
+  --accent-border: oklch(0.80 0.05 181); --on-accent: #ffffff; --focus: oklch(0.52 0.10 181);
+  --good-fg: oklch(0.44 0.11 158); --good-bg: oklch(0.958 0.030 158); --good-border: oklch(0.80 0.060 158);
+  --warn-fg: oklch(0.47 0.11 70); --warn-bg: oklch(0.962 0.035 80); --warn-border: oklch(0.82 0.070 80);
+  --bad-fg: oklch(0.47 0.16 25); --bad-bg: oklch(0.958 0.030 25); --bad-border: oklch(0.82 0.080 25);
+  --unk-fg: oklch(0.42 0.012 210); --unk-bg: oklch(0.940 0.005 210); --unk-border: oklch(0.82 0.008 210);
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --raised: #0d0d0d; --sunken: #000;
+  --border: #fff; --border-strong: #fff; --text: #fff;
+  --text-muted: #e6e6e6; --text-faint: #cfcfcf; --hatch: #4d4d4d;
+  --accent: #66d9ff; --accent-hover: #9ae7ff; --accent-active: #3fc4f0;
+  --accent-bg: #002733; --accent-border: #66d9ff; --on-accent: #000; --focus: #ff0;
+  --good-fg: #4dff8f; --good-bg: #003d17; --good-border: #4dff8f;
+  --warn-fg: #ffd23f; --warn-bg: #4a3300; --warn-border: #ffd23f;
+  --bad-fg: #ff6b60; --bad-bg: #4a0000; --bad-border: #ff6b60;
+  --unk-fg: #fff; --unk-bg: #262626; --unk-border: #fff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--t-body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[data-chrome] { position: sticky; top: 0; z-index: 30; }
+[data-rail] { position: sticky; top: 50px; }
+select, input[type='text'], textarea { width: 100%; min-width: 0; }
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--text);font:var(--t-body)">
+
+  <div data-chrome>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;padding:8px 18px;background:var(--surface);overflow:hidden">
+      <span style="display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--accent-border);border-radius:4px;color:var(--accent);font:var(--t-meta)">SM</span>
+      <button type="button" style="display:flex;align-items:center;gap:8px;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)"><span style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Show</span>Winter Ridge 2026<span style="color:var(--text-faint)" aria-hidden="true">▾</span></button>
+      <span style="display:inline-flex;align-items:center;flex:0 0 auto;height:30px;padding:0 10px;border:1px solid var(--accent);border-radius:5px;background:var(--accent);color:var(--on-accent);font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase">Show mode</span>
+      <span style="width:1px;height:22px;background:var(--border)"></span>
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 auto;flex-wrap:nowrap;overflow:hidden">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--accent)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Now</span>
+        <a href="#" style="min-width:0;font:var(--t-body);font-weight:600;color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" style-hover="color:var(--accent)">Carol of the Bells</a>
+        <span style="font:var(--t-data);font-variant-numeric:tabular-nums;color:var(--text-muted);white-space:nowrap">1:42 / 2:48</span>
+        <span style="font:var(--t-data);font-size:11px;color:var(--text-faint);white-space:nowrap">cycle 3 · next in 1:06</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto">
+        <span style="display:inline-flex;align-items:center;gap:6px;font:var(--t-meta);letter-spacing:0.07em;text-transform:uppercase;color:var(--good-fg)"><span style="width:6px;height:6px;border-radius:50%;background:var(--good-fg)"></span>Live</span>
+        <span style="width:1px;height:20px;background:var(--border)"></span>
+        <span style="font:var(--t-small);color:var(--text-muted)">erbartos</span>
+      </div>
+    </div>
+    <div role="progressbar" aria-label="Carol of the Bells playback position" aria-valuemin="0" aria-valuemax="168" aria-valuenow="102" aria-valuetext="1 minute 42 seconds of 2 minutes 48 seconds" style="height:3px;background:var(--sunken);border-bottom:1px solid var(--border)">
+      <div style="width:61%;height:3px;background:var(--accent)"></div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:212px minmax(0,1fr);align-items:start">
+
+    <nav data-rail style="padding:12px 0;border-right:1px solid var(--border);background:var(--surface);min-height:calc(100vh - 50px)">
+      <p style="margin:0 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Operate</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Dashboard</a>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Show Night<span style="font:var(--t-meta);color:var(--good-fg)">LIVE</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Live Control</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">Author</p>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Shows</a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Assets</a>
+      <p style="margin:16px 0 6px;padding:0 14px;font:var(--t-meta);letter-spacing:0.11em;text-transform:uppercase;color:var(--text-faint)">System</p>
+      <a href="#" style="display:flex;align-items:center;justify-content:space-between;min-height:32px;padding:0 14px;border-left:2px solid var(--accent);background:var(--accent-bg);color:var(--accent);font:var(--t-body);font-weight:600;text-decoration:none">Monitor<span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:3px;background:var(--bad-bg);border:1px solid var(--bad-border);color:var(--bad-fg);font:var(--t-meta);font-size:10px">2</span></a>
+      <a href="#" style="display:flex;align-items:center;min-height:32px;padding:0 14px;border-left:2px solid transparent;color:var(--text);font:var(--t-body);text-decoration:none" style-hover="background:var(--raised);border-left-color:var(--border-strong)">Settings</a>
+    </nav>
+
+    <main style="min-width:0;padding:22px 28px 80px;max-width:1120px">
+
+      <p style="margin:0;font:var(--t-small);color:var(--text-muted)"><a href="#" style="color:var(--text-muted)">Monitor</a> <span style="color:var(--text-faint)">/</span> Fleet <span style="color:var(--text-faint)">/</span> arena-main</p>
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-top:8px">
+        <div style="min-width:0">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <h1 style="margin:0;font:var(--t-display);letter-spacing:-0.02em">arena-main</h1>
+            <span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:3px;background:var(--good-bg);border:1px solid var(--good-fg);color:var(--good-fg);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase"><span aria-hidden="true">✓</span>Healthy 2.1 s</span>
+          </div>
+          <p style="margin:6px 0 0;font:var(--t-small);color:var(--text-muted)">Resolume Arena · <span style="font:var(--t-data)">10.20.0.30:8080</span> · timecode-driven, never frame-synced by ShowMesh</p>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button type="button" style="height:34px;padding:0 14px;border:1px solid var(--border-strong);border-radius:5px;background:var(--surface);color:var(--text);font:var(--t-body);font-weight:500;cursor:pointer" style-hover="border-color:var(--accent)">Test connection</button>
+        </div>
+      </div>
+
+      <section aria-labelledby="rz-comp" style="margin-top:26px;max-width:800px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <h2 id="rz-comp" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Stored composition</h2>
+          <span style="font:var(--t-small);color:var(--text-muted)">Uploaded, not read live</span>
+        </div>
+        <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:76ch">ShowMesh stores an id map of the composition so actions can name a layer or clip instead of an object id. Re-export and re-upload whenever the composition changes in Arena, or names will resolve to the wrong objects.</p>
+
+        <div style="margin-top:14px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--border);background:var(--raised)">
+            <div style="min-width:0">
+              <p style="margin:0;font:var(--t-data)">WinterRidge.avc</p>
+              <p style="margin:3px 0 0;font:var(--t-small);color:var(--text-muted)">Uploaded 22 Aug 11:04 by erbartos</p>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:3px;background:var(--good-bg);border:1px solid var(--good-fg);color:var(--good-fg);font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase"><span aria-hidden="true">✓</span>Identified</span>
+              <button type="button" style="height:28px;padding:0 10px;border:1px solid var(--border-strong);border-radius:4px;background:var(--surface);color:var(--text);font:var(--t-meta);letter-spacing:0.06em;text-transform:uppercase;cursor:pointer" style-hover="border-color:var(--accent)">Re-upload</button>
+            </div>
+          </div>
+          <dl style="display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:0;margin:0">
+            <div style="padding:12px 14px;border-right:1px solid var(--border)">
+              <dt style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Decks</dt>
+              <dd style="margin:5px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">3</dd>
+            </div>
+            <div style="padding:12px 14px;border-right:1px solid var(--border)">
+              <dt style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Layers</dt>
+              <dd style="margin:5px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">6</dd>
+            </div>
+            <div style="padding:12px 14px;border-right:1px solid var(--border)">
+              <dt style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Columns</dt>
+              <dd style="margin:5px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">14</dd>
+            </div>
+            <div style="padding:12px 14px;border-right:1px solid var(--border)">
+              <dt style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Clips</dt>
+              <dd style="margin:5px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">68</dd>
+            </div>
+            <div style="padding:12px 14px">
+              <dt style="font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Persistent</dt>
+              <dd style="margin:5px 0 0;font:var(--t-heading);font-variant-numeric:tabular-nums">4</dd>
+            </div>
+          </dl>
+          <p style="margin:0;padding:11px 14px;border-top:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Arena currently has deck <span style="font:var(--t-data);color:var(--text)">Winter</span> selected, which matches the stored map. A different selected deck would report <span style="font:var(--t-data)">deck_mismatch</span> rather than guessing.</p>
+        </div>
+      </section>
+
+      <section aria-labelledby="rz-amb" style="margin-top:26px;max-width:800px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <h2 id="rz-amb" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Clips that cannot be named</h2>
+          <span style="font:var(--t-small);color:var(--warn-fg)">2 of 72</span>
+        </div>
+        <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:76ch">Actions reference clips by name, so two clips sharing a name on the same layer and deck cannot be told apart. The coordinator computes this and refuses to guess — an action naming one of these will not resolve.</p>
+
+        <div style="margin-top:14px;border:1px solid var(--warn-border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <table style="width:100%;min-width:680px;border-collapse:collapse;font:var(--t-body)">
+            <thead>
+              <tr>
+                <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Clip</th>
+                <th style="width:132px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Layer</th>
+                <th style="width:124px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Deck</th>
+                <th style="width:126px;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Clip id</th>
+                <th style="width:132px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Column</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:10px 10px 10px 12px;border-bottom:1px solid var(--border);border-left:2px solid var(--warn-fg);font:var(--t-body);font-weight:500">Snow</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Ambience</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Winter</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-data);font-size:11px;color:var(--text-muted)">clip-1f04</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Column 3</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 12px;border-left:2px solid var(--warn-fg);font:var(--t-body);font-weight:500">Snow</td>
+                <td style="padding:10px;font:var(--t-small);color:var(--text-muted)">Ambience</td>
+                <td style="padding:10px;font:var(--t-small);color:var(--text-muted)">Winter</td>
+                <td style="padding:10px;font:var(--t-data);font-size:11px;color:var(--text-muted)">clip-9b72</td>
+                <td style="padding:10px 14px 10px 10px;font:var(--t-small);color:var(--text-muted)">Column 9</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="padding:11px 14px;border-top:1px solid var(--border);background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-muted)">Fix in Arena: rename one of them — the column tells you which is which — then re-upload. A clip sharing a name across <em>different</em> layers is fine, because the layer name disambiguates it. Clip ids are shown only here, where names cannot do the job.</span>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="rz-rec" style="margin-top:26px;max-width:800px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <h2 id="rz-rec" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">Recovery</h2>
+          <div style="display:flex;gap:1px;padding:1px;background:var(--border);border-radius:5px">
+            <button type="button" aria-pressed="{{ false }}" style="padding:5px 12px;border:0;border-radius:4px;background:var(--surface);color:var(--text-muted);font:var(--t-small);cursor:pointer" style-hover="color:var(--text)">Off</button>
+            <button type="button" aria-pressed="{{ true }}" style="padding:5px 12px;border:0;border-radius:4px;background:var(--accent);color:var(--on-accent);font:var(--t-small);font-weight:600;cursor:pointer">On</button>
+          </div>
+        </div>
+        <p style="margin:8px 0 0;font:var(--t-small);color:var(--text-muted);max-width:76ch">When on, ShowMesh records which clip each layer had connected, so it can put them back after Arena restarts. It restores layers it recorded — it does not reconstruct a composition it never saw. Changing this creates a coordinator revision attributed to you.</p>
+
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px">
+          <button type="button" disabled="{{ true }}" style="height:34px;padding:0 16px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text-faint);font:var(--t-body);font-weight:500;cursor:not-allowed">Save recovery</button>
+          <span style="font:var(--t-small);color:var(--text-muted)">Active revision <span style="font:var(--t-data);color:var(--text)">3</span> · set on by erbartos 22 Aug 11:09 · no unsaved changes</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;margin-top:16px;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+          <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--good-fg)">✓ Last record</span>
+          <p style="margin:0;font:var(--t-small);color:var(--text-muted)">21:02:22, at the enter-show transition. 6 of 6 layers recorded.</p>
+        </div>
+
+        <section aria-labelledby="rz-restore">
+        <h3 id="rz-restore" style="margin:20px 0 0;font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint)">Last restore · 20:41:33</h3>
+        <div style="margin-top:10px;border:1px solid var(--border);border-radius:5px;background:var(--surface);overflow-x:auto;overscroll-behavior-inline:contain">
+          <table style="width:100%;min-width:520px;border-collapse:collapse;font:var(--t-body)">
+            <thead>
+              <tr>
+                <th style="padding:8px 10px 8px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Layer</th>
+                <th style="padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Clip put back</th>
+                <th style="width:150px;padding:8px 14px 8px 10px;text-align:left;border-bottom:1px solid var(--border);background:var(--raised);font:var(--t-meta);letter-spacing:0.09em;text-transform:uppercase;color:var(--text-faint)">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border);font:var(--t-body)">Base</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Winter Base Loop</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Restored</span></td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border);font:var(--t-body)">Ambience</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Snow</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--warn-fg)">⚠ Skipped</span><br><span style="font:var(--t-small);color:var(--text-faint)">its name is ambiguous</span></td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;border-bottom:1px solid var(--border);font:var(--t-body)">Text</td>
+                <td style="padding:10px;border-bottom:1px solid var(--border);font:var(--t-small);color:var(--text-muted)">Countdown 5</td>
+                <td style="padding:10px 14px 10px 10px;border-bottom:1px solid var(--border)"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Restored</span></td>
+              </tr>
+              <tr>
+                <td style="padding:10px 10px 10px 14px;font:var(--t-body)">Overlay</td>
+                <td style="padding:10px;font:var(--t-small);color:var(--text-muted)">Sponsor Card</td>
+                <td style="padding:10px 14px 10px 10px"><span style="font:var(--t-meta);letter-spacing:0.05em;text-transform:uppercase;color:var(--good-fg)">✓ Restored</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="padding:11px 14px;border-top:1px solid var(--border);background:var(--raised)">
+            <span style="font:var(--t-small);color:var(--text-muted)">4 layers had a recorded clip · 3 restored, 1 skipped. The skip is the ambiguous <span style="font:var(--t-data)">Snow</span> above — recovery will keep skipping it until it is renamed.</span>
+          </div>
+        </div>
+        </section>
+      </section>
+
+      <section aria-labelledby="rz-obs" style="margin-top:26px;max-width:800px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <h2 id="rz-obs" style="margin:0;font:var(--t-heading);letter-spacing:-0.015em">What Arena is reporting</h2>
+          <a href="#" style="font:var(--t-small);white-space:nowrap">All signals</a>
+        </div>
+        <div style="margin-top:12px;border-top:1px solid var(--border-strong)">
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:13px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--good-fg)">✓ Reachable</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Answered 2.1 s ago.</p>
+          </div>
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:13px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--good-fg)">✓ Layers ready</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">6 of 6. Base is showing <span style="font:var(--t-data)">Winter Base Loop</span>; Text is showing <span style="font:var(--t-data)">Countdown 5</span>.</p>
+          </div>
+          <div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 20px;align-items:start;padding:13px 0;border-bottom:1px solid var(--border)">
+            <span style="font:var(--t-meta);letter-spacing:0.1em;text-transform:uppercase;color:var(--text-faint);border-bottom:1px solid var(--border-strong);justify-self:start;padding-bottom:2px">Unavailable</span>
+            <p style="margin:0;font:var(--t-small);color:var(--text-muted)">Timecode lock is not something Arena reports, so there is nothing to collect and nothing to retry. Only the audio node's side of the LTC path is observable.</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;, &quot;contrast&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light' | 'contrast'&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'dark' };
+  }
+}
+
+</script>
+</body>
+</html>

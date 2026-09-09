@@ -178,6 +178,19 @@ type Node struct {
 	// clock status report (no node.clock configuration, or a node still
 	// starting up).
 	Clock []ObservationEntry `json:"clock"`
+
+	// FPPConnect is an addition, additive per ADR-020 decision 8:
+	// whatever node.fppconnect.channel_range.* observations this
+	// coordinator currently holds for this node's most recently resolved
+	// fppconnect.configure push — whether the pushed channel range was
+	// formatted, legitimately empty (no configured surface), or dropped
+	// (a surface existed but could not be formatted, e.g. a refused range
+	// or a string too long for the ping's 120-byte field), and why. Never
+	// null — an empty array means this node has never had a
+	// fppconnect.configure push resolved for it. Resource names this node
+	// directly, the node.multisync.* precedent (one push carries one
+	// channel-range string per node).
+	FPPConnect []ObservationEntry `json:"fppConnect"`
 }
 
 // NodeDeclaration is a node's declaration state: an operator's durable
@@ -348,6 +361,17 @@ type NodeDeclarationResponse struct {
 // 400 before anything is deleted; this is in addition to, never instead
 // of, any confirmation dialog a UI client shows.
 type DeleteNodeDeclarationRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
+// ConfigObjectDeleteRequest is the required body of DELETE on a per-object
+// configuration kind's path (audio.node, show, show.surface, show.action,
+// show.macro, show.cue, show.playlist, night.session). Confirm must be
+// true, mirroring DeleteNodeDeclarationRequest's own rule immediately
+// above: a missing or false Confirm is rejected with 400 before anything
+// is tombstoned, in addition to, never instead of, any confirmation
+// dialog a UI client shows.
+type ConfigObjectDeleteRequest struct {
 	Confirm bool `json:"confirm"`
 }
 
@@ -668,6 +692,64 @@ type Snapshot struct {
 	// rendered exactly as GET /resolume/instances renders it. Never null,
 	// matching MacroRuns' own "fatal to omit" reasoning.
 	Resolume []ResolumeInstance `json:"resolume"`
+
+	// AuditStore is the coordinator-level standing signal for whether this
+	// coordinator can currently write to its audit store, computed FRESH
+	// on every request via a real probe write to audit_log (always
+	// rolled back), never from a per-action response. ADR-024 decision
+	// 11's amendment (owner ruling, 2026-08-26) removed the fail-closed
+	// refusal that used to make an audit-write failure directly visible
+	// on the five request paths it protected; this field exists so the
+	// condition stays visible on a surface an operator reads WITHOUT
+	// invoking an action, since an unaudited command's own
+	// attributionDegraded flag only answers "was this one action
+	// unaudited", never "is audit down right now". Fatal to omit, matching
+	// MacroRuns/Resolume/AudioConfigPush's own reasoning.
+	AuditStore AuditStoreStatus `json:"auditStore"`
+
+	// AudioConfigPush is the coordinator-level signal for whether this
+	// coordinator can decode its stored, engine-wide audio.settings
+	// revision right now. It reports ONLY that: it says nothing about
+	// whether a given node's own separate audio.node binding is usable,
+	// or whether that node is currently reachable, so "usable" here does
+	// not by itself mean every node's next push will land — see
+	// [AudioConfigPushStatus]'s own doc comment. Fatal to omit for the
+	// same reason Collectors is — an operator whose nodes have gone quiet
+	// on audio configuration has no other API-visible way to learn why.
+	AudioConfigPush AudioConfigPushStatus `json:"audioConfigPush"`
+}
+
+// AudioConfigPushStatus is GET /api/v1/snapshot's "audioConfigPush"
+// member (coordinator.audio.config.push.state /
+// coordinator.audio.config.push.reason in IDENTIFIER-REGISTER.md). Unlike
+// [CollectorStatus], this is a single coordinator-wide value, not a list:
+// audio.settings is a singleton (ADR-039), so there is exactly one
+// current revision to decode. Deliberately narrow: it reports whether
+// THIS coordinator-wide singleton revision decodes, never whether any one
+// node's own separate audio.node binding does — a node can still be
+// stranded by a broken audio.node revision while this reads "usable".
+// State is one of internal/coordinator/api.AudioConfigPushRunState's
+// three values ("usable", "unusable", or "unknown" when a genuine
+// config-store failure, not a decode failure, kept the coordinator from
+// reading its own revision); Reason is set whenever State is not "usable"
+// and always nil otherwise, mirroring [CollectorStatus.Reason]'s own
+// convention.
+type AudioConfigPushStatus struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
+}
+
+// AuditStoreStatus is GET /api/v1/snapshot's "auditStore" member
+// (coordinator.audit.store.state / coordinator.audit.store.reason in
+// IDENTIFIER-REGISTER.md), mirroring [AudioConfigPushStatus]'s shape one
+// field up, but computed fresh on every request rather than from cached
+// traffic (see [identity.Service.AuditWriteStatus]'s own doc comment).
+// State is "usable" or "unusable"; Reason is set whenever State is not
+// "usable" and always nil otherwise, matching AudioConfigPushStatus's
+// identical convention.
+type AuditStoreStatus struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
 }
 
 // Problem is the RFC 9457 application/problem+json body every error in

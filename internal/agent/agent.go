@@ -73,6 +73,22 @@ func Run() int {
 		"capability_count", len(cfg.Capabilities),
 	)
 
+	// The FPP Connect HTTP listener (below, cfg.FPPConnectListenAddr)
+	// binds unconditionally on every node: any node can be an xLights
+	// upload target, regardless of whether an operator ever intended it
+	// to be. Registering an uploaded sequence (fppconnectregister.go's
+	// POST /api/v1/assets) is gated by asset:write, a WRITE unrelated to
+	// the coordinator's own read policy — so a node can have reads wide
+	// open and still fail every registration. Logged once, at startup,
+	// rather than only surfacing after the first upload fails: an
+	// operator who never watches this log until something breaks still
+	// gets it on every restart, including the one right after they fix
+	// SHOWMESH_AGENT_API_TOKEN (config is read once, so that fix always
+	// requires a restart, and this line confirms it took).
+	if cfg.AgentAPIToken == "" {
+		logger.Warn("no SHOWMESH_AGENT_API_TOKEN configured: this node's FPP Connect HTTP listener will accept, assemble, and bind every upload it receives, then fail to register each one; registration retries indefinitely, but only succeeds once a credential carrying asset:write is set and this agent is restarted (see deploy/node/agent.env.example)")
+	}
+
 	// connCtx bounds the MQTT connection manager's lifetime and is
 	// DELIBERATELY NOT sigCtx (below), even though sigCtx is what tells this
 	// function to start shutting down. autopaho's connection manager treats
@@ -129,6 +145,14 @@ func Run() int {
 		logger.Warn("failed to sweep asset staging directory at startup", "asset_dir", cfg.AssetDir, "error", err)
 	}
 
+	// FC2's own staging area (chunked xLights uploads in progress) gets the
+	// identical sweep, for the identical reason: a partial upload left
+	// behind by a previous, interrupted process run is never a partially-
+	// usable asset. See fppconnectheld.go's sweepFPPConnectUploadStaging.
+	if err := sweepFPPConnectUploadStaging(cfg.AssetDir); err != nil {
+		logger.Warn("failed to sweep fppconnect upload staging directory at startup", "asset_dir", cfg.AssetDir, "error", err)
+	}
+
 	// assetFetchTrigger is buffered for the same non-blocking-send reason as
 	// heartbeatConnected: command.go signals it after a completed
 	// asset.fetch, and the inventory goroutine below may not have started
@@ -163,10 +187,79 @@ func Run() int {
 	// log line — finding 7's second half; see multisyncstatus.go.
 	multiSyncStatus := newMultiSyncStatus()
 
+	// fppConnectState is this node's held FPP Connect configuration
+	// (Track E phase 2 seam FC1a, ADR-044 decision 5), constructed here,
+	// outside newMQTTConn, so the discover-ping responder reads it fresh
+	// at reply time rather than a value fixed at startup (see
+	// fppconnectstate.go and multisync.go), and so it survives a broker
+	// reconnect the same way cmdHandler does. Loaded from disk BEFORE the
+	// command handler starts, so a restart with no coordinator reachable
+	// still answers from what it was last pushed rather than from nothing
+	// (matching catalogStore's identical load-before-use ordering below).
+	fppConnect := newFPPConnectState()
+	if _, err := fppConnect.Load(cfg.AssetDir); err != nil {
+		logger.Warn("failed to load persisted fppconnect state at startup; starting with none", "error", err)
+	}
+
 	multiSyncDone := make(chan struct{})
 	go func() {
 		defer close(multiSyncDone)
-		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, logger)
+		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, fppConnect, logger)
+	}()
+
+	// fppConnectStatus carries this listener's bind outcome into the
+	// render report the same way multiSyncStatus does (ADR-044): a bind
+	// failure degrades this node's FPP Connect eligibility without
+	// stopping the agent. newFPPConnectStateView adapts the held
+	// fppConnect state (fppconnectstate.go, FC1a) to the listener's
+	// fppConnectView; see that constructor's own doc comment in
+	// fppconnecthttp.go.
+	fppConnectStatus := newFPPConnectHTTPStatus()
+
+	// fppConnectHeld is FC2's upload/binding state (fppconnectheld.go):
+	// constructed here, outside newMQTTConn, for the same "must survive a
+	// broker reconnect" reason sup and cmdHandler are, and loaded from disk
+	// immediately so a restart resumes reporting whatever this node already
+	// held before it went down.
+	fppConnectHeld := newFPPConnectHeldStore(cfg.AssetDir, logger)
+
+	// fppConnectRegistrar is FC3: it registers a held, bound file through
+	// the coordinator's existing asset store, making it dispatchable
+	// (fppconnectregister.go). Constructed here, before either hook it
+	// wires can fire, and sharing sigCtx like every other long-lived
+	// goroutine in this function so an in-flight registration attempt is
+	// abandoned, never left running, once shutdown begins. Its trigger
+	// reuses assetFetchTrigger rather than a second channel: a successful
+	// registration and a completed asset.fetch are the identical event
+	// from the inventory's point of view, "republish now, something this
+	// node holds just became evidence-worthy."
+	fppConnectRegistrar := newFPPConnectRegistrar(sigCtx, fppConnectHeld, fppConnect, cfg.NodeID, cfg.AgentAPIToken, func() {
+		select {
+		case assetFetchTrigger <- struct{}{}:
+		default:
+		}
+	}, time.Now, logger)
+	fppConnectHeld.SetOnHeld(fppConnectRegistrar.OnHeld)
+	// Every applied "fppconnect.configure" push both wakes the registrar's
+	// retry loops (the operator may have just fixed the coordinator base
+	// URL) and re-resolves any record still held pending only because
+	// this node had never been pushed a shows id/name list yet (review
+	// round 2 finding D): a harmless no-op walk when shows has not
+	// actually changed.
+	fppConnect.SetOnPush(func() {
+		fppConnectHeld.RebindPendingShowIDs(fppConnect.ShowID)
+		fppConnectRegistrar.Wake()
+	})
+	// Walk the backlog after FC2's own staging sweep and this store's own
+	// disk load (both already done above): a bound-but-unregistered record
+	// left over from a previous run re-enters the retry loop; a registered
+	// one is left alone; an unbound one stays unbound.
+	fppConnectRegistrar.BootWalk()
+
+	fppConnectHTTPDone := make(chan struct{})
+	go func() {
+		defer close(fppConnectHTTPDone)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore), cfg.NodeID, fppConnectHeld, fppConnectStatus, logger)
 	}()
 
 	// showMode is ADR-033's installation-wide operating mode as this node
@@ -270,6 +363,11 @@ func Run() int {
 
 	audioMgr := audio.NewManager(audioEngine, audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
 	audioRebuilder := newAudioEngineRebuilder(sigCtx, cfg.AssetDir, audioEngine, audioMgr, logger)
+	// audioEngineHeldNode (audiocapabilities.go) is wired to the SAME
+	// rebuilder so a post-bind capability detection can tell "the engine
+	// actively holds this route" from "a fresh probe of it," and trust
+	// the former over a busy result from the latter.
+	audioEngineHeldNode = audioRebuilder.HeldNode
 	audioBind := newAudioBinding(audioRebuilder.rebuild, func(p audioSettingsConfig) {
 		audioMgr.SetSettings(audioSettingsFromWire(p))
 	})
@@ -304,6 +402,18 @@ func Run() int {
 	clockMgr := clock.NewManager(time.Now, logger)
 	clockBind := newClockBinding(clockMgr)
 
+	// audioRestoreRetryDone: this node's own bounded, backed-off retry of
+	// every deferred audio restore, re-probing the device on its own
+	// instead of waiting for a coordinator-pushed audio.node binding —
+	// see audiorestoreretry.go's own doc comment.
+	audioRestoreRetryDone := make(chan struct{})
+	go func() {
+		defer close(audioRestoreRetryDone)
+		ticker := time.NewTicker(audioRestoreRetryPollInterval)
+		defer ticker.Stop()
+		runAudioRestoreRetry(sigCtx, audioMgr, audioBind.currentNode, audioRebuilder.rebuildIfUnavailable, audioEngine.Available, time.Now, ticker.C, logger)
+	}()
+
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across
 	// every reconnect: its idempotency cache and allowlisted operations'
 	// state (e.g. agentEchoState's stored value) are this process's memory
@@ -311,9 +421,21 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, clockBind, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, clockBind, fppConnect, time.Now, logger)
 
-	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
+	// connectAndInstallCapabilityRepublish is the single call site for
+	// both constructing this node's MQTT connection and wiring
+	// installAudioCapabilityRepublish onto it (which needs a live
+	// Publisher, so it cannot happen at audioRebuilder's own construction
+	// above). Extracted so a test can exercise this EXACT statement
+	// sequence (the real dial below swapped for a fake) rather than a
+	// hand-copy that could silently drift from what Run actually calls;
+	// a prior version of this wiring lived as bare statements here with
+	// no test able to observe either one.
+	connect := func() (Conn, error) {
+		return newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
+	}
+	conn, err := connectAndInstallCapabilityRepublish(connect, audioRebuilder, sigCtx, cfg, bootID, startedAt, logger)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		return 1
@@ -340,7 +462,7 @@ func Run() int {
 		defer close(renderReportDone)
 		ticker := time.NewTicker(cfg.RenderReportInterval)
 		defer ticker.Stop()
-		runRenderReport(sigCtx, conn, cfg.NodeID, sup, assignmentStore, multiSyncStatus, time.Now, ticker.C, renderTrigger, logger)
+		runRenderReport(sigCtx, conn, cfg.NodeID, sup, assignmentStore, multiSyncStatus, fppConnectStatus, fppConnectHeld, time.Now, ticker.C, renderTrigger, logger)
 	}()
 
 	// Audio report: hardware discovery evidence (cached) plus a fresh
@@ -387,17 +509,41 @@ func Run() int {
 	stopSignal()
 
 	// The heartbeat, asset inventory, render report, audio report, clock
-	// report, audio session watcher, and MultiSync listener loops also
-	// select on sigCtx.Done() and exit on their own; wait for all seven
-	// so none can race the final offline publish below with a publish
-	// still in flight.
+	// report, audio session watcher, audio restore retry, MultiSync
+	// listener, FPP Connect HTTP listener, and show mode watch loops also
+	// select on sigCtx.Done() and exit on their own; wait for all ten so
+	// none can race the final offline publish below with a publish still
+	// in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
 	<-audioReportDone
 	<-clockReportDone
 	<-audioWatchDone
+	<-audioRestoreRetryDone
 	<-multiSyncDone
+	<-fppConnectHTTPDone
+
+	// fppConnectRegistrar.Wait is called inline here, not joined through
+	// its own done channel started earlier (review round 2 finding A: a
+	// goroutine spawned right after BootWalk calls Wait while the
+	// WaitGroup's counter is still whatever BootWalk happened to leave it
+	// at, often zero, so Wait returns immediately and closes its done
+	// channel during startup; every registration that starts afterward,
+	// which is effectively all of them, is never joined at all). Calling
+	// it here, after fppConnectHTTPDone, closes most of that gap: the HTTP
+	// listener that can still call OnHeld (an in-flight upload finishing,
+	// or a buffered playlist POST) has already stopped by this point. The
+	// "fppconnect.configure" push path (fppConnect.SetOnPush, wired above:
+	// RebindPendingShowIDs then Wake) is NOT gated by fppConnectHTTPDone,
+	// so it remains a possible late caller into OnHeld/startLoop even
+	// after sigCtx is canceled; startLoop's own r.ctx.Err() check (review
+	// round 3 finding 4) is what actually closes that race, not this
+	// ordering. This still blocks until every registerLoop already
+	// running (started at boot or at any point up to just now) has
+	// actually returned.
+	fppConnectRegistrar.Wait()
+
 	<-showModeWatchDone
 
 	// Stop whatever clock provider this node holds (a managed provider's

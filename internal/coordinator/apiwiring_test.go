@@ -355,12 +355,16 @@ func TestMultiCollectorStatusListerConcatenatesBothSources(t *testing.T) {
 	if rest.State != string(api.CollectorRunning) {
 		t.Errorf("%s State = %q, want %q", fppCollectorSourceID, rest.State, api.CollectorRunning)
 	}
-	mqtt, ok := byID[fppMQTTCollectorSourceID]
+	// The MQTT collector now emits one row per configured host, host-qualified
+	// as "<sourceID>:<instanceID>" (fppmqttmanager.go). The single "player-01"
+	// host configured above is this test's only row.
+	mqttID := fppMQTTCollectorSourceID + ":player-01"
+	mqtt, ok := byID[mqttID]
 	if !ok {
-		t.Fatalf("no %q entry in the combined collector list", fppMQTTCollectorSourceID)
+		t.Fatalf("no %q entry in the combined collector list", mqttID)
 	}
 	if mqtt.State != string(api.CollectorRunning) {
-		t.Errorf("%s State = %q, want %q", fppMQTTCollectorSourceID, mqtt.State, api.CollectorRunning)
+		t.Errorf("%s State = %q, want %q", mqttID, mqtt.State, api.CollectorRunning)
 	}
 }
 

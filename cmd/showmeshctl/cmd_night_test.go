@@ -75,6 +75,63 @@ func TestCmdNightGetRendersDetail(t *testing.T) {
 	}
 }
 
+// nightSessionSampleJSONWithSiteControlAndInterlocks is
+// nightSessionSampleJSON plus an authored siteControl block and
+// interlocks list, proving showmeshctl's existing client types
+// (types_night.go) and print path (night_print.go) round-trip a real
+// server response that carries them: this command issues no request of
+// its own for these fields (they arrive however the coordinator sends
+// them), so this is coverage for the decode/print side of the same
+// response-mapping gap the coordinator API fix (mapConfigNightSession)
+// closes.
+const nightSessionSampleJSONWithSiteControlAndInterlocks = `{"serverTime":"2026-08-16T21:00:00Z","kind":"night.session","id":"halloween-main","revision":1,
+	"payload":{
+		"show":"halloween-2026","label":"Halloween main loop",
+		"showPlaylist":{"fppInstanceId":"player-01","playlist":"halloween-show"},
+		"resting":{
+			"fppInstanceId":"player-01","playlist":"halloween-resting","endOfNightPlaylist":"halloween-resting",
+			"timelineAsset":{"show":"halloween-2026","sequence":"resting-loop","target":"player-01"},
+			"endOfNightRepeat":true
+		},
+		"enterShow":{"cues":[{"name":"lighting-fade","role":"lighting","action":"lighting-fade-out","offsetMs":-20000,"barrier":true,"onFailure":"continue"}],"blackoutHoldMs":6000},
+		"enterResting":{"cues":[],"blackoutAfterShowMs":6000},
+		"announcementDefaultPolicy":"duck",
+		"siteControl":{
+			"requestThermalProfile":"thermal-profile",
+			"presentationPowerOn":{"action":"power-on","powerDomain":"presentation","domainProvenance":"operator-declared"},
+			"presentationPowerOff":{"action":"power-off","powerDomain":"presentation","domainProvenance":"operator-declared","removalPolicy":"after-actions","prerequisites":[{"kind":"action","action":"power-off-prep"}]}
+		},
+		"interlocks":[
+			{"name":"cooldown","phase":"prepare-site","posture":"block","signal":"cooldown-check","failureText":"not cool","onUnavailable":"block","overridePolicy":"authorized-operator"}
+		]
+	},
+	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+// TestCmdNightGetRendersSiteControlAndInterlocks proves showmeshctl parity
+// for the two Track F seam F6 blocks: "night get" decodes and prints an
+// authored siteControl binding and interlock rule from a real server
+// response, not just "not configured".
+func TestCmdNightGetRendersSiteControlAndInterlocks(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, nightSessionSampleJSONWithSiteControlAndInterlocks)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"get", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"thermal-profile", "power-on", "power-off", "after-actions", "power-off-prep", "cooldown", "prepare-site", "authorized-operator"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q; got: %s", want, out)
+		}
+	}
+}
+
 func TestCmdNightSetSendsFullReplacementBody(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody []byte
@@ -117,6 +174,58 @@ func TestCmdNightSetSendsFullReplacementBody(t *testing.T) {
 	}
 	if sent["label"] != "x" {
 		t.Errorf("request body did not carry the stdin payload verbatim: %s", gotBody)
+	}
+}
+
+// TestCmdNightSetAcceptsAFullNightGetResponse is the night.session half of
+// generalizing parseConfigSetPayload's fpp.endpoints-only round-trip fix
+// (cmd_config.go, unwrapConfigGetResponse) to every config kind: feed
+// "night set" the EXACT bytes "night get --output json" prints
+// (nightSessionSampleJSON), and prove the PUT body carries the bare
+// payload object directly at the top level, not still wrapped under
+// "payload".
+func TestCmdNightSetAcceptsAFullNightGetResponse(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, nightSessionSampleJSON)
+	}))
+	defer ts.Close()
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+	go func() {
+		// The EXACT shape `night get --output json` emits.
+		_, _ = w.Write([]byte(nightSessionSampleJSON))
+		_ = w.Close()
+	}()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"set", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+
+	var sentTop map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &sentTop); err != nil {
+		t.Fatalf("PUT body was not a JSON object: %v; body=%s", err, gotBody)
+	}
+	if _, stillWrapped := sentTop["payload"]; stillWrapped {
+		t.Fatalf("PUT body = %s, still has a top-level \"payload\" key — the wrapper was sent unmodified, not unwrapped", gotBody)
+	}
+	var label string
+	if err := json.Unmarshal(sentTop["label"], &label); err != nil {
+		t.Fatalf("PUT body's \"label\" did not decode: %v; body=%s", err, gotBody)
+	}
+	if label != "Halloween main loop" {
+		t.Fatalf("PUT body label = %q, want %q from the \"night get\" response — the round trip must survive", label, "Halloween main loop")
 	}
 }
 

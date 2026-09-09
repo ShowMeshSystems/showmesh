@@ -12,6 +12,15 @@ export type {
   ConfigRevisionMeta,
   ConfigRevisionsResponse,
   ConnectionState,
+  CurrentRunsResponse,
+  CurrentShowContext,
+  CurrentRun,
+  CurrentPlayback,
+  CurrentRunFreshness,
+  CurrentReconciliation,
+  CurrentRunActivation,
+  CurrentRunTarget,
+  CurrentRunNext,
   ControlPlane,
   DiscoveryProposal,
   DiscoveryRun,
@@ -21,6 +30,12 @@ export type {
   EventSeq,
   FPPEndpointsConfigResponse,
   FPPCommandResult,
+  // The three-level emergency stop and its hard-stop arm/fire gate.
+  EmergencyStopResult,
+  EmergencyStopInstanceOutcome,
+  EmergencyStopFollowUpResult,
+  EmergencyStopNightSessionOutcome,
+  EmergencyStopArmResponse,
   // Track G seam G-2 (ADR-039).
   ConfigResolumeInstance,
   ConfigResolumeInstancesPayload,
@@ -29,6 +44,8 @@ export type {
   ConfigFPPMQTTPayload,
   ConfigFPPMQTTPutRequest,
   FPPMQTTConfigResponse,
+  FPPConnectSettingsConfigResponse,
+  ConfigFPPConnectSettingsPayload,
   // Track G seam G-4 (ADR-039).
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPayload,
@@ -79,6 +96,8 @@ export type {
   // Track B seam B2b-front: the three render.* dispatch endpoints.
   ObservationEntry,
   RenderCommandResult,
+  // GET /observations, the flat evidence list.
+  ObservationsResponse,
   // The first audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
   AudioSessionCommandResult,
   // Track D seam D-4: Resolume as an observability resource and the
@@ -96,6 +115,9 @@ export type {
   // macro run (ADR-029).
   ActionBinding,
   ActionInvocationResult,
+  // Firing one Cue directly from Live Control.
+  CueActivateResponse,
+  CueActivationNodeOutcome,
   ResolumeCompositionDeckSummary,
   ResolumeCompositionLayerGroup,
   ResolumeCompositionLayer,
@@ -108,6 +130,9 @@ export type {
   // `GET /` (getServiceDescriptor): the coordinator's own build metadata.
   ServiceDescriptor,
   CoordinatorInfo,
+  // ADR-024 decision 11's amendment (owner ruling, 2026-08-26): the
+  // standing coordinator-wide audit-store health signal.
+  AuditStoreStatus,
   // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
   // configuration objects and the macro run surface.
   ConfigObjectSummary,
@@ -132,6 +157,11 @@ export type {
   ConfigShowPlaylistEntry,
   ConfigShowPlaylist,
   ShowPlaylistConfigResponse,
+
+  // Media Playlists screen: media.playlist authoring.
+  ConfigMediaPlaylistItem,
+  ConfigMediaPlaylist,
+  MediaPlaylistConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -172,6 +202,7 @@ export type {
   ExtraAsset,
   NodeAssetManifestResponse,
   AssetManifestResponse,
+  ResyncNodeAssetsResult,
   AuditEntry,
   AuditResponse,
   // Track H seam H6: the resolved Cue catalog a node holds, and the
@@ -185,6 +216,8 @@ export type {
   ConfigNightSessionAssetRef,
   ConfigNightSessionBackgroundAudioItem,
   ConfigNightSessionBackgroundAudio,
+  ConfigNightSessionBackgroundAudioInline,
+  ConfigNightSessionBackgroundAudioReference,
   ConfigNightSessionResting,
   ConfigNightSessionCue,
   ConfigNightSessionEnterShow,
@@ -193,6 +226,8 @@ export type {
   ConfigNightSessionEnterShowWrite,
   ConfigNightSessionEnterRestingWrite,
   ConfigNightSessionBackgroundAudioWrite,
+  ConfigNightSessionBackgroundAudioInlineWrite,
+  ConfigNightSessionBackgroundAudioReferenceWrite,
   ConfigNightSessionRestingWrite,
   ConfigNightSessionWrite,
   ConfigNightSession,
@@ -209,6 +244,7 @@ export type {
   NightAuthorization,
   NightSessionState,
   NightSessionResponse,
+  NightInterlockOverride,
   NightCommandRequest,
   NightCommandResult,
   NightCommandResponse,
@@ -229,6 +265,10 @@ export type {
   // operator reviews before clearing it.
   FPPPlaylistEntryObservation,
   FPPPlaylistEntryObservationsResponse,
+  // ADR-048, Track J's J1: the fallback-program readiness evidence.
+  FallbackProgramListEntry,
+  FallbackProgramListResponse,
+  FallbackProgramResponse,
 } from './domain'
 export {
   useModel,
@@ -249,12 +289,17 @@ export {
   listFPPPlaylistDefinitions,
   getFPPPlaylistDefinition,
   getFPPPlaylistDefinitionEntries,
+  listFallbackPrograms,
+  getFallbackProgram,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
   getFPPMQTTConfig,
   putFPPMQTTConfig,
   getFPPMQTTConfigRevisions,
+  getFPPConnectSettingsConfig,
+  putFPPConnectSettingsConfig,
+  getFPPConnectSettingsConfigRevisions,
   getAssetsSettingsConfig,
   putAssetsSettingsConfig,
   getAssetsSettingsConfigRevisions,
@@ -272,6 +317,10 @@ export {
   nextFPPPlaylistItem,
   prevFPPPlaylistItem,
   setFPPVolume,
+  emergencyStop,
+  emergencyStopPowerDown,
+  armEmergencyStopHardStop,
+  fireEmergencyStopHardStop,
   applyRenderSurface,
   clearRenderSurface,
   restartRenderPipeline,
@@ -288,6 +337,7 @@ export {
   setAudioSessionGain,
   fadeAudioSessionGain,
   applyAudioSession,
+  listObservations,
   probeRenderTransport,
   runDiscovery,
   declareNode,
@@ -298,12 +348,17 @@ export {
   getShowPlaylist,
   putShowPlaylist,
   getShowPlaylistRevisions,
+  getMediaPlaylist,
+  putMediaPlaylist,
+  getMediaPlaylistRevisions,
+  deleteMediaPlaylist,
   getShowAction,
   putShowAction,
   getShowActionRevisions,
   getActionBinding,
   listActionBindings,
   invokeAction,
+  activateCue,
   getShowMacro,
   putShowMacro,
   getShowMacroRevisions,
@@ -358,8 +413,10 @@ export {
   listAssets,
   uploadAsset,
   assetContentUrl,
+  getAssetContent,
   getAssetManifest,
   getNodeAssetManifest,
+  resyncNodeAssets,
   listAudit,
   // Track H seam H6: the resolved Cue catalog a node holds and the
   // operator's own deploy control.
@@ -368,6 +425,7 @@ export {
   // Track F seam F2/F1: the night-session lifecycle controller and the
   // night.session/night.session.active configuration kinds.
   getCurrentNightSession,
+  getCurrentRuns,
   getNightSessionById,
   dispatchNightCommand,
   getNightSessionConfig,
@@ -394,6 +452,12 @@ export type { UploadProgress } from './resolumeCompositionUpload'
 // storage contract, which stays owned by token.ts.
 export { getStoredToken } from './token'
 
+// The codebase's one idempotency-key generator (uuid.ts), used by every
+// mutating store method that sends one. ShowNight.tsx needs its own copy
+// to give `prepare-site` a stable key across a double-press, matching
+// the store's own generation rather than inventing a second scheme.
+export { randomUUIDv4 } from './uuid'
+
 // Exported for seam C's error-boundary / advanced testing needs and for
 // this seam's own tests; the real application only ever needs the
 // singleton wired up in useModel.ts.
@@ -415,3 +479,8 @@ export {
   TooManyRequestsError,
   UnauthorizedError,
 } from './errors'
+
+// RFC 9457 `type` values (problem.ts). ShowNight.tsx branches on
+// `ApiError.problemType` against these to render the night command
+// endpoint's three 409s and one 503 distinguishably.
+export { PROBLEM_TYPE } from './problem'

@@ -76,7 +76,8 @@
     },
     "render": [],
     "audio": [],
-    "clock": []
+    "clock": [],
+    "fppConnect": []
   }
 }
 

@@ -258,6 +258,27 @@ describe('uploadFileWithProgress', () => {
     expect(err).toBeInstanceOf(IncompatibleVersionError)
   })
 
+  it('reports the real HTTP status, not a missing-version-header message, for an infrastructure 413 with no ShowMesh headers', async () => {
+    // Stands in for nginx's own body-size 413: an HTML error page produced
+    // before the request ever reached the coordinator, carrying none of
+    // ShowMesh's own headers or a Problem body.
+    const s = await corsServer((req, res) => {
+      req.on('data', () => {})
+      req.on('end', () => {
+        res.writeHead(413, { 'Content-Type': 'text/html' })
+        res.end('<html><head><title>413 Request Entity Too Large</title></head></html>')
+      })
+    })
+
+    const err = await uploadFileWithProgress(s.baseUrl, '/x', makeFile([1]), () => {}, new AbortController().signal).catch(
+      (e: unknown) => e,
+    )
+    expect(err).not.toBeInstanceOf(IncompatibleVersionError)
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(413)
+    expect((err as ApiError).message).toContain('413')
+  })
+
   it('rejects with a network-error ApiError when the connection is destroyed mid-request', async () => {
     const s = await corsServer((req) => {
       req.socket.destroy()

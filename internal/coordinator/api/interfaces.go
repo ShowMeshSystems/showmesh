@@ -5,11 +5,20 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
+
+// CurrentRunsReader supplies the complete runner-neutral current-runs
+// projection. The API keeps this behind a consumer-side interface so tests
+// can exercise the route without constructing collectors, while production
+// wiring can assemble it from the store and collector read adapters.
+type CurrentRunsReader interface {
+	Snapshot(ctx context.Context, now time.Time) (currentrun.Snapshot, error)
+}
 
 // NodeLister lists the coordinator's current node inventory. It exists so
 // this package does not import internal/coordinator/inventory's Manager
@@ -241,14 +250,47 @@ type EventReader interface {
 	OldestEventSeq(ctx context.Context) (seq uint64, ok bool, err error)
 }
 
+// AudioConfigPushRunState is the closed, three-value vocabulary
+// [v1.AudioConfigPushStatus.State] uses. It answers one narrow question,
+// coordinator-wide: can this coordinator's stored, engine-wide
+// audio.settings revision be decoded right now. It is computed fresh from
+// the same decode [audioconfigpush.pushSettings] performs on that same
+// revision, never from [audioconfigpush.ToNode] (which decodes a NODE's
+// own separate audio.node binding FIRST and returns before ever reaching
+// audio.settings on that failure) — a stale per-node audio.node binding
+// strands that one node on both pushes without this field moving, and
+// this field does not claim otherwise. "Can a push actually reach node
+// N right now" additionally depends on N's own audio.node binding and
+// reachability, neither of which this value reports.
+type AudioConfigPushRunState string
+
+const (
+	// AudioConfigPushUsable: the stored audio.settings revision (or the
+	// default payload, when nothing has ever been written) decodes.
+	AudioConfigPushUsable AudioConfigPushRunState = "usable"
+
+	// AudioConfigPushUnusable: the stored revision fails to decode, so
+	// every node is stranded on whatever audio.settings it last
+	// successfully received. Reason is always set alongside this value.
+	AudioConfigPushUnusable AudioConfigPushRunState = "unusable"
+
+	// AudioConfigPushUnknown: a genuine config-store failure, not a
+	// decode failure, kept this coordinator from reading its own stored
+	// revision just now — the revision itself may be perfectly usable.
+	// See [audioConfigPushStatusDegradeOnError]'s own doc comment for why
+	// this is a distinct value rather than folded into "unusable".
+	// Reason is always set alongside this value.
+	AudioConfigPushUnknown AudioConfigPushRunState = "unknown"
+)
+
 // CollectorRunState is the closed, small vocabulary [CollectorState.State]
 // and [v1.CollectorStatus.State] use, deliberately distinct from
 // pkg/observation.State — see [v1.CollectorStatus]'s doc comment for why
 // the two must not be conflated. Not every value a collector could
-// plausibly report exists here yet: only the two this codebase's one
-// collector (the FPP REST collector) actually produces. Add a value only
-// when a real producer needs it, matching this codebase's standing rule
-// against emitting a state nothing can currently justify.
+// plausibly report exists here: only the ones a real producer in this
+// codebase actually emits. Add a value only when a real producer needs it,
+// matching this codebase's standing rule against emitting a state nothing
+// can currently justify.
 type CollectorRunState string
 
 const (
@@ -263,6 +305,14 @@ const (
 	// [v1.CollectorStatus]'s doc comment for why "running" and "every
 	// signal collection_failed" are not a contradiction.
 	CollectorRunning CollectorRunState = "running"
+
+	// CollectorConnectedNoData: the collector is connected to its upstream
+	// and has received no message on any subscribed topic for at least its
+	// own silence threshold since that connection came up. States only
+	// what was observed, never why: a silently denied broker read grant
+	// reads identically to a genuinely idle topic from here. Reason is
+	// always set alongside this value.
+	CollectorConnectedNoData CollectorRunState = "connected_no_data"
 )
 
 // CollectorState is one collector's own run state, reported in the
@@ -578,6 +628,10 @@ type FPPPollNudger interface {
 // SHOWMESH_ASSET_SYNC_INTERVAL (5 minutes) later.
 type AssetSyncNudger interface {
 	Nudge()
+	// RequestNode queues nodeID for the next sync pass and wakes Run
+	// through its own request signal, syncing exactly that node rather
+	// than every declared node.
+	RequestNode(nodeID string)
 }
 
 // CueActivationNudger requests that [CueActivationLoop]'s current (or
@@ -599,6 +653,24 @@ type AssetSyncNudger interface {
 // operator-visible on a real show.
 type CueActivationNudger interface {
 	Nudge()
+}
+
+// CueActivationPinStatus is the operator-visibility surface for
+// ADR-033 show mode: whatever GET /api/v1/config/show.mode already shows
+// the operator (ADR-033 decision 3's persistent, always-visible mode
+// panel) is also where a mid-show show.cue edit's own staged, not-yet-
+// applied state has to surface: a staged edit nobody can see is not a
+// fix, it is the exact silence the incident this type exists for was
+// built from. The real implementation is *CueActivationLoop itself
+// (CueActivationLoop.PinStatus), wired by coordinator.go on the identical
+// "construct the loop first, then share it through Dependencies" ordering
+// [CueActivationNudger]'s own doc comment describes.
+type CueActivationPinStatus interface {
+	// PinStatus reports whether a show-mode pin is currently held and,
+	// when it is, the frozen Show/Generation identity and when it was
+	// minted. pinned is false whenever program mode applies, or show mode
+	// applies but no active show has ever been resolved.
+	PinStatus() (pinned bool, show string, generation int64, pinnedAt time.Time)
 }
 
 // AssetSettingsSource is Track G seam G-4's live, no-restart view of the

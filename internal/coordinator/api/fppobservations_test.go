@@ -5,11 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/fppidentity"
@@ -51,6 +56,11 @@ func (s *fppObservationTestSetup) deps() Dependencies {
 		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
 		Identity: s.svc, FPPObservations: s.st,
+		// The POST handler resolves its reconciliation verdict through
+		// this dependency unconditionally (fppobservations.go), so it
+		// must be wired even for tests that never call the dedicated
+		// GET .../reconciliation route.
+		FPPReconciliation: StoreFPPReconciliation{Store: s.st},
 	}
 }
 
@@ -331,6 +341,63 @@ func TestFPPObservationSequenceRegressionRefused409(t *testing.T) {
 	}
 }
 
+// TestFPPObservationSequenceRegressionSetsEvidenceBrokenMarker is owner
+// ruling 2026-09-02's own set path (cue-deactivate-on-jump): a sequence
+// regression records schemaV29's marker on the instance's own row, read
+// back through the ordinary Store form exactly like any other field, and
+// the 409 status/body are unaffected — contract §1.7 fixes "Sequence
+// regression | 409 | conflict" unconditionally, so recording this
+// discontinuity must never change what the plugin itself sees.
+func TestFPPObservationSequenceRegressionSetsEvidenceBrokenMarker(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	if resp, _ := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 5, "showmesh-test", "main", 0), token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed post: status = %d, want 200", resp.StatusCode)
+	}
+	rec, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after seed: %v", err)
+	}
+	if rec.EvidenceBrokenAt != nil {
+		t.Fatalf("EvidenceBrokenAt = %v after an ordinary accepted post, want nil", rec.EvidenceBrokenAt)
+	}
+
+	resp, m := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 3, "showmesh-test", "main", 0), token)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeConflict {
+		t.Errorf("type = %v, want %q (the marker write must never change the response the plugin sees)", m["type"], ProblemTypeConflict)
+	}
+
+	rec, err = setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after regression: %v", err)
+	}
+	if rec.EvidenceBrokenAt == nil {
+		t.Fatal("EvidenceBrokenAt = nil after a sequence-regression refusal, want set")
+	}
+	if !rec.EvidenceBrokenAt.Equal(testNow) {
+		t.Errorf("EvidenceBrokenAt = %v, want %v (the refusal's own now)", rec.EvidenceBrokenAt, testNow)
+	}
+
+	// The marker and its own audit entry are written in the SAME
+	// transaction (identity.AuditedWrite): the ordinary
+	// fpp.observe_playlist_entry refusal audit entry must still exist,
+	// unchanged from before this marker existed.
+	entries := fppAuditEntriesForObservation(t, setup.svc)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want exactly 1: %+v", len(entries), entries)
+	}
+	const wantReason = "sequence regression: last accepted sequence was 5"
+	if entries[0].OutcomeReason != wantReason {
+		t.Errorf("audit OutcomeReason = %q, want %q", entries[0].OutcomeReason, wantReason)
+	}
+}
+
 func TestFPPObservationSequenceConflictDifferentBodyRefused409(t *testing.T) {
 	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -347,6 +414,35 @@ func TestFPPObservationSequenceConflictDifferentBodyRefused409(t *testing.T) {
 	}
 	if m["type"] != ProblemTypeConflict {
 		t.Errorf("type = %v, want %q", m["type"], ProblemTypeConflict)
+	}
+}
+
+// TestFPPObservationSameSequenceConflictNeverSetsEvidenceBrokenMarker
+// proves the marker's own narrow scope (owner ruling 2026-09-02): a
+// same-sequence-different-body conflict is a different anomaly than a
+// sequence regression — it does not, by itself, mean the player's own
+// timeline moved on — and must never set schemaV29's marker, only the
+// genuine regression case above does.
+func TestFPPObservationSameSequenceConflictNeverSetsEvidenceBrokenMarker(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	if resp, _ := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 5, "showmesh-test", "main", 0), token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("seed post: status = %d, want 200", resp.StatusCode)
+	}
+	resp, _ := mustPostObservation(t, api, fppObservationBody(t, "instance-1", 5, "showmesh-test", "other", 0), token)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+
+	rec, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if rec.EvidenceBrokenAt != nil {
+		t.Fatalf("EvidenceBrokenAt = %v after a same-sequence conflict, want nil (only a regression sets it)", rec.EvidenceBrokenAt)
 	}
 }
 
@@ -972,10 +1068,12 @@ func TestFPPObservationSequenceReusedWithDifferentBodyIsAuditedWithReason(t *tes
 }
 
 // TestFPPObservationDecodeRefusalsWriteNoAuditEntry is finding 1's other
-// half: contract §1.6 is explicit that step 4 (malformed JSON, an unknown
-// field, trailing content, or a duplicate member name) is NOT audited.
-// Without this, someone could "fix" the classification later by auditing
-// everything, and nothing here would notice.
+// half: contract §1.6 is explicit that step 4 (malformed JSON, trailing
+// content, or a duplicate member name) is NOT audited. Without this,
+// someone could "fix" the classification later by auditing everything, and
+// nothing here would notice. An unknown member is no longer a step 4
+// refusal at all; see
+// [TestFPPObservationIgnoresUnknownMembersAndReportsThem].
 func TestFPPObservationDecodeRefusalsWriteNoAuditEntry(t *testing.T) {
 	cases := []struct {
 		name string
@@ -984,11 +1082,6 @@ func TestFPPObservationDecodeRefusalsWriteNoAuditEntry(t *testing.T) {
 		{
 			name: "malformed JSON",
 			body: `{not valid json`,
-		},
-		{
-			name: "unknown field",
-			body: `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
-				`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`,
 		},
 		{
 			name: "trailing content",
@@ -1062,5 +1155,392 @@ func TestFPPObservationListReturnsLatestPerInstance(t *testing.T) {
 	obs, _ := m["observations"].([]any)
 	if len(obs) != 1 {
 		t.Fatalf("observations = %d, want 1; body: %s", len(obs), body)
+	}
+}
+
+// fppObservationBodyWithLoop is [fppObservationBodyWithAction] plus an
+// explicit playlistLoop, and with a nil loop it emits no member at all
+// rather than a zero: contract §1.8 makes absent and 0 different values, so
+// a test that cannot express "absent" cannot test the rule.
+func fppObservationBodyWithLoop(t *testing.T, instanceUUID string, sequence int64, playlistName, section string, position int, action string, loop *int) string {
+	t.Helper()
+	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{
+		InstanceUUID: instanceUUID, PlaylistName: playlistName, PlaylistHash: playlistHash64, Section: section, Position: position,
+	})
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	m := map[string]any{
+		"schemaVersion":                      1,
+		"instanceUuid":                       instanceUUID,
+		"playlistName":                       playlistName,
+		"playlistHash":                       playlistHash64,
+		"section":                            section,
+		"position":                           position,
+		"entryKey":                           entryKey,
+		"action":                             action,
+		"sequence":                           sequence,
+		"observedAtMillis":                   testNow.UnixMilli(),
+		"coalescedSincePreviousAcknowledged": 0,
+	}
+	if loop != nil {
+		m["playlistLoop"] = *loop
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal observation body: %v", err)
+	}
+	return string(raw)
+}
+
+// TestFPPObservationLoopReentryWithoutStartAdvancesOccurrence is the FPP 10
+// case this field exists for. FPP 10 never sends action "start"
+// (Playlist::PlayImpl flips status before Start reads it), so the whole
+// sequence below is "playing" ticks, and the entry key is identical
+// throughout because a loop's second visit to one entry derives the same
+// key. Only playlistLoop changes. Without it the loop's second lap would
+// carry the first lap's occurrence forward and the Cue would never re-fire.
+func TestFPPObservationLoopReentryWithoutStartAdvancesOccurrence(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	loop0, loop1 := 0, 1
+
+	first := fppObservationBodyWithLoop(t, "instance-1", 1, "showmesh-test", "main", 0, "playing", &loop0)
+	if resp, _ := mustPostObservation(t, api, first, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first pass post: status = %d, want 200", resp.StatusCode)
+	}
+	rec1, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after first pass: %v", err)
+	}
+	if rec1.PlaylistLoop == nil || *rec1.PlaylistLoop != 0 {
+		t.Fatalf("PlaylistLoop after a reported pass 0 = %v, want a stored 0 (not absent)", rec1.PlaylistLoop)
+	}
+
+	// Another tick on the SAME pass: the occurrence must not advance, or
+	// every ordinary tick dispatches again.
+	same := fppObservationBodyWithLoop(t, "instance-1", 2, "showmesh-test", "main", 0, "playing", &loop0)
+	if resp, _ := mustPostObservation(t, api, same, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("same-pass tick post: status = %d, want 200", resp.StatusCode)
+	}
+	rec2, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after same-pass tick: %v", err)
+	}
+	if rec2.EntryOccurrenceSequence != rec1.EntryOccurrenceSequence {
+		t.Fatalf("occurrence advanced on a same-entry same-pass tick: %d -> %d", rec1.EntryOccurrenceSequence, rec2.EntryOccurrenceSequence)
+	}
+
+	// The playlist loops. Same entry, same key, no "start", pass counter 1.
+	looped := fppObservationBodyWithLoop(t, "instance-1", 3, "showmesh-test", "main", 0, "playing", &loop1)
+	if resp, _ := mustPostObservation(t, api, looped, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("loop post: status = %d, want 200", resp.StatusCode)
+	}
+	rec3, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after loop: %v", err)
+	}
+	if rec3.EntryKey != rec1.EntryKey {
+		t.Fatalf("test setup error: the loop's EntryKey (%s) differs from the first pass's (%s); this test proves nothing unless they match",
+			rec3.EntryKey, rec1.EntryKey)
+	}
+	if rec3.EntryOccurrenceSequence == rec2.EntryOccurrenceSequence {
+		t.Fatalf("occurrence did not advance on a loop re-entry with no start and an identical entry key: stayed at %d",
+			rec3.EntryOccurrenceSequence)
+	}
+	if rec3.EntryOccurrenceSequence != 3 {
+		t.Fatalf("occurrence after the loop = %d, want 3 (the loop tick's own wire sequence)", rec3.EntryOccurrenceSequence)
+	}
+}
+
+// TestFPPObservationAbsentPlaylistLoopBehavesAsBeforeTheField is the
+// compatibility guarantee: a plugin that never sends the field must produce
+// exactly the behavior it did before the field existed. If this reddens, a
+// coordinator upgrade changes what every already-installed plugin does.
+func TestFPPObservationAbsentPlaylistLoopBehavesAsBeforeTheField(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	first := fppObservationBodyWithLoop(t, "instance-1", 1, "showmesh-test", "main", 0, "playing", nil)
+	if resp, _ := mustPostObservation(t, api, first, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first post: status = %d, want 200", resp.StatusCode)
+	}
+	rec1, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after first: %v", err)
+	}
+	if rec1.PlaylistLoop != nil {
+		t.Fatalf("PlaylistLoop = %v for a body that carried none, want nil; a stored 0 here would compare equal to a real first pass", *rec1.PlaylistLoop)
+	}
+
+	second := fppObservationBodyWithLoop(t, "instance-1", 2, "showmesh-test", "main", 0, "playing", nil)
+	if resp, _ := mustPostObservation(t, api, second, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("second post: status = %d, want 200", resp.StatusCode)
+	}
+	rec2, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after second: %v", err)
+	}
+	if rec2.EntryOccurrenceSequence != rec1.EntryOccurrenceSequence {
+		t.Fatalf("occurrence advanced between two absent-loop ticks: %d -> %d; absent must compare equal to absent",
+			rec1.EntryOccurrenceSequence, rec2.EntryOccurrenceSequence)
+	}
+}
+
+func TestPlaylistLoopChanged(t *testing.T) {
+	i := func(v int64) *int64 { return &v }
+	for _, tc := range []struct {
+		name             string
+		incoming, stored *int64
+		want             bool
+	}{
+		{"both absent is not a change, or every old plugin re-dispatches every tick", nil, nil, false},
+		{"same value is not a change", i(2), i(2), false},
+		{"a higher pass is a change", i(1), i(0), true},
+		{"a lower pass is a change too: the playlist restarted", i(0), i(3), true},
+		{"a plugin that starts reporting has told us something", i(0), nil, true},
+		{"and so has one that stops", nil, i(0), true},
+		{"zero against absent is a change: 0 is a real first pass", i(0), nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := playlistLoopChanged(tc.incoming, tc.stored); got != tc.want {
+				t.Fatalf("playlistLoopChanged = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// fppObservationBodyWithExtraMembers is [fppObservationBody] with extra
+// top-level members spliced in, standing in for a plugin newer than the
+// coordinator it is posting to.
+func fppObservationBodyWithExtraMembers(t *testing.T, instanceUUID string, sequence int64, extra map[string]any) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(fppObservationBody(t, instanceUUID, sequence, "showmesh-test", "main", 0)), &m); err != nil {
+		t.Fatalf("unmarshal base observation body: %v", err)
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal observation body: %v", err)
+	}
+	return string(raw)
+}
+
+// TestFPPObservationIgnoresUnknownMembersAndReportsThem is the whole point
+// of the change: a plugin newer than its coordinator keeps working. Before
+// this, the observation below was a 400 and the coordinator saw no playlist
+// entries at all, so no Cue fired and the symptom read as a broken plugin
+// rather than as an upgrade performed in the wrong order.
+func TestFPPObservationIgnoresUnknownMembersAndReportsThem(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := fppObservationBodyWithExtraMembers(t, "instance-1", 1, map[string]any{
+		"somethingElse": true,
+		"anotherThing":  map[string]any{"nested": 1},
+	})
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if accepted, _ := m["accepted"].(bool); !accepted {
+		t.Errorf("accepted = %v, want true: an unknown member must not stop the observation being stored", m["accepted"])
+	}
+
+	got, ok := m["ignoredFields"].([]any)
+	if !ok {
+		t.Fatalf("ignoredFields = %#v, want an array naming both unknown members", m["ignoredFields"])
+	}
+	var names []string
+	for _, v := range got {
+		names = append(names, v.(string))
+	}
+	if want := []string{"anotherThing", "somethingElse"}; !slices.Equal(names, want) {
+		t.Errorf("ignoredFields = %v, want %v (sorted)", names, want)
+	}
+
+	// The known fields still landed. An ignored member must not cost the
+	// observation anything else.
+	rec, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get stored observation: %v", err)
+	}
+	if rec.Sequence != 1 || rec.PlaylistName != "showmesh-test" {
+		t.Errorf("stored observation = sequence %d, playlist %q; want 1 and %q", rec.Sequence, rec.PlaylistName, "showmesh-test")
+	}
+}
+
+// TestFPPObservationOrdinaryBodyReportsNoIgnoredFields keeps the response
+// byte-identical to what it was for every plugin already in the field: the
+// member is omitted, not an empty array.
+func TestFPPObservationOrdinaryBodyReportsNoIgnoredFields(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := fppObservationBody(t, "instance-1", 1, "showmesh-test", "main", 0)
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if _, present := m["ignoredFields"]; present {
+		t.Errorf("ignoredFields present (%#v) for a body with no unknown members; it must be omitted", m["ignoredFields"])
+	}
+}
+
+// TestFPPObservationUnknownMembersStillRefuseADuplicateMemberName is the
+// half of strict decoding that was NOT relaxed. A duplicate member name is
+// still a 400, because a permissive decoder keeps the last sequence while
+// the canonicalizer reading the same bytes sees the first, and the two
+// disagreeing is the wedging hazard §1.5 describes.
+func TestFPPObservationUnknownMembersStillRefuseADuplicateMemberName(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"sequence":9,"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+}
+
+// TestFPPObservationUnknownMemberDoesNotBypassValidation proves the
+// ignored member is ignored and nothing more: the body below is missing
+// the identity fields §1.6 step 7 requires, and must still be refused.
+// Without this, "ignore what you do not know" could quietly become "accept
+// whatever arrives."
+func TestFPPObservationUnknownMemberDoesNotBypassValidation(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`
+	resp, m := mustPostObservation(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing identity fields); body: %v", resp.StatusCode, m)
+	}
+}
+
+func TestUnknownFPPObservationMembers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"no unknown members returns nil, so the response omits the field", `{"schemaVersion":1,"instanceUuid":"a"}`, nil},
+		{"an unknown member is named", `{"instanceUuid":"a","zzz":1}`, []string{"zzz"}},
+		{"names come back sorted", `{"c":1,"a":2,"b":3}`, []string{"a", "b", "c"}},
+		{"a non-object cannot be scanned and reports nothing", `[1,2]`, nil},
+		{
+			"the list is capped, so a caller cannot choose the response size",
+			`{"a":1,"b":1,"c":1,"d":1,"e":1,"f":1,"g":1,"h":1,"i":1,"j":1}`,
+			[]string{"a", "b", "c", "d", "e", "f", "g", "h"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := unknownFPPObservationMembers([]byte(tc.raw)); !slices.Equal(got, tc.want) {
+				t.Fatalf("unknownFPPObservationMembers = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFPPObservationKnownMembersCoversEveryRequestField is what keeps this
+// honest when someone adds a field to the request type: if the tag reader
+// ever stopped seeing a declared member, that member would be reported as
+// ignored on every observation that sends it.
+func TestFPPObservationKnownMembersCoversEveryRequestField(t *testing.T) {
+	known := fppObservationKnownMembers()
+	tv := reflect.TypeOf(v1.FPPPlaylistEntryObservationRequest{})
+	if len(known) != tv.NumField() {
+		t.Fatalf("known member names = %d, want %d (one per declared field)", len(known), tv.NumField())
+	}
+	for _, name := range []string{"schemaVersion", "instanceUuid", "action", "sequence", "unavailable"} {
+		if _, ok := known[name]; !ok {
+			t.Errorf("%q is not in the known member set", name)
+		}
+	}
+}
+
+func TestUnknownMemberLogDedupes(t *testing.T) {
+	var l unknownMemberLog
+	if !l.shouldLog("instance-1", []string{"a"}) {
+		t.Fatal("the first sighting must log")
+	}
+	if l.shouldLog("instance-1", []string{"a"}) {
+		t.Fatal("the same set repeated must not log again; that is the flood this exists to prevent")
+	}
+	if !l.shouldLog("instance-1", []string{"a", "b"}) {
+		t.Fatal("a changed set must log")
+	}
+	if !l.shouldLog("instance-2", []string{"a", "b"}) {
+		t.Fatal("a different instance must log on its own first sighting")
+	}
+	if !l.shouldLog("instance-1", nil) {
+		t.Fatal("going quiet is a change too; it is recorded so a later recurrence logs again")
+	}
+	if !l.shouldLog("instance-1", []string{"a", "b"}) {
+		t.Fatal("the set recurring after a quiet period must log again")
+	}
+}
+
+// TestFPPObservationRefusedBodyLogsNoIgnoredFieldsWarning is a defect this
+// change originally shipped and a bench run caught: the warning says the
+// members "were ignored", which is only true of an observation that was
+// accepted. A body refused for a duplicate member name had nothing
+// ignored, it had everything refused, and warning about the wrong problem
+// sends an operator after the wrong thing.
+func TestFPPObservationRefusedBodyLogsNoIgnoredFieldsWarning(t *testing.T) {
+	var logged bytes.Buffer
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{
+		Clock:  fixedClock(testNow),
+		Logger: slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	// Refused at canonicalization for the duplicate "sequence", and it also
+	// carries an unknown member.
+	duplicate := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":1,` +
+		`"sequence":9,"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`
+	if resp, m := mustPostObservation(t, api, duplicate, token); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("duplicate member post: status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	// Refused at step 7 for the missing identity fields, same shape.
+	missing := `{"schemaVersion":1,"instanceUuid":"instance-1","action":"playing","sequence":2,` +
+		`"observedAtMillis":1,"coalescedSincePreviousAcknowledged":0,"somethingElse":true}`
+	if resp, m := mustPostObservation(t, api, missing, token); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing identity post: status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+
+	if strings.Contains(logged.String(), "does not know") {
+		t.Fatalf("a refused observation logged an ignored-fields warning:\n%s", logged.String())
+	}
+
+	// The same unknown member on an accepted observation still warns, or
+	// this test would pass just as well with the warning deleted.
+	accepted := fppObservationBodyWithExtraMembers(t, "instance-1", 3, map[string]any{"somethingElse": true})
+	if resp, m := mustPostObservation(t, api, accepted, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("accepted post: status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+	if !strings.Contains(logged.String(), "does not know") {
+		t.Fatalf("an accepted observation carrying an unknown member logged no warning:\n%s", logged.String())
 	}
 }

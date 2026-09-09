@@ -40,7 +40,7 @@ type DiscoveryRunRecord struct {
 // [Tx.GetDiscoveryRun] when no row exists for id.
 var ErrDiscoveryRunNotFound = errors.New("store: discovery run not found")
 
-func startDiscoveryRun(ctx context.Context, q querier, s *Store, rec DiscoveryRunRecord, now time.Time) (DiscoveryRunRecord, error) {
+func startDiscoveryRun(ctx context.Context, q querier, s *Store, rec DiscoveryRunRecord, now time.Time, hooks commitHook) (DiscoveryRunRecord, error) {
 	rec.StartedAt = now
 	rec.FinishedAt = nil
 	rec.Complete = false
@@ -57,8 +57,12 @@ func startDiscoveryRun(ctx context.Context, q querier, s *Store, rec DiscoveryRu
 
 	// Same two independent triggers as [appendAuditEntry] (audit.go): insert
 	// volume and elapsed wall-clock time since the last prune pass. See
-	// retention.go's pruneEveryNDiscoveryRuns/pruneCheckInterval doc comments.
-	byCount := s.discoveryRunInsertCount.Add(1)%pruneEveryNDiscoveryRuns == 0
+	// retention.go's pruneEveryNDiscoveryRuns/pruneCheckInterval doc
+	// comments, and [commitHook]'s doc comment for why the mutation itself
+	// is queued through hooks (immediate via [Store.StartDiscoveryRun]'s
+	// own q = s.db, deferred to commit via [Tx.StartDiscoveryRun]'s
+	// caller-owned transaction) rather than applied here directly.
+	byCount := (s.discoveryRunInsertCount.Load()+1)%pruneEveryNDiscoveryRuns == 0
 	byAge := false
 	if !byCount {
 		last := s.lastDiscoveryRunPruneAtNanos.Load()
@@ -68,8 +72,10 @@ func startDiscoveryRun(ctx context.Context, q querier, s *Store, rec DiscoveryRu
 		if err := s.pruneDiscoveryRuns(ctx, q); err != nil {
 			return DiscoveryRunRecord{}, fmt.Errorf("store: start discovery run %q: %w", rec.ID, err)
 		}
-		s.lastDiscoveryRunPruneAtNanos.Store(s.now().UnixNano())
+		prunedAt := s.now()
+		hooks.after(func() { s.lastDiscoveryRunPruneAtNanos.Store(prunedAt.UnixNano()) })
 	}
+	hooks.after(func() { s.discoveryRunInsertCount.Add(1) })
 
 	return rec, nil
 }
@@ -81,12 +87,12 @@ func startDiscoveryRun(ctx context.Context, q querier, s *Store, rec DiscoveryRu
 // would later need to explain).
 func (s *Store) StartDiscoveryRun(ctx context.Context, rec DiscoveryRunRecord) (DiscoveryRunRecord, error) {
 	guardNotInTx(ctx, "Store.StartDiscoveryRun")
-	return startDiscoveryRun(ctx, s.db, s, rec, s.now())
+	return startDiscoveryRun(ctx, s.db, s, rec, s.now(), immediateHook{})
 }
 
 // StartDiscoveryRun is [Store.StartDiscoveryRun]'s [Tx] form.
 func (t *Tx) StartDiscoveryRun(ctx context.Context, rec DiscoveryRunRecord) (DiscoveryRunRecord, error) {
-	return startDiscoveryRun(ctx, t.tx, t.s, rec, t.s.now())
+	return startDiscoveryRun(ctx, t.tx, t.s, rec, t.s.now(), t)
 }
 
 func finishDiscoveryRun(ctx context.Context, q querier, id string, complete bool, reason string, foundCount int64, now time.Time) error {

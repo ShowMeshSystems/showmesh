@@ -16,10 +16,93 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changed-files:
+    # Detects whether this pull request touches only prose, so the required
+    # jobs below can skip their expensive work on a docs-only PR without
+    # ever being skipped themselves. Eric ruled (2026-08-26) that docs-only
+    # pull requests should not burn the full suite, but GitHub cannot skip
+    # a required check by path: a required job a trigger-level path filter
+    # simply never runs sits pending forever instead of reporting a pass.
+    # So the required jobs always run and always report; only the work
+    # inside them is conditional on this job's output.
+    #
+    # "Documentation-only" here is CLAUDE.md's own definition applied
+    # mechanically: every changed path ends in `.md`. Workflows, scripts,
+    # generated files, and api/openapi.yaml are never documentation-only by
+    # that definition, and none of them end in `.md`, so the suffix check
+    # is a faithful proxy for it, not an invented rule.
+    #
+    # The check asks whether ANY changed path falls outside that set, never
+    # a count or a ratio: one code file among ten Markdown files is not
+    # docs-only. `--no-renames` explodes a rename into a delete of the old
+    # path plus an add of the new one, so a code file renamed to a
+    # docs-looking path still surfaces its real, non-.md old path in the
+    # diff instead of hiding behind the new name. The diff is three-dot
+    # (`base...head`): against the merge base of the PR's base and head,
+    # not against head's previous commit, so a stale base can't hide
+    # changes and a force-push or rebase on either side doesn't change what
+    # gets compared.
+    #
+    # A push to `main` is never treated as documentation-only: Eric's
+    # exemption is stated for pull requests, and a post-merge run on `main`
+    # should still get the full suite. If classification itself errors,
+    # this job reports docs_only=false rather than failing outright, and
+    # every job below also treats a missing/empty output as false (see
+    # their own `if: always()` comments) so a broken detector fails toward
+    # running the full suite, never toward silently skipping it.
+    #
+    # No documentation link checker or Markdown linter exists in this
+    # workflow or the Makefile today, so a docs-only PR loses no check it
+    # would otherwise have had. If one is ever added, it must run outside
+    # this short-circuit (its own job, or exempted from the `docs_only`
+    # condition below) or a docs-only PR would skip the one check that
+    # actually covers its content.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify this pull request as documentation-only or not
+        id: classify
+        run: |
+          docs_only=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            if files="$(git diff --no-renames --name-only "$base...$head" 2>&1)"; then
+              docs_only=true
+              while IFS= read -r f; do
+                case "$f" in
+                  "") ;;
+                  *.md) ;;
+                  *) docs_only=false ;;
+                esac
+              done <<< "$files"
+            else
+              echo "could not compute the changed-file list, treating as not documentation-only: $files" >&2
+              docs_only=false
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   test:
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
+    needs: [changed-files]
+    # A job with a `needs:` dependency carries an implicit `if: success()`,
+    # so if `changed-files` itself ever failed, this required job would be
+    # SKIPPED rather than run, and a skipped required check can read as
+    # satisfied instead of blocking (the same trap `test-gate` below
+    # guards against). `if: always()` keeps this job running regardless,
+    # and `needs.changed-files.outputs.docs_only` reads as empty (not
+    # `'true'`) when that job failed or was cancelled, so the steps below
+    # default to running the full suite rather than silently skipping it.
+    if: always()
     # Raised from 15 on 2026-08-21 because this job was already crossing the
     # old limit on `main`, not because of any one branch: run 32506564142's
     # 1.26.6 leg was cancelled at 15m05s and run 32510556351's finished at
@@ -27,28 +110,26 @@ jobs:
     # variance. internal/coordinator/api alone costs about 8 minutes under
     # the race detector. Raise the ceiling rather than let a timeout keep
     # reading as a test failure; making that package cheaper is separate work.
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       # Both matrix legs run to completion. With the default fail-fast, a
       # failure on one Go version cancels the other, so a run reports one
       # failure when it could have reported two, and each hidden one costs
       # a full round trip to discover.
       fail-fast: false
-      # Test both the minimum Go version this project claims to support
-      # (go.mod) and the compiler the Dockerfile actually ships the
-      # coordinator binary on, so the two never silently diverge. These are
-      # literal versions, not go-version-file, precisely so this matrix
-      # doesn't collapse back into one entry; update both by hand when
-      # either go.mod's `go` directive or the Dockerfile's golang: tag
-      # changes.
+      # Test the compiler the Dockerfile actually ships the coordinator
+      # binary on. This is a literal version, not go-version-file, so it
+      # cannot silently drift from the Dockerfile's own pin; update by hand
+      # when the Dockerfile's golang: tag changes.
       matrix:
-        go-version: ["1.25.0", "1.26.6"]
+        go-version: ["1.26.6"]
     steps:
       # ubuntu-latest ships GStreamer 1.24 and go-gst needs 1.26 or newer,
       # so every job that compiles the agent's cgo backend runs on Debian 13
       # instead. Debian 13 is also the platform the audio engine was measured
       # green on; Debian 12's GLib 2.74 does not build it at all.
       - name: Install the toolchain and the agent's C dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -90,12 +171,23 @@ jobs:
           cache: true
 
       - name: Download dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: go mod download
 
       - name: Vet
+        id: vet
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: go vet ./...
 
       - name: Test the audio engine (race detector)
+        id: test_engine
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # gstengine drives real GStreamer pipelines in real time; run it
         # alone, before the rest of the suite claims the runner's other
         # cores, so its timing bounds reflect this package rather than
@@ -118,6 +210,11 @@ jobs:
           go test -race ./internal/agent/audio/gstengine/...
 
       - name: Test (race detector)
+        id: test_rest
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # Everything the step above did not run. grep -vx on the full
         # import path, not a substring: an unanchored match would also
         # exclude a future sibling like gstengineltc, which the step above
@@ -133,9 +230,14 @@ jobs:
             exit 1
           fi
           # shellcheck disable=SC2086
-          go test -race $rest
+          go test -race -timeout=20m $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
+        id: build_cgo
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # The agent's real GStreamer/libltc engine is a cgo build; without
         # this step, nothing in CI proves `./...` links with cgo enabled,
         # only that `go test -race` (which forces it on) happens not to
@@ -145,6 +247,11 @@ jobs:
         run: CGO_ENABLED=1 go build ./...
 
       - name: Build CGo-free (ADR-012)
+        id: build_cgofree
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # ADR-012 requires the coordinator build CGo-free so the image can
         # be a static binary on a distroless base and cross-compile cleanly
         # for arm64; `go test -race` above requires cgo and would not catch
@@ -152,6 +259,11 @@ jobs:
         run: CGO_ENABLED=0 go build ./...
 
       - name: Check formatting
+        id: check_fmt
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         # gofmt -l lists files that are not formatted; fail the job if it
         # prints anything, since a clean `-l` output is empty. Scoped to
         # the directories that actually hold this project's Go source
@@ -165,6 +277,102 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "The following files are not gofmt-formatted:"
             echo "$unformatted"
+            exit 1
+          fi
+
+      - name: "Suite results (this log names which suites ran and which failed)"
+        if: always()
+        # The six steps above each carry continue-on-error, so a failure
+        # in an early one (Vet, or the audio engine test) no longer skips
+        # the ones after it -- this is the actual defect this job is
+        # fixing: an engine failure previously hid the rest of the Go
+        # packages, including a coordinator end-to-end test that had never
+        # once executed. continue-on-error also forces each of those
+        # steps' own `conclusion` to report success no matter what
+        # happened -- GitHub's own step list and job-view API show that
+        # forced `conclusion`, not the real result -- so this reads
+        # `outcome` instead, which still carries the real pass/fail.
+        # `skipped` is accepted because every one of those steps carries
+        # the same docs_only guard the rest of this job does: on a
+        # documentation-only pull request they legitimately do not run,
+        # and that must not turn this job red. Anything other than
+        # success or skipped -- failure, cancelled, or an empty string if
+        # a step never ran for some other reason -- fails this step, so
+        # an unexecuted suite cannot silently read as a passing one.
+        #
+        # Every step's name is printed next to its outcome, on both
+        # success and failure, both to stdout/stderr and to
+        # GITHUB_STEP_SUMMARY, because the step list itself now shows a
+        # green tick on a failed suite (the `conclusion` problem above):
+        # this step's own summary and log are where the real result
+        # actually lives, so both need the full list, not just the job's
+        # pass/fail verdict.
+        run: |
+          failed=false
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          for pair in \
+            "Vet:${{ steps.vet.outcome }}" \
+            "Test the audio engine (race detector):${{ steps.test_engine.outcome }}" \
+            "Test (race detector):${{ steps.test_rest.outcome }}" \
+            "Build with cgo (ADR-042 real agent backend):${{ steps.build_cgo.outcome }}" \
+            "Build CGo-free (ADR-012):${{ steps.build_cgofree.outcome }}" \
+            "Check formatting:${{ steps.check_fmt.outcome }}"; do
+            name="${pair%%:*}"
+            outcome="${pair#*:}"
+            case "$outcome" in
+              success)
+                line="PASS  $name: $outcome"
+                echo "$line"
+                ;;
+              skipped)
+                line="SKIP  $name: $outcome"
+                echo "$line"
+                ;;
+              *)
+                line="FAIL  $name: $outcome"
+                echo "$line" >&2
+                failed=true
+                ;;
+            esac
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" = true ]; then
+            exit 1
+          fi
+
+  test-gate:
+    # Required-check aggregate for the `test` go-version matrix. Branch
+    # protection matches required checks by literal name, and the matrix
+    # leg is named `test (1.26.6)`, so bumping the version renames the leg
+    # and the old required name stops reporting forever. This job's name
+    # never changes, so it is what branch protection requires instead of
+    # the version-specific name; bump the matrix without touching branch
+    # protection.
+    runs-on: ubuntu-latest
+    needs: [test]
+    # `needs: [test]` alone runs this job only if `test` succeeded (an
+    # implicit `if: success()`), so on a failed or cancelled matrix leg
+    # this job would be SKIPPED, not failed. A skipped check reports no
+    # failure, and a required check that is merely skipped can read as
+    # satisfied rather than blocking -- which would make this gate pass
+    # exactly when the tests it guards fail. `if: always()` forces the job
+    # to run regardless, and the step below turns any non-success result
+    # (failure, cancelled, or skipped) into an explicit failure instead of
+    # silently not reporting one.
+    if: always()
+    # A docs-only PR does not skip `test` as a job (see `changed-files`
+    # above): `test` always runs and always reports success or failure,
+    # only its expensive steps are conditional, so this job's own success
+    # always means every leg genuinely reported success, never that a leg
+    # quietly never ran.
+    timeout-minutes: 5
+    steps:
+      - name: Require every test matrix leg to have succeeded
+        run: |
+          result="${{ needs.test.result }}"
+          if [ "$result" != "success" ]; then
+            echo "test matrix result was '$result', not success; failing the required gate." >&2
             exit 1
           fi
 
@@ -210,7 +418,7 @@ jobs:
             -w "$GITHUB_WORKSPACE" \
             -e TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
             -e HOME=/tmp \
-            golang:1.25.0-trixie \
+            golang:1.26.6-trixie \
             bash -euxo pipefail -c '
               apt-get update -o Acquire::Retries=2
               apt-get install -y --no-install-recommends \
@@ -297,12 +505,19 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
     # Debian 13 for the same reason the test job uses it: golangci-lint type
     # checks every package, and the agent's engine packages are cgo, so
     # linting them at all needs GStreamer 1.26 and libltc present.
     timeout-minutes: 15
     steps:
       - name: Install the toolchain and the agent's C dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -324,11 +539,19 @@ jobs:
           cache: true
 
       - uses: golangci/golangci-lint-action@v9
+        if: needs.changed-files.outputs.docs_only != 'true'
         with:
           # Version pinned so lint results don't drift with an unrelated
           # golangci-lint release; bump deliberately alongside .golangci.yml.
           # Matches GOLANGCI_LINT_VERSION in the Makefile's lint fallback.
-          version: v2.6.2
+          version: v2.9.0
+          # The action's own `config verify` step fetches its JSON schema
+          # over the public internet before linting even starts, so a
+          # required check can fail on a website instead of on our code.
+          # A malformed .golangci.yml still surfaces, just later: as a
+          # parse failure from the lint run itself rather than an upfront
+          # schema error.
+          verify: false
 
   ui:
     # A separate job, not a step folded into `test` above, specifically so
@@ -340,7 +563,15 @@ jobs:
     # TypeScript exception (ADR-015): the two toolchains stay independent
     # in CI the same way they stay independent in the repository layout.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
+    # npm ci alone has taken up to 6 minutes on hosted runners; 10 left the
+    # generated-types check with seconds to spare and cancelled it mid-run.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -356,40 +587,132 @@ jobs:
       # mismatch instead of silently rewriting the committed lockfile,
       # and installs exactly what's locked rather than whatever satisfies
       # the version ranges today.
+      #
+      # Not part of the aggregate below: if install fails, Lint, Typecheck,
+      # Unit tests and Build cannot produce a meaningful result either, so
+      # this is a precondition like checkout and setup-node above, not a
+      # sixth thing to report on.
       - name: Install
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: cd ui && npm ci
 
       - name: Lint
+        id: lint
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm run lint
 
       - name: Typecheck
+        id: typecheck
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm run typecheck
 
       - name: Unit tests
+        id: unit_tests
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm test
 
       - name: Build
+        id: build
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: cd ui && npm run build
 
       # Regenerates src/api/generated/schema.d.ts from api/openapi.yaml and
-      # fails the job on any diff against what's committed — see the
+      # fails the job on any diff against what's committed, see the
       # Makefile's ui-gen-check target, which this step also uses locally.
       # This is what keeps ADR-015's "generated from or verified against
       # the Go types" true on every push rather than only at the moment
       # someone remembered to regenerate by hand.
       - name: Generated API types are up to date
+        id: gen_check
+        if: needs.changed-files.outputs.docs_only != 'true'
+        # continue-on-error so a failure here does not skip every step
+        # after it, per the aggregating step at the end of this job.
+        continue-on-error: true
         run: make ui-gen-check
+
+      - name: "Suite results (this log names which steps ran and which failed)"
+        if: always()
+        # The five steps above each carry continue-on-error, so a failure in
+        # an early one (Lint, say) no longer skips the ones after it, and in
+        # particular no longer skips Generated API types are up to date,
+        # which has caught committed drift between api/openapi.yaml and
+        # ui/src/api/generated/schema.d.ts before. continue-on-error also
+        # forces each of those steps' own `conclusion` to report success no
+        # matter what happened, so this reads `outcome` instead, which still
+        # carries the real pass/fail. `skipped` is accepted because every
+        # one of those steps carries the same docs_only guard the rest of
+        # this job does: on a documentation-only pull request they
+        # legitimately do not run, and that must not turn this job red.
+        # Anything other than success or skipped fails this step, so an
+        # unexecuted step cannot silently read as a passing one.
+        #
+        # Every step's name is printed next to its outcome, both to
+        # stdout/stderr and to GITHUB_STEP_SUMMARY, because the step list
+        # itself now shows a green tick on a failed step (the `conclusion`
+        # problem above): this step's own summary and log are where the
+        # real result actually lives.
+        run: |
+          failed=false
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          for pair in \
+            "Lint:${{ steps.lint.outcome }}" \
+            "Typecheck:${{ steps.typecheck.outcome }}" \
+            "Unit tests:${{ steps.unit_tests.outcome }}" \
+            "Build:${{ steps.build.outcome }}" \
+            "Generated API types are up to date:${{ steps.gen_check.outcome }}"; do
+            name="${pair%%:*}"
+            outcome="${pair#*:}"
+            case "$outcome" in
+              success)
+                line="PASS  $name: $outcome"
+                echo "$line"
+                ;;
+              skipped)
+                line="SKIP  $name: $outcome"
+                echo "$line"
+                ;;
+              *)
+                line="FAIL  $name: $outcome"
+                echo "$line" >&2
+                failed=true
+                ;;
+            esac
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" = true ]; then
+            exit 1
+          fi
 
   vuln:
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
     # Debian 13 for the same reason the test job uses it: govulncheck loads
     # every package, and the agent's engine packages are cgo, so scanning
     # them at all needs GStreamer 1.26 and libltc present.
     timeout-minutes: 15
     steps:
       - name: Install the toolchain and the agent's C dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -410,7 +733,7 @@ jobs:
       # vulnerabilities against whichever toolchain runs it, and the stdlib
       # is linked into the shipped binary, so the only version whose stdlib
       # findings describe the released artifact is the one the Dockerfile
-      # builds with. Scanning under go.mod's 1.25.0 minimum-support floor
+      # builds with. Scanning under go.mod's 1.26.0 minimum-support floor
       # would report a different set that nothing this project publishes
       # actually contains. Keep this in step with the Dockerfile.
       - uses: actions/setup-go@v7
@@ -442,13 +765,21 @@ jobs:
       # "fix" a red run here by relaxing it to reporting-only; fix the
       # finding or move the pin above.
       - name: Install govulncheck
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Scan for reachable vulnerabilities
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: govulncheck ./...
 
   docker:
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -462,6 +793,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - name: Build multi-arch image (no push)
+        if: needs.changed-files.outputs.docs_only != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .

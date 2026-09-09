@@ -39,6 +39,12 @@ type branch struct {
 	filesrcName   string
 	decodebinName string
 
+	// elementNames holds the GStreamer names of every element in
+	// elements(), computed ahead of construction so [Engine.indexBranch]
+	// can register them before the elements themselves exist — see that
+	// method's doc comment for why.
+	elementNames []string
+
 	channelMixerPads []gst.Pad // index k links to engine.channelMixers[k]
 	linkedCount      atomic.Int32
 
@@ -178,6 +184,11 @@ func (b *branch) build(path string) error {
 	name := func(role string) string { return fmt.Sprintf("h%d-%s", b.id, role) }
 	b.filesrcName = name("filesrc")
 	b.decodebinName = name("decodebin")
+	b.elementNames = []string{
+		b.filesrcName, b.decodebinName,
+		name("audioconvert"), name("audioresample"), name("capsfilter"),
+		name("volume"), name("queue"), name("deinterleave"),
+	}
 	e.indexBranch(b)
 
 	b.filesrc = gst.ElementFactoryMake("filesrc", b.filesrcName)
@@ -351,12 +362,32 @@ func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
 // element b owns, with no bound of its own; setElementsState is what
 // bounds the caller's wait for it.
 func setElementsStateNow(b *branch, state gst.State) error {
-	for _, el := range b.elements() {
+	for _, el := range stateChangeOrder(b.elements(), state) {
 		if el.SetState(state) == gst.StateChangeFailure {
 			return fmt.Errorf("%w: element %q refused to reach state %v", pkgaudio.ErrEnginePipelineCrash, el.GetName(), state)
 		}
 	}
 	return nil
+}
+
+// stateChangeOrder is the order to walk els in for a transition to
+// state: downstream first on the way up, source first on the way down,
+// the same direction a GstBin uses for its own children. Bringing the
+// source up first instead activates its src pad in push mode and starts
+// a streaming task, which then races decodebin's switch to pull mode;
+// when the task wins that race its push is refused and filesrc posts
+// "Internal data stream error" against a branch that is still loading.
+// The direction is read off the target state, which is correct only
+// while NULL is the sole downward transition this package makes.
+func stateChangeOrder(els []gst.Element, state gst.State) []gst.Element {
+	if state == gst.StateNull {
+		return els
+	}
+	out := make([]gst.Element, len(els))
+	for i, el := range els {
+		out[len(els)-1-i] = el
+	}
+	return out
 }
 
 // awaitNoElementRace blocks until no setElementsState call, including
@@ -612,6 +643,22 @@ func (b *branch) unblockFlow() {
 	if id != 0 {
 		b.queue.GetStaticPad("sink").RemoveProbe(id)
 	}
+}
+
+// silenceDeferredBranch mutes a branch whose teardown just deferred.
+// doTeardown always unblocks its flow ahead of the state change it may
+// go on to abandon (see doTeardown's own comment on that ordering), so a
+// deferred branch is left unblocked and possibly still PLAYING, holding
+// its mixer request pads: without this it can keep sounding under
+// whatever the session loads next. A property set on volume needs no
+// state-changing call of its own, so it cannot race the abandoned
+// SetState this branch's elements may still be driving. cancelFade runs
+// first: a live GstController binding re-syncs "volume" from its own
+// interpolation source on the pipeline's next buffer regardless of what
+// this call just set, which would silently un-mute the branch again.
+func (b *branch) silenceDeferredBranch() {
+	b.cancelFade()
+	b.volume.SetObjectProperty("volume", float64(0))
 }
 
 func (b *branch) freezeAt(pos time.Duration) {

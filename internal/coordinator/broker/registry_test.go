@@ -154,13 +154,12 @@ func TestRegistryAwaitResponseResolvesPublishAndSubscribeToOneBroker(t *testing.
 	bmA := &BrokerManager{now: time.Now}
 	cmB := &fakeMQTTClient{}
 	cmA := &fakeMQTTClient{
-		subscribeFunc: func(ctx context.Context, s *paho.Subscribe) (*paho.Suback, error) {
-			// The instant broker A's own SUBSCRIBE "lands", simulate broker
-			// A's external responder answering on broker A — this proves
-			// the wait resolved off broker A's own delivery path, not
-			// broker B's.
-			go bmA.dispatchToWaiters(Message{Topic: "home/projectors/state", Payload: []byte("on"), Retained: false})
-			return &paho.Suback{}, nil
+		publishFunc: func(ctx context.Context, p *paho.Publish) (*paho.PublishResponse, error) {
+			// Dispatched from the publish step, not the subscribe step, so
+			// this arrives strictly after AwaitResponse stamps publishedAt,
+			// while still proving the wait resolves off broker A's own path.
+			bmA.dispatchToWaiters(Message{Topic: "home/projectors/state", Payload: []byte("on"), Retained: false})
+			return &paho.PublishResponse{}, nil
 		},
 	}
 	bmA.cm = cmA

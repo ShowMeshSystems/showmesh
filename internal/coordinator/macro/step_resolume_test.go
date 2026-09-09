@@ -392,7 +392,34 @@ func TestMapResolumeActionResult(t *testing.T) {
 			if res.outcomeState != tc.wantState {
 				t.Fatalf("outcomeState = %q, want %q", res.outcomeState, tc.wantState)
 			}
+			// The unrecognized case synthesizes its own outcomeReason
+			// (naming the bogus word) rather than passing result.Reason
+			// through; every named outcome must pass it through unchanged.
+			if tc.name != "unrecognized" && res.outcomeReason != "test reason" {
+				t.Fatalf("outcomeReason = %q, want %q (result.Reason must survive the mapping unchanged)", res.outcomeReason, "test reason")
+			}
 		})
+	}
+}
+
+// TestMapResolumeActionResultRefusalReasonSurvives: a refusal collapses to
+// outcomeFailed for run continuation (OnFailure is this package's only
+// per-step continuation policy), but the refusal itself must still reach a
+// human, in outcomeReason, since outcomeState is opaque by contract
+// (api/openapi.yaml).
+func TestMapResolumeActionResultRefusalReasonSurvives(t *testing.T) {
+	res := mapResolumeActionResult(api.ResolumeActionResult{
+		Outcome: api.ResolumeOutcomeRefused,
+		Reason:  `the clip named "Whole House 1" is not in the current composition`,
+	})
+	if res.outcome != outcomeFailed {
+		t.Fatalf("outcome = %q, want %q", res.outcome, outcomeFailed)
+	}
+	if res.outcomeReason == "" {
+		t.Fatal("outcomeReason is empty; a refusal must still explain itself to a human")
+	}
+	if !strings.Contains(res.outcomeReason, "Whole House 1") {
+		t.Fatalf("outcomeReason = %q, want it to name %q", res.outcomeReason, "Whole House 1")
 	}
 }
 

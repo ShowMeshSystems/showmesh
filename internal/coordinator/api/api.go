@@ -14,6 +14,8 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -32,6 +34,12 @@ import (
 // no-op defaults deliberately, to prove the router itself works before any
 // real store exists.
 type Dependencies struct {
+	// CurrentRuns is the authoritative, server-computed view used by the
+	// operator's current-runs screen. It is deliberately separate from the
+	// broad snapshot: runner playback, reconciliation, activation context,
+	// and target evidence must be read as one projection.
+	CurrentRuns CurrentRunsReader
+
 	Nodes        NodeLister
 	FPP          FPPLister
 	Observations ObservationLister
@@ -54,6 +62,24 @@ type Dependencies struct {
 	// nil field is replaced by [noNodeClockLister], matching Audio's
 	// identical no-op default posture.
 	Clock NodeClockLister
+
+	// FPPConnectStatus: this SAME *fppconnectpush.StatusStore instance
+	// is both written to (by
+	// pushFPPConnectToAllNodes/pushFPPConnectToNode, passed straight into
+	// fppconnectpush.BestEffort/ToNode as their statusStore argument —
+	// fppconnectsettingsconfig.go) and read from (via its own
+	// NodeFPPConnectObservations method, mapNode's fppConnectObs source),
+	// mirroring Render/Audio's identical "the real dependency already has
+	// this method set" pattern one push surface over. Unlike Render/Audio
+	// this is a concrete type, not a package-local interface: this
+	// package already imports internal/coordinator/fppconnectpush
+	// directly for the write half, so a second, api-package-declared
+	// interface for the read half alone would name nothing this package
+	// does not already depend on concretely. A nil field is nil-safe on
+	// both sides — [fppconnectpush.StatusStore.NodeFPPConnectObservations]
+	// and fppconnectpush.BestEffort/ToNode already tolerate a nil
+	// *StatusStore — so no withDefaults() entry is needed.
+	FPPConnectStatus *fppconnectpush.StatusStore
 
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
@@ -316,6 +342,18 @@ type Dependencies struct {
 	// panicking on a nil dereference.
 	AssetManifests *store.Store
 
+	// FallbackPrograms is Track J's J1 own dependency for reading a
+	// published fallback program and its acknowledgement, and for storing
+	// a new acknowledgement (ADR-048): *store.Store directly, not an
+	// interface, on [Dependencies.AssetManifests]'s own precedent one
+	// field up: this is read by a background reconciler
+	// (internal/coordinator/fallbackreconcile) that ALSO needs the
+	// concrete *store.Store for its own compile-time reads, so a second,
+	// narrower interface here would still have to be satisfied by the
+	// identical concrete value. A nil field is checked explicitly by each
+	// handler, matching AssetManifests's identical nil-check posture.
+	FallbackPrograms *store.Store
+
 	// AssetSettings is Track G seam G-4's live, no-restart view of the
 	// assets.settings configuration kind (ADR-039): the upload byte limit,
 	// the manifest staleness interval, and (via ContentBaseURL) whether the
@@ -329,6 +367,18 @@ type Dependencies struct {
 	// field is replaced by [noAssetSettingsSource], which reproduces the
 	// exact defaults the old startup-snapshot fields used to fall back to.
 	AssetSettings AssetSettingsSource
+
+	// BrokerConnection reports when this coordinator's own MQTT broker
+	// connection last came up, threaded into [cueactivate.Authorize]'s
+	// reconnect-staleness allowance (cueactivationdispatch.go): a
+	// control-plane outage this coordinator itself rode out must not be
+	// counted against a node's own asset inventory staleness window. In
+	// practice the real value is the SAME *broker.BrokerManager wired as
+	// [Dependencies.RenderPublisher] and [Dependencies.AudioPublisher]. A
+	// nil field is replaced by [noBrokerConnectionState], whose
+	// ConnectedSince is always the zero time, meaning "never connected",
+	// never an open-ended allowance.
+	BrokerConnection BrokerConnectionState
 
 	// AssetSyncNudger is Track E seam E6's out-of-band sync trigger — see
 	// [AssetSyncNudger]'s own doc comment. In practice the real value is
@@ -359,6 +409,16 @@ type Dependencies struct {
 	// out the loop's own periodic tick, matching this struct's standing
 	// "an unwired dependency is not this API failing" posture.
 	CueActivationNudger CueActivationNudger
+
+	// CueActivationPinStatus is ADR-033 show-mode's own pin
+	// visibility: see [CueActivationPinStatus]'s own doc comment. In
+	// practice the real value is the same *CueActivationLoop
+	// CueActivationNudger already wires, shared through Dependencies
+	// exactly like it is. A nil field is replaced by
+	// [noCueActivationPinStatus], under which GET /api/v1/config/show.mode
+	// reports unpinned always, the "an unwired dependency is not this API
+	// failing" posture every other optional field here already holds.
+	CueActivationPinStatus CueActivationPinStatus
 
 	// AssetSettingsEnvVarsSet is [FPPEndpointsEnvVarSet]'s mirror for Track
 	// G seam G-4 (ADR-039 decision 4): whether ANY of the four
@@ -540,6 +600,9 @@ var _ FPPReconciliationStore = StoreFPPReconciliation{}
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
 func (d Dependencies) withDefaults() Dependencies {
+	if d.CurrentRuns == nil {
+		d.CurrentRuns = currentrun.Coordinator{}
+	}
 	if d.Nodes == nil {
 		d.Nodes = noNodeLister{}
 	}
@@ -603,6 +666,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetSettings == nil {
 		d.AssetSettings = noAssetSettingsSource{}
 	}
+	if d.BrokerConnection == nil {
+		d.BrokerConnection = noBrokerConnectionState{}
+	}
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
 	}
@@ -611,6 +677,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.CueActivationNudger == nil {
 		d.CueActivationNudger = noCueActivationNudger{}
+	}
+	if d.CueActivationPinStatus == nil {
+		d.CueActivationPinStatus = noCueActivationPinStatus{}
 	}
 	if d.Resolume == nil {
 		d.Resolume = noResolumeLister{}
@@ -785,7 +854,8 @@ func (noFPPMQTTSecretStore) ClearFPPMQTTPassword(context.Context) error {
 // identical shape one field over.
 type noAssetSyncNudger struct{}
 
-func (noAssetSyncNudger) Nudge() {}
+func (noAssetSyncNudger) Nudge()             {}
+func (noAssetSyncNudger) RequestNode(string) {}
 
 // noAssetFetchFailureSource is [Dependencies.AssetFetchFailures]'s
 // nil-safe default: LastFetchFailure always reports ok=false, matching
@@ -804,6 +874,15 @@ func (noAssetFetchFailureSource) LastFetchFailure(string, string) (string, time.
 type noCueActivationNudger struct{}
 
 func (noCueActivationNudger) Nudge() {}
+
+// noCueActivationPinStatus is [Dependencies.CueActivationPinStatus]'s
+// nil-safe default: always reports unpinned, matching
+// [noCueActivationNudger]'s identical shape one field over.
+type noCueActivationPinStatus struct{}
+
+func (noCueActivationPinStatus) PinStatus() (bool, string, int64, time.Time) {
+	return false, "", 0, time.Time{}
+}
 
 // defaultAssetManifestInventoryInterval mirrors
 // internal/coordinator/config's own defaultAssetInventoryInterval (2
@@ -829,6 +908,14 @@ func (noAssetSettingsSource) MaxUploadBytes() int64  { return assetstore.Default
 func (noAssetSettingsSource) InventoryInterval() time.Duration {
 	return defaultAssetManifestInventoryInterval
 }
+
+// noBrokerConnectionState is [Dependencies.BrokerConnection]'s nil-safe
+// default: ConnectedSince always reports the zero time, "never connected",
+// so an unwired dependency can never grant [cueactivate.Authorize]'s
+// reconnect-staleness allowance.
+type noBrokerConnectionState struct{}
+
+func (noBrokerConnectionState) ConnectedSince() time.Time { return time.Time{} }
 
 // noResolumeReferenceResolver is [Dependencies.ResolumeReferences]'s
 // nil-safe default: every method reports
@@ -1454,6 +1541,23 @@ func (o Options) withDefaults() Options {
 type API struct {
 	Handler http.Handler
 	Hub     *Hub
+
+	// h is the SAME *handlers instance wired into Handler above, kept only
+	// so [API.AutoDeployCueCatalog] can delegate to it. Every dependency
+	// that method needs (CurrentRuns, AssetManifests, Commands,
+	// AudioPublisher, Identity) is already set on it by the time New
+	// returns, since this field is assigned last.
+	h *handlers
+}
+
+// AutoDeployCueCatalog implements fallbackreconcile.CatalogDeployer (see
+// cuecatalogautodeploy.go) by delegating to the handlers instance this API
+// wraps. coordinator.go wires *API itself as the deployer it hands
+// fallbackreconcile.Service.SetCatalogDeployer, so this package need not
+// import fallbackreconcile at all: Go's structural interface satisfaction
+// is enough.
+func (a *API) AutoDeployCueCatalog(ctx context.Context, now time.Time, nodeID string) {
+	a.h.AutoDeployCueCatalog(ctx, now, nodeID)
 }
 
 // New builds an [API] from deps and opts. It does not start anything: no
@@ -1471,6 +1575,7 @@ func New(deps Dependencies, opts Options) *API {
 		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
 		fppCommandPollInterval:    opts.FPPCommandPollInterval,
 		nightReadinessMaxAge:      opts.NightReadinessMaxAge,
+		emergencyStopArms:         newEmergencyStopArmStore(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
 
@@ -1491,6 +1596,10 @@ func New(deps Dependencies, opts Options) *API {
 	// names as what the read scopes gate. See this package's report.
 	mux.HandleFunc("GET /api/v1/{$}", h.handleServiceDescriptor)
 	mux.HandleFunc("GET /api/v1/snapshot", h.readGuardAll(readAllScopes, h.handleSnapshot))
+	// GET /api/v1/current-runs is the runner-neutral playback projection.
+	// It uses the same all-read-scope guard as snapshot because one response
+	// may contain FPP, audio-node, observation, and active-show context.
+	mux.HandleFunc("GET /api/v1/current-runs", h.readGuardAll(readAllScopes, h.handleCurrentRuns))
 	mux.HandleFunc("GET /api/v1/nodes", h.readGuard(identity.ScopeNodeRead, h.handleNodes))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}", h.readGuard(identity.ScopeNodeRead, h.handleNode))
 	mux.HandleFunc("GET /api/v1/fpp", h.readGuard(identity.ScopeFPPRead, h.handleFPPList))
@@ -1546,6 +1655,11 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade", h.writeGuard(&scopeAudioCommand, h.handleAudioGainFade))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/mute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputMute))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute", h.writeGuard(&scopeAudioCommand, h.handleAudioOutputUnmute))
+
+	// Dispatch the agent's one node-scoped audio.* operation,
+	// audio.node.silence (audionodesilence.go): the unconditional
+	// per-node emergency stop, no sessionId. Same audio:command scope.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/silence", h.writeGuard(&scopeAudioCommand, h.handleAudioNodeSilence))
 
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))
@@ -1656,11 +1770,18 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.action/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowAction))
 	mux.HandleFunc("PUT /api/v1/config/show.action/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowAction))
 	mux.HandleFunc("GET /api/v1/config/show.action/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActionRevisions))
+	// DELETE is the tombstone delete this seam adds (owner ruling,
+	// tombstone delete for every configuration kind): same config:write
+	// scope as PUT, immediately, since this is a per-object collection
+	// kind, not one of the twelve singletons this seam offers no DELETE
+	// for.
+	mux.HandleFunc("DELETE /api/v1/config/show.action/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowAction))
 
 	mux.HandleFunc("GET /api/v1/config/show.macro", h.readAnyGuard(showConfigReadScopes, h.handleListShowMacros))
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacro))
 	mux.HandleFunc("PUT /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowMacro))
 	mux.HandleFunc("GET /api/v1/config/show.macro/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowMacroRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.macro/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowMacro))
 
 	// A pre-show binding check (ADR-029's own Consequences section),
 	// re-resolving a stored show.action's target against current
@@ -1677,6 +1798,18 @@ func New(deps Dependencies, opts Options) *API {
 	// reachable by GET — see actioninvoke.go.
 	mux.HandleFunc("POST /api/v1/actions/{id}/invocations", h.writeGuard(&scopeActionInvoke, h.handleInvokeAction))
 
+	// The show.emergencystop configuration kind (its own optional,
+	// per-level follow-up action lists) and the four trigger routes.
+	// show:emergencystop:invoke is the only scope check on all four.
+	// See that scope's own doc comment (identity/types.go).
+	mux.HandleFunc("GET /api/v1/config/show.emergencystop", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfig))
+	mux.HandleFunc("PUT /api/v1/config/show.emergencystop", h.writeGuard(&scopeConfigWrite, h.handlePutEmergencyStopConfig))
+	mux.HandleFunc("GET /api/v1/config/show.emergencystop/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfigRevisions))
+	mux.HandleFunc("POST /api/v1/emergency-stop/stop", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStop))
+	mux.HandleFunc("POST /api/v1/emergency-stop/stop-power-down", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopPowerDown))
+	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/arm", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopArm))
+	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/fire", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopFire))
+
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an
 	// admin who has never been granted show:macro:run must not be able to
@@ -1688,6 +1821,9 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("POST /api/v1/macros/{id}/runs", h.writeGuard(&scopeShowMacroRun, h.handleSubmitMacroRun))
 	mux.HandleFunc("GET /api/v1/macro-runs", h.readAnyGuard(showConfigReadScopes, h.handleListMacroRuns))
 	mux.HandleFunc("GET /api/v1/macro-runs/{runId}", h.readAnyGuard(showConfigReadScopes, h.handleGetMacroRun))
+	// POST /api/v1/cues/{id}/activate: an operator hand-firing one
+	// Cue directly from Live Control. See cuefire.go's own doc comment.
+	mux.HandleFunc("POST /api/v1/cues/{id}/activate", h.writeGuard(&scopeCueActivate, h.handleActivateCue))
 	// GET/POST /api/v1/config/resolume/composition (Track D seam D-2a,
 	// ADR-032): the stored Resolume composition id map, sourced only from
 	// an operator-uploaded file — never from Resolume's own crashing
@@ -1751,11 +1887,16 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShow))
 	mux.HandleFunc("PUT /api/v1/config/show/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShow))
 	mux.HandleFunc("GET /api/v1/config/show/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowRevisions))
+	// DELETE refuses with 409 when show.active currently names this show
+	// (showobjects.go's refuseShowIfActive); every OTHER kind namespaced
+	// under this show is left in place, not cascaded.
+	mux.HandleFunc("DELETE /api/v1/config/show/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShow))
 
 	mux.HandleFunc("GET /api/v1/config/show.surface", h.readAnyGuard(showConfigReadScopes, h.handleListShowSurfaces))
 	mux.HandleFunc("GET /api/v1/config/show.surface/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurface))
 	mux.HandleFunc("PUT /api/v1/config/show.surface/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowSurface))
 	mux.HandleFunc("GET /api/v1/config/show.surface/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowSurfaceRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.surface/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowSurface))
 
 	mux.HandleFunc("GET /api/v1/config/show.active", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActive))
 	mux.HandleFunc("PUT /api/v1/config/show.active", h.writeGuard(&scopeConfigWrite, h.handlePutShowActive))
@@ -1773,11 +1914,22 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/show.cue/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowCue))
 	mux.HandleFunc("PUT /api/v1/config/show.cue/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowCue))
 	mux.HandleFunc("GET /api/v1/config/show.cue/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowCueRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.cue/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowCue))
 
 	mux.HandleFunc("GET /api/v1/config/show.playlist", h.readAnyGuard(showConfigReadScopes, h.handleListShowPlaylists))
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylist))
 	mux.HandleFunc("PUT /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowPlaylist))
 	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylistRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteShowPlaylist))
+
+	// --- media.playlist: an operator-authored bed the audio engine plays,
+	// promoted to its own per-object config kind (mediaplaylist.go). Same
+	// route shape and scopes as show.playlist immediately above.
+	mux.HandleFunc("GET /api/v1/config/media.playlist", h.readAnyGuard(showConfigReadScopes, h.handleListMediaPlaylists))
+	mux.HandleFunc("GET /api/v1/config/media.playlist/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetMediaPlaylist))
+	mux.HandleFunc("PUT /api/v1/config/media.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutMediaPlaylist))
+	mux.HandleFunc("GET /api/v1/config/media.playlist/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetMediaPlaylistRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/media.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteMediaPlaylist))
 
 	// --- Track F seam F1: night.session and its active-session pointer ---
 	//
@@ -1794,6 +1946,9 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/night.session/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutNightSession))
 	mux.HandleFunc("GET /api/v1/config/night.session/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionRevisions))
 	mux.HandleFunc("GET /api/v1/config/night.session/{id}/revisions/{revision}", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionRevision))
+	// DELETE refuses with 409 when night.session.active currently names
+	// this session (nightsession.go's refuseNightSessionIfActive).
+	mux.HandleFunc("DELETE /api/v1/config/night.session/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteNightSession))
 
 	mux.HandleFunc("GET /api/v1/config/night.session.active", h.readAnyGuard(showConfigReadScopes, h.handleGetNightSessionActive))
 	mux.HandleFunc("PUT /api/v1/config/night.session.active", h.writeGuard(&scopeConfigWrite, h.handlePutNightSessionActive))
@@ -1901,6 +2056,18 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/assets/manifest", h.readAnyGuard(showConfigReadScopes, h.handleAssetManifest))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets", h.readAnyGuard(showConfigReadScopes, h.handleNodeAssetManifest))
 
+	// Which of a node's held assets no Cue in its resolved catalog
+	// references, and removing one. GET mirrors GET .../assets' own
+	// showConfigReadScopes posture: it answers over the identical evidence.
+	// POST is behind asset:write (nodeunusedassets.go's own doc comment),
+	// the existing write-authority scope for the asset store.
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets/unused", h.readAnyGuard(showConfigReadScopes, h.handleGetNodeUnusedAssets))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/assets/remove", h.writeGuard(&scopeAssetWrite, h.handlePostRemoveNodeAsset))
+
+	// Nudge the existing asset-sync service to run its own gap-driven tick
+	// now for this node (noderesync.go). Same asset:write scope as remove.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/assets/resync", h.writeGuard(&scopeAssetWrite, h.handlePostResyncNodeAssets))
+
 	// TRACK-H-H3-SPEC.md §4: the resolved Cue catalog read route and its
 	// per-node acknowledgement. GET stays under observation:read (the
 	// spec's own posture, matching every other FPP/observation read
@@ -1910,6 +2077,24 @@ func New(deps Dependencies, opts Options) *API {
 	// an acknowledgement is not a configuration write.
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/cue-catalog", h.readGuard(identity.ScopeObservationRead, h.handleGetNodeCueCatalog))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/acknowledge", h.writeGuard(&scopeNodeObserve, h.handlePostNodeCueCatalogAcknowledge))
+
+	// ADR-048, Track J's J1: the signed fallback-program listing and
+	// per-host read, and the host's own acknowledgement write. The listing
+	// stays under observation:read, matching every other list-metadata
+	// read surface in this file; the per-host read carries the signed
+	// payload material a specific host consumes and, like the
+	// acknowledgement write, is gated by fpp:fallback
+	// (IDENTIFIER-REGISTER.md's own reservation): the installed FPP
+	// plugin principal, never a general operator read scope.
+	mux.HandleFunc("GET /api/v1/fallback-programs", h.readGuard(identity.ScopeObservationRead, h.handleListFallbackPrograms))
+	// GET on the per-host path is deliberately requireScope, never
+	// readGuard: readGuard is a no-op unless CloseReads is set
+	// (auth.go's own posture), and this route serves the actual signed
+	// program bytes, not observation metadata. requireScope enforces
+	// fpp:fallback unconditionally, the same always-on guard GET
+	// /api/v1/audit uses for equivalently sensitive material.
+	mux.HandleFunc("GET /api/v1/fallback-programs/{fppInstanceId}", h.requireScope(identity.ScopeFPPFallback, h.handleGetFallbackProgram))
+	mux.HandleFunc("POST /api/v1/fallback-programs/{fppInstanceId}/acknowledge", h.writeGuard(&scopeFPPFallback, h.handlePostFallbackProgramAcknowledge))
 	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
 	// resolve, dispatch cuecatalog.deploy, and record the node's own
 	// reported revision through the same PutNodeCueCatalogAck path the
@@ -1975,6 +2160,16 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNode))
 	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
+	mux.HandleFunc("DELETE /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handleDeleteAudioNode))
+
+	// GET/PUT /api/v1/config/fppconnect.settings (Track E phase 2 seam
+	// FC1a, ADR-044 decision 5): the enable flag and the two byte caps
+	// bounding a node's xLights ingestion listener. Mirrors
+	// /config/audio.settings' config:write-only, never-404 posture exactly
+	// (fppconnectsettingsconfig.go).
+	mux.HandleFunc("GET /api/v1/config/fppconnect.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPConnectSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/fppconnect.settings", h.writeGuard(&scopeConfigWrite, h.handlePutFPPConnectSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/fppconnect.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPConnectSettingsConfigRevisions))
 
 	// GET/PUT /api/v1/config/node.clock/{id} (Track I seam I1, ADR-039): a
 	// collection keyed by node id, mirroring audio.node's identical
@@ -2053,5 +2248,5 @@ func New(deps Dependencies, opts Options) *API {
 		withIdentity(deps.Identity, h.loginLimiter, opts.Logger, opts.Clock, opts.TrustClientAddr),
 	)
 
-	return &API{Handler: handler, Hub: hub}
+	return &API{Handler: handler, Hub: hub, h: h}
 }

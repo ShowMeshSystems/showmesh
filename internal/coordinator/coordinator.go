@@ -6,6 +6,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,11 +28,14 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeclock"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackreconcile"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/macro"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/signingkey"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -108,6 +112,25 @@ func Run() int {
 	// where the bootstrap file lives (ADR-024 decision 9), the same
 	// directory the SQLite database above already lives in.
 	identitySvc := identity.NewService(st, time.Now, cfg.DataDir, identity.WithLogger(logger))
+
+	// signingMgr is ADR-025 decisions 1 and 2's coordinator signing
+	// authority (internal/coordinator/signingkey): an Ed25519 keypair
+	// generated once per deployment, on first run, and persisted under
+	// cfg.DataDir. It never leaves this data volume.
+	signingMgr, err := signingkey.LoadOrGenerate(cfg.DataDir, signingkey.WithLogger(logger))
+	if err != nil {
+		logger.Error("failed to load or generate the coordinator signing key", "error", err)
+		_ = st.Close()
+		return 1
+	}
+	logger.Info("coordinator signing key ready", "public_key", base64.StdEncoding.EncodeToString(signingMgr.PublicKey()))
+
+	// fallbackReconcile is Track J's J1 own background loop (ADR-048
+	// decision 1): while healthy, it compiles, signs, and publishes each
+	// participating FPP host's fallback program on change and on a fixed
+	// interval. Constructed here, beside signingMgr, because it is the
+	// only other thing this service needs besides st and identitySvc.
+	fallbackReconcile := fallbackreconcile.NewService(st, signingMgr, identitySvc, logger, fallbackreconcile.DefaultInterval)
 
 	// Step 7 seam A (RES-008 D1): the SHOWMESH_FPP_ENDPOINTS -> store
 	// migration and the owner's 2026-08-12 disagreement rule, run BEFORE
@@ -255,6 +278,15 @@ func Run() int {
 	// package doc comment.
 	clockStore := nodeclock.NewStore()
 
+	// fppconnectpush's own push cache, the identical "record at
+	// push time, read back on demand" shape as renderStore/audioStore
+	// above, except recording this package's OWN resolved channel-range
+	// outcome rather than a report relayed from a node — see
+	// fppconnectpush.StatusStore's doc comment. Constructed here,
+	// unconditionally, matching renderStore's identical "costs nothing
+	// when nothing ever pushes to it" reasoning.
+	fppConnectStatus := fppconnectpush.NewStatusStore()
+
 	// bm is assigned below, once broker.NewBrokerManager has built it —
 	// the identical "capture by reference in a closure" shape hub/notifyHub
 	// use just above, for the identical reason: onHello can fire the
@@ -272,6 +304,10 @@ func Run() int {
 		}
 		go audioconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
 		go clockconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
+		// Track E phase 2 seam FC1a (ADR-044 decision 5): the identical
+		// hello-triggered convergence, one config surface over; see
+		// internal/coordinator/fppconnectpush.
+		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger, fppConnectStatus)
 	}
 
 	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithClockSink(clockStore))
@@ -295,10 +331,24 @@ func Run() int {
 		}
 	}
 	subs := append(inv.Subscriptions(), broker.Subscription{Filter: mqttproto.SubscribeResult, QoS: 1})
+	// reconnectNodeLister feeds broker.go's own reconnect dispatch:
+	// st.ListNodes reduced to node IDs, the same *st every other
+	// Dependencies field on this coordinator already reads directly.
+	reconnectNodeLister := func(ctx context.Context) ([]string, error) {
+		nodes, err := st.ListNodes(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.NodeID
+		}
+		return ids, nil
+	}
 	bm, err = broker.NewBrokerManager(ctx, cfg, logger, subs, func(m broker.Message) {
 		inv.HandleMessage(m)
 		assetSyncHandler(m)
-	})
+	}, reconnectNodeLister)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		_ = st.Close()
@@ -558,6 +608,14 @@ func Run() int {
 		// NodeClockLister's NodeClockObservations method directly, no
 		// adapter needed, matching Audio's identical wiring above.
 		Clock: clockStore,
+		// fppConnectStatus is the SAME instance onHello's
+		// fppconnectpush.BestEffort call above records into and
+		// pushFPPConnectToAllNodes/pushFPPConnectToNode
+		// (fppconnectsettingsconfig.go) record into on every write-driven
+		// push — see api.Dependencies.FPPConnectStatus's own doc comment
+		// for why this is a concrete field rather than a package-local
+		// interface like Render/Audio.
+		FPPConnectStatus: fppConnectStatus,
 		// RenderPublisher is Track B seam B2b-front's own dependency: the
 		// SAME *broker.BrokerManager (bm) assetSync's own Publisher was
 		// built from above already satisfies api.RenderPublisher with no
@@ -576,6 +634,11 @@ func Run() int {
 		// with no adapter either.
 		AudioPublisher: bm,
 		AudioSessions:  st,
+		// BrokerConnection: the SAME bm already satisfies
+		// api.BrokerConnectionState (ConnectedSince) with no adapter,
+		// matching RenderPublisher/AudioPublisher's identical wiring
+		// immediately above.
+		BrokerConnection: bm,
 		// Step 5 (contract section 5.4): both FPP collector sources must be
 		// visible in /api/v1/snapshot's collectors[] — a second source that
 		// is invisible there is a source an operator cannot tell is broken.
@@ -623,6 +686,10 @@ func Run() int {
 		// interface (see that field's own doc comment for why), wired the
 		// same *st already used for Config/Assets/Commands/Discovery above.
 		AssetManifests: st,
+		// FallbackPrograms is Track J's J1 own dependency: the SAME
+		// *st fallbackReconcile above publishes into, wired the same
+		// AssetManifests/Config/Assets/Commands/Discovery already are.
+		FallbackPrograms: st,
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
@@ -798,6 +865,10 @@ func Run() int {
 		// values is safe.
 		MQTTBrokers: integrationBrokers,
 	}
+	// Build the current-runs reader only after every store and collector read
+	// adapter is present. The reader remains read-only and is shared by the
+	// REST handler and the stream hub through api.Dependencies.
+	apiDeps.CurrentRuns = api.NewCurrentRunsReader(apiDeps)
 
 	// apiOpts is named (not inlined into api.New's own call, as it used to
 	// be) because Step 9's macro executor needs the IDENTICAL Dependencies
@@ -830,6 +901,15 @@ func Run() int {
 	// synchronously, before this coordinator starts listening (ADR-031
 	// decision 4), alongside api.ReconcileStrandedFPPCommands.
 	macroDispatcher := api.NewFPPCommandDispatcher(apiDeps, apiOpts)
+	// audioDispatcher is the audio integration's own mirror of
+	// macroDispatcher immediately above: a second, independently-
+	// constructed *handlers wrapping the SAME apiDeps/apiOpts
+	// api.New itself uses, so a macro's audio step and every
+	// audio.session.*/audio.gain.*/audio.output.* HTTP route dispatch
+	// through the identical core — see api.NewAudioActionDispatcher's own
+	// doc comment for why that is safe to build twice rather than sharing
+	// one *handlers value.
+	audioDispatcher := api.NewAudioActionDispatcher(apiDeps, apiOpts)
 	macroExecutor := macro.NewExecutor(macro.Dependencies{
 		Store:    st,
 		Identity: identitySvc,
@@ -841,6 +921,7 @@ func Run() int {
 		// through the identical api.ResolumeActionDispatcher, never two
 		// independently-wired copies of it.
 		ResolumeActions: apiDeps.ResolumeActions,
+		AudioActions:    audioDispatcher,
 		Notify:          notifyHub,
 		Clock:           time.Now,
 		Logger:          logger,
@@ -858,9 +939,19 @@ func Run() int {
 	// further down, alongside every other background reconcile loop.
 	cueActivationLoop := api.NewCueActivationLoop(apiDeps, apiOpts)
 	apiDeps.CueActivationNudger = cueActivationLoop
+	apiDeps.CueActivationPinStatus = cueActivationLoop
 
 	apiInst := api.New(apiDeps, apiOpts)
 	hub = apiInst.Hub
+
+	// Part 2 (catalog-currency auto-deploy)'s own wiring: *api.API
+	// structurally satisfies fallbackreconcile.CatalogDeployer
+	// (AutoDeployCueCatalog, api.go), so fallbackReconcile's own periodic
+	// missing-acknowledgement detection can trigger a real deploy without
+	// this package importing anything new or fallbackreconcile importing
+	// api. See cuecatalogautodeploy.go's own doc comment for the dispatch
+	// and safety-hold logic this delegates to.
+	fallbackReconcile.SetCatalogDeployer(apiInst)
 
 	// Resolve any command a PRIOR process left dispatched-but-unresolved
 	// (a crash, a kill, or an abandoned client connection between dispatch
@@ -1049,6 +1140,13 @@ func Run() int {
 	// cleanly like every other background loop here.
 	spawnBackground(func() {
 		resolumeCompositionWire.Run(ctx)
+	})
+	// fallbackReconcile.Run owns Track J's J1 own periodic
+	// compile-sign-publish loop (fallbackreconcile/reconcile.go), joined
+	// via the identical backgroundWG so shutdown waits for it cleanly
+	// like every other background loop here.
+	spawnBackground(func() {
+		fallbackReconcile.Run(ctx)
 	})
 	// watchUnclaimedBootstrap is ADR-024 decision 9's "loud and
 	// persistent" unclaimed-bootstrap signal's other half — the log side,

@@ -48,8 +48,9 @@ type fakeRenderPublisher struct {
 // RenderPublisher interface exactly.
 type mqttCmdEnvelopeForTest struct {
 	Payload struct {
-		Action string         `json:"action"`
-		Params map[string]any `json:"params"`
+		Action   string         `json:"action"`
+		Params   map[string]any `json:"params"`
+		Deadline *time.Time     `json:"deadline"`
 	} `json:"payload"`
 }
 
@@ -171,9 +172,17 @@ func renderPutActiveShow(t *testing.T, st *store.Store, showID string) {
 
 func renderCreateAsset(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, contentHash, filename string) store.AssetRecord {
 	t.Helper()
+	return renderCreateAssetMediaType(t, st, showID, sequenceID, targetKind, targetID, "fseq", contentHash, filename)
+}
+
+// renderCreateAssetMediaType is renderCreateAsset with an explicit media
+// type, for tests that need a non-fseq current asset (e.g. an audio upload
+// for the sequence render.surface.apply must not hand to the node).
+func renderCreateAssetMediaType(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, mediaType, contentHash, filename string) store.AssetRecord {
+	t.Helper()
 	rec, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
 		ID: contentHash + "-" + targetKind + "-" + targetID, ShowID: showID, SequenceID: sequenceID,
-		TargetKind: targetKind, TargetID: targetID, MediaType: "fseq", ContentHash: contentHash,
+		TargetKind: targetKind, TargetID: targetID, MediaType: mediaType, ContentHash: contentHash,
 		RuntimeFilename: filename, SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
 	})
 	if err != nil {
@@ -343,6 +352,178 @@ func TestRenderApplyRefusesOnAmbiguousAsset(t *testing.T) {
 	}
 	if setup.pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0", setup.pub.count())
+	}
+}
+
+// TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio is the
+// refusal case this file has always needed: a sequence for which the ONLY
+// asset ever uploaded, current or otherwise, is audio, no FSEQ was ever
+// registered at all. render.surface.apply must refuse, naming the missing
+// FSEQ, and must never dispatch the audio file as fseqFilename.
+//
+// This name previously covered a DIFFERENT scenario, which a lane-manager
+// review caught as encoding the pre-fix identity rule rather than this
+// one: an FSEQ uploaded and current, then audio uploaded for the SAME
+// (show, sequence, target), with the test's own premise asserting the
+// audio upload superseded the FSEQ (assets.go's createAsset, before
+// ADR-028 decision 1's amendment, superseded whatever held the tuple
+// regardless of media type). That premise no longer holds: audio no
+// longer displaces a current FSEQ. That scenario, both assets current, is
+// now its own test, TestRenderApplyFindsTheFSEQWhenAudioIsAlsoCurrentForTheSameSequence,
+// which keeps this test's original fixture shape and its own history note.
+func TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio(t *testing.T) {
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	// No FSEQ was ever registered for "opener": only audio.
+	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "audio", "hash-b", "opener.mp3")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	var problem struct{ Detail string }
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem response: %v", err)
+	}
+	if !strings.Contains(problem.Detail, "no fseq asset found") || !strings.Contains(problem.Detail, `sequence "opener"`) {
+		t.Fatalf("detail = %q, want it to name the missing fseq asset for the sequence, not pass the audio file through", problem.Detail)
+	}
+	if strings.Contains(problem.Detail, "opener.mp3") {
+		t.Fatalf("detail = %q, must never name the audio file as if it were a candidate FSEQ", problem.Detail)
+	}
+	if setup.pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0: an audio file must never be dispatched downstream as fseqFilename", setup.pub.count())
+	}
+}
+
+// TestRenderApplyFindsTheFSEQWhenAudioIsAlsoCurrentForTheSameSequence
+// reproduces the rehearsal-rig failure of 2026-08-30, and its outcome
+// changed with ADR-028 decision 1's amendment (media type joins asset
+// identity): an FSEQ is uploaded and current for the sequence, then the
+// show's audio is uploaded for the SAME sequence and target. Before that
+// amendment, assets.go's createAsset superseded any current row for the
+// (show, sequence, target) tuple regardless of media type, so the audio
+// upload silently displaced the FSEQ, the only current asset left for the
+// sequence was the audio file, and resolveRenderApplyParams handed the MP3
+// to the node as fseqFilename, which the node correctly refused with
+// "fseq: not an FSEQ file (bad magic)", a media-file-shaped failure the
+// coordinator should never have let leave it. This test's own fixture used
+// to be the previous name's, TestRenderApplyRefusesWhenOnlyCurrentAssetForSequenceIsAudio,
+// which asserted exactly that 400 refusal, back when superseding the FSEQ
+// was this package's own documented, expected behavior. That name now
+// covers the genuine "only audio was ever uploaded" refusal case instead,
+// and this test proves the fix for the fixture it inherited: createAsset
+// scopes supersession to (show, sequence, target, media type), so the
+// audio upload supersedes nothing, both the FSEQ and the audio asset stay
+// current, and render.surface.apply still resolves and dispatches the
+// FSEQ exactly as if the audio had never been uploaded.
+func TestRenderApplyFindsTheFSEQWhenAudioIsAlsoCurrentForTheSameSequence(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	fseq := renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "fseq", "hash-a", "opener.fseq")
+	// Same (show, sequence, target) as fseq above, different media type: no
+	// longer a superseding upload since the fix, both rows stay current.
+	audio := renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "audio", "hash-b", "opener.mp3")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: the fseq must still be found and dispatched after the audio upload; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	env := setup.pub.payload[0]
+	if got := env.Payload.Params["fseqFilename"]; got != "opener.fseq" {
+		t.Errorf("fseqFilename = %v, want opener.fseq (the audio upload must never displace the fseq)", got)
+	}
+
+	stillCurrent, err := setup.st.GetAsset(context.Background(), fseq.ID)
+	if err != nil {
+		t.Fatalf("GetAsset fseq: %v", err)
+	}
+	if stillCurrent.SupersededAt != nil {
+		t.Fatalf("fseq asset SupersededAt = %v, want nil: uploading audio for the same sequence must not supersede it", stillCurrent.SupersededAt)
+	}
+	audioCurrent, err := setup.st.GetAsset(context.Background(), audio.ID)
+	if err != nil {
+		t.Fatalf("GetAsset audio: %v", err)
+	}
+	if audioCurrent.SupersededAt != nil {
+		t.Fatalf("audio asset SupersededAt = %v, want nil: it is the current audio asset for the sequence", audioCurrent.SupersededAt)
+	}
+}
+
+// TestRenderApplyIgnoresNonFSEQCandidateWhenChoosingTheFSEQ proves the
+// media-type filter picks the sequence's fseq asset even when another
+// current asset of a different media type also matches the sequence (here,
+// a show-wide audio asset alongside a node-targeted fseq, different
+// targets, so both stay current per createAsset's (show, sequence, target)
+// key). Before this fix, resolveRenderApplyParams counted both as
+// candidates and reported "ambiguous", since it never looked at media type.
+func TestRenderApplyIgnoresNonFSEQCandidateWhenChoosingTheFSEQ(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "fseq", "hash-a", "opener.fseq")
+	renderCreateAssetMediaType(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindShow, "", "audio", "hash-b", "opener.mp3")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
+	}()
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: one current fseq and one current asset of a different media type is not ambiguous; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	env := setup.pub.payload[0]
+	if got := env.Payload.Params["fseqFilename"]; got != "opener.fseq" {
+		t.Errorf("fseqFilename = %v, want opener.fseq (the audio asset must never be selected)", got)
 	}
 }
 
@@ -704,6 +885,41 @@ func TestRenderDispatchReportsUnconfirmedWithoutEvidence(t *testing.T) {
 	}
 }
 
+// TestRenderApplyDispatchSetsWireDeadline proves executeRenderDispatch
+// populates CmdPayload.Deadline on every dispatch, anchored to the
+// dispatch clock by exactly renderCommandWireDeadline, not merely
+// non-nil.
+func TestRenderApplyDispatchSetsWireDeadline(t *testing.T) {
+	renderCommandConfirmDeadline = 100 * time.Millisecond
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/clear", `{"idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want exactly 1", setup.pub.count())
+	}
+	got := setup.pub.payload[0].Payload.Deadline
+	if got == nil {
+		t.Fatalf("Deadline = nil, want set")
+	}
+	want := testNow.Add(renderCommandWireDeadline)
+	if !got.Equal(want) {
+		t.Fatalf("Deadline = %v, want %v (testNow + renderCommandWireDeadline)", got, want)
+	}
+}
+
 // TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing proves
 // idempotency: the same key dispatched twice publishes exactly once.
 func TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *testing.T) {
@@ -748,6 +964,20 @@ func TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *testin
 	}
 	if n := countRenderAuditReplayEntries(t, setup.svc, result.Command.CommandID); n != 1 {
 		t.Fatalf("AuditReplay entries for command %s = %d, want 1", result.Command.CommandID, n)
+	}
+
+	// The stored value must carry store.CallerIntentRenderRequest's own
+	// tag, not the bare identity JSON: an untagged pair of writer and
+	// replay-reader round-trips fine on its own and would not catch a
+	// future writer silently dropping the tag, which is exactly the
+	// ambiguity this column's rename exists to close.
+	rec, err := setup.st.GetCommand(context.Background(), result.Command.CommandID)
+	if err != nil {
+		t.Fatalf("get command: %v", err)
+	}
+	const wantCallerIntent = `render-request:{"action":"render.surface.clear","node":"media-01","surface":"wall-1","sequenceId":""}`
+	if rec.CallerIntent != wantCallerIntent {
+		t.Errorf("commands.caller_intent = %q, want %q", rec.CallerIntent, wantCallerIntent)
 	}
 }
 

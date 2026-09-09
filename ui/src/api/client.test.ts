@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 /**
  * ADR-024's additions to ApiClient: POST/DELETE with a JSON body, the
  * explicit `credentials: 'same-origin'` request option, and the three new
