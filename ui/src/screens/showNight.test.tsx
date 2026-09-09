@@ -1106,14 +1106,19 @@ describe('Show Night', () => {
     expect(await screen.findByLabelText('Audio asset')).toHaveValue('')
   })
 
-  it('explains that the resting target file sets the resting cycle length', async () => {
+  it('explains on the resting sequence field, not the target field, that the file sets the resting cycle length', async () => {
     mockListConfigObjects()
     stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
     renderDefinitions({ session: configWriteSession })
     await openWinterRidgeDefinition()
-    expect(
-      await screen.findByText("This file's own duration is how long the resting cycle runs; nothing else sets that length."),
-    ).toBeInTheDocument()
+    const helpText = "This file's own duration is how long the resting cycle runs; nothing else sets that length."
+    const sequenceSelect = await screen.findByLabelText('Resting sequence')
+    const describedBy = sequenceSelect.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    expect(document.getElementById(describedBy!)).toHaveTextContent(helpText)
+    // A second copy on Resting target would still pass a plain text-presence assertion.
+    expect(screen.getAllByText(helpText)).toHaveLength(1)
+    expect(screen.getByLabelText('Resting target').getAttribute('aria-describedby')).toBeNull()
   })
 
   it('explains the audio asset picker lists store-registered assets by name and node', async () => {
