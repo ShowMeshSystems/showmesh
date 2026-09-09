@@ -18,13 +18,20 @@ import (
 // completion, persisting each step as a night_cue_outbox row (nightcuerun.go)
 // so a restart resumes without repeating or skipping one.
 
+// The night_cue_outbox.phase vocabulary this file adds, alongside
+// nightcuerun.go's own nightPhaseEnterShow/nightPhaseEnterResting/
+// nightPhaseFadeOut: camelCase, matching every existing sibling.
 const (
 	// nightPhasePowerOffPrereq holds one after-actions prerequisite's own
 	// outbox row, named nightPowerOffPrereqName(index).
-	nightPhasePowerOffPrereq = "power-off-prereq"
+	nightPhasePowerOffPrereq = "powerOffPrereq"
 	// nightPhasePowerOffAction holds the one dispatch every removal
 	// policy ends with.
-	nightPhasePowerOffAction   = "power-off-action"
+	nightPhasePowerOffAction = "powerOffAction"
+	// nightPowerOffActionCueName is a cue_name under nightPhasePowerOffAction,
+	// safe from an operator's own cue names because row identity is
+	// (session, cycle, phase, cue_name) and no operator cue ever shares
+	// this phase.
 	nightPowerOffActionCueName = "power-off"
 )
 
@@ -174,10 +181,10 @@ func (h *handlers) nightPowerOffAdvanceActionPrerequisite(ctx context.Context, n
 	}
 	switch row.State {
 	case nightCueStatePending, nightCueStateDispatched:
-		// No bound here: nightRunCue's own resume path is what turns a
-		// row stuck here into a resolved outcome or, when the target
-		// carries no stable retry identity, ambiguous - never this file's
-		// own timeout.
+		// Stated, not accidental: an audio target's own await-result
+		// error (nightDispatchCueAudio's "resolved: false") retries here
+		// under the same idempotency key with no cap, so this can wait
+		// indefinitely rather than guess; power stays on meanwhile.
 		return false, false, "", nil
 	case nightCueStateAmbiguous:
 		return false, true, row.OutcomeReason, nil
@@ -215,6 +222,8 @@ func (h *handlers) nightPowerOffDispatchAction(ctx context.Context, now time.Tim
 	}
 	switch row.State {
 	case nightCueStatePending, nightCueStateDispatched:
+		// Same stated property as nightPowerOffAdvanceActionPrerequisite's
+		// own identical case: no bound here, waits rather than guesses.
 		return
 	case nightCueStateAmbiguous:
 		h.nightCompletePowerPhase(ctx, now, rec, fmt.Sprintf(
