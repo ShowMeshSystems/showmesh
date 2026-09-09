@@ -620,6 +620,13 @@ type AssetSyncNudger interface {
 	// through its own request signal, syncing exactly that node rather
 	// than every declared node.
 	RequestNode(nodeID string)
+	// RecordResyncIntent notes that nodeID has an outstanding operator
+	// re-sync as of issuedAt, for [internal/coordinator/inventory.Manager]
+	// to run once a live report arrives that postdates issuedAt, rather
+	// than RequestNode running immediately against whatever report is
+	// already stored. See noderesync.go's route and assetsync.Service's
+	// own TriggerIfResyncIntentPrecedes, this record's consumer.
+	RecordResyncIntent(nodeID string, issuedAt time.Time)
 }
 
 // CueActivationNudger requests that [CueActivationLoop]'s current (or

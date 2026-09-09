@@ -164,6 +164,11 @@ func TestNightAnnouncementApplyThenStartIsWhatActuallyDucks(t *testing.T) {
 	if got := n.report(t, "announcement-1"); got.State != pkgaudio.StatePlaying {
 		t.Fatalf("announcement state after start = %q, want playing", got.State)
 	}
+	// A duck lands via an engine fade toward the duck depth
+	// (mix.go's fadeToEffectiveGainLocked), not an instant SetGain: wait
+	// past DuckFadeDurationMs so the bed's reported gain below reads the
+	// duck's settled value, not the engine still mid-ramp.
+	time.Sleep(2 * time.Duration(audio.DefaultSettings.DuckFadeDurationMs) * time.Millisecond)
 	bed := n.report(t, "night-bg")
 	if !bed.Ducked || bed.DuckedBy != "announcement-1" {
 		t.Fatalf("bed after the announcement started: ducked = %v, duckedBy = %q; want ducked by announcement-1", bed.Ducked, bed.DuckedBy)
@@ -175,8 +180,11 @@ func TestNightAnnouncementApplyThenStartIsWhatActuallyDucks(t *testing.T) {
 		t.Fatalf("bed gain under the announcement = %v, want the duck depth %v", bed.Gain, wantDucked)
 	}
 
-	// And it releases on stop, back to the configured gain.
+	// And it releases on stop, back to the configured gain, again via an
+	// engine fade (this time DuckRestoreFadeDurationMs) rather than an
+	// instant step.
 	n.run(t, "audio.session.stop", "announcement-1", "ann-stop", 3, nil)
+	time.Sleep(2 * time.Duration(audio.DefaultSettings.DuckRestoreFadeDurationMs) * time.Millisecond)
 	bed = n.report(t, "night-bg")
 	if bed.Ducked {
 		t.Fatal("bed still ducked after the announcement stopped")

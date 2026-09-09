@@ -6,6 +6,13 @@ package v1
 type ResyncNodeAssetsResult struct {
 	Node       string `json:"node"`
 	AcceptedAt string `json:"acceptedAt"`
+
+	// InventoryRequestCommandID names the asset.inventory.request this
+	// route issued to nodeID, if publishing it succeeded. Empty when
+	// nothing could be published (never a placeholder value): the node's
+	// own outstanding re-sync intent still runs off its next ordinary
+	// report in that case, just without this specific push.
+	InventoryRequestCommandID string `json:"inventoryRequestCommandId,omitempty"`
 }
 
 // ResyncNodeAssetsResponse wraps ResyncNodeAssetsResult with the standard

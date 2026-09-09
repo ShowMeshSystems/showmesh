@@ -174,6 +174,21 @@ type Service struct {
 	// method's own doc comment for why that is the honest ADR-011 answer
 	// rather than a gap to close. Guarded by mu.
 	failures map[dispatchKey]FetchFailureRecord
+
+	// resyncIntentMu guards resyncIntents: one node's most recently
+	// issued operator re-sync intent, backing [Service.
+	// RecordResyncIntent] and [Service.TriggerIfResyncIntentPrecedes].
+	// In-memory only and reset on every process restart: a coordinator
+	// restart between an operator's press and the node's answering report
+	// drops the intent, and that node's re-sync falls back to running on
+	// whatever report the node next sends on its own ordinary schedule,
+	// the same as today's behavior. Chosen over a store-backed record
+	// because the cost of that gap is bounded by the node's own inventory
+	// interval, not open-ended, and a schema change buys nothing an
+	// operator would notice: a restart mid-press is already a rare event
+	// they can simply press the button again for.
+	resyncIntentMu sync.Mutex
+	resyncIntents  map[string]time.Time
 }
 
 // NewService constructs a Service holding initial. See [Settings]' own
@@ -289,6 +304,46 @@ func (s *Service) RequestNode(nodeID string) {
 	select {
 	case s.request <- struct{}{}:
 	default:
+	}
+}
+
+// RecordResyncIntent notes that nodeID has an outstanding operator-issued
+// re-sync as of issuedAt, overwriting any earlier intent for the same
+// node. It does not itself sync anything, see [Service.
+// TriggerIfResyncIntentPrecedes], which consumes this record once a fresh
+// report proves the node's own current state.
+func (s *Service) RecordResyncIntent(nodeID string, issuedAt time.Time) {
+	s.resyncIntentMu.Lock()
+	if s.resyncIntents == nil {
+		s.resyncIntents = make(map[string]time.Time)
+	}
+	s.resyncIntents[nodeID] = issuedAt
+	s.resyncIntentMu.Unlock()
+}
+
+// TriggerIfResyncIntentPrecedes clears and acts on nodeID's outstanding
+// re-sync intent when one was recorded strictly before reportedAt, the
+// coordinator's own receipt time for a just-stored, live asset inventory
+// report (never the node's envelope SentAt: see internal/coordinator/
+// inventory's handleAssetInventory, this method's only caller, for why
+// both sides of that comparison must share one clock domain). An intent
+// recorded at or after reportedAt describes a press this report predates
+// and is left outstanding for the next one. No intent for nodeID is a
+// no-op. Triggering runs the repair through [Service.RequestNode] exactly
+// as the resync route (internal/coordinator/api's noderesync.go) used to
+// call it directly, now against the report that was just stored rather
+// than whatever was already on hand when the operator pressed the button.
+func (s *Service) TriggerIfResyncIntentPrecedes(nodeID string, reportedAt time.Time) {
+	s.resyncIntentMu.Lock()
+	issuedAt, ok := s.resyncIntents[nodeID]
+	if ok && issuedAt.Before(reportedAt) {
+		delete(s.resyncIntents, nodeID)
+	} else {
+		ok = false
+	}
+	s.resyncIntentMu.Unlock()
+	if ok {
+		s.RequestNode(nodeID)
 	}
 }
 

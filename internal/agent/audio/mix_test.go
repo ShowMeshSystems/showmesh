@@ -1733,6 +1733,16 @@ func TestSnapshotReportsGainWhenSuppressedWithoutAnyExplicitGainSet(t *testing.T
 	startPlaying(t, m, ctx, bgID, bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
 	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
 	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	// A duck lands via an engine fade toward the duck depth (mix.go's
+	// fadeToEffectiveGainLocked), not an instant SetGain like mute: run
+	// the clock past DuckFadeDurationMs and let a tick observe it
+	// resolved, so this snapshot reads the duck's settled gain rather
+	// than the engine mid-ramp (see the fade-observability tests above
+	// for that transient value's own coverage).
+	c.advance(2 * time.Duration(m.SettingsSnapshot().DuckFadeDurationMs) * time.Millisecond)
+	m.watchTick(ctx)
+
 	bg, _ := m.get(bgID)
 	bg.mu.Lock()
 	ducked := len(bg.duckedByAll) != 0
@@ -1802,5 +1812,109 @@ func TestFadeCancelledByMuteReportsUnconfirmableNotComplete(t *testing.T) {
 	}
 	if got := observedGain(t, m, ctx, handle); got != 0 {
 		t.Fatalf("engine gain after the mute that cancelled the fade = %v, want 0", got)
+	}
+}
+
+// mutation target: session.go's snapshot gain assignment reverting to
+// effectiveGainLocked (the fade's own dispatched target, recorded onto
+// s.desired.Gain the instant the fade is dispatched) instead of the
+// fresh Engine.Observe result this same snapshot already collects for
+// Position. This is the observation gap the issue exists to close:
+// audio_session.gain.effective must show the engine's actual output
+// while a fade is ramping, not the value already recorded as this
+// session's own intent before the engine has moved anywhere.
+func TestSnapshotGainReportsEngineObservedValueNotTheDispatchedFadeTargetWhileFading(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	const target = pkgaudio.Gain(0.4)
+	if r := m.GainFade(ctx, id, "inv-fade", 3, pkgaudio.FadeCurveLinear, 2*time.Second, target); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain fade unexpectedly refused: %+v", r)
+	}
+
+	immediately := m.Snapshot(ctx)[0]
+	if !immediately.HasGain {
+		t.Fatal("snapshot immediately after dispatching a fade reports HasGain=false, want true")
+	}
+	if immediately.Gain == target {
+		t.Fatalf("snapshot immediately after dispatching a fade already reports the dispatched target %v; the engine has not ramped anywhere yet", target)
+	}
+
+	c.advance(time.Second)
+	m.watchTick(ctx)
+	halfway := m.Snapshot(ctx)[0]
+	if halfway.Gain == target || halfway.Gain == pkgaudio.Gain(1) {
+		t.Fatalf("snapshot halfway through a 2s fade reports Gain=%v, want a value strictly between the starting gain (1) and the target (%v)", halfway.Gain, target)
+	}
+
+	c.advance(1100 * time.Millisecond)
+	m.watchTick(ctx)
+	after := m.Snapshot(ctx)[0]
+	if after.Gain != target {
+		t.Fatalf("snapshot once the fade completes reports Gain=%v, want the dispatched target %v", after.Gain, target)
+	}
+}
+
+// Acceptance: a two-second fade must report a fading state throughout
+// and complete only once it is done, read here from [Manager.Snapshot]
+// -- the same call [runAudioReport] itself uses to build the wire report
+// -- not just the session's own internal field, which mix_test.go's
+// other fade tests already exercise directly.
+func TestSnapshotFadeStateReportsInProgressDuringAFadeAndCompleteAfterOverTheSnapshotAPI(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	if r := m.GainFade(ctx, id, "inv-fade", 3, pkgaudio.FadeCurveLinear, 2*time.Second, pkgaudio.Gain(0.4)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain fade unexpectedly refused: %+v", r)
+	}
+	if got := m.Snapshot(ctx)[0].FadeState; got != FadeStateInProgress {
+		t.Fatalf("FadeState immediately after dispatch = %q, want %q", got, FadeStateInProgress)
+	}
+
+	c.advance(time.Second)
+	m.watchTick(ctx)
+	if got := m.Snapshot(ctx)[0].FadeState; got != FadeStateInProgress {
+		t.Fatalf("FadeState halfway through a 2s fade = %q, want still %q", got, FadeStateInProgress)
+	}
+
+	c.advance(1100 * time.Millisecond)
+	m.watchTick(ctx)
+	if got := m.Snapshot(ctx)[0].FadeState; got != FadeStateComplete {
+		t.Fatalf("FadeState once the fade completes = %q, want %q", got, FadeStateComplete)
+	}
+}
+
+// A hard cut (audio.gain.set) must be distinguishable from a gain fade
+// purely from the snapshot API: it never reports FadeState in_progress,
+// and its Gain reaches the requested value on the very next snapshot
+// rather than ramping toward it -- the API-alone read the issue's
+// acceptance also requires against a hard cut, alongside the fade read
+// above.
+func TestSnapshotDistinguishesAHardGainSetFromAGainFade(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+
+	if r := m.GainSet(ctx, id, "inv-set", 3, pkgaudio.Gain(0.4)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain set unexpectedly refused: %+v", r)
+	}
+
+	snap := m.Snapshot(ctx)[0]
+	if snap.FadeState == FadeStateInProgress {
+		t.Fatal("a hard gain.set reports FadeState in_progress, want it to never report a fade at all")
+	}
+	if snap.Gain != pkgaudio.Gain(0.4) {
+		t.Fatalf("snapshot immediately after a hard gain.set reports Gain=%v, want the requested value 0.4 with no ramp", snap.Gain)
 	}
 }

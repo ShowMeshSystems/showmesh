@@ -709,13 +709,22 @@ func TestListAssetManifestReturnsEveryDeclaredNode(t *testing.T) {
 // (see assetmanifest.go's compile-time assertion for the real type's own
 // pin).
 type spyAssetSyncNudger struct {
-	calls         int
-	requestedNode []string
+	calls          int
+	requestedNode  []string
+	recordedIntent []resyncIntentCall
+}
+
+type resyncIntentCall struct {
+	nodeID   string
+	issuedAt time.Time
 }
 
 func (s *spyAssetSyncNudger) Nudge() { s.calls++ }
 func (s *spyAssetSyncNudger) RequestNode(nodeID string) {
 	s.requestedNode = append(s.requestedNode, nodeID)
+}
+func (s *spyAssetSyncNudger) RecordResyncIntent(nodeID string, issuedAt time.Time) {
+	s.recordedIntent = append(s.recordedIntent, resyncIntentCall{nodeID: nodeID, issuedAt: issuedAt})
 }
 
 // TestDependenciesAssetSyncNudgerDefaultsToNoOp proves withDefaults gives a

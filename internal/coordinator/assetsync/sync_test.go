@@ -696,6 +696,104 @@ func TestRequestNodeWakesRequestNeverNudge(t *testing.T) {
 	}
 }
 
+// --- RecordResyncIntent / TriggerIfResyncIntentPrecedes: noderesync.go's
+// deferred trigger (the arriving report, not a wall-clock wait, decides
+// when the repair runs) ---
+
+// TestTriggerIfResyncIntentPrecedesRunsRepairWhenIntentPredatesReport
+// proves the required shape: an intent recorded before a report's own
+// ReportedAt runs the repair (RequestNode's own request-channel wake,
+// never nudge - RequestNode's own contract) and clears the intent so a
+// later report does not re-trigger it.
+func TestTriggerIfResyncIntentPrecedesRunsRepairWhenIntentPredatesReport(t *testing.T) {
+	svc := NewService(openTestStore(t), &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	issuedAt := time.Now()
+	svc.RecordResyncIntent("render-01", issuedAt)
+	reportedAt := issuedAt.Add(time.Second)
+	svc.TriggerIfResyncIntentPrecedes("render-01", reportedAt)
+
+	select {
+	case <-svc.request:
+	default:
+		t.Fatal("TriggerIfResyncIntentPrecedes() left nothing queued on the request channel; want RequestNode to have run")
+	}
+	svc.requestMu.Lock()
+	queued := svc.pendingNodes["render-01"]
+	svc.requestMu.Unlock()
+	if !queued {
+		t.Fatal("pendingNodes[render-01] = false, want true: the repair must run against render-01")
+	}
+
+	svc.resyncIntentMu.Lock()
+	_, stillOutstanding := svc.resyncIntents["render-01"]
+	svc.resyncIntentMu.Unlock()
+	if stillOutstanding {
+		t.Fatal("intent for render-01 is still outstanding after triggering; it must be cleared so a later report does not re-trigger it")
+	}
+}
+
+// TestTriggerIfResyncIntentPrecedesNoOpWithNoIntent proves a report for a
+// node with no outstanding intent never runs the repair: an ordinary
+// periodic report must not spuriously wake RequestNode.
+func TestTriggerIfResyncIntentPrecedesNoOpWithNoIntent(t *testing.T) {
+	svc := NewService(openTestStore(t), &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	svc.TriggerIfResyncIntentPrecedes("render-01", time.Now())
+
+	select {
+	case <-svc.request:
+		t.Fatal("TriggerIfResyncIntentPrecedes() queued a request with no recorded intent")
+	default:
+	}
+}
+
+// TestTriggerIfResyncIntentPrecedesNoOpWhenIntentIssuedAfterReport proves
+// the boundary the design calls out explicitly: an intent issued AFTER a
+// report's ReportedAt describes a press that report predates, so it must
+// not trigger on THAT report - it stays outstanding for the next one.
+func TestTriggerIfResyncIntentPrecedesNoOpWhenIntentIssuedAfterReport(t *testing.T) {
+	svc := NewService(openTestStore(t), &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	reportedAt := time.Now()
+	issuedAt := reportedAt.Add(time.Second)
+	svc.RecordResyncIntent("render-01", issuedAt)
+	svc.TriggerIfResyncIntentPrecedes("render-01", reportedAt)
+
+	select {
+	case <-svc.request:
+		t.Fatal("TriggerIfResyncIntentPrecedes() ran the repair against a report that predates the intent")
+	default:
+	}
+	svc.resyncIntentMu.Lock()
+	stillIssuedAt, stillOutstanding := svc.resyncIntents["render-01"]
+	svc.resyncIntentMu.Unlock()
+	if !stillOutstanding || !stillIssuedAt.Equal(issuedAt) {
+		t.Fatalf("intent for render-01 = %v (outstanding=%v), want it left outstanding at %v for the next report", stillIssuedAt, stillOutstanding, issuedAt)
+	}
+}
+
+// TestRecordResyncIntentOverwritesEarlierIntent proves a second press
+// before the first report arrives replaces, rather than queues, the
+// outstanding intent for that node - there is exactly one outstanding
+// re-sync per node, matching pendingNodes' own "no unread duplicates"
+// shape one field over.
+func TestRecordResyncIntentOverwritesEarlierIntent(t *testing.T) {
+	svc := NewService(openTestStore(t), &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	first := time.Now()
+	second := first.Add(time.Second)
+	svc.RecordResyncIntent("render-01", first)
+	svc.RecordResyncIntent("render-01", second)
+
+	svc.resyncIntentMu.Lock()
+	got := svc.resyncIntents["render-01"]
+	svc.resyncIntentMu.Unlock()
+	if !got.Equal(second) {
+		t.Fatalf("resyncIntents[render-01] = %v, want the later intent %v", got, second)
+	}
+}
+
 // --- HandleMessage: consuming asset.fetch results ---
 
 // resultMessage builds a broker.Message carrying a result envelope for
