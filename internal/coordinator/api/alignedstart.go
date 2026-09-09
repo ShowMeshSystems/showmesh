@@ -88,11 +88,9 @@ func (h *handlers) handleAlignedAudioStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// The issuer is resolved per dispatch by alignedStartIssuerID, which
+	// every prepare and start below shares.
 	ac := authFromContext(ctx)
-	issuerID := ac.result.Principal.ID
-	if issuerID == "" {
-		issuerID = "unknown"
-	}
 	key := body.IdempotencyKey
 	if key == "" {
 		key = uuid.NewString()
