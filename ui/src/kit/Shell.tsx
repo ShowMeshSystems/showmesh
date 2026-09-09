@@ -1,8 +1,21 @@
-import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { Children, cloneElement, isValidElement, useEffect, useState, type MouseEvent, type ReactElement, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Drawer } from './Drawer'
 
 export type Connection = 'live' | 'degraded' | 'lost' | 'unknown'
+
+/** True once the viewport is at or below `breakpoint`. False during SSR and the first paint. */
+function useNarrow(breakpoint: number): boolean {
+  const [narrow, setNarrow] = useState(false)
+  useEffect(() => {
+    const query = window.matchMedia(`(max-width: ${breakpoint}px)`)
+    setNarrow(query.matches)
+    const onChange = () => setNarrow(query.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [breakpoint])
+  return narrow
+}
 
 type ChromeProps = {
   showPicker: ReactNode
@@ -18,6 +31,8 @@ type ChromeProps = {
  * puts the first nav group behind it: fix the wrap, never the offset.
  */
 export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal }: ChromeProps) {
+  const compact = useNarrow(720)
+  const [overflowOpen, setOverflowOpen] = useState(false)
   return (
     <header className="sm-chrome" data-chrome>
       <div className="sm-chrome__left">
@@ -28,9 +43,36 @@ export function ChromeBar({ showPicker, mode, nowPlaying, connection, principal 
       </div>
       <div className="sm-chrome__now">{nowPlaying}</div>
       <div className="sm-chrome__right">
-        {connection}
-        <span className="sm-chrome__divider" aria-hidden="true" />
-        {principal}
+        {compact ? (
+          <>
+            <button
+              type="button"
+              className="sm-chrome-toggle"
+              aria-haspopup="true"
+              aria-expanded={overflowOpen}
+              aria-label="More"
+              onClick={() => setOverflowOpen((v) => !v)}
+            >
+              <span aria-hidden="true">⋯</span>
+            </button>
+            {overflowOpen && (
+              <>
+                <div className="sm-chrome-overflow-scrim" onClick={() => setOverflowOpen(false)} aria-hidden="true" />
+                <div className="sm-chrome-overflow" role="menu">
+                  {connection}
+                  <span className="sm-chrome__divider" aria-hidden="true" />
+                  {principal}
+                </div>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            {connection}
+            <span className="sm-chrome__divider" aria-hidden="true" />
+            {principal}
+          </>
+        )}
       </div>
     </header>
   )
@@ -56,13 +98,51 @@ export function ConnectionPill({ state, label }: { state: Connection; label: str
   )
 }
 
-/** The rail and the page beside it. */
+/**
+ * The rail and the page beside it. Below the rail breakpoint the rail no
+ * longer takes a grid column; this owns the opener and scrim that turn it
+ * into a drawer instead, so no screen has to wire that state itself.
+ */
 export function ShellBody({ children }: { children: ReactNode }) {
-  return <div className="sm-shell-body">{children}</div>
+  const [railOpen, setRailOpen] = useState(false)
+  const items = Children.toArray(children)
+  const railIndex = items.findIndex((child) => isValidElement(child) && child.type === Rail)
+  const rail =
+    railIndex === -1
+      ? null
+      : cloneElement(items[railIndex] as ReactElement<RailProps>, { open: railOpen, onClose: () => setRailOpen(false) })
+  const rest = railIndex === -1 ? items : items.filter((_, index) => index !== railIndex)
+  return (
+    <div className="sm-shell-body">
+      <button
+        type="button"
+        className="sm-rail-toggle"
+        aria-haspopup="true"
+        aria-expanded={railOpen}
+        aria-label={railOpen ? 'Close navigation' : 'Open navigation'}
+        onClick={() => setRailOpen((v) => !v)}
+      >
+        <span aria-hidden="true">☰</span>
+      </button>
+      <div className="sm-rail-scrim" data-open={railOpen} onClick={() => setRailOpen(false)} aria-hidden="true" />
+      {rail}
+      {rest}
+    </div>
+  )
 }
 
-export function Rail({ children }: { children: ReactNode }) {
-  return <nav className="sm-rail" data-rail aria-label="Primary">{children}</nav>
+type RailProps = { children: ReactNode; open?: boolean; onClose?: () => void }
+
+/** `open`/`onClose` are supplied by `ShellBody` when `Rail` is its direct child; both default for standalone use (the specimen page). */
+export function Rail({ children, open = false, onClose }: RailProps) {
+  const closeOnLinkClick = (event: MouseEvent<HTMLElement>) => {
+    if (onClose && event.target instanceof HTMLElement && event.target.closest('a')) onClose()
+  }
+  return (
+    <nav className="sm-rail" data-rail data-open={open} aria-label="Primary" onClick={closeOnLinkClick}>
+      {children}
+    </nav>
+  )
 }
 
 export function RailGroup({ children }: { children: string }) {

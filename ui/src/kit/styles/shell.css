@@ -27,6 +27,14 @@
   background: var(--surface);
 }
 
+/* Below the rail breakpoint the drawer opener sits fixed at the left edge of
+   the bar; reserve its width so it never overlaps the brand mark. */
+@media (max-width: 1100px) {
+  .sm-chrome {
+    padding-left: 54px;
+  }
+}
+
 .sm-chrome__left {
   display: flex;
   align-items: center;
@@ -64,6 +72,59 @@
   align-items: center;
   gap: 14px;
   flex: 0 0 auto;
+}
+
+/* The bar's own overflow menu. Below 720px the bar cannot fit the connection
+   pill and principal group; they move here instead of clipping. */
+.sm-chrome-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: var(--ctrl-h-compact);
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .sm-chrome-toggle {
+    display: inline-flex;
+  }
+}
+
+.sm-chrome-overflow-scrim {
+  position: fixed;
+  inset: var(--chrome-h) 0 0 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.sm-chrome-overflow {
+  position: fixed;
+  top: calc(var(--chrome-h) + 1px);
+  right: 12px;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  max-width: calc(100vw - 24px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--raised);
+  box-shadow: -4px 8px 24px rgb(0 0 0 / 0.4);
+}
+
+.sm-chrome-overflow > .sm-chrome__divider {
+  width: 100%;
+  height: 1px;
 }
 
 .sm-brand {
@@ -338,6 +399,68 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* The opener for the collapsed rail. Fixed at the bar's left edge so it stays
+   reachable regardless of the rail's own on/off-screen state. */
+.sm-rail-toggle {
+  display: none;
+  position: fixed;
+  top: 6px;
+  left: 12px;
+  z-index: 31;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.sm-rail-scrim {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .sm-rail-toggle {
+    display: inline-flex;
+  }
+
+  /* Below the breakpoint the rail stops taking a grid column; the drawer
+     floats over the main column instead. */
+  .sm-shell-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sm-rail {
+    position: fixed;
+    top: calc(var(--chrome-h) + 1px);
+    left: 0;
+    bottom: 0;
+    z-index: 41;
+    width: min(84vw, 320px);
+    max-width: 320px;
+    min-height: 0;
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+    box-shadow: 8px 0 24px rgb(0 0 0 / 0.4);
+  }
+
+  .sm-rail[data-open='true'] {
+    transform: translateX(0);
+  }
+
+  .sm-rail-scrim[data-open='true'] {
+    display: block;
+    position: fixed;
+    inset: calc(var(--chrome-h) + 1px) 0 0 0;
+    z-index: 40;
+    background: rgb(0 0 0 / 0.35);
+  }
 }
 
 .sm-main {
