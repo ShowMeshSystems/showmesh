@@ -62,6 +62,21 @@
 // GST_DEBUG-based confirmation of exactly which element provided that
 // clock.
 //
+// The sink-branch queue that tee originally always inserted is itself a
+// confound this file's own instrument introduced: production has no
+// queue (or tee) anywhere between its format-adaptation chain and the
+// sink, so a real buffering element -- GStreamer's queue defaults
+// max-size-time to exactly one second -- was sitting directly in the
+// path whose buffering behavior this repro measures, capable of letting
+// a non-live pipeline's mixer run that far ahead of what the sink has
+// actually rendered before backpressure reaches it. buildTruncation
+// CaptureSink's sinkQueueMaxSizeMs parameter and sinkQueueDisabled exist
+// to measure whether that is what an already-reported ~1s non-live
+// truncation actually came from, not the aggregator-drop this repro set
+// out to test; see bench/audio-node/resync-truncation-repro/README.md's
+// "Node-01 run 3" section for the full investigation, the two required
+// experiments, and how to read their combined result.
+//
 // Opt in explicitly -- excluded from every ordinary run because it opens
 // a physical device:
 //
@@ -86,6 +101,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -107,27 +123,120 @@ const truncationReproRate = 48000
 // output-side latency to actually reach the filesink and finalize.
 const truncationReproSettle = 5 * time.Second
 
+// sinkQueueDisabled, passed as buildTruncationCaptureSink's
+// sinkQueueMaxSizeMs, builds the sink branch with no queue at all: tee
+// links straight to alsasink, matching production's own topology at
+// that exact point (Engine.buildPipeline's linkInterleaveToSink also
+// runs the format-adaptation chain straight into the sink, no queue).
+// See this file's own top doc comment for why the sink-branch queue this
+// repro's own capture tee originally always inserted here -- a
+// buffering element production does not have, sitting directly in the
+// path under measurement -- is itself a suspect in the non-live arm's
+// truncation number, and why both a parametrized version and this
+// no-queue version are needed to settle it.
+const sinkQueueDisabled = 0
+
 // buildTruncationCaptureSink parses a tee that duplicates the pipeline's
 // real output to both a genuine alsasink on device (exactly as production
 // wires it: sync=true, the GstBaseSink default, which is what makes it
 // the entity actually pacing playback to the real card's clock) and a
-// queue!wavenc!filesink recording branch. Each tee branch gets its own
-// queue so neither branch's downstream can stall the other's thread.
+// queue!wavenc!filesink recording branch, named sinkq and captureq
+// respectively so both this function's own caller and a human reading
+// GST_DEBUG output can address and verify them individually.
+//
+// sinkQueueMaxSizeMs controls the SINK branch only: sinkQueueDisabled
+// (0) omits that queue entirely (tee -> alsasink directly, matching
+// production); a positive value inserts `queue name=sinkq` with
+// max-size-time set to exactly that many milliseconds and max-size-bytes
+// / max-size-buffers explicitly zeroed (unlimited), so max-size-time is
+// the only bound in effect -- otherwise GStreamer's own default
+// max-size-buffers=200 could cap effective queue depth below whatever
+// max-size-time alone would allow, confounding a test whose entire point
+// is varying time. The CAPTURE branch's own queue (captureq) is never
+// touched by this parameter and keeps GStreamer's un-set defaults in
+// every call: a tee blocks every branch when any branch blocks, so
+// removing captureq's own buffering would let a filesink/wavenc stall
+// propagate back through the tee into the sink branch, producing a third,
+// different pipeline rather than an answer to either question this
+// function exists to let two separate experiments ask.
+//
 // ghost_unlinked_pads=true (the second ParseBinFromDescription argument)
 // is what turns tee's own dangling sink pad into this bin's ghost pad, so
 // the returned element satisfies newSinkFactoryElement's gst.Element
 // contract exactly as a plain alsasink would.
-func buildTruncationCaptureSink(device, capturePath string) (gst.Element, error) {
+func buildTruncationCaptureSink(device, capturePath string, sinkQueueMaxSizeMs int) (gst.Element, error) {
 	gst.Init() // ParseBinFromDescription below needs GStreamer initialized before New would otherwise do it
+
+	var sinkBranch string
+	if sinkQueueMaxSizeMs == sinkQueueDisabled {
+		sinkBranch = fmt.Sprintf("alsasink device=%q", device)
+	} else {
+		sinkBranch = fmt.Sprintf("queue name=sinkq max-size-time=%d max-size-bytes=0 max-size-buffers=0 ! alsasink device=%q",
+			int64(sinkQueueMaxSizeMs)*int64(time.Millisecond), device)
+	}
 	desc := fmt.Sprintf(
-		`tee name=t ! queue ! alsasink device=%q `+
-			`t. ! queue ! wavenc ! filesink location=%q sync=false async=false`,
-		device, capturePath)
+		`tee name=t ! %s `+
+			`t. ! queue name=captureq ! wavenc ! filesink location=%q sync=false async=false`,
+		sinkBranch, capturePath)
 	bin, err := gst.ParseBinFromDescription(desc, true)
 	if err != nil {
 		return nil, fmt.Errorf("could not build tee/capture sink bin from %q: %w", desc, err)
 	}
 	return bin, nil
+}
+
+// verifyAssembledSinkShape enumerates every element GStreamer actually
+// added to bin (via gst_bin_iterate_elements, not the description string
+// that was written) and logs each one's name and factory, so an element
+// that survived an edit -- or was never intended -- cannot sit
+// unnoticed in exactly the path this experiment measures. It also reads
+// back sinkq's own max-size-time/-bytes/-buffers directly from the live
+// element, when sinkq exists, since a property this test set is only
+// evidence once it is read back rather than assumed to have taken.
+func verifyAssembledSinkShape(t *testing.T, bin gst.Bin, label string) {
+	t.Helper()
+	// Iterator.ForEach/Fold go through gobject.UnsafeValueFromGlibUseAny
+	// Instead, which unconditionally panics in go-gst v0.0.2 (a generated
+	// stub explicitly marked "must be handwritten" -- not this package's
+	// bug to fix). Iterator.Next is a real, separately hand-written
+	// conversion (iterator.go, via gobject.ValueFromNative(...).GoValue())
+	// and does not have this problem, so the walk below uses it directly
+	// instead of ForEach.
+	var elements []string
+	it := bin.IterateElements()
+	for {
+		v, result := it.Next()
+		if result == gst.IteratorResync {
+			it.Resync()
+			elements = nil
+			continue
+		}
+		if result != gst.IteratorOK {
+			if result != gst.IteratorDone {
+				t.Logf("VERIFY [%s]: element iteration ended with %v, not IteratorDone -- shape list below may be incomplete", label, result)
+			}
+			break
+		}
+		el, ok := v.(gst.Element)
+		if !ok {
+			elements = append(elements, fmt.Sprintf("<non-element item: %T>", v))
+			continue
+		}
+		factoryName := "?"
+		if f := el.GetFactory(); f != nil {
+			factoryName = f.GetName()
+		}
+		elements = append(elements, fmt.Sprintf("%s(%s)", el.GetName(), factoryName))
+	}
+	t.Logf("ASSEMBLED SHAPE [%s]: %v", label, elements)
+
+	if sinkq := bin.GetByName("sinkq"); sinkq != nil {
+		obj := sinkq.(gst.Object)
+		t.Logf("VERIFY [%s]: sinkq read back from the live element -- max-size-time=%v max-size-bytes=%v max-size-buffers=%v",
+			label, obj.ObjectProperty("max-size-time"), obj.ObjectProperty("max-size-bytes"), obj.ObjectProperty("max-size-buffers"))
+	} else {
+		t.Logf("VERIFY [%s]: no element named sinkq exists in the assembled bin (sink branch has no queue)", label)
+	}
 }
 
 // buildTestPipeline constructs a pipeline for exactly the single-
@@ -314,9 +423,33 @@ func runTruncationArm(t *testing.T, forceNonLiveArm bool, captureEnvVar string) 
 		t.Skipf("set SHOWMESH_TRUNC_DEVICE, SHOWMESH_TRUNC_SWEEP and %s to run this gate", captureEnvVar)
 	}
 
-	sink, err := buildTruncationCaptureSink(device, capture)
+	// SHOWMESH_TRUNC_SINK_QUEUE_MS controls the sink-branch queue this
+	// capture tee inserts -- a buffering element production does not have
+	// at that point in its own topology, and therefore a suspect in any
+	// truncation this repro measures until ruled in or out. Unset
+	// defaults to 1000 (GStreamer's own queue default, and what every
+	// result already reported against this harness used, so omitting the
+	// variable reproduces prior behavior unchanged); "0" builds the sink
+	// branch with no queue at all (sinkQueueDisabled), matching
+	// production's own topology exactly at that point. See
+	// buildTruncationCaptureSink's own doc comment.
+	sinkQueueMs := 1000
+	if v := os.Getenv("SHOWMESH_TRUNC_SINK_QUEUE_MS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatalf("SHOWMESH_TRUNC_SINK_QUEUE_MS=%q: %v", v, err)
+		}
+		sinkQueueMs = n
+	}
+
+	sink, err := buildTruncationCaptureSink(device, capture, sinkQueueMs)
 	if err != nil {
 		t.Fatalf("buildTruncationCaptureSink: %v", err)
+	}
+	if sinkBin, ok := sink.(gst.Bin); ok {
+		verifyAssembledSinkShape(t, sinkBin, captureEnvVar)
+	} else {
+		t.Fatalf("sink is not a gst.Bin -- cannot verify its assembled shape, stop rather than guess")
 	}
 
 	var e *Engine

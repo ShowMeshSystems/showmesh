@@ -245,6 +245,135 @@ a future fix would put production in. Measuring whether it truncates the
 front of a cue is measuring the consequence of that future state before
 it ships, not an academic comparison.
 
+## Node-01 run 3: a confound in the instrument itself, and how it's ruled in or out
+
+### The result that prompted this
+
+Three runs each arm, all six controls passing, live always
+`pipeline.IsLive()==true` with clock `GstSystemClock`, non-live always
+`false` with clock `GstAudioSinkClock`:
+
+| arm | run 1 | run 2 | run 3 | mean |
+|---|---|---|---|---|
+| live truncation (ms) | 0.021 | 7.208 | 0.021 | -- |
+| non-live truncation (ms) | 1000.458 | 999.292 | 1005.000 | 1001.6 (range 5.7) |
+
+The non-live pipeline drops about a second off the front of every cue --
+roughly 2.5x the originally measured anchor's own 395ms, and suspiciously
+close to a round number.
+
+### The confound
+
+`buildTruncationCaptureSink`'s capture tee originally always inserted
+`tee name=t ! queue ! alsasink ...` -- a bare `queue`, whose GStreamer
+default `max-size-time` is exactly 1000000000ns, one second. **Production
+has no tee and no queue between the format-adaptation chain and the
+sink at all** -- `linkInterleaveToSink` (`engine_cgo.go`) links straight
+into whatever `newSinkFactoryElement` builds. A buffering element
+production does not have was sitting directly upstream of the sink, in
+exactly the path whose buffering behavior this repro measures.
+
+**The hypothesis, which predicts both arms, not only the surprising
+one:** a non-live source pushes as fast as it can. The sink-branch queue
+absorbs up to its own max-size-time of data before backpressure reaches
+the mixer, so the mixer's own output running time can run that far ahead
+of what the sink has actually rendered. `Start`'s seek then anchors the
+branch to that advanced running time, its buffers arrive behind it, and
+`GstAudioAggregator` discards whatever lies entirely before its output
+offset -- bounded by the queue's own depth. In the live arm the source
+paces to real time, the mixer cannot run ahead regardless of any
+downstream queue, nothing is discarded, and the measurement reads zero
+either way. One mechanism explains both results; an explanation that
+only accounts for the surprising one is a guess, not a candidate.
+
+**This is the analyzer's own onset mistake one layer out:** the
+instrument was built by the same hands as the experiment, and it
+introduced an element production does not have into exactly the path
+under test. The tee genuinely cannot affect clock selection (queried and
+confirmed via `GST_DEBUG=GST_PIPELINE:5`, section 4) -- that was true,
+and the wrong property to have checked. It can affect buffering.
+
+### Two decisive experiments, not one
+
+**Experiment A -- does truncation track queue depth?** Vary only the
+sink-branch queue's `max-size-time` via `SHOWMESH_TRUNC_SINK_QUEUE_MS`
+(new env var; unset defaults to 1000, reproducing the run above
+unchanged) across 100 / 500 / 1000ms, three runs each, nine numbers
+total. The capture-branch queue (`captureq`) is never touched by this
+variable and keeps GStreamer's own unset defaults throughout -- a tee
+blocks every branch when any one blocks, so removing *that* queue's
+buffering would let a `filesink`/`wavenc` stall propagate back into the
+sink branch, producing a third, different pipeline rather than an answer.
+`buildTruncationCaptureSink` also now sets the sink queue's
+`max-size-bytes` and `max-size-buffers` explicitly to 0 (unlimited)
+whenever a queue is present, so `max-size-time` is the only bound in
+effect -- otherwise GStreamer's own default `max-size-buffers=200` could
+cap effective depth below whatever the time setting alone implies,
+confounding a test whose entire point is varying time. This means even
+the 1000ms sweep point is not byte-for-bit identical in configuration to
+run 3's own original queue (which had all three GStreamer defaults
+active); if its result still lands near 1001.6ms, that itself shows the
+byte/buffer bounds were not the dominant factor either.
+
+**Experiment B -- does truncation collapse when the sink-branch queue is
+removed entirely?** `SHOWMESH_TRUNC_SINK_QUEUE_MS=0` builds the sink
+branch as `tee name=t ! alsasink device=...` directly -- no queue at
+all, matching production's own topology exactly at that point. The
+capture branch keeps its own queue unchanged, for the same
+tee-blocks-every-branch reason as experiment A. Three runs.
+
+Both experiments must be run and reported together, not separately --
+one corrected figure, not a third revision.
+
+**Verifying the shape actually built, not the string that was written:**
+`buildTruncationCaptureSink` names every element in its own description
+(`t`, `sinkq` when present, `captureq`) precisely so
+`verifyAssembledSinkShape` can enumerate what GStreamer actually
+constructed (`gst_bin_iterate_elements`, not a re-parse of the
+description) and log it before any run proceeds, plus read `sinkq`'s
+`max-size-time`/`-bytes`/`-buffers` back off the live element rather than
+trust the value this test asked for. This is what catches a queue that
+survived an edit, or one nobody intended, sitting unnoticed in exactly
+the path under measurement -- writing a fresh description string is a
+fresh chance to make the same mistake again, so the check has to inspect
+the assembled object, not the text. (Building this needed one library
+workaround: go-gst v0.0.2's generated `Iterator.ForEach`/`Fold` panic
+unconditionally -- an upstream stub explicitly marked "must be
+handwritten" -- so the walk uses the separately hand-written
+`Iterator.Next` instead, which does not have this problem.) Confirmed on
+dev-02 against a bad device (no card needed for this structural check):
+
+```
+ASSEMBLED SHAPE [...]: [filesink0(filesink) wavenc0(wavenc) captureq(queue) alsasink0(alsasink) sinkq(queue) t(tee)]
+VERIFY [...]: sinkq read back from the live element -- max-size-time=500000000 max-size-bytes=0 max-size-buffers=0
+```
+
+for a 500ms setting, and with `sinkq` entirely absent from the list (not
+merely zeroed) when `SHOWMESH_TRUNC_SINK_QUEUE_MS=0`.
+
+### How to read the combined result
+
+- **If Experiment A's truncation tracks the queue setting** (roughly
+  proportional to 100 / 500 / 1000ms), the constant is this repro's own
+  instrument, not evidence about production, and the number reported so
+  far is an artefact of the rig -- a good outcome for one round of work,
+  reported plainly rather than softened.
+- **If Experiment A stays near 1000ms regardless of setting**, the
+  sink-branch queue's `max-size-time` is exonerated as the mechanism.
+- **If Experiment B (queue removed) collapses toward roughly 200ms** --
+  `alsasink`'s own default `buffer-time` -- the hypothesis is confirmed
+  in a different, still real form: the bound is the sink's own ring
+  buffer, not a GStreamer queue, and that number is closer to what
+  production would actually lose.
+- **If Experiment B stays near a second even with no queue at all**, the
+  sink-branch queue was not the cause, something else is holding that
+  much data back, and that is itself worth reporting rather than
+  papering over.
+
+The one thing this section does not do is state a corrected truncation
+number: that comes only from the nine-plus-three measurements above,
+run and reported together.
+
 ## What's in this directory
 
 - `gensweep/` -- the deterministic sweep generator (below).
@@ -510,23 +639,65 @@ Each run logs (to `-test.v` output): `pipeline.IsLive()` (must read
 `true` for the live arm, `false` for the non-live arm -- a mismatch is a
 hard test failure, not a soft warning, exactly because a silently-failed
 toggle would make the two arms measure the same thing), the pipeline's
-selected clock name, and the diagnostic
-`pipelineRunningTime`/pad-offset pair `resyncMixerPads` actually computed
-for that run.
+selected clock name, the assembled sink-branch shape and (when present)
+`sinkq`'s properties read back from the live element (see run 3 above),
+and the diagnostic `pipelineRunningTime`/pad-offset pair `resyncMixerPads`
+actually computed for that run.
 
 **Confirming the clock provider independently of the Go log line**: the
 tee this repro inserts sits *after* interleave and *before* the real
 `alsasink`, so it cannot itself change which element the pipeline selects
 its clock from -- but per the task's own instruction, confirm this by
-reading the selected clock rather than assuming it. Re-run either arm
-once with `GST_DEBUG=GST_PIPELINE:5 ./truncation_repro.test ...` and grep
-the output for `"selected clock"` (`gst_pipeline_auto_clock`'s own debug
-line); the name it reports must be the ALSA sink's own clock instance
-(named after the device, not `GstSystemClock`). Its absence, or a
-`GstSystemClock` selection, is itself a control failure -- it means the
-card never actually became the pipeline's timing source, voiding the
-comparison this whole repro depends on -- and should be reported as such,
-not run past.
+reading the selected clock rather than assuming it, not by predicting
+what it should be. Re-run either arm once with
+`GST_DEBUG=GST_PIPELINE:5 ./truncation_repro.test ...` and grep the
+output for `"selected clock"` (`gst_pipeline_auto_clock`'s own debug
+line). Observed on node-01: live selected `GstSystemClock`, non-live
+selected `GstAudioSinkClock` -- the reverse of a naive expectation that
+the real device's own hardware clock would win in the live arm. Both
+arms' own `pipeline.GetPipelineClock() != nil` control passed in both
+cases (a pipeline with no selected clock at all is the actual control
+failure this guards, not a specific clock name), so neither run was
+voided by it, but this pairing is not yet explained and is recorded here
+rather than silently accepted -- a candidate confound in its own right,
+separate from the queue investigation above, that a future round should
+chase rather than this one.
+
+### Node-01 run 3's experiments: exact commands
+
+Nine sweep runs (Experiment A: `SHOWMESH_TRUNC_SINK_QUEUE_MS` in
+`100 500 1000`, three repeats each) plus three queue-deleted runs
+(Experiment B: `SHOWMESH_TRUNC_SINK_QUEUE_MS=0`), all against the
+**non-live** arm only, each to its own capture file so none overwrite
+each other:
+
+```sh
+for ms in 100 500 1000; do
+  for run in 1 2 3; do
+    SHOWMESH_TRUNC_DEVICE=plughw:CARD=PCH \
+    SHOWMESH_TRUNC_SWEEP=/path/to/sweep_100_2000_2s_48k_s16le_mono.wav \
+    SHOWMESH_TRUNC_CAPTURE_NONLIVE=/path/to/nonlive_q${ms}_run${run}.wav \
+    SHOWMESH_TRUNC_SINK_QUEUE_MS=${ms} \
+        ./truncation_repro.test -test.run TestTruncationRepro_NonLiveArm -test.v \
+        | tee /path/to/log_q${ms}_run${run}.txt
+  done
+done
+
+for run in 1 2 3; do
+  SHOWMESH_TRUNC_DEVICE=plughw:CARD=PCH \
+  SHOWMESH_TRUNC_SWEEP=/path/to/sweep_100_2000_2s_48k_s16le_mono.wav \
+  SHOWMESH_TRUNC_CAPTURE_NONLIVE=/path/to/nonlive_qdel_run${run}.wav \
+  SHOWMESH_TRUNC_SINK_QUEUE_MS=0 \
+      ./truncation_repro.test -test.run TestTruncationRepro_NonLiveArm -test.v \
+      | tee /path/to/log_qdel_run${run}.txt
+done
+```
+
+Each saved log's `ASSEMBLED SHAPE`/`VERIFY` lines are part of the
+evidence, not just its `RESULT_TRUNCATION_MS` -- confirm `sinkq` is
+present with the intended `max-size-time` (experiment A) or absent
+entirely (experiment B) for every one of the twelve runs before trusting
+its number.
 
 ## 5. Analyzing a completed capture
 
