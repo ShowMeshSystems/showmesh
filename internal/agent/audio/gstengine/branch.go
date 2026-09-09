@@ -63,6 +63,13 @@ type branch struct {
 	frozen   bool // true when Position must come from frozenAt, not a live query
 	frozenAt time.Duration
 
+	// renderedPos is the PTS of the last buffer actually seen at volume's
+	// own sink pad, kept current for the branch's whole lifetime by the
+	// probe build installs. Pause freezes at this rather than at
+	// queryPosition's live result, which resolves upstream toward the
+	// source and over-reports by however far decode is running ahead.
+	renderedPos time.Duration
+
 	// segmentStart is the branch position the current GStreamer segment
 	// began at: 0 until the first seek, then whatever position the most
 	// recent seek targeted. resyncMixerPads uses it to translate a
@@ -299,6 +306,17 @@ func (b *branch) build(path string) error {
 		}
 	})
 
+	// Keep renderedPos current for Pause: see its own field comment for
+	// why this is more trustworthy than a live queryPosition call.
+	b.volume.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		if buf := info.GetBuffer(); buf != nil {
+			b.mu.Lock()
+			b.renderedPos = time.Duration(buf.PTS())
+			b.mu.Unlock()
+		}
+		return gst.PadProbeOK
+	})
+
 	// Watch this branch's own contribution to the mix for its natural
 	// end: an EOS event on the queue's src pad is this branch finishing
 	// on its own, distinct from a pipeline-wide EOS this engine never
@@ -486,6 +504,14 @@ func (b *branch) queryPosition() time.Duration {
 		return frozenAt
 	}
 	return time.Duration(ns)
+}
+
+// renderedPosition returns renderedPos, the actually-rendered position
+// Pause freezes at instead of queryPosition's read-ahead result.
+func (b *branch) renderedPosition() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.renderedPos
 }
 
 // localRunningTime returns atPos translated into the running time this
