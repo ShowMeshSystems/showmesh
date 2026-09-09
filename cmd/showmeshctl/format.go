@@ -241,3 +241,44 @@ func declarationColumn(d nodeDeclaration) string {
 		return "declared, UNRECOGNIZED-STATE(" + d.DiscoveryState + ")"
 	}
 }
+
+// Resolved show-participation states (node.showParticipation,
+// fppInstance.showParticipation, resolumeInstance.showParticipation).
+// These are the coordinator's own answer about one node or one instance,
+// never the selection an operator recorded on a show object -- see
+// cmd_show_participation.go for that. participationSelectionUnrecorded
+// reaches the INSTANCE form only.
+const (
+	participationParticipating       = "participating"
+	participationNotParticipating    = "not_participating"
+	participationSelectionUnrecorded = "selection_unrecorded"
+	participationNotConfigured       = "not_configured"
+	participationUnknown             = "unknown"
+)
+
+// participationStateGlyph renders a resolved participation state so that
+// anything other than "participating" is visually distinct without colour,
+// exactly as stateGlyph does for evidence states. SELECTION-UNRECORDED is
+// its own glyph and never folded into NOT-PARTICIPATING: an instance in
+// that state is still covered by tonight's checks, which is the opposite
+// consequence. The empty string is a coordinator that predates the field,
+// not an answer of "no".
+func participationStateGlyph(st string) string {
+	switch st {
+	case participationParticipating:
+		return "participating"
+	case participationNotParticipating:
+		return "NOT-PARTICIPATING"
+	case participationSelectionUnrecorded:
+		return "SELECTION-UNRECORDED"
+	case participationNotConfigured:
+		return "NOT-CONFIGURED"
+	case participationUnknown:
+		return "UNKNOWN"
+	case "":
+		return "NOT-REPORTED"
+	default:
+		// An additive future state this build predates (contract §6.2).
+		return "UNRECOGNIZED-STATE(" + st + ")"
+	}
+}

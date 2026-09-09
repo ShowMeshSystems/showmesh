@@ -352,7 +352,7 @@ export function ResolumeConfig() {
         missing="way to test a configured Resolume address on demand"
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(520px, 1fr))', gap: 'var(--s-5)', alignItems: 'start' }}>
+      <div className="sm-grid sm-grid--wider" style={{ gap: 'var(--s-5)', alignItems: 'start' }}>
         <div>
       <Section id="rz-comp" title="Stored composition" aside={<span className="sm-small sm-muted">Uploaded, not read live</span>}>
         <p className="sm-small sm-muted">

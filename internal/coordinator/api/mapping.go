@@ -686,7 +686,7 @@ func deriveHealthFromCriticalSignals(obs []observation.Observation, now time.Tim
 // stream.go) — goes through, so resolving here makes it resolved
 // everywhere, once, per contract section 5.2's "resolution happens once,
 // at read."
-func mapFPPInstance(fv FPPInstanceView, now time.Time) v1.FPPInstance {
+func mapFPPInstance(fv FPPInstanceView, participation v1.InstanceShowParticipation, now time.Time) v1.FPPInstance {
 	resolved := ResolveObservations(fv.Observations)
 	sortObservations(resolved)
 
@@ -703,6 +703,7 @@ func mapFPPInstance(fv FPPInstanceView, now time.Time) v1.FPPInstance {
 		LastPollAt:                       formatTimePtr(fv.LastPollAt),
 		LastPollError:                    fv.LastPollError,
 		DuplicateInstanceUUIDEndpointIDs: fv.DuplicateInstanceUUIDEndpointIDs,
+		ShowParticipation:                participation,
 	}
 	if inst.DuplicateInstanceUUIDEndpointIDs == nil {
 		inst.DuplicateInstanceUUIDEndpointIDs = []string{}
@@ -785,7 +786,7 @@ func deriveResolumeHealth(obs []observation.Observation, now time.Time) observat
 // configuration, not per-instance collector state, so every caller in this
 // package computes it exactly once per response rather than once per
 // instance.
-func mapResolumeInstance(rv ResolumeInstanceView, composition *v1.ResolumeInstanceComposition, now time.Time) v1.ResolumeInstance {
+func mapResolumeInstance(rv ResolumeInstanceView, composition *v1.ResolumeInstanceComposition, participation v1.InstanceShowParticipation, now time.Time) v1.ResolumeInstance {
 	resolved := ResolveObservations(rv.Observations)
 	sortObservations(resolved)
 
@@ -795,10 +796,11 @@ func mapResolumeInstance(rv ResolumeInstanceView, composition *v1.ResolumeInstan
 	}
 
 	return v1.ResolumeInstance{
-		InstanceID:   rv.InstanceID,
-		Health:       string(deriveResolumeHealth(resolved, now)),
-		Observations: obsEvidence,
-		Composition:  composition,
+		InstanceID:        rv.InstanceID,
+		Health:            string(deriveResolumeHealth(resolved, now)),
+		Observations:      obsEvidence,
+		Composition:       composition,
+		ShowParticipation: participation,
 	}
 }
 

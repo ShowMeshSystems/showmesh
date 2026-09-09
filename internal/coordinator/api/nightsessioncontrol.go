@@ -1596,6 +1596,10 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 // revision for the active show fails readiness, naming both revisions,
 // unless a deploy is currently held safely pending for it, in which case
 // it warns instead of failing.
+//
+// nightinstanceparticipation.go's own per-participating-instance check
+// runs here too: an FPP or Resolume instance the active show selects is
+// checked, and one it does not select is not checked at all.
 func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, payload config.NightSessionPayload, interlockChecks []nightReadinessCheck) ([]nightReadinessCheck, string) {
 	instanceIDs := map[string]bool{payload.ShowPlaylist.FPPInstanceID: true, payload.Resting.FPPInstanceID: true}
 	var checks []nightReadinessCheck
@@ -1640,6 +1644,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 		checks = append(checks, nightCheckRestingAssetExactVariant(p.prefix, p.playlist))
 	}
 	checks = append(checks, h.nightCheckCatalogCurrent(ctx, now, payload.Show)...)
+	checks = append(checks, h.nightCheckShowInstanceParticipation(ctx, now, payload.Show)...)
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
 	checks = append(checks, nightCheckBrightnessCompositionUnverified("enterShow", payload.EnterShow.Cues))
 	checks = append(checks, nightCheckBrightnessCompositionUnverified("enterResting", payload.EnterResting.Cues))

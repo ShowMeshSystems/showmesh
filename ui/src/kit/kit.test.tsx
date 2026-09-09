@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
 import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { clampPopoverLeft } from './Popover'
 
 afterEach(cleanup)
 
@@ -268,6 +269,14 @@ describe('Popover', () => {
 
     fireEvent.mouseDown(document.body)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('clampPopoverLeft keeps a fitting anchor position, and pulls a right-overhung one back to the viewport margin', () => {
+    expect(clampPopoverLeft(100, 220, 390)).toBe(100)
+    // Anchor at 249 with a 220-wide panel would run to 469 against a 382-wide viewport.
+    expect(clampPopoverLeft(249, 220, 382)).toBe(382 - 220 - 8)
+    // A panel wider than the viewport still lands no further right than the 8px margin.
+    expect(clampPopoverLeft(200, 300, 200)).toBe(8)
   })
 })
 

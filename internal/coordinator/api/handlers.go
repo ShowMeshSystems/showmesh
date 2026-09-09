@@ -75,6 +75,12 @@ type handlers struct {
 	// — see [Options.NightReadinessMaxAge]'s doc comment in api.go.
 	nightReadinessMaxAge time.Duration
 
+	// notifyStream pokes the stream hub to render and broadcast now,
+	// rather than at the end of its ordinary recompute interval. Set by
+	// [New]; call it through [handlers.notifyStreamNow], which tolerates a
+	// *handlers a test built without one.
+	notifyStream func()
+
 	// discoveryRunInFlight serializes POST /api/v1/discovery/runs
 	// (discovery.go's handleStartDiscoveryRun): a second concurrent run is
 	// refused with a 409, never queued — see that handler's own doc
@@ -264,9 +270,10 @@ func (h *handlers) handleFPPList(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "list fpp instances", err)
 		return
 	}
+	participation := h.resolveInstanceParticipation(r.Context())
 	instances := make([]v1.FPPInstance, 0, len(views))
 	for _, fv := range views {
-		instances = append(instances, mapFPPInstance(fv, now))
+		instances = append(instances, mapFPPInstance(fv, participation.forFPP(fv.InstanceID), now))
 	}
 	jsonWrite(w, v1.FPPResponse{ServerTime: formatTime(now), Instances: instances})
 }
@@ -291,9 +298,10 @@ func (h *handlers) handleFPPInstance(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "list fpp instances", err)
 		return
 	}
+	participation := h.resolveInstanceParticipation(r.Context())
 	for _, fv := range views {
 		if fv.InstanceID == instanceID {
-			jsonWrite(w, v1.FPPInstanceResponse{ServerTime: formatTime(now), Instance: mapFPPInstance(fv, now)})
+			jsonWrite(w, v1.FPPInstanceResponse{ServerTime: formatTime(now), Instance: mapFPPInstance(fv, participation.forFPP(fv.InstanceID), now)})
 			return
 		}
 	}
@@ -543,9 +551,10 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "list fpp instances", err)
 		return
 	}
+	instanceParticipation := resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 	instances := make([]v1.FPPInstance, 0, len(fppViews))
 	for _, fv := range fppViews {
-		instances = append(instances, mapFPPInstance(fv, now))
+		instances = append(instances, mapFPPInstance(fv, instanceParticipation.forFPP(fv.InstanceID), now))
 	}
 
 	collectorViews, err := h.deps.Collectors.CollectorStatuses(ctx)
@@ -589,7 +598,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	resolumeInstances := make([]v1.ResolumeInstance, 0, len(resolumeViews))
 	for _, rv := range resolumeViews {
-		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, now))
+		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, instanceParticipation.forResolume(rv.InstanceID), now))
 	}
 
 	// Coordinator-wide, computed fresh from the same decode a real push

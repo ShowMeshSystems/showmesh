@@ -106,19 +106,60 @@ func valueDisplay(v any) string {
 	return fmt.Sprintf("%v", v)
 }
 
+// printShowParticipationDetail renders one resolved participation answer's
+// body: the state, the show it was resolved against, and the coordinator's
+// own reason. The reason line is printed even when there is none, because
+// a line that disappears when a value is absent is exactly how this field
+// stayed invisible. Nothing here invents a reason the coordinator did not
+// send.
+func printShowParticipationDetail(w io.Writer, state, show string, reason *string) {
+	if state == "" {
+		_, _ = fmt.Fprintln(w, "  (not reported by this coordinator, which predates this field)")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "  State:  %s\n", participationStateGlyph(state))
+	_, _ = fmt.Fprintf(w, "  Show:   %s\n", emptyOrDash(show))
+	r := "(none reported)"
+	if reason != nil && *reason != "" {
+		r = *reason
+	}
+	_, _ = fmt.Fprintf(w, "  Reason: %s\n", r)
+}
+
+// printNodeShowParticipation renders node.showParticipation: whether the
+// coordinator resolved this node into the show currently active. Its state
+// vocabulary has no "selection_unrecorded" -- a node's participation is
+// derived from the cue catalog, not from a hand-recorded selection.
+func printNodeShowParticipation(w io.Writer, p nodeShowParticipation) {
+	_, _ = fmt.Fprintln(w, "Show participation:")
+	printShowParticipationDetail(w, p.State, p.Show, p.Reason)
+}
+
+// printInstanceShowParticipation renders an FPP or Resolume instance's
+// showParticipation. Unlike the node form this one can answer
+// "selection_unrecorded", which means the active show has no selection
+// recorded and this instance is therefore still being checked; the
+// coordinator's reason states that consequence, and this renderer prints
+// it rather than reducing the state to a yes or a no.
+func printInstanceShowParticipation(w io.Writer, instanceID string, p instanceShowParticipation) {
+	_, _ = fmt.Fprintf(w, "\n%s show participation:\n", instanceID)
+	printShowParticipationDetail(w, p.State, p.Show, p.Reason)
+}
+
 func printNodesTable(w io.Writer, resp nodesResponse) {
 	if len(resp.Nodes) == 0 {
 		_, _ = fmt.Fprintln(w, "(no nodes in inventory)")
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "NODE ID\tLABEL\tCONTROL PLANE\tDECLARATION\tHELLO\tHEARTBEAT\tLAST WILL")
+	_, _ = fmt.Fprintln(tw, "NODE ID\tLABEL\tCONTROL PLANE\tDECLARATION\tPARTICIPATION\tHELLO\tHEARTBEAT\tLAST WILL")
 	for _, n := range resp.Nodes {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			n.NodeID,
 			stringOrDash(n.Label),
 			controlPlaneColumn(n.ControlPlane),
 			declarationColumn(n.Declaration),
+			participationStateGlyph(n.ShowParticipation.State),
 			evidenceColumn(n.Evidence.Hello, resp.ServerTime),
 			evidenceColumn(n.Evidence.Heartbeat, resp.ServerTime),
 			evidenceColumn(n.Evidence.LastWill, resp.ServerTime),
@@ -144,6 +185,9 @@ func printNodeDetail(w io.Writer, n node, serverTime time.Time) {
 	_, _ = fmt.Fprintln(w)
 
 	printDeclarationDetail(w, n.Declaration)
+	_, _ = fmt.Fprintln(w)
+
+	printNodeShowParticipation(w, n.ShowParticipation)
 	_, _ = fmt.Fprintln(w)
 
 	_, _ = fmt.Fprintln(w, "Capabilities:")
@@ -209,10 +253,12 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tENDPOINT\tHEALTH\tLAST POLL\tLAST POLL ERROR\tINSTANCE UUID")
+	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tENDPOINT\tHEALTH\tPARTICIPATION\tLAST POLL\tLAST POLL ERROR\tINSTANCE UUID")
 	for _, f := range resp.Instances {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			f.InstanceID, f.Endpoint, healthGlyph(f.Health), timeOrDash(f.LastPollAt), stringOrDash(f.LastPollError),
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			f.InstanceID, f.Endpoint, healthGlyph(f.Health),
+			participationStateGlyph(f.ShowParticipation.State),
+			timeOrDash(f.LastPollAt), stringOrDash(f.LastPollError),
 			stringOrDash(f.InstanceUUID))
 	}
 	_ = tw.Flush()
@@ -234,6 +280,7 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 	}
 
 	for _, f := range resp.Instances {
+		printInstanceShowParticipation(w, f.InstanceID, f.ShowParticipation)
 		_, _ = fmt.Fprintf(w, "\n%s observations:\n", f.InstanceID)
 		printObservations(w, f.Observations, resp.ServerTime)
 	}
@@ -249,13 +296,16 @@ func printResolumeInstancesTable(w io.Writer, resp resolumeInstancesResponse) {
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tHEALTH\tCOMPOSITION")
+	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tHEALTH\tPARTICIPATION\tCOMPOSITION")
 	for _, ri := range resp.Instances {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", ri.InstanceID, healthGlyph(ri.Health), resolumeCompositionSummaryColumn(ri.Composition))
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ri.InstanceID, healthGlyph(ri.Health),
+			participationStateGlyph(ri.ShowParticipation.State),
+			resolumeCompositionSummaryColumn(ri.Composition))
 	}
 	_ = tw.Flush()
 
 	for _, ri := range resp.Instances {
+		printInstanceShowParticipation(w, ri.InstanceID, ri.ShowParticipation)
 		_, _ = fmt.Fprintf(w, "\n%s observations:\n", ri.InstanceID)
 		printObservations(w, ri.Observations, resp.ServerTime)
 	}
