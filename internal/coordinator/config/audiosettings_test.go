@@ -23,6 +23,8 @@ func TestDecodeAudioSettingsPayloadAccepts(t *testing.T) {
 		DuckFadeDurationMs:        150,
 		DuckRestoreFadeDurationMs: 700,
 		LTCFrameRate:              "25", LTCDefaultStartOffset: "00:00:00:00",
+		ScheduledStartDeliveryBoundMs: 2000,
+		ScheduledStartMarginMs:        1000,
 	}
 	if p != want {
 		t.Errorf("payload = %+v, want %+v", p, want)
