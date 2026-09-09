@@ -3,6 +3,12 @@ import { createPortal } from 'react-dom'
 
 const VIEWPORT_MARGIN = 8
 
+/** Pulls the panel's left edge back inside the viewport, keeping `VIEWPORT_MARGIN` clear on both sides. */
+export function clampPopoverLeft(anchorLeft: number, panelWidth: number, viewportWidth: number): number {
+  const maxLeft = viewportWidth - panelWidth - VIEWPORT_MARGIN
+  return Math.min(anchorLeft, Math.max(VIEWPORT_MARGIN, maxLeft))
+}
+
 type PopoverProps = {
   open: boolean
   /** The heading text `role="dialog"` is labelled by. Rendered inside the panel. */
@@ -84,8 +90,7 @@ export function Popover({ open, title, anchorRef, onClose, children }: PopoverPr
     if (anchor === null || panel === null) return
     const anchorLeft = anchor.getBoundingClientRect().left
     const panelWidth = panel.getBoundingClientRect().width
-    const maxLeft = window.innerWidth - panelWidth - VIEWPORT_MARGIN
-    setLeft(Math.min(anchorLeft, Math.max(VIEWPORT_MARGIN, maxLeft)))
+    setLeft(clampPopoverLeft(anchorLeft, panelWidth, window.innerWidth))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, remeasureTick])
 
