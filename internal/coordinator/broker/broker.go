@@ -249,6 +249,12 @@ func (b *BrokerManager) RequestNodeInventory(ctx context.Context, nodeID string,
 // discard this payload's own retained delivery once one arrives (see
 // [response.go]'s doc comment on why RETAINED deliveries are dropped
 // there).
+//
+// The returned commandID is populated even when the final Publish call
+// fails: it still names the command this attempt built (just never
+// delivered), so [BrokerManager.RequestNodeInventory]'s own caller
+// (internal/coordinator/api's POST .../assets/resync) can record which
+// specific command failed, rather than a failure that names nothing.
 func (b *BrokerManager) publishInventoryRequest(ctx context.Context, nodeID string, issuer mqttproto.CmdIssuer) (string, error) {
 	topic, err := mqttproto.CmdTopic(nodeID)
 	if err != nil {
@@ -272,7 +278,7 @@ func (b *BrokerManager) publishInventoryRequest(ctx context.Context, nodeID stri
 		return "", fmt.Errorf("marshal cmd envelope: %w", err)
 	}
 	if err := b.Publish(ctx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, raw); err != nil {
-		return "", err
+		return commandID, err
 	}
 	return commandID, nil
 }

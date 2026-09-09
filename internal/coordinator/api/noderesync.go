@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
+
+	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // POST /nodes/{nodeId}/assets/resync: asks nodeID for a fresh asset
@@ -20,13 +25,33 @@ import (
 // soon as a live report proves fresher than this intent - see that
 // package's ResyncIntentTrigger. The outcome is never claimed here; it
 // surfaces later on GET /nodes/{nodeId}/assets.
+//
+// The asset.inventory.request dispatch itself IS recorded as a commands
+// row, though, matching every other MQTT command this coordinator issues
+// (see cuecatalogdeploy.go/cueactivationdispatch.go's identical
+// InsertCommand-before-outcome shape): a caller-visible commandID that
+// names nothing, or a publish failure that leaves no trace at all, is the
+// same accepted-looking no-op this route's own acceptance criteria forbid,
+// moved one step earlier than the manifest-driven repair itself. Nothing
+// here waits for the node's own reply - see [InventoryRequester]'s doc
+// comment for why AwaitResponse is never the right tool for this action.
 
 // InventoryRequester asks a node to publish a fresh asset inventory report
 // now, stamped with issuer, and returns the CommandID assigned to that
-// request. Declared here, at the consumer, for the identical reason
+// request - populated even when err is non-nil, naming the command that
+// was attempted (never delivered), so this route can still record what
+// failed. Declared here, at the consumer, for the identical reason
 // [RenderPublisher] is (renderdispatch.go): the real implementation is
 // *broker.BrokerManager's own RequestNodeInventory method, which already
 // satisfies this one-method interface with no adapter needed.
+//
+// AwaitResponse is never used to confirm this dispatch: the answer this
+// request is asking for is the node's own inventory report, published
+// RETAINED on its observed topic (mqttproto.ObservedDeliveryPolicy), and
+// AwaitResponse deliberately discards a retained delivery (see broker's
+// response.go), so it would discard the very report it is waiting for and
+// present that as a timeout. This route only ever learns whether the
+// PUBLISH itself reached the wire.
 type InventoryRequester interface {
 	RequestNodeInventory(ctx context.Context, nodeID string, issuer mqttproto.CmdIssuer) (string, error)
 }
@@ -62,15 +87,24 @@ func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Req
 	// it - only later than a delivered push would have.
 	h.deps.AssetSyncNudger.RecordResyncIntent(nodeID, now)
 
-	commandID, err := h.deps.InventoryRequester.RequestNodeInventory(ctx, nodeID, mqttproto.CmdIssuer{
+	commandID, pubErr := h.deps.InventoryRequester.RequestNodeInventory(ctx, nodeID, mqttproto.CmdIssuer{
 		PrincipalID: issuerID, PrincipalName: issuerName,
 	})
-	if err != nil {
-		h.logger.Warn("resync: failed to publish asset.inventory.request", "node_id", nodeID, "error", err)
+	if commandID == "" {
+		// Defensive: this route still needs an id to name the row it is
+		// about to record even against an [InventoryRequester]
+		// implementation that reports a publish failure with no id of its
+		// own (the unwired-broker default, [noInventoryRequester], does
+		// exactly this).
+		commandID = uuid.NewString()
+	}
+	h.recordInventoryRequestCommand(ctx, now, nodeID, commandID, issuerID, issuerName, pubErr)
+	if pubErr != nil {
+		h.logger.Warn("resync: failed to publish asset.inventory.request", "node_id", nodeID, "command_id", commandID, "error", pubErr)
 	}
 
 	result := v1.ResyncNodeAssetsResult{Node: nodeID, AcceptedAt: formatTime(now)}
-	if err == nil {
+	if pubErr == nil {
 		result.InventoryRequestCommandID = commandID
 	}
 
@@ -80,4 +114,52 @@ func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Req
 		ServerTime: formatTime(now),
 		Resync:     result,
 	})
+}
+
+// recordInventoryRequestCommand inserts the commands row for the
+// asset.inventory.request identified by commandID, then resolves it
+// according to whether the publish itself reached the wire - matching
+// cuecatalogdeploy.go/cueactivationdispatch.go's own insert-then-resolve
+// shape, narrowed to this action's own two possible outcomes: a publish
+// failure resolves the row immediately (state "failed",
+// outcome_state "collection_failed", outcome_reason the publish error -
+// [observation.StateCollectionFailed] is this codebase's own vocabulary
+// for exactly "nothing reached the wire"), never left silently pending; a
+// successful publish only marks the row dispatched, since - per this
+// route's own NOTHING WAITS contract - nothing here ever learns whether
+// the node answered.
+//
+// Best-effort: a store failure here is logged and otherwise swallowed,
+// matching this route's own pre-existing posture toward
+// AssetSyncNudger.RecordResyncIntent above it. The repair this whole
+// route exists to trigger runs off the node's own next report regardless
+// of whether this bookkeeping succeeds.
+func (h *handlers) recordInventoryRequestCommand(ctx context.Context, now time.Time, nodeID, commandID, issuerID, issuerName string, pubErr error) {
+	rec := store.CommandRecord{
+		ID: commandID, IdempotencyKey: commandID, Action: "asset.inventory.request",
+		TargetKind: "node", TargetID: nodeID,
+		IssuerPrincipalID: issuerID, IssuerPrincipalName: issuerName,
+		ConfirmationMethod: "evidence", State: "pending",
+	}
+	if _, err := h.deps.Commands.InsertCommand(ctx, rec); err != nil {
+		h.logger.Warn("resync: failed to record asset.inventory.request command", "node_id", nodeID, "command_id", commandID, "error", err)
+		return
+	}
+
+	if pubErr != nil {
+		reason := pubErr.Error()
+		if err := h.deps.Commands.UpdateCommandOutcome(ctx, commandID, store.CommandOutcomeUpdate{
+			ResolvedAt: &now, State: strPtr("failed"),
+			OutcomeState: strPtr(string(observation.StateCollectionFailed)), OutcomeReason: &reason,
+		}); err != nil {
+			h.logger.Warn("resync: failed to resolve a failed asset.inventory.request command", "node_id", nodeID, "command_id", commandID, "error", err)
+		}
+		return
+	}
+
+	if err := h.deps.Commands.UpdateCommandOutcome(ctx, commandID, store.CommandOutcomeUpdate{
+		DispatchedAt: &now, State: strPtr("dispatched"),
+	}); err != nil {
+		h.logger.Warn("resync: failed to mark an asset.inventory.request command dispatched", "node_id", nodeID, "command_id", commandID, "error", err)
+	}
 }

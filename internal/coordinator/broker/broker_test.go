@@ -746,6 +746,29 @@ func TestRequestNodeInventoryStampsCallerSuppliedIssuer(t *testing.T) {
 	}
 }
 
+// TestRequestNodeInventoryReturnsCommandIDOnPublishFailure proves the
+// commandID a publish failure names is still real: a caller (internal/
+// coordinator/api's POST .../assets/resync) that records this id against
+// a failed command must be able to name the exact command that never
+// reached the wire, not an empty string.
+func TestRequestNodeInventoryReturnsCommandIDOnPublishFailure(t *testing.T) {
+	wantErr := errors.New("simulated publish failure")
+	cm := &fakeMQTTClient{
+		publishFunc: func(context.Context, *paho.Publish) (*paho.PublishResponse, error) {
+			return nil, wantErr
+		},
+	}
+	bm := &BrokerManager{now: time.Now, cm: cm}
+
+	commandID, err := bm.RequestNodeInventory(context.Background(), "node-1", mqttproto.CmdIssuer{PrincipalID: "operator-1", PrincipalName: "Operator One"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("RequestNodeInventory() error = %v, want %v", err, wantErr)
+	}
+	if commandID == "" {
+		t.Fatal("RequestNodeInventory() returned an empty commandID on a publish failure, want the id of the command that was attempted")
+	}
+}
+
 // TestDispatchReconnectInventoryRequestsNoOpWhenNodeListerNil proves an
 // unwired coordinator (nodeLister nil, e.g. an integration broker with no
 // nodes of its own) never attempts a publish.
