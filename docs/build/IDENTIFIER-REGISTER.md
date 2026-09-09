@@ -1266,7 +1266,7 @@ The store schema version, bumped by migrations in
 | v9 | shipped | Track C seam C3 (audio session desired state, `audio_sessions`) |
 | v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox filled by seam F4) |
 | v11 | released, dead | was credential storage moving from the data directory into SQLite, reserved 2026-08-18. Stale by the time this was built: v32 had already shipped, so v11 sits at or below the stamped maximum and a migration numbered here can never run, for the identical reason v21/v22/v23 moved. The work ships as v33 instead |
-| v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
+| v12 | released | was durable action-invocation attribution and lifecycle state, reserved 2026-08-19 (Linear SM-100/SM-102). Released 2026-09-08 for the same reason as v11, v13, v21, v22 and v23: v33 has shipped, so v12 sits far below the stamped maximum and a migration numbered here can never run. The work renumbers above the maximum when it is built, and is not cancelled |
 | v13 | released | reserved 2026-08-19 for the `commands.requested_revision` rename and never built; that work runs as v22 |
 | v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
 | v15 | shipped | Track H seam H2: FPP playlist definition storage (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3) |
@@ -1285,7 +1285,9 @@ The store schema version, bumped by migrations in
 | v28 | shipped | widens both `assets_current` and `assets_identity` to key on `media_type` as well as show/sequence/target, so an FSEQ and an audio asset may both be current for one sequence at once instead of the second upload superseding the first, and identical bytes registered under two different media types are a new identity rather than a raw constraint violation (ADR-028 decision 1's amendment). A pure widening for both indexes: every pre-v28 row already holds exactly one media type per tuple, so no data fix runs |
 | v29 | shipped | adds `fpp_playlist_entry_observations.evidence_broken_at_millis`, a nullable marker recording a persisted sequence-regression discontinuity for one instance, read directly by `cueactivate.Decide` (owner ruling 2026-09-02, cue-deactivate-on-jump). NULL/absent leaves the row unaffected for every earlier row; nothing sets it retroactively |
 | v30 | shipped | SM-72: adds `config_objects.deleted_at`, a nullable tombstone marker for delete on the eight per-object configuration kinds (audio.node, show, show.surface, show.action, show.macro, show.cue, show.playlist, night.session). `config_revisions` is untouched: a delete never removes or rewrites a revision, only marks the owning object gone. A pure addition: every pre-v30 row's `deleted_at` is implicitly NULL, so every existing object reads back live, unchanged, with no data fix |
-| v33 | reserved (built on this branch, PR pending) | a general-purpose `(kind, object_id, field) -> value` credentials table; the fpp.mqtt broker password moves out of its legacy data-directory file into it (owner ruling 2026-09-08, "credentials into SQLite"). Renumbered from the stale v11 reservation above |
+| v31 | shipped | rewrites every stored timestamp from schemaV1's original trimmed `time.RFC3339Nano` text to `timeLayout`'s fixed nine-digit-fraction format (`migrateV31FixedWidthTimestamps`, `migration_v31.go`), so a plain string `ORDER BY` on any of this package's timestamp columns sorts in true chronological order rather than lexically |
+| v32 | shipped | adds `fpp_playlist_entry_observations.playlist_loop`, FPP's own `mainPlaylist` pass counter exactly as the plugin reported it, NULL when it reported none (`migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn`, `migration_v32.go`). Ingestion compares it to see a playlist loop back into an entry it already visited, which is the only signal that does so on FPP 10 |
+| v33 | shipped | a general-purpose `(kind, object_id, field) -> value` credentials table; the fpp.mqtt broker password moves out of its legacy data-directory file into it (owner ruling 2026-09-08, "credentials into SQLite"). Renumbered from the stale v11 reservation above |
 | v34+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
@@ -1294,6 +1296,12 @@ free one. That follows this file's own rule at the top: reserving costs
 nothing and a collision costs a rename across a whole branch. v22 is now
 registered to SM-111 in the row above, so the gap is closed rather than
 standing.
+
+**v12 is released on the same rule, 2026-09-08.** It was held from 2026-08-19
+and never built, and v33 shipped in the meantime, so it sits twenty-one versions
+below the stamp. A row that says reserved below the maximum is not a reservation,
+which is why it is marked rather than left standing. The work it was held for
+renumbers above the maximum when it is built.
 
 **v21, v22 and v23 are released as dead, and nothing at or below the shipped
 maximum is ever reserved again.** v24 shipped on 2026-08-31. `migrate()` targets
@@ -1310,6 +1318,29 @@ the next number ABOVE the current maximum, never the lowest free one, and
 re-check the maximum before the branch lands rather than when it was written.
 Three reservations went stale here because `main` took a number underneath them
 while they were unmerged, which is ordinary and will happen again.
+
+**Write the Status column in its post-merge tense, and never describe a branch.**
+A version's row lands in the same commit as its migration, so the row is authored
+inside a branch where "reserved" and "pull request pending" are the accurate
+words. They stop being accurate the moment that commit reaches `main`, and
+nothing updates them, because the merge is not an edit. v31 and v32 were missing
+from this table for the opposite reason, rows written too late: both shipped on
+2026-09-08 and neither was ever added, so the table advertised v31 as free while
+a v31 migration existed. v33 was wrong from the minute it landed, a row written
+too early. Both are the same defect from opposite ends, and both were live at
+once on the same day. A row that says `shipped` is briefly ahead of reality inside its own
+branch, which costs nothing because the branch is the only place it is wrong and
+the branch is temporary.
+
+Status carries three meanings and only one of them is derivable, which is why the
+column stays rather than being dropped for being redundant. Shipped restates what
+`migrations.go` already proves, and is kept only because this table is read on
+its own. Reserved is a claim on a number with no migration behind it yet, and
+nothing in the code records that, so it exists here or nowhere. Released marks a
+number that was claimed and then abandoned, and it is the one that matters most:
+`migrations.go` has no entry for v11, v13, v21, v22 or v23, and a missing entry
+cannot tell a reader whether a number was never allocated or given up. Without
+those rows the next person reuses one.
 
 **SM-111 moves from v13 to v22, and v13 is released.** The rename was
 reserved as v13 on 2026-08-19 and never built; v14 through v21 were taken by
