@@ -979,11 +979,10 @@ paths:
       description: >-
         Behind `audio:command`. Merges the request body onto the session's desired state, creating the session if it does not already exist - `revision` and `idempotencyKey` go through the node's own revision/idempotency ledger for this session, so a stale or replayed revision is refused rather than applied out of order. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1044,11 +1043,10 @@ paths:
       description: >-
         Behind `audio:command`. Gates readiness (a missing, changed, or undecodable asset is refused) and loads the session's current item on the node without starting playback. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1109,11 +1107,10 @@ paths:
       description: >-
         Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
         This is the one session endpoint that accepts an operation-specific
         param: optional `params.scheduledAtNs` starts the session at a
         named instant on the TARGET NODE's own media clock instead of on
@@ -1254,11 +1251,10 @@ paths:
       description: >-
         Behind `audio:command`. Suspends the session's current item, preserving position. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1319,11 +1315,10 @@ paths:
       description: >-
         Behind `audio:command`. Continues the session's current item from the position `pause` left it at. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1384,11 +1379,10 @@ paths:
       description: >-
         Behind `audio:command`. Re-anchors the session's current item's position - a discontinuity, never a continuation of pre-seek timing. `params.positionMs` names the target position in milliseconds. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1449,11 +1443,10 @@ paths:
       description: >-
         Behind `audio:command`. Forces the session to its next playlist item - the same underlying transition the node's own natural-completion watcher drives, so an item is advanced exactly once regardless of what triggered it. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1514,11 +1507,10 @@ paths:
       description: >-
         Behind `audio:command`. Commands the session to stop - permanently distinguishable in evidence from a natural end-of-item completion. Never refused for want of node evidence: an idle or unloaded session still reports `stopped`. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1579,11 +1571,10 @@ paths:
       description: >-
         Behind `audio:command`. Releases the session entirely on the node and removes its persisted record. Never refused for want of node evidence, matching `stop`. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1660,11 +1651,10 @@ paths:
         that case, because a mute or a duck must never be bypassed by an
         operator's own gain change. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1746,11 +1736,10 @@ paths:
         because Track F's transition barrier is built on that
         distinction. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1817,11 +1806,10 @@ paths:
         already-muted session reports the existing mute rather than
         re-applying it. A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -1889,11 +1877,10 @@ paths:
         session that is not muted is a no-op success, never a refusal.
         A `200` response is never itself
         success: `command.outcome` is the only place that is decided, and
-        it is commonly `"unconfirmable"` today because the pipeline
-        backend behind this seam's session engine is an open owner
-        decision - every dispatch against the shipped agent reports
-        `"unconfirmable"` with a reason, which is a real, expected
-        outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+        `"unconfirmable"` remains a real, expected outcome whenever
+        the node's own evidence does not corroborate the dispatched
+        command - it carries a reason, and is not a transport failure.
+        See AudioSessionCommandResult.outcome.
       parameters:
         - name: nodeId
           in: path
@@ -11412,10 +11399,10 @@ components:
         command. outcome is never "successful" merely because the
         publish to the node succeeded (ADR-003): it is decided from the
         node's own evidence, collected after its own dispatch. A
-        SUCCESSFUL HTTP 200 response commonly carries
+        SUCCESSFUL HTTP 200 response can still carry
         `outcome: "unconfirmable"` - this is a real, expected outcome
-        while the node's session engine has no working pipeline backend
-        wired in, never an error and never a transport failure. Reading
+        whenever the node's own evidence does not corroborate the
+        command, never an error and never a transport failure. Reading
         only the HTTP status code is not enough to know whether the
         command worked; read `outcome`.
       required:
@@ -11458,9 +11445,7 @@ components:
             were never dispatched to the node as a real command attempt
             (a bad revision, an unknown session, invalid params).
             "unconfirmable" WAS dispatched but the node could not
-            corroborate it with fresh evidence - including, today,
-            every dispatch against the shipped agent, whose session
-            engine has no working pipeline backend. gain/fade_complete
+            corroborate it with fresh evidence. gain/fade_complete
             never appear here: those belong to the separate
             audio.gain.* dispatch surface.
         reason:

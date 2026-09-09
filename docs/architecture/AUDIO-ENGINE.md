@@ -268,7 +268,7 @@ ADR-019 removed automatic fallback, which makes this procedure the replacement r
 3. **Revalidate before touching playback.** In order: the intended route is still the one physically connected; program and LTC are still on separate correctly assigned channels, neither mixed nor swapped; the program-to-LTC clock relationship is back within tolerance where a measurement exists; every pinned asset still resolves by content hash, re-probed rather than trusted from a stale result; and the current playlist item is the one expected.
 4. **Then act, choosing one.** Restart the session on the same node, `audio.session.prepare` followed by `audio.session.start`: a successful prepare is what clears a recorded fault, and a start without one neither clears it nor confirms anything. Or reassign to an eligible standby node, verifying its media, output capabilities and physical routing first (§11.3); this is operator-initiated, not automatic.
 5. **Reverting to FPP's own audio output is never a command.** Where it is genuinely necessary it is a deliberate installation change made outside ShowMesh's control surface. ShowMesh neither offers it as a recovery action nor performs it on its own.
-6. **Confirm recovery from evidence, not from the command.** Check that `audio_session.fault.kind` has returned to `none`. Every session command's confirmation is gated while no pipeline backend exists, so the cleared fault is the durable evidence and the command's own reported outcome is not.
+6. **Confirm recovery from evidence, not from the command.** Check that `audio_session.fault.kind` has returned to `none`. A session command's own reported outcome is not itself proof of recovery, so the cleared fault is the durable evidence to check.
 
 ## 12. Platform
 

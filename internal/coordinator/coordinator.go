@@ -594,7 +594,17 @@ func Run() int {
 	// this source, so the fpp.endpoints collision check sees the stored
 	// hosts even when no collector bundle is running.
 	fppMQTTConfigSrc := newFPPMQTTConfigSource(st, logger, fppMQTTCfg, fppMQTTPassword)
-	fppMQTTMgr := newFPPMQTTManager(fppRunner, fppMQTTConfigSrc, logger)
+	// fppMQTTMgr does NOT share fppRunner: it gets its own dedicated
+	// *collector.Runner (fppMQTTRunner), delivering to an equivalent
+	// fppSink over the identical st/notifyHub/logger, so it can be
+	// nudged on a far shorter cadence than fppRunner's REST-tuned
+	// [collector.DefaultNudgeMinInterval] without touching that shared
+	// setting — see fppmqttmanager.go's push-path doc comment for why a
+	// separate Runner, not a Runner-wide interval change, is the fix for
+	// this collector's own poll latency.
+	fppMQTTRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger,
+		collector.WithNudgeMinInterval(fppMQTTPushNudgeMinInterval))
+	fppMQTTMgr := newFPPMQTTManager(fppMQTTRunner, fppMQTTConfigSrc, logger)
 	// The FIRST reconcile runs synchronously, here, for the identical
 	// "no request may observe a partially-wired dependency" reason
 	// resolumeMgr.reconcile above does.
@@ -1257,6 +1267,14 @@ func Run() int {
 	// like every other unconditional loop in this block.
 	spawnBackground(func() {
 		fppMQTTMgr.Run(ctx)
+	})
+	// fppMQTTRunner.Run drives the dedicated Runner constructed alongside
+	// fppMQTTMgr above: its own collector is added/removed by
+	// fppMQTTMgr.reconcile, never here, but the polling/nudge loop itself
+	// still needs its own goroutine, joined via backgroundWG exactly like
+	// fppRunner.Run.
+	spawnBackground(func() {
+		fppMQTTRunner.Run(ctx)
 	})
 
 	// resolumeMgr.Run owns Track G seam G-2's own reconcile loop: it keeps
