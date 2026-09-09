@@ -89,6 +89,32 @@ const (
 	SignalEngineRestoreLastReason    observation.SignalID = "node.audio.engine.restore.last_reason"
 )
 
+// SignalTimelineScheduledAt, SignalTimelineExpectedMs,
+// SignalTimelineActualMs, SignalTimelineErrorMs, SignalTimelineResyncs,
+// and SignalTimelineLastResyncReason are Track I seam I2's scheduled
+// playback timeline (RES-019 section 10), minted by the owner and closed:
+// no seventh name is added here without another ruling. ScheduledAt is
+// the T0 the running session was given, on the reporting node's media
+// clock, in nanoseconds (an int64 that exceeds float64's exact integer
+// range: see pkg/audio.ParamScheduledAtNs). ExpectedMs is media_now
+// minus T0; ActualMs is the presented sample count over the nominal
+// rate, read from the sink clock rather than the decode frontier;
+// ErrorMs is expected minus actual. Resyncs counts discontinuity seeks
+// performed, and LastResyncReason names why the most recent one fired.
+//
+// All six report [observation.StateNotCollected] on a node that is not
+// running a scheduled session, which includes every node whose clock
+// provider is not locked: such a node keeps today's start-on-arrival
+// behaviour and has no timeline to report against.
+const (
+	SignalTimelineScheduledAt      observation.SignalID = "node.audio.timeline.scheduled_at"
+	SignalTimelineExpectedMs       observation.SignalID = "node.audio.timeline.expected_ms"
+	SignalTimelineActualMs         observation.SignalID = "node.audio.timeline.actual_ms"
+	SignalTimelineErrorMs          observation.SignalID = "node.audio.timeline.error_ms"
+	SignalTimelineResyncs          observation.SignalID = "node.audio.timeline.resyncs"
+	SignalTimelineLastResyncReason observation.SignalID = "node.audio.timeline.last_resync_reason"
+)
+
 // SignalSettingsState, SignalSettingsSubstitutedFields, and
 // SignalSettingsReason report internal/agent/audio.Manager's own
 // settings-substitution status for this node
@@ -136,6 +162,12 @@ var AllSignalIDs = []observation.SignalID{
 	SignalEngineRestoreAttempts,
 	SignalEngineRestoreNextAttemptMs,
 	SignalEngineRestoreLastReason,
+	SignalTimelineScheduledAt,
+	SignalTimelineResyncs,
+	SignalTimelineLastResyncReason,
+	SignalTimelineExpectedMs,
+	SignalTimelineActualMs,
+	SignalTimelineErrorMs,
 	SignalSettingsState,
 	SignalSettingsSubstitutedFields,
 	SignalSettingsReason,

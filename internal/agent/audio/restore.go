@@ -489,6 +489,10 @@ func (m *Manager) watchTick(ctx context.Context) {
 				}
 			}
 		}
+		// After the observe above, so a session this tick just downgraded
+		// out of Playing is not measured against a schedule it is no
+		// longer running.
+		m.evaluateTimelineLocked(ctx, s)
 		if s.state == pkgaudio.StateCompleted {
 			completed = append(completed, s.id)
 		}

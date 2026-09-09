@@ -301,6 +301,9 @@ func mapAudioSettingsPayload(p config.AudioSettingsPayload) v1.ConfigAudioSettin
 		DuckRestoreFadeDurationMs:  p.DuckRestoreFadeDurationMs,
 		LTCFrameRate:               p.LTCFrameRate,
 		LTCDefaultStartOffset:      p.LTCDefaultStartOffset,
+
+		ScheduledStartDeliveryBoundMs: p.ScheduledStartDeliveryBoundMs,
+		ScheduledStartMarginMs:        p.ScheduledStartMarginMs,
 	}
 }
 

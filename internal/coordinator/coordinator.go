@@ -21,9 +21,11 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/clockconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeclock"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackreconcile"
@@ -278,6 +280,11 @@ func Run() int {
 	// operator-declared audio.node configuration, read live on every poll).
 	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
 
+	// Track I seam I1: node.clock's own push cache, the identical shape
+	// as audioStore above, one report type over — see nodeclock's
+	// package doc comment.
+	clockStore := nodeclock.NewStore()
+
 	// fppconnectpush's own push cache, the identical "record at
 	// push time, read back on demand" shape as renderStore/audioStore
 	// above, except recording this package's OWN resolved channel-range
@@ -294,12 +301,16 @@ func Run() int {
 	// assignment below runs. ADR-039/ADR-036: this is the node-hello half
 	// of the audio.node/audio.settings config push, converging a node that
 	// was offline during a write; see internal/coordinator/audioconfigpush.
+	// Track I seam I1's node.clock push (internal/coordinator/
+	// clockconfigpush) follows the identical precedent, best-effort
+	// alongside it.
 	var bm *broker.BrokerManager
 	onHello := func(nodeID string) {
 		if bm == nil {
 			return
 		}
 		go audioconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
+		go clockconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
 		// Track E phase 2 seam FC1a (ADR-044 decision 5): the identical
 		// hello-triggered convergence, one config surface over; see
 		// internal/coordinator/fppconnectpush.
@@ -323,7 +334,7 @@ func Run() int {
 		}
 	})
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithClockSink(clockStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
 
 	// bm's OWN construction needs assetSync.HandleMessage
 	// wired in as part of the ONE process-wide message handler, the
@@ -484,6 +495,12 @@ func Run() int {
 	// no known-surfaces-style restart bookkeeping.
 	fppRunner.Add(nodeaudio.New(audioStore), nodeaudio.DefaultPollInterval)
 
+	// Track I seam I1: clockStore's own read side, sharing fppRunner for
+	// the identical reason audioStore's does — no per-node dynamic list
+	// to seed here either (node.clock.ptp.* are fixed, one-per-node
+	// signals).
+	fppRunner.Add(nodeclock.New(clockStore), nodeclock.DefaultPollInterval)
+
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
 	// (SHOWMESH_INTEGRATION_BROKERS), registered under its own identifier.
@@ -611,6 +628,10 @@ func Run() int {
 		// api.NodeAudioLister's NodeAudioObservations method directly, no
 		// adapter needed, matching renderStore's identical wiring above.
 		Audio: audioStore,
+		// Track I seam I1: clockStore already satisfies api.
+		// NodeClockLister's NodeClockObservations method directly, no
+		// adapter needed, matching Audio's identical wiring above.
+		Clock: clockStore,
 		// fppConnectStatus is the SAME instance onHello's
 		// fppconnectpush.BestEffort call above records into and
 		// pushFPPConnectToAllNodes/pushFPPConnectToNode

@@ -82,6 +82,7 @@
       },
       "render": [],
       "audio": [],
+      "clock": [],
       "fppConnect": []
     },
     {
@@ -157,6 +158,7 @@
       },
       "render": [],
       "audio": [],
+      "clock": [],
       "fppConnect": []
     }
   ]

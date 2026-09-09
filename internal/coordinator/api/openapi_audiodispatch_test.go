@@ -29,6 +29,8 @@ func TestOpenAPIAudioSessionDispatchSchemasCompile(t *testing.T) {
 		"AudioGainFadeRequest", "AudioSessionNoParamsRequest",
 		"AudioSessionApplyParams", "AudioSessionSeekParams", "AudioSessionGainParams",
 		"AudioSessionGainFadeParams",
+		"AudioSessionStartRequest", "AudioSessionStartParams",
+		"AlignedAudioStartRequest", "AlignedAudioStartSelection", "AlignedAudioStartResponse",
 		"AudioSessionCommandResponse", "AudioSessionCommandResult",
 	} {
 		if _, err := c.Compile(openAPIDocumentURL + "#/components/schemas/" + name); err != nil {
@@ -53,7 +55,10 @@ func TestOpenAPIAudioSessionRequestSchemasBindToTheirOwnOperation(t *testing.T) 
 	}{
 		{"/nodes/{nodeId}/audio/sessions/{sessionId}/apply", "post", "AudioSessionApplyRequest"},
 		{"/nodes/{nodeId}/audio/sessions/{sessionId}/prepare", "post", "AudioSessionNoParamsRequest"},
-		{"/nodes/{nodeId}/audio/sessions/{sessionId}/start", "post", "AudioSessionNoParamsRequest"},
+		// start is the one session op with an operation-specific param
+		// (scheduledAtNs), so it binds its own request schema rather than
+		// the shared no-params one.
+		{"/nodes/{nodeId}/audio/sessions/{sessionId}/start", "post", "AudioSessionStartRequest"},
 		{"/nodes/{nodeId}/audio/sessions/{sessionId}/pause", "post", "AudioSessionNoParamsRequest"},
 		{"/nodes/{nodeId}/audio/sessions/{sessionId}/resume", "post", "AudioSessionNoParamsRequest"},
 		{"/nodes/{nodeId}/audio/sessions/{sessionId}/seek", "post", "AudioSessionSeekRequest"},

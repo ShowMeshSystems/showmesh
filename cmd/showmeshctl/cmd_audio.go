@@ -35,6 +35,11 @@ type configAudioSettingsPayload struct {
 	DuckRestoreFadeDurationMs  int     `json:"duckRestoreFadeDurationMs"`
 	LTCFrameRate               string  `json:"ltcFrameRate"`
 	LTCDefaultStartOffset      string  `json:"ltcDefaultStartOffset"`
+
+	// The only two fields here the COORDINATOR reads rather than a node:
+	// the two terms it adds to a scheduled start's T0.
+	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
+	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
 }
 
 type audioSettingsConfigResponse struct {
@@ -185,8 +190,8 @@ func printAudioSettingsUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio settings <subcommand> [flags]
 
 Read or write the coordinator's audio.settings configuration (ADR-039):
-driftIgnoreThresholdMs (never measured — a starting point, not a tuned
-value), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
+driftIgnoreThresholdMs (default 40, derived from a measured sink whose
+routine skew correction is 20.0 ms), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
 defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB;
 a linear-looking 0.5 here is only half a decibel, not a halving, so enter
 -6.02 if you meant half amplitude),
@@ -200,8 +205,13 @@ duckRestoreFadeDurationMs (how long a bed takes to fade back UP once its
 last ducker releases it; must be positive, and is deliberately longer
 than duckFadeDurationMs by default: fast down, slower back up),
 ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
-and ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
-ltcStartOffset overrides this).
+ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
+ltcStartOffset overrides this),
+and the two scheduled-start terms the COORDINATOR reads rather than a
+node: scheduledStartDeliveryBoundMs (how long a start command is assumed
+to take to reach the slowest target and finish its preroll) and
+scheduledStartMarginMs (deliberate slack held back beyond it). Both are
+guesses, not measurements.
 Every subcommand requires the config:write scope (admin only) — there is
 no config:read scope.
 
@@ -809,6 +819,8 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  duckRestoreFadeDurationMs:  %d\n", resp.Payload.DuckRestoreFadeDurationMs)
 	_, _ = fmt.Fprintf(w, "  ltcFrameRate:               %s\n", resp.Payload.LTCFrameRate)
 	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
+	_, _ = fmt.Fprintf(w, "  scheduledStartDeliveryBoundMs: %d\n", resp.Payload.ScheduledStartDeliveryBoundMs)
+	_, _ = fmt.Fprintf(w, "  scheduledStartMarginMs:        %d\n", resp.Payload.ScheduledStartMarginMs)
 }
 
 // printAudioNodesTable renders an audio.node list with its channel

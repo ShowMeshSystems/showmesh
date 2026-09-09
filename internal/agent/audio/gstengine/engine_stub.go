@@ -116,6 +116,12 @@ func (e *Engine) ObserveLTC(context.Context) agentaudio.LTCObservation {
 
 // GlitchCounts always reports "not collected": this build has no
 // GStreamer bus to observe warning or QoS messages from.
+// PresentedElapsed reports not collected: this build links no GStreamer
+// backend, so there is no output pipeline and no sink clock to read.
+func (e *Engine) PresentedElapsed(_ context.Context) (time.Duration, bool, string) {
+	return 0, false, unavailableReason
+}
+
 func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
 	return agentaudio.GlitchCounts{}, false
 }

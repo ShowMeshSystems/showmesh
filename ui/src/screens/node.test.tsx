@@ -72,6 +72,7 @@ function node(overrides: Partial<Node> = {}): Node {
     },
     render: [],
     audio: [],
+    clock: [],
     fppConnect: [],
     ...overrides,
   } as unknown as Node

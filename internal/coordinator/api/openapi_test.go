@@ -761,7 +761,7 @@ const validDeclarationJSON = `{"declared":false,"label":null,"notes":null,"decla
 const validNodeShowParticipationJSON = `{"state":"not_configured","show":"","reason":"no show is currently active"}`
 
 var nodeResponseJSONWithExtraField = `{"serverTime":"2026-01-01T00:00:00Z","node":{"nodeId":"x","label":null,"platform":null,"agentVersion":null,"bootId":null,"startedAt":null,"firstSeenAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","capabilities":[],"controlPlane":{"state":"unknown","reason":"x"},"evidence":{"hello":` +
-	validEvidenceJSON + `,"lastWill":` + validEvidenceJSON + `,"heartbeat":` + validEvidenceJSON + `},"declaration":` + validDeclarationJSON + `,"showParticipation":` + validNodeShowParticipationJSON + `,"render":[],"audio":[],"fppConnect":[]},"unexpectedField":"surprise"}`
+	validEvidenceJSON + `,"lastWill":` + validEvidenceJSON + `,"heartbeat":` + validEvidenceJSON + `},"declaration":` + validDeclarationJSON + `,"showParticipation":` + validNodeShowParticipationJSON + `,"render":[],"audio":[],"clock":[],"fppConnect":[]},"unexpectedField":"surprise"}`
 
 // TestOpenAPIStreamEventSchemasMatchRealFrames validates one real
 // stream.start frame's JSON payload — obtained the same way

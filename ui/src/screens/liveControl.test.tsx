@@ -101,6 +101,7 @@ function node(nodeId: string, render: Node['render']): Node {
     declaration: {},
     render,
     audio: [],
+    clock: [],
     fppConnect: [],
   } as unknown as Node
 }
@@ -830,7 +831,9 @@ describe('Live Control', () => {
     fireEvent.click(within(region).getByRole('button', { name: 'Unmute' }))
 
     expect(stubs.prepareAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
-    expect(stubs.startAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
+    // The fourth argument is the optional scheduled start instant; undefined
+    // is the empty box, which means start on arrival exactly as before.
+    expect(stubs.startAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n, undefined)
     expect(stubs.pauseAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
     expect(stubs.resumeAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)
     expect(stubs.advanceAudioSession).toHaveBeenCalledWith('audio-node-01', 'bg-holiday-01', 1n)

@@ -82,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdRender(rest, stdout, stderr, clock)
 	case "audio":
 		return cmdAudio(rest, stdout, stderr, clock)
+	case "node-clock":
+		return cmdNodeClock(rest, stdout, stderr, clock)
 	case "fppconnect":
 		return cmdFPPConnect(rest, stdout, stderr, clock)
 	case "fpp-mqtt":
@@ -396,7 +398,11 @@ Commands:
   audio session prepare <nodeId> <sessionId> [params-json]
                                         dispatch audio.session.prepare (write, requires audio:command)
   audio session start <nodeId> <sessionId> [params-json]
-                                        dispatch audio.session.start (write, requires audio:command)
+                                        dispatch audio.session.start (write, requires audio:command);
+                                        --scheduled-at-ns starts at an instant on that node's media clock
+  audio session aligned-start <sessionId> <nodeId>...
+                                        prepare several nodes and start them all at ONE instant on the
+                                        shared media clock (write, requires audio:command)
   audio session pause <nodeId> <sessionId> [params-json]
                                         dispatch audio.session.pause (write, requires audio:command)
   audio session resume <nodeId> <sessionId> [params-json]
@@ -420,6 +426,11 @@ Commands:
   audio silence <nodeId>
                                         dispatch audio.node.silence: the unconditional
                                         per-node emergency stop (write, requires audio:command)
+  node-clock list                      enumerate node.clock objects (id is the node id)
+  node-clock get <nodeId>              show one node's clock configuration
+  node-clock set <nodeId>              write a new node.clock revision (write, full
+                                        replacement, requires config:write)
+  node-clock revisions <nodeId>        list node.clock revision history, newest first
   fppconnect settings get              show the active fppconnect.settings configuration
                                         (ADR-044; never 404s, reports the built-in default)
   fppconnect settings set              write a new fppconnect.settings revision (write,

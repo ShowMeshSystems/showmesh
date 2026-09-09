@@ -51,6 +51,16 @@ type FakeEngine struct {
 	// "unload" operation to reset it against.
 	lastLoadedHandle      EngineHandle
 	lastLoadedHandleKnown bool
+
+	// presentedEpoch is this instance's own sink-clock epoch, and
+	// presentedAdjust is a test-injected departure of that clock from the
+	// clock now returns. Together they stand in for the one thing a fake
+	// cannot otherwise express: a real output whose presented sample
+	// count runs at its own rate, which is what a scheduled timeline
+	// measures its error against. Nothing in production writes
+	// presentedAdjust.
+	presentedEpoch  time.Time
+	presentedAdjust time.Duration
 }
 
 // fakeLTCNeverStartedReason is FakeEngine's LTC state before StartLTC is
@@ -96,7 +106,7 @@ type fakeFade struct {
 
 // NewFakeEngine returns a FakeEngine using now for its internal clock.
 func NewFakeEngine(now func() time.Time) *FakeEngine {
-	return &FakeEngine{now: now, handles: make(map[EngineHandle]*fakeHandle), failNext: make(map[EngineHandle]error)}
+	return &FakeEngine{now: now, handles: make(map[EngineHandle]*fakeHandle), failNext: make(map[EngineHandle]error), presentedEpoch: now()}
 }
 
 // InjectFailure arms handle so its next call to Load, Start, Pause,
@@ -462,4 +472,25 @@ func (e *FakeEngine) ObserveLTC(_ context.Context) LTCObservation {
 	obs := e.ltc
 	obs.ObservedAt = e.now()
 	return obs
+}
+
+// PresentedElapsed reports this fake's stand-in for a sink clock: time
+// since this instance was constructed, plus whatever departure
+// [FakeEngine.SetPresentedAdjust] injected. It is a fake clock over a
+// fake output and is never evidence that any sample reached a speaker,
+// exactly as this type's own doc comment says of everything else here.
+func (e *FakeEngine) PresentedElapsed(_ context.Context) (time.Duration, bool, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.now().Sub(e.presentedEpoch) + e.presentedAdjust, true, ""
+}
+
+// SetPresentedAdjust moves this fake's presented running time by d
+// relative to its now function, so a test can drive a scheduled
+// timeline's measured error to a chosen value. Test-only: nothing in
+// production calls it.
+func (e *FakeEngine) SetPresentedAdjust(d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.presentedAdjust = d
 }

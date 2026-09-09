@@ -48,6 +48,7 @@ function node(
     render: [],
     audio: [],
     fppConnect: [],
+    clock: [],
   }
   if (showParticipation === undefined) {
     delete (base as Partial<typeof base>).showParticipation

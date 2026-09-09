@@ -22,6 +22,76 @@ import (
 // from anything else this package already reports.
 const noAlignmentMeasurementReason = "no program-to-LTC alignment measurement is implemented; nothing in this seam can measure it"
 
+// timelineAbsentReason states why a timeline signal carries no value.
+// The node's own [mqttproto.AudioPayload.TimelineReason] is preferred
+// whenever it supplied one; the fallbacks cover an agent built before
+// these fields existed, which omits the whole block rather than
+// explaining its absence.
+func timelineAbsentReason(p mqttproto.AudioPayload, scheduled bool) string {
+	if p.TimelineReason != "" {
+		return p.TimelineReason
+	}
+	if !scheduled {
+		return "this node is running no session against a scheduled start instant"
+	}
+	return "this node could not read both its media clock and its sink clock on this report tick"
+}
+
+// timelineObservations renders the six node.audio.timeline.* signals
+// (signals.go) from the node's own report.
+//
+// The payload carries TWO flags and they are not interchangeable.
+// Scheduled makes ScheduledAt, Resyncs and LastResyncReason real;
+// Measured makes ExpectedMs, ActualMs and ErrorMs real. A scheduled
+// session whose media clock could not be read this tick therefore
+// reports the first three and leaves the last three
+// [observation.StateNotCollected] with the node's stated reason, rather
+// than a zero error that would read as perfectly on time.
+//
+// LastResyncReason is only real once a resync has actually happened: on a
+// scheduled session that has never resynced there is no reason to report,
+// and an empty string would read as one.
+func timelineObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+	reason := timelineAbsentReason(p, p.TimelineScheduled)
+
+	var obs []observation.Observation
+	if p.TimelineScheduled {
+		obs = append(obs,
+			buildValue(nodeID, SignalTimelineScheduledAt, p.TimelineScheduledAtNs, observedAt, rep),
+			buildValue(nodeID, SignalTimelineResyncs, p.TimelineResyncs, observedAt, rep),
+		)
+		if p.TimelineLastResyncReason != "" {
+			obs = append(obs, buildValue(nodeID, SignalTimelineLastResyncReason, p.TimelineLastResyncReason, observedAt, rep))
+		} else {
+			obs = append(obs, notCollected(res, SignalTimelineLastResyncReason, source,
+				"this scheduled session has not resynced, so no resync reason is in effect", rep.receivedAt))
+		}
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalTimelineScheduledAt, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineResyncs, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineLastResyncReason, source, reason, rep.receivedAt),
+		)
+	}
+
+	if p.TimelineScheduled && p.TimelineMeasured {
+		obs = append(obs,
+			buildValue(nodeID, SignalTimelineExpectedMs, p.TimelineExpectedMs, observedAt, rep),
+			buildValue(nodeID, SignalTimelineActualMs, p.TimelineActualMs, observedAt, rep),
+			buildValue(nodeID, SignalTimelineErrorMs, p.TimelineErrorMs, observedAt, rep),
+		)
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalTimelineExpectedMs, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineActualMs, source, reason, rep.receivedAt),
+			notCollected(res, SignalTimelineErrorMs, source, reason, rep.receivedAt),
+		)
+	}
+	return obs
+}
+
 // ltcFrameRateAbsentReason states why a node reports no frame rate, which
 // differs between a node that cannot generate LTC at all and one that
 // simply has not run it.
@@ -184,6 +254,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
 	obs = append(obs, engineRestoreObservations(nodeID, p, observedAt, rep)...)
+	obs = append(obs, timelineObservations(nodeID, p, observedAt, rep)...)
 	obs = append(obs, settingsObservations(nodeID, p, observedAt, rep)...)
 
 	return obs

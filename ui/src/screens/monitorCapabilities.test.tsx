@@ -17,6 +17,7 @@ function node(nodeId: string, capabilities: Node['capabilities'] = []): Node {
     declaration: {},
     render: [],
     audio: [],
+    clock: [],
     fppConnect: [],
   } as unknown as Node
 }

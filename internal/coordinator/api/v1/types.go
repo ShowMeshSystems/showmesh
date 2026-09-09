@@ -245,6 +245,14 @@ type Node struct {
 	// audio discovery report.
 	Audio []ObservationEntry `json:"audio"`
 
+	// Clock is Track I seam I1's addition, additive per ADR-020 decision
+	// 8: whatever node.clock.ptp.* observations this coordinator
+	// currently holds for this node, one [ObservationEntry] per signal.
+	// Never null — an empty array means this node has never published a
+	// clock status report (no node.clock configuration, or a node still
+	// starting up).
+	Clock []ObservationEntry `json:"clock"`
+
 	// FPPConnect is an addition, additive per ADR-020 decision 8:
 	// whatever node.fppconnect.channel_range.* observations this
 	// coordinator currently holds for this node's most recently resolved

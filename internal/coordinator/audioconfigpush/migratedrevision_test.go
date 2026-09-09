@@ -59,7 +59,7 @@ func writePreDecibelDatabase(t *testing.T, linearMaxGain, linearDuckGain float64
 
 	payload := fmt.Sprintf(
 		`{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,`+
-			`"defaultMaxBackgroundGain":%v,"duckTargetGain":%v,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`,
+			`"defaultMaxBackgroundGain":%v,"duckTargetGain":%v,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`,
 		linearMaxGain, linearDuckGain)
 
 	if _, err := db.ExecContext(ctx,

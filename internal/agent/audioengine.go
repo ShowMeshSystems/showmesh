@@ -484,6 +484,7 @@ func (r *audioEngineRebuilder) bind(engine audio.Engine) {
 // struct literal.
 func audioSettingsFromWire(p audioSettingsConfig) audio.Settings {
 	return audio.Settings{
+		DriftIgnoreThresholdMs:    p.DriftIgnoreThresholdMs,
 		DefaultFadeCurve:          pkgaudio.FadeCurve(p.DefaultFadeCurve),
 		DefaultFadeDurationMs:     p.DefaultFadeDurationMs,
 		DefaultMaxBackgroundGain:  pkgaudio.Ceiling(p.DefaultMaxBackgroundGain),

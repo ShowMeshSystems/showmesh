@@ -41,22 +41,22 @@ func gainSignalFor(reason string) string {
 	return "audio_session.gain.effective"
 }
 
-func gainSet(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, error) {
+func gainSet(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
 	raw, ok := params["gain"]
 	if !ok {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.set: params.gain is required")
+		return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.gain.set: params.gain is required")
 	}
 	f, ok := raw.(float64)
 	if !ok {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.set: params.gain must be a number, got %T", raw)
+		return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.gain.set: params.gain must be a number, got %T", raw)
 	}
 	outcome := mgr.GainSet(ctx, id, inv, rev, pkgaudio.Gain(f))
-	return outcome, gainSignalFor(outcome.Reason), nil
+	return outcome, gainSignalFor(outcome.Reason), nil, nil
 }
 
 var audioGainFadeKnownKeys = map[string]bool{"targetGain": true, "durationMs": true, "curve": true}
 
-func gainFade(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, error) {
+func gainFade(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
 	body := map[string]any{}
 	for k, v := range params {
 		if audioSessionCommonKeys[k] {
@@ -65,16 +65,16 @@ func gainFade(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, in
 		body[k] = v
 	}
 	if err := rejectUnknownKeys("audio.gain.fade", body, audioGainFadeKnownKeys); err != nil {
-		return pkgaudio.OutcomeResult{}, "", err
+		return pkgaudio.OutcomeResult{}, "", nil, err
 	}
 
 	rawTarget, ok := body["targetGain"]
 	if !ok {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.targetGain is required")
+		return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.gain.fade: params.targetGain is required")
 	}
 	target, ok := rawTarget.(float64)
 	if !ok {
-		return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.targetGain must be a number, got %T", rawTarget)
+		return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.gain.fade: params.targetGain must be a number, got %T", rawTarget)
 	}
 
 	settings := mgr.SettingsSnapshot()
@@ -83,7 +83,7 @@ func gainFade(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, in
 	if rawDuration, ok := body["durationMs"]; ok {
 		durationMs, ok = rawDuration.(float64)
 		if !ok || durationMs <= 0 {
-			return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.durationMs must be a positive number, got %v", rawDuration)
+			return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.gain.fade: params.durationMs must be a positive number, got %v", rawDuration)
 		}
 	}
 
@@ -91,19 +91,19 @@ func gainFade(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, in
 	if rawCurve, ok := body["curve"]; ok {
 		v, ok := rawCurve.(string)
 		if !ok || v == "" {
-			return pkgaudio.OutcomeResult{}, "", fmt.Errorf("audio.gain.fade: params.curve must be a non-empty string, got %T", rawCurve)
+			return pkgaudio.OutcomeResult{}, "", nil, fmt.Errorf("audio.gain.fade: params.curve must be a non-empty string, got %T", rawCurve)
 		}
 		curve = pkgaudio.FadeCurve(v)
 	}
 
 	outcome := mgr.GainFade(ctx, id, inv, rev, curve, time.Duration(durationMs)*time.Millisecond, pkgaudio.Gain(target))
-	return outcome, "audio_session.fade.state", nil
+	return outcome, "audio_session.fade.state", nil, nil
 }
 
-func outputMute(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Mute(ctx, id, inv, rev), "audio_session.mix.state", nil
+func outputMute(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	return mgr.Mute(ctx, id, inv, rev), "audio_session.mix.state", nil, nil
 }
 
-func outputUnmute(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, error) {
-	return mgr.Unmute(ctx, id, inv, rev), "audio_session.mix.state", nil
+func outputUnmute(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	return mgr.Unmute(ctx, id, inv, rev), "audio_session.mix.state", nil, nil
 }

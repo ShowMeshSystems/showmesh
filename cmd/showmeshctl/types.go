@@ -135,6 +135,20 @@ type node struct {
 	// no SURFACE entry is present, regardless of node.multisync.*.
 	Render []observationEntry `json:"render"`
 
+	// Audio is required (api/openapi.yaml's Node schema): whatever
+	// node.audio.* observations this coordinator currently holds for this
+	// node, one [observationEntry] per signal. Never null: an empty slice
+	// means this node has never published an audio discovery report.
+	Audio []observationEntry `json:"audio"`
+
+	// Clock is Track I seam I1's addition, additive per contract §6.2:
+	// whatever node.clock.ptp.* observations this coordinator currently
+	// holds for this node, one [observationEntry] per signal. Never null
+	// on a coordinator that has this field — an empty slice means this
+	// node has never published a clock status report (no node.clock
+	// configuration, or a node still starting up).
+	Clock []observationEntry `json:"clock"`
+
 	// FPPConnect is an addition, additive per contract §6.2: whatever
 	// node.fppconnect.channel_range.* observations this coordinator
 	// currently holds for this node's most recently resolved
@@ -145,12 +159,6 @@ type node struct {
 	// channel-range string per node). "fppconnect status" (cmd_fppconnect.go)
 	// prints these.
 	FPPConnect []observationEntry `json:"fppConnect"`
-
-	// Audio is required (api/openapi.yaml's Node schema): whatever
-	// node.audio.* observations this coordinator currently holds for this
-	// node, one [observationEntry] per signal. Never null: an empty slice
-	// means this node has never published an audio discovery report.
-	Audio []observationEntry `json:"audio"`
 }
 
 // observationEntry mirrors internal/coordinator/api/v1.ObservationEntry:

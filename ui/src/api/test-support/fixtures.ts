@@ -92,6 +92,7 @@ export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
     showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     render: [],
     audio: [],
+    clock: [],
     fppConnect: [],
     ...overrides,
   }

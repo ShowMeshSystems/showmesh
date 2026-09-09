@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
+	"github.com/showmeshsystems/showmesh/internal/agent/clock"
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
@@ -391,6 +392,20 @@ func Run() int {
 		audioMgr.RunWatcher(sigCtx, ticker.C)
 	}()
 
+	// clockMgr is Track I seam I1's PTP media clock: unconfigured until a
+	// node.clock.configure command delivers this node's binding
+	// (clockBind below rebuilds it — see clockconfigops.go), exactly the
+	// audioBind/audioMgr shape one seam over. An unconfigured Manager
+	// reports [clock.StatusUnconfigured] ("unsynchronized") on every
+	// report tick, matching what a node with no clock provider reported
+	// before this seam existed.
+	clockMgr := clock.NewManager(time.Now, logger)
+	clockBind := newClockBinding(clockMgr)
+	// Seam I2: the audio session layer reads the same media clock, for a
+	// scheduled start's T0 and for its timeline. Read-only; the audio
+	// Manager never configures or steps it.
+	audioMgr.SetClockSource(clockMgr)
+
 	// audioRestoreRetryDone: this node's own bounded, backed-off retry of
 	// every deferred audio restore, re-probing the device on its own
 	// instead of waiting for a coordinator-pushed audio.node binding —
@@ -410,7 +425,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, fppConnect, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, clockBind, fppConnect, time.Now, logger)
 
 	// connectAndInstallCapabilityRepublish is the single call site for
 	// both constructing this node's MQTT connection and wiring
@@ -475,6 +490,17 @@ func Run() int {
 		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, audioEngine, time.Now, audioReportTicks, logger)
 	}()
 
+	// Clock report: this node's current PTP status on its own cadence —
+	// see clockreport.go. No trigger channel, matching the audio report
+	// above: nothing here needs an out-of-cadence publish.
+	clockReportDone := make(chan struct{})
+	go func() {
+		defer close(clockReportDone)
+		ticker := time.NewTicker(cfg.ClockReportInterval)
+		defer ticker.Stop()
+		runClockReport(sigCtx, conn, cfg.NodeID, clockMgr, time.Now, ticker.C, logger)
+	}()
+
 	// runShowModeWatch is the observability half of ADR-033 decision 5: it
 	// logs when this node's mode stops being confirmed and starts being
 	// held. It publishes nothing, so it cannot race the final offline
@@ -497,16 +523,17 @@ func Run() int {
 	stopSignal()
 
 	// The heartbeat, asset inventory, render report, audio report cadence
-	// ticker, audio report, audio session watcher, audio restore retry,
-	// MultiSync listener, FPP Connect HTTP listener, and show mode watch
-	// loops also select on sigCtx.Done() and exit on their own; wait for
-	// all ten so none can race the final offline publish below with a
-	// publish still in flight.
+	// ticker, audio report, clock report, audio session watcher, audio
+	// restore retry, MultiSync listener, FPP Connect HTTP listener, and
+	// show mode watch loops also select on sigCtx.Done() and exit on their
+	// own; wait for all eleven so none can race the final offline publish
+	// below with a publish still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
 	<-audioReportTickerDone
 	<-audioReportDone
+	<-clockReportDone
 	<-audioWatchDone
 	<-audioRestoreRetryDone
 	<-multiSyncDone
@@ -533,6 +560,14 @@ func Run() int {
 	fppConnectRegistrar.Wait()
 
 	<-showModeWatchDone
+
+	// Stop whatever clock provider this node holds (a managed provider's
+	// own supervised ptp4l process, most notably) before the final offline
+	// publish — matching sup.Shutdown's identical "stop what this process
+	// owns before disconnecting" rule one seam over.
+	if err := clockMgr.Close(); err != nil {
+		logger.Warn("failed to cleanly close the clock manager at shutdown", "error", err)
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
