@@ -908,8 +908,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 25 {
-		t.Errorf("AllSignalIDs has %d entries, want 25", len(AllSignalIDs))
+	if len(AllSignalIDs) != 31 {
+		t.Errorf("AllSignalIDs has %d entries, want 31", len(AllSignalIDs))
 	}
 }
 

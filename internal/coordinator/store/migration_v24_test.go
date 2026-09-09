@@ -13,7 +13,7 @@ func TestMigrateV24BackfillsMissingDuckFadeDurations(t *testing.T) {
 	seedAudioSettingsRevision(t, db, 1,
 		`{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,`+
 			`"defaultMaxBackgroundGainDb":-4.44,"duckTargetGainDb":-12.04,`+
-			`"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`)
+			`"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`)
 
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -35,7 +35,7 @@ func TestMigrateV24LeavesCompletePayloadsAlone(t *testing.T) {
 	// change this payload and fail the byte-for-byte check below.
 	const complete = `{"driftIgnoreThresholdMs":500,"defaultFadeCurve":"linear","defaultFadeDurationMs":2500,` +
 		`"defaultMaxBackgroundGainDb":-6.0,"duckTargetGainDb":-8.5,"duckFadeDurationMs":150,` +
-		`"duckRestoreFadeDurationMs":900,"ltcFrameRate":"25","ltcDefaultStartOffset":"01:02:03:04"}`
+		`"duckRestoreFadeDurationMs":900,"ltcFrameRate":"25","ltcDefaultStartOffset":"01:02:03:04","scheduledStartDeliveryBoundMs":2000,"scheduledStartMarginMs":1000}`
 
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1, complete)

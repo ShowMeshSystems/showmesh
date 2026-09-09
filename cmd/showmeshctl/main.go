@@ -383,7 +383,11 @@ Commands:
   audio session prepare <nodeId> <sessionId> [params-json]
                                         dispatch audio.session.prepare (write, requires audio:command)
   audio session start <nodeId> <sessionId> [params-json]
-                                        dispatch audio.session.start (write, requires audio:command)
+                                        dispatch audio.session.start (write, requires audio:command);
+                                        --scheduled-at-ns starts at an instant on that node's media clock
+  audio session aligned-start <sessionId> <nodeId>...
+                                        prepare several nodes and start them all at ONE instant on the
+                                        shared media clock (write, requires audio:command)
   audio session pause <nodeId> <sessionId> [params-json]
                                         dispatch audio.session.pause (write, requires audio:command)
   audio session resume <nodeId> <sessionId> [params-json]
