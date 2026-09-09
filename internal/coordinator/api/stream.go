@@ -497,6 +497,7 @@ func (h *Hub) render(ctx context.Context) {
 		h.evictRendered("node:", present)
 	}
 
+	instanceParticipation := h.instanceParticipation(ctx)
 	if views, err := h.deps.FPP.ListInstances(ctx); err != nil {
 		h.logger.Warn("stream hub: list fpp instances failed", "error", err)
 	} else {
@@ -504,7 +505,7 @@ func (h *Hub) render(ctx context.Context) {
 		for _, fv := range views {
 			key := "fpp:" + fv.InstanceID
 			present[key] = struct{}{}
-			inst := mapFPPInstance(fv, now)
+			inst := mapFPPInstance(fv, instanceParticipation.forFPP(fv.InstanceID), now)
 			proj := fppInstanceDiffProjection(inst)
 
 			// fullChanged is EXACTLY the pre-ADR-023 gate, unmodified: it
@@ -602,7 +603,7 @@ func (h *Hub) render(ctx context.Context) {
 		for _, rv := range rviews {
 			key := "resolume:" + rv.InstanceID
 			present[key] = struct{}{}
-			inst := mapResolumeInstance(rv, composition, now)
+			inst := mapResolumeInstance(rv, composition, instanceParticipation.forResolume(rv.InstanceID), now)
 			proj := resolumeInstanceDiffProjection(inst)
 			if h.updateRendered(key, proj) {
 				i := inst

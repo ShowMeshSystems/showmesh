@@ -109,6 +109,7 @@ export function makeFPPInstance(instanceId: string, overrides: Partial<FPPInstan
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
+    showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }
 }
@@ -119,6 +120,7 @@ export function makeResolumeInstance(instanceId: string, overrides: Partial<Reso
     health: 'healthy',
     observations: [],
     composition: null,
+    showParticipation: { state: 'participating', show: 'halloween-2026', reason: null },
     ...overrides,
   }
 }

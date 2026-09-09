@@ -197,6 +197,14 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 	// than tracking which ones actually reference this show id.
 	h.pushFPPConnectToAllNodes(r.Context(), now)
 
+	// SAME RULE, TWO CALL SITES: a change to which instances take part in
+	// a show, and a change to WHICH show is active, both change every
+	// rendered instance's showParticipation. Neither is discoverable from
+	// a config revision alone, so each write says so here. The other call
+	// site is handlePutShowActive below; if one of them is deleted as
+	// redundant the other stops covering its own case.
+	h.notifyStreamNow()
+
 	jsonWrite(w, mapShowConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,
 	}, payload))
@@ -645,5 +653,14 @@ func mapShowActiveConfigResponse(now time.Time, rev store.ConfigRevisionRecord, 
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),
 		CreatedByPrincipalName: nonEmptyStrPtr(rev.CreatedByPrincipalName),
 		Source:                 rev.Source,
+	}
+}
+
+// notifyStreamNow pokes the stream hub, if one is wired, so a write whose
+// result is visible in a streamed resource reaches subscribers now instead
+// of waiting out the hub's own recompute interval.
+func (h *handlers) notifyStreamNow() {
+	if h.notifyStream != nil {
+		h.notifyStream()
 	}
 }

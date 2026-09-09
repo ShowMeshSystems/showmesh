@@ -9660,6 +9660,50 @@ components:
       properties:
         confirm:
           type: boolean
+    InstanceShowParticipation:
+      type: object
+      description: >-
+        The coordinator's own answer to whether a configured FPP or
+        Resolume instance takes part in the show currently active. The UI
+        renders this value directly and must never infer participation
+        from any other field.
+
+        It reuses NodeShowParticipation's vocabulary and adds exactly one
+        state, and the difference is not an oversight. A node's
+        participation is DERIVED from the active show's cue catalog, so it
+        can only be undetermined because no show is active or no
+        cue-catalog source exists; both are "not_configured". An
+        instance's participation is SELECTED by hand on the show object,
+        which admits a third case: a show IS active and its selection has
+        simply never been recorded, which is true of every show written
+        before participation existed. "Activate a show" and "choose which
+        instances take part" are different remedies, so
+        "selection_unrecorded" is its own state and "not_participating"
+        stays reserved for a real answer to a question somebody was
+        actually asked.
+
+        Under "selection_unrecorded" every configured instance is treated
+        as taking part, deliberately: the quiet reading would turn every
+        participation-aware readiness check green the moment this field
+        shipped.
+      required: [state, show, reason]
+      properties:
+        state:
+          type: string
+          enum:
+            [participating, not_participating, selection_unrecorded,
+             unknown, not_configured]
+        show:
+          type: string
+          description: >-
+            The active show this was computed against. Empty for
+            "not_configured", and for "unknown" when no show could be
+            identified at all - honest absence, never a bug.
+        reason:
+          type: [string, "null"]
+          description: >-
+            Always populated for "unknown", "not_configured" and
+            "selection_unrecorded"; optional otherwise.
     FPPInstance:
       type: object
       description: >-
@@ -9669,7 +9713,8 @@ components:
       required:
         [instanceId, endpoint, health, observations, lastPollAt,
          lastPollError, instanceUuid, instanceUuidFirstObservedAt,
-         instanceUuidChange, duplicateInstanceUuidEndpointIds]
+         instanceUuidChange, duplicateInstanceUuidEndpointIds,
+         showParticipation]
       properties:
         instanceId:
           type: string
@@ -9678,6 +9723,8 @@ components:
         health:
           type: string
           enum: [healthy, degraded, failed, unknown, suppressed]
+        showParticipation:
+          $ref: "#/components/schemas/InstanceShowParticipation"
         observations:
           type: array
           description: Ordered by signal, ascending, and this ordering is guaranteed.
@@ -9944,7 +9991,7 @@ components:
         Mirrors FPPInstance's conventions: observations
         is never null, and composition is null before any composition has
         ever been uploaded.
-      required: [instanceId, health, observations, composition]
+      required: [instanceId, health, observations, composition, showParticipation]
       properties:
         instanceId:
           type: string
@@ -9960,6 +10007,8 @@ components:
           oneOf:
             - $ref: "#/components/schemas/ResolumeInstanceComposition"
             - type: "null"
+        showParticipation:
+          $ref: "#/components/schemas/InstanceShowParticipation"
     ResolumeInstancesResponse:
       type: object
       required: [serverTime, instances]
@@ -17297,6 +17346,19 @@ components:
         check's own `reason` states exactly what it verified and what it
         could not. A healthy result on one check is never evidence any
         other check passed.
+
+        It also checks every FPP and Resolume instance the ACTIVE show
+        selects as taking part (`participation:fpp:<instanceId>`,
+        `participation:resolume:<instanceId>`): a selected instance that is
+        not configured on this coordinator at all fails, and a selected
+        instance that is configured carries its own derived health. An
+        instance the active show does not select produces no check, so an
+        unhealthy host no active show uses cannot redden tonight. A show
+        whose selection was never recorded counts every configured
+        instance, which is what stops this from going green on upgrade.
+        When `show.active` names a different show from this session's own,
+        the whole family reports one `not_configured` check named
+        `participation`.
 
         When `resting.backgroundAudio` is configured, this also checks
         the configured output's declared capabilities

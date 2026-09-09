@@ -3160,12 +3160,26 @@ export interface components {
         ConfigObjectDeleteRequest: {
             confirm: boolean;
         };
+        /**
+         * @description The coordinator's own answer to whether a configured FPP or Resolume instance takes part in the show currently active. The UI renders this value directly and must never infer participation from any other field.
+         *     It reuses NodeShowParticipation's vocabulary and adds exactly one state, and the difference is not an oversight. A node's participation is DERIVED from the active show's cue catalog, so it can only be undetermined because no show is active or no cue-catalog source exists; both are "not_configured". An instance's participation is SELECTED by hand on the show object, which admits a third case: a show IS active and its selection has simply never been recorded, which is true of every show written before participation existed. "Activate a show" and "choose which instances take part" are different remedies, so "selection_unrecorded" is its own state and "not_participating" stays reserved for a real answer to a question somebody was actually asked.
+         *     Under "selection_unrecorded" every configured instance is treated as taking part, deliberately: the quiet reading would turn every participation-aware readiness check green the moment this field shipped.
+         */
+        InstanceShowParticipation: {
+            /** @enum {string} */
+            state: "participating" | "not_participating" | "selection_unrecorded" | "unknown" | "not_configured";
+            /** @description The active show this was computed against. Empty for "not_configured", and for "unknown" when no show could be identified at all - honest absence, never a bug. */
+            show: string;
+            /** @description Always populated for "unknown", "not_configured" and "selection_unrecorded"; optional otherwise. */
+            reason: string | null;
+        };
         /** @description One configured FPP instance's current representation. `endpoint` never includes userinfo (credentials are stripped before this is ever rendered). */
         FPPInstance: {
             instanceId: string;
             endpoint: string;
             /** @enum {string} */
             health: "healthy" | "degraded" | "failed" | "unknown" | "suppressed";
+            showParticipation: components["schemas"]["InstanceShowParticipation"];
             /** @description Ordered by signal, ascending, and this ordering is guaranteed. */
             observations: components["schemas"]["Evidence"][];
             /** Format: date-time */
@@ -3290,6 +3304,7 @@ export interface components {
             /** @description Ordered by signal, ascending, and this ordering is guaranteed. */
             observations: components["schemas"]["Evidence"][];
             composition: components["schemas"]["ResolumeInstanceComposition"] | null;
+            showParticipation: components["schemas"]["InstanceShowParticipation"];
         };
         ResolumeInstancesResponse: {
             /** Format: date-time */
@@ -5992,6 +6007,7 @@ export interface components {
         };
         /**
          * @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed.
+         *     It also checks every FPP and Resolume instance the ACTIVE show selects as taking part (`participation:fpp:<instanceId>`, `participation:resolume:<instanceId>`): a selected instance that is not configured on this coordinator at all fails, and a selected instance that is configured carries its own derived health. An instance the active show does not select produces no check, so an unhealthy host no active show uses cannot redden tonight. A show whose selection was never recorded counts every configured instance, which is what stops this from going green on upgrade. When `show.active` names a different show from this session's own, the whole family reports one `not_configured` check named `participation`.
          *     When `resting.backgroundAudio` is configured, this also checks the configured output's declared capabilities (`resting:background-audio-output-capabilities:<node>`) and its requested item-transition ability (`resting:background-audio-item-transition`). Both can report `not_verifiable` for an output that has never published a capability advertisement at all (an agent built before that signal existed makes no claim either way), `failed` for a currently-confirmed output whose advertisement genuinely omits what is needed, and `healthy` once it declares everything needed. Both also report `unknown` for an output this coordinator cannot currently confirm is online. Only `resting:background-audio-output-capabilities:<node>` additionally reports `unknown`, rather than `failed`, for an output that is online but has not finished reporting since it connected: it cross-checks a second, independent signal (`node.audio.engine.state`) before concluding a missing capability is genuinely absent rather than merely not yet advertised, since post-connect capability detection can take up to two minutes. `resting:background-audio-item-transition` has no second signal to cross-check against, so once an output is online, a missing item-transition capability reads `failed` immediately, even during that same post-connect window.
          */
         NightReadinessCheck: {
