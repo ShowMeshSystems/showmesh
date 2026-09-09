@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 )
 
 // DefaultExternalUDSAddress is linuxptp's own documented default read-only
@@ -49,13 +50,40 @@ func (p *ExternalProvider) Kind() ProviderKind { return ProviderExternal }
 func (p *ExternalProvider) Interface() string  { return p.cfg.Interface }
 func (p *ExternalProvider) Close() error       { return nil }
 
-// Now reports MediaTime.Valid=false: an external provider observes ptp4l
-// state only (RES-019 section 5.3 scopes it to "observes only"). Reading
-// the PHC device itself, when one is configured, is [ReadPHC] — a
-// separate concern from which component owns the PTP protocol traffic,
-// and this provider does not assume it also owns PHC access.
+// Now serves media time only in the one case this provider can establish
+// from evidence: an interface with no PHC at all.
+//
+// RES-019 section 5.3 gives this provider two time sources, the PHC in
+// hardware timestamping mode and "the disciplined system clock in
+// software mode". Which of the two applies depends on the timestamping
+// mode the OBSERVED ptp4l actually reached, and nothing on the read-only
+// management socket reports that mode, which is why the hardware case
+// stays refused here: an interface that HAS a PHC may still be running an
+// externally-owned ptp4l that fell back to software timestamping, and a
+// provider that read that undisciplined PHC would be confidently wrong.
+// Reading a PHC device is [ReadPHC], a separate concern from which
+// component owns the PTP protocol traffic, and this provider does not
+// assume it also owns PHC access.
+//
+// An interface with NO PHC settles the question: ptp4l cannot reach
+// hardware timestamping without one, so the instance being observed is
+// necessarily software timestamped, and a software-timestamped ptp4l
+// disciplines CLOCK_REALTIME itself (linuxptp ptp4l.8, and the identical
+// case [ManagedProvider.Now] already serves). The reading carries that
+// reasoning as its own Reason, so a consumer can see what it rests on.
 func (p *ExternalProvider) Now(context.Context) MediaTime {
-	return MediaTime{Valid: false, Reason: "external provider observes PTP status only; wire a PHC device separately for media time"}
+	_, hasPHC, err := PHCIndexForInterface(p.cfg.Interface)
+	if err != nil {
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("cannot tell whether %s has a PHC, so which clock the observed ptp4l disciplines is unknown: %v", p.cfg.Interface, err)}
+	}
+	if hasPHC {
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("%s has a PHC, and this provider cannot tell whether the ptp4l it observes reached hardware timestamping; wire a PHC device explicitly for media time", p.cfg.Interface)}
+	}
+	return MediaTime{
+		Time:   time.Now(),
+		Valid:  true,
+		Reason: fmt.Sprintf("%s has no PHC, so the observed ptp4l is necessarily software timestamped and disciplines CLOCK_REALTIME directly", p.cfg.Interface),
+	}
 }
 
 // Poll reads TIME_STATUS_NP, PORT_DATA_SET, TIME_PROPERTIES_DATA_SET, and
