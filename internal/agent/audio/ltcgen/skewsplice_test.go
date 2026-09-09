@@ -3,6 +3,7 @@
 package ltcgen
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio/ltcgen/ltcdecodetest"
@@ -46,46 +47,46 @@ func spliceRepeat(s []int16, cut, n int) []int16 {
 	return append(out, s[cut:]...)
 }
 
-// TestSkewCorrectionNeverProducesAWrongTimecode is the assertion that
-// matters, and it is deliberately not about how many frames survive.
+// TestASampleSpliceCanMakeLTCDecodeATimecodeThatWasNeverSent
+// characterises the LTC format, not this project's code, and that is why
+// it asserts that the corruption happens rather than that it does not.
 //
-// A splice costs one or two frames, which is benign: a gap is visibly a
-// gap and a consumer sees nothing where it expected something. The defect
-// is a frame that DECODES TO A VALUE THAT WAS NEVER SENT. LTC carries a
-// sync word and no checksum, so a decoder that finds the sync word at a
-// plausible offset after a splice emits whatever bits precede it, with no
-// way to know they are wrong. Measured examples from this exact setup:
-// 01:00:70:08, which is not a valid timecode at all, and 01:15:00:00 in a
-// signal that never leaves 01:00:0x.
+// LTC carries a sync word and no checksum. A decoder that finds the sync
+// word at a plausible offset after samples are added or removed emits
+// whatever bits precede it, with no way to know they are wrong. That is
+// true of every LTC signal in the world, it is not a defect anyone can
+// fix here, and it will still be true after this project's own clock
+// defect is gone. Asserting it is characterising an external system.
 //
-// The sweep is load bearing. A correction lands at an arbitrary offset
-// within a frame, and the severity depends on where: splicing exactly on
-// a frame boundary costs one frame and produces no wrong value at all.
-// Pinning the offset would choose the answer rather than measure it.
-func TestSkewCorrectionNeverProducesAWrongTimecode(t *testing.T) {
-	// SKIPPED BECAUSE IT FAILS, AND THE ENVIRONMENT IS FINE. Every other
-	// skip in this repository means a machine lacks docker or a fixture
-	// file. This one does not: the toolchain, libltc and the encoder are
-	// all present and working, and the code under measurement is wrong.
-	//
-	// Measured, deterministic, four wrong values out of thirty-two splice
-	// positions, in a signal running 01:00:00:00 to 01:00:01:08:
-	//
-	//   offset  500, samples repeated -> 01:00:10:08
-	//   offset  600, samples repeated -> 01:00:70:08   not a valid timecode
-	//   offset 1400, samples dropped  -> 01:03:00:00
-	//   offset 1500, samples dropped  -> 01:15:00:00   fifteen minutes into
-	//                                                  a 1.3 second signal
-	//
-	// The cause is upstream of this package: the agent's pipeline selects
-	// the system clock rather than the audio sink's, the sound card drifts
-	// against it, and the sink corrects by splicing samples. Fixing the
-	// clock selection removes the splice and makes this pass. Removing
-	// this skip is an acceptance item on that work, by this test's name.
-	t.Skip("fails: a sample splice makes the decoder emit timecodes that were never sent " +
-		"(01:00:10:08, 01:00:70:08, 01:03:00:00, 01:15:00:00). Not an environment problem; " +
-		"see this test's doc comment")
-
+// Measured, deterministic, four of thirty-two splice positions in a
+// signal running 01:00:00:00 to 01:00:01:08:
+//
+//	offset  500, samples repeated -> 01:00:10:08
+//	offset  600, samples repeated -> 01:00:70:08   not a valid timecode
+//	offset 1400, samples dropped  -> 01:03:00:00
+//	offset 1500, samples dropped  -> 01:15:00:00   fifteen minutes into
+//	                                               a 1.3 second signal
+//
+// WHY THIS MATTERS HERE. The agent's pipeline selects the system clock
+// rather than the audio sink's, so the sound card drifts against it and
+// the sink corrects by splicing samples: measured at 15.7 ppm on one real
+// card, corrected in about 882-sample steps roughly every 22 minutes.
+// Program and LTC share one interface, so those splices land in generated
+// timecode. Fixing the clock selection removes the splices in production.
+//
+// THIS TEST CANNOT OBSERVE THAT FIX. It splices the samples itself, in
+// the test body, and never touches a pipeline or a clock. It will pass
+// before and after, unchanged. The acceptance test for the clock work
+// lives with that work: read the selected clock from the engine's own
+// pipeline, and count skew corrections over a run longer than the
+// correction interval. This test exists to say what those corrections
+// cost, which is the reason the clock has to be right.
+//
+// The sweep is load bearing. Severity depends on where in a frame the
+// splice lands, and splicing exactly on a frame boundary produces no
+// wrong value at all, so pinning one offset chooses the answer instead of
+// measuring it. See the boundary case below.
+func TestASampleSpliceCanMakeLTCDecodeATimecodeThatWasNeverSent(t *testing.T) {
 	clean, expected := encodeRun(t, pkgaudio.LTCFrameRate30, "01:00:00:00", skewTestFrames)
 
 	sent := make(map[pkgaudio.LTCTimecode]bool, len(expected))
@@ -93,6 +94,7 @@ func TestSkewCorrectionNeverProducesAWrongTimecode(t *testing.T) {
 		sent[tc] = true
 	}
 
+	var wrong []string
 	for _, splice := range []struct {
 		name string
 		fn   func([]int16, int, int) []int16
@@ -100,42 +102,38 @@ func TestSkewCorrectionNeverProducesAWrongTimecode(t *testing.T) {
 		{"samples dropped", spliceOut},
 		{"samples repeated", spliceRepeat},
 	} {
-		t.Run(splice.name, func(t *testing.T) {
-			// Sixteen offsets across one frame. A real correction is
-			// equally likely anywhere in that window.
-			step := skewSamplesPerTC / 16
-			for off := 0; off < skewSamplesPerTC; off += step {
-				cut := skewSamplesPerTC*20 + off
-				frames, err := ltcdecodetest.Decode(splice.fn(clean, cut, skewSamples), skewSamplesPerTC)
-				if err != nil {
-					t.Fatalf("offset %d: decode: %v", off, err)
-				}
-				for _, f := range frames {
-					if got := decodedString(f); !sent[got] {
-						t.Errorf("offset %d into the frame: decoder reported %s, which was never sent; "+
-							"a %d-sample splice made a corrupted frame decode as a valid-looking timecode",
-							off, got, skewSamples)
-					}
+		// Sixteen offsets across one frame. A real correction is equally
+		// likely anywhere in that window.
+		step := skewSamplesPerTC / 16
+		for off := 0; off < skewSamplesPerTC; off += step {
+			cut := skewSamplesPerTC*20 + off
+			frames, err := ltcdecodetest.Decode(splice.fn(clean, cut, skewSamples), skewSamplesPerTC)
+			if err != nil {
+				t.Fatalf("%s at offset %d: decode: %v", splice.name, off, err)
+			}
+			for _, f := range frames {
+				if got := decodedString(f); !sent[got] {
+					wrong = append(wrong, fmt.Sprintf("%s at offset %d decoded %s", splice.name, off, got))
 				}
 			}
-		})
+		}
+	}
+
+	if len(wrong) == 0 {
+		// Not a pass. Either the decoder gained a validity check, or the
+		// signal or splice sizes here stopped reproducing the condition.
+		// Both are real news about what a clock correction costs, and the
+		// figures in this test's doc comment would need re-measuring.
+		t.Fatalf("no splice position produced a wrong timecode; this test exists because four of " +
+			"thirty-two did. Either libltc now rejects corrupted frames, or this signal no longer " +
+			"reproduces the condition. Re-measure before trusting the cost figures above")
+	}
+	t.Logf("splices producing a timecode that was never sent: %d of 32 positions", len(wrong))
+	for _, w := range wrong {
+		t.Logf("  %s", w)
 	}
 }
 
-// TestSkewCorrectionOnAFrameBoundaryIsTheBenignCase pins the reason the
-// sweep above exists. Splicing exactly on a frame boundary is the most
-// favourable point in the space, and measuring only there reports a
-// benign result for a defect that is not benign.
-//
-// This one RUNS. It is deliberately not skipped alongside the sweep: it
-// passes today, it keeps this file from being entirely inert while the
-// sweep is skipped, and it is what stops someone reading the sweep as
-// redundant and deleting it. On its own it would be worse than nothing,
-// because it asserts the benign case and would read as coverage of the
-// whole question.
-//
-// If this ever fails, the sweep's premise is wrong and its result needs
-// re-reading, so it is worth its own name rather than a comment.
 func TestSkewCorrectionOnAFrameBoundaryIsTheBenignCase(t *testing.T) {
 	clean, expected := encodeRun(t, pkgaudio.LTCFrameRate30, "01:00:00:00", skewTestFrames)
 	sent := make(map[pkgaudio.LTCTimecode]bool, len(expected))
