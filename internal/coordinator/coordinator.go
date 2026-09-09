@@ -24,6 +24,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/clockconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppplugin"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeclock"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
@@ -599,6 +600,22 @@ func Run() int {
 	// resolumeMgr.reconcile above does.
 	fppMQTTMgr.reconcile(ctx, fppMQTTCfg, fppMQTTPassword)
 
+	// The push-fed plugin collector gets its OWN dedicated
+	// *collector.Runner, never fppRunner above, specifically so its nudge
+	// is not rate-limited by fppRunner's [collector.DefaultNudgeMinInterval]
+	// (2s), a floor tuned for REST command-dispatch bursts against one
+	// instance and much too coarse for "deliver within one second of an
+	// HTTP POST arriving." A short nudge floor here is safe precisely
+	// because this Runner polls nothing over the network — Poll only
+	// renders state Observe already recorded — so nothing here can turn a
+	// fast nudge into a poll storm against a live FPP host.
+	fppPluginRunner := collector.NewRunner(&fppSink{st: st, notify: notifyHub, logger: logger}, logger,
+		collector.WithNudgeMinInterval(200*time.Millisecond))
+	fppPluginCollector := fppplugin.New(fppPluginEndpointResolver{st: st, endpoints: fppEndpoints}, func() {
+		fppPluginRunner.Nudge(fppplugin.CollectorID)
+	})
+	fppPluginRunner.Add(fppPluginCollector, fppPluginCollector.PollInterval())
+
 	// The FPP REST collector (Task C) and the versioned control API (Task
 	// D) were each built against interfaces they declared themselves,
 	// never against each other's or the store's concrete types (contract
@@ -619,6 +636,11 @@ func Run() int {
 		FPP:          fppInstanceLister{st: st, endpoints: fppEndpoints},
 		Observations: storeObservationLister{st: st},
 		Events:       storeEventReader{st: st},
+		// fppPluginCollector already satisfies
+		// api.FPPPlaylistEntryObserver directly, no adapter needed, the
+		// same "the real dependency already has this method set" pattern
+		// several other fields in this literal use.
+		FPPPlaylistEntryObserver: fppPluginCollector,
 		// Track B seam B2b: renderStore already satisfies
 		// api.NodeRenderLister's NodeRenderObservations method directly, no
 		// adapter needed, the same "the real dependency already has this
@@ -1142,6 +1164,9 @@ func Run() int {
 	})
 	spawnBackground(func() {
 		fppRunner.Run(ctx)
+	})
+	spawnBackground(func() {
+		fppPluginRunner.Run(ctx)
 	})
 	// assetSync.Run owns Track E seam E5/E6's own periodic gap-close loop
 	// (assetsync/sync.go), joined via the identical backgroundWG so

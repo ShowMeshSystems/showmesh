@@ -1544,3 +1544,109 @@ func TestFPPObservationRefusedBodyLogsNoIgnoredFieldsWarning(t *testing.T) {
 		t.Fatalf("an accepted observation carrying an unknown member logged no warning:\n%s", logged.String())
 	}
 }
+
+// fakeFPPPlaylistEntryObserver records every Observe call, so a test can
+// assert both that an accepted observation reaches it and that a replay
+// or a refusal does not — see [FPPPlaylistEntryObserver]'s own doc
+// comment for why a spurious call here would produce a second, unwanted
+// push into the plugin collector's state.
+type fakeFPPPlaylistEntryObserver struct {
+	calls []fppPlaylistEntryObserveCall
+}
+
+type fppPlaylistEntryObserveCall struct {
+	instanceUUID, action, playlistName, unavailable string
+	now                                             time.Time
+}
+
+func (f *fakeFPPPlaylistEntryObserver) Observe(instanceUUID, action, playlistName, unavailable string, now time.Time) {
+	f.calls = append(f.calls, fppPlaylistEntryObserveCall{instanceUUID, action, playlistName, unavailable, now})
+}
+
+// TestFPPObservationAcceptedNotifiesPluginObserver is the plugin push path.s own wiring
+// test: a genuinely new, accepted observation must reach
+// Dependencies.FPPPlaylistEntryObserver with the coordinator's own clock,
+// never the plugin's observedAtMillis, and with the derived fields the
+// push-fed collector needs to build its own state.
+func TestFPPObservationAcceptedNotifiesPluginObserver(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	observer := &fakeFPPPlaylistEntryObserver{}
+	deps := setup.deps()
+	deps.FPPPlaylistEntryObserver = observer
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := fppObservationBodyWithAction(t, "instance-1", 1, "showmesh-test", "main", 0, "playing")
+	if resp, m := mustPostObservation(t, api, body, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, m)
+	}
+
+	if len(observer.calls) != 1 {
+		t.Fatalf("Observe called %d times, want 1: %+v", len(observer.calls), observer.calls)
+	}
+	call := observer.calls[0]
+	if call.instanceUUID != "instance-1" || call.action != "playing" || call.playlistName != "showmesh-test" || call.unavailable != "" {
+		t.Errorf("Observe call = %+v, want instance-1/playing/showmesh-test/\"\"", call)
+	}
+	if !call.now.Equal(testNow) {
+		t.Errorf("Observe now = %v, want the coordinator's own clock %v (never observedAtMillis)", call.now, testNow)
+	}
+}
+
+// TestFPPObservationReplayDoesNotNotifyPluginObserver is the other half
+// the ruling explicitly asked for: an idempotent replay (contract §1.6
+// step 9's "equal sequence, identical body" case) must not produce a
+// second Observe call, since the ingest path already stores nothing and
+// changes nothing for a replay.
+func TestFPPObservationReplayDoesNotNotifyPluginObserver(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	observer := &fakeFPPPlaylistEntryObserver{}
+	deps := setup.deps()
+	deps.FPPPlaylistEntryObserver = observer
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := fppObservationBodyWithAction(t, "instance-1", 1, "showmesh-test", "main", 0, "playing")
+	if resp, _ := mustPostObservation(t, api, body, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first post: status = %d, want 200", resp.StatusCode)
+	}
+	// The identical body again, same sequence: contract §1.6 step 9's
+	// idempotent replay.
+	if resp, m := mustPostObservation(t, api, body, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("replay post: status = %d, want 200; body: %v", resp.StatusCode, m)
+	} else if replay, _ := m["replay"].(bool); !replay {
+		t.Fatalf("replay post: response did not report replay=true: %v", m)
+	}
+
+	if len(observer.calls) != 1 {
+		t.Fatalf("Observe called %d times across one accept + one replay, want 1 (the replay must not call it again): %+v", len(observer.calls), observer.calls)
+	}
+}
+
+// TestFPPObservationRefusalDoesNotNotifyPluginObserver: a sequence
+// regression is refused before anything is stored, and must not reach the
+// plugin observer either.
+func TestFPPObservationRefusalDoesNotNotifyPluginObserver(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	observer := &fakeFPPPlaylistEntryObserver{}
+	deps := setup.deps()
+	deps.FPPPlaylistEntryObserver = observer
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	first := fppObservationBodyWithAction(t, "instance-1", 5, "showmesh-test", "main", 0, "playing")
+	if resp, _ := mustPostObservation(t, api, first, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first post: status = %d, want 200", resp.StatusCode)
+	}
+	regressed := fppObservationBodyWithAction(t, "instance-1", 1, "showmesh-test", "main", 0, "playing")
+	if resp, m := mustPostObservation(t, api, regressed, token); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("regressed post: status = %d, want 409; body: %v", resp.StatusCode, m)
+	}
+
+	if len(observer.calls) != 1 {
+		t.Fatalf("Observe called %d times across one accept + one refused regression, want 1 (the refusal must not call it): %+v", len(observer.calls), observer.calls)
+	}
+}
