@@ -335,6 +335,63 @@ func TestAudioPayloadValidateRequiresEngineRestoreLastReasonWhenAttemptsNonzero(
 	}
 }
 
+// TestAudioPayloadValidateAcceptsOmittedSettingsFields proves an agent
+// built before the settings* fields existed leaves them all at their zero
+// value (SettingsState "") and must still validate, matching
+// TestAudioPayloadValidateAcceptsOmittedEngineRestoreFields' identical
+// additive-compatibility proof one field family over.
+func TestAudioPayloadValidateAcceptsOmittedSettingsFields(t *testing.T) {
+	p := validAudioPayload()
+	if p.SettingsState != "" || len(p.SettingsSubstitutedFields) != 0 || p.SettingsReason != "" {
+		t.Fatalf("validAudioPayload() settings* = %+v, want all zero (this test proves the OMITTED case)", p)
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(settingsState omitted) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsAccepted(t *testing.T) {
+	p := validAudioPayload()
+	p.SettingsState = "accepted"
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(settingsState=accepted) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateRejectsUnrecognizedSettingsState(t *testing.T) {
+	p := validAudioPayload()
+	p.SettingsState = "rejected"
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInvalidSettingsState) {
+		t.Errorf("Validate(settingsState=%q) = %v, want ErrPayloadInvalidSettingsState", p.SettingsState, err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresSubstitutedFieldsAndReasonWhenSubstituted(t *testing.T) {
+	p := validAudioPayload()
+	p.SettingsState = "substituted"
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(settingsState=substituted, no fields/reason) = %v, want ErrPayloadMissingField", err)
+	}
+
+	p.SettingsSubstitutedFields = []string{"DefaultFadeDurationMs"}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(settingsState=substituted, fields but no reason) = %v, want ErrPayloadMissingField", err)
+	}
+
+	p.SettingsReason = "DefaultFadeDurationMs 0 is not positive"
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(settingsState=substituted, fields and reason set) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateRejectsSubstitutedFieldsWhenAccepted(t *testing.T) {
+	p := validAudioPayload()
+	p.SettingsSubstitutedFields = []string{"DefaultFadeDurationMs"}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInconsistentField) {
+		t.Errorf("Validate(settingsState=accepted, substitutedFields set) = %v, want ErrPayloadInconsistentField", err)
+	}
+}
+
 func TestNewAudioEnvelopeRejectsInvalidPayload(t *testing.T) {
 	bad := validAudioPayload()
 	bad.Routes = nil

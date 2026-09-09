@@ -925,6 +925,24 @@ evidence once the sink's `qos` property is enabled (done as part of this
 change), independent of the xrun question. See gstengine's own
 `classifyWarningDomain` doc comment.
 
+**Three node-level `node.audio.settings.*` signals, SM-161.**
+`internal/agent/audio.Manager.SetSettings` already refuses a bad field and
+falls back to the package default for that field only, so every other
+value an operator set still lands; before this the substitution went to
+the node's own log and into an accessor nothing in production called, so
+an operator saw a successful coordinator write and a silently different
+value in effect on the node with no coordinator-visible evidence either
+way. `state`/`reason` match the pairing already shipped on
+`node.audio.engine.*` and `node.audio.ltc.generator.*` rather than
+inventing a second convention; `substituted_fields` is the one addition,
+naming which `Settings` struct field was refused.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.settings.state` | shipped | SM-161 (`accepted` or `substituted`; `""` from an older agent reads as `accepted`) |
+| `node.audio.settings.substituted_fields` | shipped | SM-161 (the refused field names, joined with `"; "`; not_collected, not empty, whenever state is not `substituted`) |
+| `node.audio.settings.reason` | shipped | SM-161 (why, in the node's own words; not_collected whenever state is not `substituted`) |
+
 **One more node-level signal, SM-494.** `audio.node.silence`'s own
 result reports a per-session outcome and count directly in its
 `OperationResult.Value`, not through a retained observation, so it mints
