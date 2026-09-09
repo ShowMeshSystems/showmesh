@@ -1624,6 +1624,39 @@ type AudioPayload struct {
 	EngineRestoreAttempts      int64  `json:"engineRestoreAttempts"`
 	EngineRestoreNextAttemptMs int64  `json:"engineRestoreNextAttemptMs"`
 	EngineRestoreLastReason    string `json:"engineRestoreLastReason"`
+
+	// SettingsState, SettingsSubstitutedFields, and SettingsReason are
+	// internal/agent/audio.Manager's own report of whether this node's
+	// most recently applied audio.settings.configure revision landed as
+	// written (node.audio.settings.state/.substituted_fields/.reason,
+	// docs/build/IDENTIFIER-REGISTER.md). Each field of that revision is
+	// validated independently against this node's own wire-boundary
+	// rules; a field that fails is never accepted as given and falls back
+	// to the package default FOR THAT FIELD ONLY, so every other value the
+	// operator set still lands. Before this trio existed the substitution
+	// went to the node's own log and nowhere else, an operator would see a
+	// successful coordinator write and a silently different value in
+	// effect on the node.
+	//
+	// SettingsState is "accepted" (every field landed as given) or
+	// "substituted" (at least one field was refused and replaced).
+	// OPTIONAL, matching EngineRestoreState's own additive-compatibility
+	// rule: this trio is added after AudioPayload first shipped, and an
+	// agent built before it existed omits all three; an empty/absent
+	// SettingsState reads as "accepted", never as "substituted".
+	SettingsState string `json:"settingsState"`
+
+	// SettingsSubstitutedFields names every internal/agent/audio.Settings
+	// struct field this node refused this revision, e.g.
+	// "DefaultFadeDurationMs" -- required and non-empty whenever
+	// SettingsState is "substituted", empty otherwise.
+	SettingsSubstitutedFields []string `json:"settingsSubstitutedFields"`
+
+	// SettingsReason is why, in this node's own words -- required whenever
+	// SettingsState is "substituted", empty otherwise, matching
+	// EngineReason/LTCGeneratorReason's identical
+	// required-whenever-not-healthy rule.
+	SettingsReason string `json:"settingsReason"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device
@@ -1713,6 +1746,23 @@ func (p AudioPayload) Validate() error {
 	if p.EngineRestoreAttempts > 0 && p.EngineRestoreLastReason == "" {
 		return fmt.Errorf("%w: engineRestoreLastReason (required whenever engineRestoreAttempts is nonzero)", ErrPayloadMissingField)
 	}
+	switch p.SettingsState {
+	case "", "accepted", "substituted":
+		// "" is an older agent's omitted field, read as "accepted" -- see
+		// SettingsState's own doc comment. Never required.
+	default:
+		return fmt.Errorf("%w: %q", ErrPayloadInvalidSettingsState, p.SettingsState)
+	}
+	if p.SettingsState == "substituted" {
+		if len(p.SettingsSubstitutedFields) == 0 {
+			return fmt.Errorf("%w: settingsSubstitutedFields (required whenever settingsState is \"substituted\")", ErrPayloadMissingField)
+		}
+		if p.SettingsReason == "" {
+			return fmt.Errorf("%w: settingsReason (required whenever settingsState is \"substituted\")", ErrPayloadMissingField)
+		}
+	} else if len(p.SettingsSubstitutedFields) != 0 || p.SettingsReason != "" {
+		return fmt.Errorf("%w: settingsSubstitutedFields/settingsReason must be empty when settingsState is not \"substituted\"", ErrPayloadInconsistentField)
+	}
 	return nil
 }
 
@@ -1727,6 +1777,12 @@ var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognize
 // "scheduled", or "exhausted" -- the closed vocabulary
 // node.audio.engine.restore.state carries (docs/build/IDENTIFIER-REGISTER.md).
 var ErrPayloadInvalidEngineRestoreState = errors.New("mqttproto: engineRestoreState is not a recognized value")
+
+// ErrPayloadInvalidSettingsState is wrapped by [AudioPayload.Validate]
+// when SettingsState is set to something other than "", "accepted", or
+// "substituted" -- the closed vocabulary node.audio.settings.state
+// carries (docs/build/IDENTIFIER-REGISTER.md).
+var ErrPayloadInvalidSettingsState = errors.New("mqttproto: settingsState is not a recognized value")
 
 // ErrPayloadInconsistentField is wrapped by [AudioPayload.Validate] when a
 // field that means "not collected" (e.g. engineGlitchCountsKnown false)

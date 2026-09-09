@@ -89,7 +89,14 @@ func TestSetSettingsRejectsDuckTargetGainAtOrAboveUnity(t *testing.T) {
 	if got := m.SettingsSnapshot().DuckTargetGain; got != DefaultSettings.DuckTargetGain {
 		t.Fatalf("DuckTargetGain = %v, want the default %v substituted for the rejected 1", got, DefaultSettings.DuckTargetGain)
 	}
-	if len(m.SettingsValidationIssues()) == 0 {
+	state, fields, reason := m.SettingsSubstitution()
+	if state != SettingsSubstituted {
+		t.Fatalf("state = %q, want %q", state, SettingsSubstituted)
+	}
+	if len(fields) != 1 || fields[0] != "DuckTargetGain" {
+		t.Fatalf("fields = %v, want exactly [DuckTargetGain]", fields)
+	}
+	if reason == "" {
 		t.Fatal("a rejected field must be observable, not a silent substitution")
 	}
 }

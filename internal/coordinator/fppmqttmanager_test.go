@@ -27,7 +27,7 @@ func newTestFPPMQTTManager(t *testing.T) (*fppMQTTManager, *fppMQTTConfigSource)
 	st := openTestStore(t)
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
-	src := newFPPMQTTConfigSource(st, t.TempDir(), testLogger(), config.FPPMQTTConfig{}, "")
+	src := newFPPMQTTConfigSource(st, testLogger(), config.FPPMQTTConfig{}, "")
 	mgr := newFPPMQTTManager(runner, src, testLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -145,7 +145,7 @@ func TestFPPMQTTManagerDeferredMigrationSurvivesReconcileTick(t *testing.T) {
 	sink := &fppSink{st: st, logger: testLogger()}
 	runner := collector.NewRunner(sink, testLogger())
 	envCfg := unreachableBrokerCfg()
-	src := newFPPMQTTConfigSource(st, t.TempDir(), testLogger(), envCfg, "pw")
+	src := newFPPMQTTConfigSource(st, testLogger(), envCfg, "pw")
 	mgr := newFPPMQTTManager(runner, src, testLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())

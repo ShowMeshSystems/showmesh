@@ -848,6 +848,85 @@ func TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty(t *testing.T) {
 	}
 }
 
+// TestPollSettingsSubstitutedNamesFieldAndReason proves the property this
+// whole issue is about at the observation surface: a substituted revision
+// reports state "substituted", names the refused field, and states why --
+// the coordinator surface that was previously visible only in the node's
+// own log.
+func TestPollSettingsSubstitutedNamesFieldAndReason(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.SettingsState = "substituted"
+	payload.SettingsSubstitutedFields = []string{"DefaultFadeDurationMs"}
+	payload.SettingsReason = "DefaultFadeDurationMs 0 is not positive"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalSettingsState)
+	if state.Value != "substituted" {
+		t.Errorf("settings state = %v, want %q", state.Value, "substituted")
+	}
+	fields := findObs(t, obs, SignalSettingsSubstitutedFields)
+	if fields.Value != "DefaultFadeDurationMs" {
+		t.Errorf("settings substituted_fields = %v, want %q", fields.Value, "DefaultFadeDurationMs")
+	}
+	reason := findObs(t, obs, SignalSettingsReason)
+	if reason.Value != payload.SettingsReason {
+		t.Errorf("settings reason = %v, want %q", reason.Value, payload.SettingsReason)
+	}
+}
+
+// TestPollSettingsSubstitutedJoinsMultipleFieldNames proves more than one
+// refused field renders as a joined list, not just the first or last one.
+func TestPollSettingsSubstitutedJoinsMultipleFieldNames(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.SettingsState = "substituted"
+	payload.SettingsSubstitutedFields = []string{"DefaultFadeDurationMs", "DuckTargetGain"}
+	payload.SettingsReason = "DefaultFadeDurationMs 0 is not positive; DuckTargetGain: must be below 1"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	fields := findObs(t, obs, SignalSettingsSubstitutedFields)
+	want := "DefaultFadeDurationMs; DuckTargetGain"
+	if fields.Value != want {
+		t.Errorf("settings substituted_fields = %v, want %q", fields.Value, want)
+	}
+}
+
+// TestPollSettingsAcceptedReportsStateNeverEmpty proves a node that has
+// never substituted a field (samplePayload's own SettingsState left at
+// its Go zero value, matching an older agent's omitted field) reads
+// "accepted" -- never an empty string -- with substituted_fields/reason
+// both not_collected rather than a fabricated absence of a substitution
+// that was never named.
+func TestPollSettingsAcceptedReportsStateNeverEmpty(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	if payload.SettingsState != "" {
+		t.Fatalf("samplePayload() SettingsState = %q, want \"\" (this test proves the OMITTED/never-substituted case)", payload.SettingsState)
+	}
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalSettingsState)
+	if state.Value != "accepted" {
+		t.Errorf("settings state = %v, want %q (never empty)", state.Value, "accepted")
+	}
+	for _, sig := range []observation.SignalID{SignalSettingsSubstitutedFields, SignalSettingsReason} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s absence on an accepted node = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+	}
+}
+
 func TestPollUnknownNodeProducesNoObservations(t *testing.T) {
 	st := NewStore()
 	c := New(st)
@@ -908,8 +987,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 25 {
-		t.Errorf("AllSignalIDs has %d entries, want 25", len(AllSignalIDs))
+	if len(AllSignalIDs) != 28 {
+		t.Errorf("AllSignalIDs has %d entries, want 28", len(AllSignalIDs))
 	}
 }
 

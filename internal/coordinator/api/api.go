@@ -1632,6 +1632,14 @@ func New(deps Dependencies, opts Options) *API {
 	// fppcommand_handler.go owns everything past authorization.
 	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/commands", h.writeGuard(&scopeFPPCommand, h.handleFPPCommand))
 
+	// POST /api/v1/fpp/{instanceId}/brightness/transition-gain: the
+	// operator write of one FPP host's brightness transition gain
+	// (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 2.2), behind the same
+	// fpp:command scope dispatching an FPP command needs - see
+	// scopeFPPTransitionGain's own doc comment. fpptransitiongain.go owns
+	// everything past authorization.
+	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/brightness/transition-gain", h.writeGuard(&scopeFPPTransitionGain, h.handleFPPTransitionGain))
+
 	// Track B seam B2b-front: dispatch the three agent render.* operations
 	// (renderdispatch.go). Guarded by render:command, matching
 	// fpp:command/resolume:action's identical "reads open, this write
