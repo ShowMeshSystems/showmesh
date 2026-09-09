@@ -929,6 +929,20 @@ paths:
         param: optional `params.scheduledAtNs` starts the session at a
         named instant on the TARGET NODE's own media clock instead of on
         arrival. See AudioSessionStartParams.
+        Its two failure modes are answered at DIFFERENT layers and a
+        caller must not conflate them. A MALFORMED instant - not an
+        integer, negative, carrying a fraction or an exponent, or too
+        large for an int64 - is refused by this coordinator as `400`
+        before anything is dispatched, and no command reaches the node.
+        A well-formed instant the node's own media clock has ALREADY
+        PASSED is not a `400`: the command is dispatched, the node
+        refuses it, and this endpoint answers `200` with
+        `command.outcome` `"refused"` and `command.reason`
+        `"scheduled_start_in_past"`. The node does not start late and
+        does not clamp to now. Sending `scheduledAtNs` to any other
+        session endpoint is also a `400`, since the name means "start
+        playing at this instant" and silently ignoring it elsewhere
+        would let a caller believe it had scheduled something.
       parameters:
         - name: nodeId
           in: path
