@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getAssetManifest, type NodeAssetManifest } from '../api'
-import { Button, Panes, RuledStrip, Section, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Drawer, Panes, RuledStrip, Section, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import type { Tone } from '../kit'
 import { formatBytes } from './showsModel'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { MonitorHead } from './Monitor'
+import { NodeDetail, NODE_DRAWER_TITLE_ID } from './NodeDetail'
 
 type ManifestState =
   | { kind: 'loading' }
@@ -46,6 +47,8 @@ const STATE_LABEL: Record<NodeAssetManifest['state'], string> = { ready: 'Ready'
 
 export function MonitorManifest() {
   const model = useModelContext()
+  const navigate = useNavigate()
+  const { nodeId: routeNodeId } = useParams<{ nodeId?: string }>()
   const { state, refresh } = useAssetManifest()
   const [selected, setSelected] = useState<string | null>(null)
 
@@ -129,6 +132,15 @@ export function MonitorManifest() {
           </Panes>
         )}
       </Section>
+
+      <Drawer
+        open={routeNodeId !== undefined}
+        onClose={() => navigate('/monitor/manifest')}
+        labelledBy={NODE_DRAWER_TITLE_ID}
+        width="wide"
+      >
+        <NodeDetail />
+      </Drawer>
     </>
   )
 }
@@ -184,7 +196,7 @@ function ManifestDetail({ manifest }: { manifest: NodeAssetManifest }) {
     <div className="sm-inspector">
       <p className="sm-eyebrow">Node</p>
       <h2 className="sm-inspector__title" id={`mo-manifest-inspect-${manifest.node}`}>
-        <Link to={`/monitor/fleet/node/${manifest.node}`}>{manifest.node}</Link>
+        <Link to={`/monitor/manifest/node/${encodeURIComponent(manifest.node)}`}>{manifest.node}</Link>
       </h2>
       <p className="sm-small sm-muted">
         <StatusPair tone={STATE_TONE[manifest.state]} label={STATE_LABEL[manifest.state]} />

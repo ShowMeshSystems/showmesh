@@ -103,6 +103,7 @@ export default function App() {
             <Route path="monitor/activity" element={<MonitorActivity />} />
             <Route path="monitor/capabilities" element={<MonitorCapabilities />} />
             <Route path="monitor/manifest" element={<MonitorManifest />} />
+            <Route path="monitor/manifest/node/:nodeId" element={<MonitorManifest />} />
             <Route path="monitor/fleet/node/:nodeId" element={<Monitor />} />
             <Route path="monitor/fleet/fpp/:instanceId" element={<FppFleetRedirect />} />
             <Route path="monitor/fleet/resolume" element={<Navigate replace to="/settings/resolume" />} />
