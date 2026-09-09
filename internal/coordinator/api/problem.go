@@ -170,6 +170,15 @@ const (
 	// "the definition does not match its own declared hash" apart from an
 	// ordinary malformed field.
 	ProblemTypeDefinitionHashMismatch = problemBaseURI + "definition-hash-mismatch"
+
+	// ProblemTypeFPPTransitionGainWriteFailed is
+	// POST /fpp/{instanceId}/brightness/transition-gain's own upstream
+	// failure: the request was valid and the instance is configured, but
+	// the write to the FPP host's plugin did not take. Its own type, and a
+	// 502 rather than a 500, because the fault is on the far side of a
+	// reachable-or-not network hop the operator can act on (is the host
+	// up, is the plugin installed) rather than a coordinator defect.
+	ProblemTypeFPPTransitionGainWriteFailed = problemBaseURI + "fpp-transition-gain-write-failed"
 )
 
 // supportedAPIVersions is the fixed, single-element list this coordinator
@@ -683,5 +692,19 @@ func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem
 			"Instance %q is currently playing %q, so this request is refused (ifBusy=%q, the default). Resend "+
 				"with ifBusy=%q to replace the running show, or wait for it to finish.",
 			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
+	}
+}
+
+// fppTransitionGainWriteFailedProblem reports a transition-gain write that
+// did not take. The underlying error text is carried verbatim: the plugin
+// refuses out-of-range input and an undecodable 200 with its own wording,
+// and paraphrasing that would cost the operator the only description of
+// what the FPP host actually said.
+func fppTransitionGainWriteFailedProblem(instanceID string, err error) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPTransitionGainWriteFailed,
+		Title:  "FPP transition gain write failed",
+		Status: http.StatusBadGateway,
+		Detail: fmt.Sprintf("the brightness transition gain write to FPP instance %q did not take: %v", instanceID, err),
 	}
 }
