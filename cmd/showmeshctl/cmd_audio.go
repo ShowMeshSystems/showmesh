@@ -18,9 +18,11 @@ import (
 // GET/PUT /api/v1/config/audio.node[/{id}[/revisions]]. Declares its own
 // wire types rather than importing internal/coordinator/api/v1 (the
 // import-graph test forbids it), matching cmd_render.go/cmd_surface.go's
-// identical precedent one kind over. showConfigObjectsListResponse and
-// configRevisionsResponse (types_macro.go, types.go) are already
-// kind-agnostic and reused verbatim rather than declared a third time.
+// identical precedent one kind over. configRevisionsResponse (types.go) is
+// already kind-agnostic and reused verbatim. The node list has its own
+// audioNodeListResponse/audioNodeSummary instead of reusing
+// showConfigObjectsListResponse: the list carries channel placement that
+// shape has no field for.
 
 // configAudioSettingsPayload mirrors v1.ConfigAudioSettingsPayload.
 type configAudioSettingsPayload struct {
@@ -60,6 +62,25 @@ type configAudioNode struct {
 	ClockDomainProvenance string  `json:"clockDomainProvenance"`
 	Role                  string  `json:"role,omitempty"`
 	Zone                  *string `json:"zone,omitempty"`
+}
+
+// audioNodeSummary mirrors v1.AudioNodeSummary: one element of an audio.node
+// list, carrying ProgramChannels and LTCChannel so an operator can see
+// channel placement without fetching each node individually.
+type audioNodeSummary struct {
+	ID              string    `json:"id"`
+	Label           string    `json:"label"`
+	ProgramChannels []int     `json:"programChannels"`
+	LTCChannel      int       `json:"ltcChannel,omitempty"`
+	CurrentRevision int64     `json:"currentRevision"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+// audioNodeListResponse is the body of GET /config/audio.node.
+type audioNodeListResponse struct {
+	ServerTime time.Time          `json:"serverTime"`
+	Kind       string             `json:"kind"`
+	Objects    []audioNodeSummary `json:"objects"`
 }
 
 type audioNodeConfigResponse struct {
@@ -487,7 +508,7 @@ func cmdAudioNodeList(args []string, stdout, stderr io.Writer, clock func() time
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
-	var resp showConfigObjectsListResponse
+	var resp audioNodeListResponse
 	if err := c.getJSON(ctx, "/api/v1/config/audio.node", nil, &resp); err != nil {
 		return reportError(stderr, "audio node list", err)
 	}
@@ -499,7 +520,7 @@ func cmdAudioNodeList(args []string, stdout, stderr io.Writer, clock func() time
 		}
 		return exitOK
 	}
-	printShowConfigObjectsTable(stdout, resp)
+	printAudioNodesTable(stdout, resp)
 	return exitOK
 }
 
@@ -788,6 +809,28 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  duckRestoreFadeDurationMs:  %d\n", resp.Payload.DuckRestoreFadeDurationMs)
 	_, _ = fmt.Fprintf(w, "  ltcFrameRate:               %s\n", resp.Payload.LTCFrameRate)
 	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
+}
+
+// printAudioNodesTable renders an audio.node list with its channel
+// placement, rather than reusing printShowConfigObjectsTable: audio.node
+// carries no show reference (unlike the kinds that table serves), and its
+// list is exactly where an operator needs program/LTC channel placement
+// without fetching each node individually.
+func printAudioNodesTable(w io.Writer, resp audioNodeListResponse) {
+	if len(resp.Objects) == 0 {
+		_, _ = fmt.Fprintln(w, "(no audio.node objects)")
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "ID\tLABEL\tPROGRAM CHANNELS\tLTC CHANNEL\tREVISION\tUPDATED")
+	for _, o := range resp.Objects {
+		ltc := "none"
+		if o.LTCChannel != 0 {
+			ltc = strconv.Itoa(o.LTCChannel)
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%v\t%s\t%d\t%s\n", o.ID, o.Label, o.ProgramChannels, ltc, o.CurrentRevision, o.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"))
+	}
+	_ = tw.Flush()
 }
 
 func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {

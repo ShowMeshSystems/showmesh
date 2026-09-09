@@ -4276,9 +4276,8 @@ paths:
       summary: Enumerate audio.node objects (ADR-018/ADR-039)
       description: >-
         Requires `config:write`. Object ids (the node id) with label (the
-        configured programRoute) and current revision number, NOT the full
-        payloads - `show` is always empty, since audio.node carries no
-        show reference.
+        configured programRoute), program/LTC channel placement, and current
+        revision number, NOT the full payloads.
       responses:
         "200":
           description: OK
@@ -4288,7 +4287,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ConfigObjectsListResponse"
+                $ref: "#/components/schemas/AudioNodeListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -14066,10 +14065,10 @@ components:
       description: >-
         The body of GET /config/show.action, GET /config/show.macro, GET
         /config/show, GET /config/show.surface, GET /config/show.cue, GET
-        /config/show.playlist, GET /config/night.session, GET
-        /config/audio.node, and GET /config/media.playlist (audio.node's
-        own list summary reports its configured programRoute as label and
-        leaves show empty, since audio.node carries no show reference).
+        /config/show.playlist, GET /config/night.session, and GET
+        /config/media.playlist. GET /config/audio.node has its own dedicated
+        AudioNodeListResponse instead, since its list carries channel
+        placement that this shared, kind-agnostic shape has no field for.
       required: [serverTime, kind, objects]
       properties:
         serverTime:
@@ -14077,11 +14076,58 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, audio.node, media.playlist]
+          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, media.playlist]
         objects:
           type: array
           items:
             $ref: "#/components/schemas/ConfigObjectSummary"
+    AudioNodeSummary:
+      type: object
+      description: >-
+        One element of AudioNodeListResponse.objects: enough to enumerate
+        every audio.node object's routing, including its program and LTC
+        channel placement, without fetching each one's full payload.
+        programChannels and ltcChannel carry the same meaning here as on
+        ConfigAudioNode.
+      required: [id, label, programChannels, currentRevision, updatedAt]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+          description: The configured programRoute.
+        programChannels:
+          type: array
+          items:
+            type: integer
+          description: >-
+            The ordered, 1-based channel indices on the configured
+            programRoute carrying program audio.
+        ltcChannel:
+          type: integer
+          description: >-
+            The 1-based channel index on the configured ltcRoute carrying
+            LTC, or absent on a program-only node that emits no LTC.
+        currentRevision:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    AudioNodeListResponse:
+      type: object
+      description: The body of GET /config/audio.node.
+      required: [serverTime, kind, objects]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [audio.node]
+        objects:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioNodeSummary"
     ConfigShowActionMQTTPublish:
       type: object
       description: >-
