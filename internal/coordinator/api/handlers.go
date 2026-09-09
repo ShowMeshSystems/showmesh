@@ -95,6 +95,14 @@ type handlers struct {
 	// more.
 	fppUnknownMembers unknownMemberLog
 
+	// fppDefinitionUnknownMembers is fppUnknownMembers' own counterpart
+	// for fppplaylistdefinitions.go, kept as a SEPARATE instance rather
+	// than shared with it: both are keyed only by instanceUUID, and one
+	// route's warning would otherwise silently suppress the other's for
+	// an instance that happens to report the same field name on both
+	// routes.
+	fppDefinitionUnknownMembers unknownMemberLog
+
 	// nightCueHooks is Track F seam F4's own crash-injection seam for
 	// RESTING-MODE.md §7.1.1's commit/dispatch boundary — see
 	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero

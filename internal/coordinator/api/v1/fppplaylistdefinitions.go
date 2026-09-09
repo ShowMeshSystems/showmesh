@@ -38,7 +38,17 @@ type FPPPlaylistDefinitionPublishResponse struct {
 	PlaylistHash  string `json:"playlistHash"`
 	Stored        bool   `json:"stored"`
 	Idempotent    bool   `json:"idempotent"`
-	ServerTime    string `json:"serverTime"`
+
+	// IgnoredFields names the top-level members of the submitted body
+	// this coordinator does not know, sorted, absent when there were
+	// none. They did not stop the definition being accepted: an unknown
+	// member is ignored, because refusing it would make a plugin newer
+	// than its coordinator lose every definition. Present so a
+	// misspelled member is visible to whoever sent it instead of
+	// silently dropped, which is what strict decoding used to buy.
+	IgnoredFields []string `json:"ignoredFields,omitempty"`
+
+	ServerTime string `json:"serverTime"`
 }
 
 // FPPPlaylistDefinitionMetadata is one row of GET
