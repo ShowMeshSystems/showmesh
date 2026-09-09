@@ -784,6 +784,36 @@ type fppTransitionGainResult struct {
 	EffectiveOutput int    `json:"effectiveOutput"`
 }
 
+// fppDefinitionRepublishRequest is the body of POST
+// /api/v1/fpp/{instanceId}/playlist-definitions/republish. RequestID is
+// minted by this program, once per invocation, for [fppTransitionGainRequest]'s
+// reason, and can be supplied by hand to poll one earlier request.
+type fppDefinitionRepublishRequest struct {
+	RequestID string `json:"requestId"`
+}
+
+// fppDefinitionRepublishResponse is the body of a successful response from
+// POST /api/v1/fpp/{instanceId}/playlist-definitions/republish.
+type fppDefinitionRepublishResponse struct {
+	ServerTime time.Time                    `json:"serverTime"`
+	Republish  fppDefinitionRepublishResult `json:"republish"`
+}
+
+// fppDefinitionRepublishResult mirrors v1.FPPDefinitionRepublishResult
+// field for field, this program's own independent transcription of it.
+// Every count here is the PLUGIN's own state; none of them says a
+// definition reached the coordinator, and SweepPending true means the
+// resend is owed rather than done.
+type fppDefinitionRepublishResult struct {
+	InstanceID                   string `json:"instanceId"`
+	RequestID                    string `json:"requestId"`
+	Applied                      bool   `json:"applied"`
+	DefinitionsCleared           int    `json:"definitionsCleared"`
+	DefinitionsHeld              int    `json:"definitionsHeld"`
+	DefinitionsRefusedTerminally int    `json:"definitionsRefusedTerminally"`
+	SweepPending                 bool   `json:"sweepPending"`
+}
+
 // Track G seam G-5: identity administration. principalObject mirrors
 // v1.PrincipalObject field for field — this program's own independent
 // transcription, per this file's own doc comment.

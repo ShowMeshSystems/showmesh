@@ -179,6 +179,16 @@ const (
 	// reachable-or-not network hop the operator can act on (is the host
 	// up, is the plugin installed) rather than a coordinator defect.
 	ProblemTypeFPPTransitionGainWriteFailed = problemBaseURI + "fpp-transition-gain-write-failed"
+
+	// ProblemTypeFPPDefinitionRepublishFailed is
+	// POST /fpp/{instanceId}/playlist-definitions/republish's own upstream
+	// failure: the request was valid and the instance is configured, but
+	// the plugin did not agree to resend. Its own type, and a 502 rather
+	// than a 500, for [ProblemTypeFPPTransitionGainWriteFailed]'s reason:
+	// the fault is on the far side of a network hop the operator can act
+	// on (is the host up, is the plugin installed and publishing
+	// definitions) rather than a coordinator defect.
+	ProblemTypeFPPDefinitionRepublishFailed = problemBaseURI + "fpp-definition-republish-failed"
 )
 
 // supportedAPIVersions is the fixed, single-element list this coordinator
@@ -706,5 +716,18 @@ func fppTransitionGainWriteFailedProblem(instanceID string, err error) v1.Proble
 		Title:  "FPP transition gain write failed",
 		Status: http.StatusBadGateway,
 		Detail: fmt.Sprintf("the brightness transition gain write to FPP instance %q did not take: %v", instanceID, err),
+	}
+}
+
+// fppDefinitionRepublishFailedProblem reports a republish the plugin did
+// not agree to. The underlying error text is carried verbatim: the plugin
+// refuses with its own wording, and paraphrasing it would cost the
+// operator the only description of what the FPP host actually said.
+func fppDefinitionRepublishFailedProblem(instanceID string, err error) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeFPPDefinitionRepublishFailed,
+		Title:  "FPP playlist definition republish failed",
+		Status: http.StatusBadGateway,
+		Detail: fmt.Sprintf("FPP instance %q did not agree to republish its playlist definitions: %v", instanceID, err),
 	}
 }
