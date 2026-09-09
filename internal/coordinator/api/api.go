@@ -1590,6 +1590,7 @@ func New(deps Dependencies, opts Options) *API {
 		emergencyStopArms:         newEmergencyStopArmStore(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
+	h.hub = hub
 
 	mux := http.NewServeMux()
 	// "{$}" matches only the exact path "/api/v1/", not every path under

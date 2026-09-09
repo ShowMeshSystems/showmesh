@@ -588,6 +588,11 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 	// fppconnect.configure state.
 	h.pushFPPConnectToAllNodes(r.Context(), now)
 
+	// Every show-dependent stream payload just changed. Connected clients
+	// must be refreshed by the activation itself, not by whatever the
+	// hub's next render pass happens to recompute.
+	h.notifyStreamHub()
+
 	jsonWrite(w, mapShowActiveConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowActiveConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,
 	}, payload))
