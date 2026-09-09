@@ -6,6 +6,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 // Instance participation is the show's own hand-made selection of which
@@ -63,7 +64,14 @@ type showInstanceParticipation struct {
 // selection once. active/activeErr come from
 // [resolveActiveShowForParticipation], so a caller that already renders
 // node participation resolves the active show exactly once for both.
-func resolveShowInstanceParticipation(ctx context.Context, cfg ConfigStore, active assetsync.ActiveShow, activeErr error) showInstanceParticipation {
+func resolveShowInstanceParticipation(ctx context.Context, cfg ConfigStore, assetManifests *store.Store, active assetsync.ActiveShow, activeErr error) showInstanceParticipation {
+	// A nil store is not an inactive show. Without this the zero-valued
+	// ActiveShow that [resolveActiveShowForParticipation] returns for a nil
+	// store reads as "no show is currently active", which is a confident
+	// false answer sending a reader to the wrong remedy.
+	if assetManifests == nil {
+		return showInstanceParticipation{notConfiguredReason: "no asset manifest store is configured on this coordinator"}
+	}
 	if activeErr != nil {
 		return showInstanceParticipation{unknownReason: "could not resolve the active show: " + activeErr.Error()}
 	}
@@ -152,14 +160,14 @@ func participationCounts(state v1.InstanceShowParticipation) bool {
 // [resolveShowInstanceParticipation] directly with it.
 func (h *handlers) resolveInstanceParticipation(ctx context.Context) showInstanceParticipation {
 	active, activeErr := resolveActiveShowForParticipation(ctx, h.deps.AssetManifests)
-	return resolveShowInstanceParticipation(ctx, h.deps.Config, active, activeErr)
+	return resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 }
 
 // instanceParticipation is [handlers.resolveInstanceParticipation] for the
 // stream hub, which holds the same Dependencies but is not a *handlers.
 func (h *Hub) instanceParticipation(ctx context.Context) showInstanceParticipation {
 	active, activeErr := resolveActiveShowForParticipation(ctx, h.deps.AssetManifests)
-	return resolveShowInstanceParticipation(ctx, h.deps.Config, active, activeErr)
+	return resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 }
 
 // fppSelectedIDs and resolumeSelectedIDs return the ids a selection

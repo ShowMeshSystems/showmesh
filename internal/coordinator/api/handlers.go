@@ -543,7 +543,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		h.writeInternalError(w, now, "list fpp instances", err)
 		return
 	}
-	instanceParticipation := resolveShowInstanceParticipation(ctx, h.deps.Config, active, activeErr)
+	instanceParticipation := resolveShowInstanceParticipation(ctx, h.deps.Config, h.deps.AssetManifests, active, activeErr)
 	instances := make([]v1.FPPInstance, 0, len(fppViews))
 	for _, fv := range fppViews {
 		instances = append(instances, mapFPPInstance(fv, instanceParticipation.forFPP(fv.InstanceID), now))
