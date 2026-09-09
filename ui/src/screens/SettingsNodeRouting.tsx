@@ -313,6 +313,9 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         </div>
 
         <div className="sm-panel sm-stack-4">
+          {/* Stays NotWired: the agent's only per-route channel signal is a probe
+              negotiation outcome, not a channel inventory (audiocapabilities.go's
+              routeAttributes), so a picker built from it could hide real channels. */}
           <NotWiredBanner
             what="Output groups"
             missing={
