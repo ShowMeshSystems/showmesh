@@ -60,6 +60,15 @@ type Engine struct {
 	mu      sync.Mutex
 	handles map[agentaudio.EngineHandle]*branch
 
+	// inFlightReplacements holds every replacement branch a swap (see
+	// Engine.swapToPosition in methods.go) has built but not yet either
+	// swapped into handles or torn down. A replacement is never
+	// reachable through handles while it exists here, so Close's own
+	// fan-out must check this set too or it would leak one abandoned to
+	// a ctx timeout mid-swap. Guarded by e.mu, the same lock handles
+	// uses.
+	inFlightReplacements map[*branch]struct{}
+
 	// elementIndex maps every one of a branch's own element names (all
 	// eight from [branch.elements], not only filesrc/decodebin — every
 	// one of them is a direct sibling in the shared pipeline, per
@@ -138,11 +147,12 @@ func New(cfg Config) (*Engine, error) {
 	gst.Init()
 
 	e := &Engine{
-		cfg:          cfg,
-		handles:      make(map[agentaudio.EngineHandle]*branch),
-		elementIndex: make(map[string]*branch),
-		done:         make(chan struct{}),
-		startedAt:    time.Now(),
+		cfg:                  cfg,
+		handles:              make(map[agentaudio.EngineHandle]*branch),
+		inFlightReplacements: make(map[*branch]struct{}),
+		elementIndex:         make(map[string]*branch),
+		done:                 make(chan struct{}),
+		startedAt:            time.Now(),
 	}
 
 	if reason := e.checkPrerequisites(); reason != "" {
@@ -206,10 +216,11 @@ func (e *Engine) releaseAfterFailedBuild() {
 // It holds no device and needs no Close, though Close is safe.
 func NewUnavailable(reason string) *Engine {
 	return &Engine{
-		availReason:  reason,
-		handles:      make(map[agentaudio.EngineHandle]*branch),
-		elementIndex: make(map[string]*branch),
-		done:         make(chan struct{}),
+		availReason:          reason,
+		handles:              make(map[agentaudio.EngineHandle]*branch),
+		inFlightReplacements: make(map[*branch]struct{}),
+		elementIndex:         make(map[string]*branch),
+		done:                 make(chan struct{}),
 	}
 }
 
@@ -289,10 +300,19 @@ func (e *Engine) Close() error {
 		e.markBroken(closedReason)
 		close(e.done)
 		e.mu.Lock()
-		branches := make([]*branch, 0, len(e.handles))
+		branches := make([]*branch, 0, len(e.handles)+len(e.inFlightReplacements))
 		for h, b := range e.handles {
 			branches = append(branches, b)
 			delete(e.handles, h)
+		}
+		// A replacement mid-swap is never in handles (see
+		// inFlightReplacements' doc comment); its own swap goroutine
+		// still owns removing it from this set once it finishes, so
+		// this only reads it rather than deleting -- teardown is
+		// idempotent, so racing that goroutine's own bestEffortTeardown
+		// call here is harmless.
+		for b := range e.inFlightReplacements {
+			branches = append(branches, b)
 		}
 		e.mu.Unlock()
 		var wg sync.WaitGroup
@@ -907,6 +927,21 @@ func (e *Engine) unindexBranch(b *branch) {
 	for _, name := range b.elementNames {
 		delete(e.elementIndex, name)
 	}
+}
+
+// trackReplacement and untrackReplacement add and remove b from
+// inFlightReplacements; see that field's doc comment for why Close needs
+// this set at all.
+func (e *Engine) trackReplacement(b *branch) {
+	e.mu.Lock()
+	e.inFlightReplacements[b] = struct{}{}
+	e.mu.Unlock()
+}
+
+func (e *Engine) untrackReplacement(b *branch) {
+	e.mu.Lock()
+	delete(e.inFlightReplacements, b)
+	e.mu.Unlock()
 }
 
 // classifyBranchError maps a branch-scoped GStreamer error onto this

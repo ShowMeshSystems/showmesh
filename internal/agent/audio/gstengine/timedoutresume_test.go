@@ -117,12 +117,16 @@ func TestTimedOutResumeUnfreezesOnlyAfterItsSeekSucceeds(t *testing.T) {
 	t.Logf("%d/%d trials timed out and none unfroze early", timedOut, trials)
 }
 
-// TestTimedOutResumeMarksAnchorUnknown proves the second half of the
-// Resume fix: Resume's flushing seek is issued before its own ctx
-// deadline can fire, and an abandoned seek may still land arbitrarily
-// late with no way to know when, so the branch must be marked
-// errAnchorUnknown rather than left silently reanchored.
-func TestTimedOutResumeMarksAnchorUnknown(t *testing.T) {
+// TestTimedOutResumeNeverMarksTheOldBranchAnchorUnknown proves the
+// swap-era counterpart of what this test used to check: a joined branch
+// is never flush-seeked in place, so a Resume whose own ctx expires
+// while its replacement is being prepared never touches the original
+// branch's segment at all. Unlike a genuine in-place seek timeout (see
+// TestTimedOutSeekLeavesSegmentStartStale), the original here was never
+// issued a seek that could still land late, so it must not be marked
+// errAnchorUnknown, and the handle must still resolve to it, still
+// paused at its own frozen position, usable by a later call.
+func TestTimedOutResumeNeverMarksTheOldBranchAnchorUnknown(t *testing.T) {
 	dir := t.TempDir()
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 4)
@@ -151,6 +155,10 @@ func TestTimedOutResumeMarksAnchorUnknown(t *testing.T) {
 			if _, err := e.Pause(ctx, handle); err != nil {
 				t.Fatalf("Pause (trial %d): %v", i, err)
 			}
+			before, err := e.branchFor(handle)
+			if err != nil {
+				t.Fatalf("branchFor before Resume (trial %d): %v", i, err)
+			}
 
 			tctx, tcancel := context.WithTimeout(context.Background(), resumeTimeoutProbe(i))
 			_, resumeErr := e.Resume(tctx, handle)
@@ -158,8 +166,19 @@ func TestTimedOutResumeMarksAnchorUnknown(t *testing.T) {
 
 			if errors.Is(resumeErr, context.DeadlineExceeded) {
 				caught++
-				if _, err := e.Seek(ctx, handle, 1*time.Second); !errors.Is(err, errAnchorUnknown) {
-					t.Fatalf("trial %d: Seek on a branch left by a timed-out Resume: err = %v, want errAnchorUnknown in its chain", i, err)
+				after, err := e.branchFor(handle)
+				if err != nil {
+					t.Fatalf("trial %d: branchFor after a timed-out Resume: %v", i, err)
+				}
+				if after != before {
+					t.Fatalf("trial %d: handle now resolves to a different branch after a timed-out Resume swap: "+
+						"a failed swap must leave the original branch in place", i)
+				}
+				if _, err := e.Seek(ctx, handle, 1*time.Second); errors.Is(err, errAnchorUnknown) {
+					t.Fatalf("trial %d: Seek on the branch a timed-out Resume left in place returned errAnchorUnknown; "+
+						"a timed-out swap never flush-seeked it, so its anchoring was never put in question", i)
+				} else if err != nil {
+					t.Fatalf("trial %d: Seek on the branch a timed-out Resume left in place: %v", i, err)
 				}
 			}
 		}()
@@ -168,5 +187,5 @@ func TestTimedOutResumeMarksAnchorUnknown(t *testing.T) {
 	if caught == 0 {
 		t.Skipf("no trial's Resume actually timed out sweeping 1-%dus deadlines on this environment; cannot exercise this window here", trials)
 	}
-	t.Logf("exercised the anchorUnknown path on %d/%d trials", caught, trials)
+	t.Logf("exercised the untouched-original path on %d/%d trials", caught, trials)
 }
