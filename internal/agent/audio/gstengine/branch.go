@@ -45,8 +45,9 @@ type branch struct {
 	// method's doc comment for why.
 	elementNames []string
 
-	channelMixerPads []gst.Pad // index k links to engine.channelMixers[k]
-	linkedCount      atomic.Int32
+	channelMixerPads    []gst.Pad // index k links to engine.channelMixers[k]
+	deinterleaveSrcPads []gst.Pad // index k is deinterleave src_%u, the pad resyncMixerPads offsets
+	linkedCount         atomic.Int32
 
 	readyCh   chan struct{}
 	readyOnce sync.Once
@@ -258,6 +259,7 @@ func (b *branch) build(path string) error {
 	}
 
 	b.channelMixerPads = make([]gst.Pad, n)
+	b.deinterleaveSrcPads = make([]gst.Pad, n)
 	for k := 0; k < n; k++ {
 		pad := e.channelMixers[k].RequestPadSimple("sink_%u")
 		if pad == nil {
@@ -301,6 +303,7 @@ func (b *branch) build(path string) error {
 			}
 			return
 		}
+		b.deinterleaveSrcPads[idx] = pad
 		if b.linkedCount.Add(1) == int32(n) {
 			b.readyOnce.Do(func() { close(b.readyCh) })
 		}
@@ -564,7 +567,8 @@ func (b *branch) pipelineRunningTime() time.Duration {
 // as a named limitation rather than a silently accepted one.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
 	offset := int64(b.pipelineRunningTime()) - b.localRunningTime(atPos).Nanoseconds()
-	for _, pad := range b.channelMixerPads {
+	// A pad offset is only reliable on a source pad, so this offsets deinterleave's src pads, not the mixer's sink pads.
+	for _, pad := range b.deinterleaveSrcPads {
 		if pad != nil {
 			pad.SetOffset(offset)
 		}
