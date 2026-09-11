@@ -139,6 +139,7 @@ var migrations = []migration{
 	// because 33 shipped on main as schemaV33 and a repeated number never
 	// runs against a store already stamped at it.
 	{version: 34, fn: migrateV34AudioSettingsBackfillScheduledStartFields},
+	{version: 35, sql: schemaV35},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

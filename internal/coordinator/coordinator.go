@@ -23,6 +23,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/clockconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/audioalignment"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fppplugin"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
@@ -281,6 +282,11 @@ func Run() int {
 	// operator-declared audio.node configuration, read live on every poll).
 	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
 
+	// Wraps audioStore so an alignment sample lands on a node's
+	// active audio_alignment_runs run without changing what audioStore
+	// itself stores or how it is polled.
+	alignmentRecorder := audioalignment.NewRecorder(audioStore, st, logger)
+
 	// Track I seam I1: node.clock's own push cache, the identical shape
 	// as audioStore above, one report type over — see nodeclock's
 	// package doc comment.
@@ -335,7 +341,7 @@ func Run() int {
 		}
 	})
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithClockSink(clockStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(alignmentRecorder), inventory.WithClockSink(clockStore), inventory.WithResyncIntentTrigger(resyncIntentTrigger))
 
 	// bm's OWN construction needs assetSync.HandleMessage
 	// wired in as part of the ONE process-wide message handler, the
@@ -894,6 +900,9 @@ func Run() int {
 		// other than always answer a "not configured" internal error
 		// against api.noDeclarationStore's no-op default.
 		Discovery: st,
+		// AlignmentRuns wires the /audio/alignment-runs routes to the
+		// real store instead of api.noAlignmentRunStore's no-op default.
+		AlignmentRuns: st,
 		// NightSessions is Track F seam F2's own dependency: *store.Store
 		// already satisfies api.NightSessionStore with no adapter — wiring
 		// it in is what makes GET /api/v1/night/session and

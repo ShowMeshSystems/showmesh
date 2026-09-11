@@ -797,6 +797,25 @@ type DeclarationStore interface {
 	RecordNodeDiscoverySeen(ctx context.Context, nodeID, runID string, seenAt time.Time) error
 }
 
+// AlignmentRunStore is what this package needs from the long-run drift
+// recording's tables, satisfied directly by *store.Store, matching
+// [DeclarationStore]'s "the real dependency already has this method" pattern.
+type AlignmentRunStore interface {
+	// CreateAlignmentRun starts a run. Returns
+	// *[store.AlignmentRunAlreadyActiveError] if the node already has one
+	// active.
+	CreateAlignmentRun(ctx context.Context, run store.AlignmentRunRecord) (store.AlignmentRunRecord, error)
+	// StopAlignmentRun closes runID. Returns
+	// [store.ErrAlignmentRunNotFound] if runID does not exist or is
+	// already stopped.
+	StopAlignmentRun(ctx context.Context, runID, stoppedBy, stopReason string) (store.AlignmentRunRecord, error)
+	// GetAlignmentRun returns one run with its samples in ascending
+	// sampled_at order, or [store.ErrAlignmentRunNotFound].
+	GetAlignmentRun(ctx context.Context, id string) (store.AlignmentRunRecord, []store.AlignmentSampleRecord, error)
+	// ListAlignmentRuns returns nodeID's runs, newest first.
+	ListAlignmentRuns(ctx context.Context, nodeID string) ([]store.AlignmentRunRecord, error)
+}
+
 // AssetStore is Track E seam E3/E4's asset metadata store, as this package
 // needs it (ADR-028): looking up one asset by id and listing by filter.
 // Satisfied directly by *store.Store (its GetAsset/ListAssets methods),
