@@ -862,12 +862,13 @@ right and never inferred from the pipeline still being up.
 
 | Signal | Status | Owner |
 |---|---|---|
-| `node.audio.clock.alignment` | shipped | C6/C7 |
+| `node.audio.clock.alignment` | shipped | C6/C7; measured since 2026-09-11 (PR #451): the node's signed program-to-LTC offset in ms, observedAt = the node's own sample time |
+| `node.audio.clock.alignment.state` | reserved | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_collected` whenever the measured alignment is |
 
-**It is always `not_collected`, with a reason, by design.** Nothing in
-software can measure program-to-LTC alignment, so it is never derived
+**Until 2026-09-11 it was always `not_collected`, with a reason, by design.** Nothing in
+software could measure program-to-LTC alignment, so it was never derived
 from both outputs being usable and never from configuration declaring a
-shared clock. A test fails if the signal is made to look measured. The
+shared clock. A test failed if the signal was made to look measured. The
 whole value of the signal is that a green alignment light means measured
 rather than configured, and only the hardware work can make it say
 anything else.
