@@ -599,11 +599,13 @@ func (b *branch) doTeardown(ctx context.Context) error {
 	b.mu.Unlock()
 
 	// Release any flow block first so the state change below never
-	// races it. The hold stays if never joined: releasing it could
-	// reach deinterleave's still-unlinked pads; NULL deactivates it.
+	// races it. A never-joined branch flushes the hold away, since a
+	// plainly released buffer would answer NOT_LINKED.
 	b.unblockFlow()
 	if b.hasJoined() {
 		b.removeHold()
+	} else {
+		b.removeHoldForTeardown()
 	}
 
 	if !b.awaitNoElementRace(ctx, teardownTimeout) {

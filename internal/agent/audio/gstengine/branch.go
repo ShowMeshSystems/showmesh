@@ -666,6 +666,22 @@ func (b *branch) removeHold() {
 	}
 }
 
+// removeHoldForTeardown flushes queue's src pad before removing the
+// hold, so a held buffer is dropped instead of reaching deinterleave's
+// still-unlinked pads, which would answer NOT_LINKED.
+func (b *branch) removeHoldForTeardown() {
+	b.mu.Lock()
+	id := b.holdProbeID
+	b.mu.Unlock()
+	if id == 0 {
+		return
+	}
+	pad := b.queue.GetStaticPad("src")
+	pad.PushEvent(gst.NewEventFlushStart())
+	pad.PushEvent(gst.NewEventFlushStop(true))
+	b.removeHold()
+}
+
 // hasJoined reports whether join has already linked this branch to the
 // shared mixers, which Start, Seek, and Resume use to choose between an
 // in-place flush-seek and a swap (see methods.go).
