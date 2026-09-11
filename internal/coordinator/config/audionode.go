@@ -42,6 +42,27 @@ var audioNodeRoles = map[string]bool{
 	AudioNodeRoleZone:       true,
 }
 
+// The two members of audio.node.sinkBackend (RES-019 section 7.2
+// candidate A, permitted by ADR-046): [AudioNodeSinkBackendALSA] plays
+// through the node's own alsasink, exactly as every audio.node before
+// this field existed; [AudioNodeSinkBackendPipeWire] hands the node's
+// output graph to PipeWire, clocked from the node's PTP hardware clock,
+// so PipeWire (not this codebase) rate-matches ALSA output to it.
+const (
+	AudioNodeSinkBackendALSA     = "alsasink"
+	AudioNodeSinkBackendPipeWire = "pipewiresink"
+
+	// AudioNodeSinkBackendDefault is used whenever a payload omits
+	// "sinkBackend" -- every audio.node written before this field
+	// existed keeps decoding to exactly the backend it already ran.
+	AudioNodeSinkBackendDefault = AudioNodeSinkBackendALSA
+)
+
+var audioNodeSinkBackends = map[string]bool{
+	AudioNodeSinkBackendALSA:     true,
+	AudioNodeSinkBackendPipeWire: true,
+}
+
 // ValidateAudioNodeObjectID validates an audio.node object id against the
 // same syntax a node id must satisfy — reusing [ValidateShowObjectID]'s own
 // reuse of [mqttproto.ValidateNodeID] rather than a second copy of the
@@ -55,7 +76,7 @@ var audioNodeTopLevelKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true,
 	"programChannels": true, "ltcChannel": true,
 	"clockDomain": true, "clockDomainProvenance": true,
-	"role": true, "zone": true,
+	"role": true, "zone": true, "sinkBackend": true,
 }
 
 // AudioNodePayload is config_revisions.payload_json's decoded, VALIDATED
@@ -130,6 +151,14 @@ type AudioNodePayload struct {
 	// at decode time, matching show.cue's outputs.announcement.duckGainDb
 	// precedent: an ignored field would read as an applied one.
 	Zone *string `json:"zone,omitempty"`
+
+	// SinkBackend is the GStreamer output backend this node's agent
+	// builds against: [AudioNodeSinkBackendALSA] or
+	// [AudioNodeSinkBackendPipeWire]. Optional on the wire; absent
+	// decodes to [AudioNodeSinkBackendDefault] ("alsasink") so every
+	// audio.node written before this field existed keeps decoding
+	// unchanged.
+	SinkBackend string `json:"sinkBackend,omitempty"`
 }
 
 // EncodeAudioNodePayload marshals p into config_revisions.payload_json's
@@ -197,6 +226,11 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		return AudioNodePayload{}, verr
 	}
 
+	sinkBackend, verr := decodeDefaultedEnum(top, "sinkBackend", "sinkBackend", AudioNodeSinkBackendDefault, audioNodeSinkBackends)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
+
 	var zone *string
 	if raw, present := top["zone"]; present {
 		if role != AudioNodeRoleZone {
@@ -223,6 +257,7 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		ProgramChannels: programChannels, LTCChannel: ltcChannel,
 		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
 		Role: role, Zone: zone,
+		SinkBackend: sinkBackend,
 	}, nil
 }
 

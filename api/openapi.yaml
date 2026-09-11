@@ -14334,6 +14334,13 @@ components:
         the operator's own name for the independent speaker zone this
         node drives, present only when `role` is `zone` - refused on any
         other role, since an ignored field would read as an applied one.
+
+
+        `sinkBackend` (RES-019 section 7.2 candidate A, ADR-046) is the
+        GStreamer output backend this node's agent builds against:
+        `alsasink` or `pipewiresink`. Optional on the wire; absent
+        decodes to `alsasink`, the backend every audio.node ran before
+        this field existed.
       required:
         [programRoute, programChannels, clockDomain, clockDomainProvenance]
       dependentRequired:
@@ -14367,6 +14374,12 @@ components:
           description: >-
             The operator's own name for this node's independent speaker
             zone. Present only when role is "zone".
+        sinkBackend:
+          type: string
+          enum: [alsasink, pipewiresink]
+          description: >-
+            Optional; absent decodes to "alsasink" (RES-019 section 7.2
+            candidate A, ADR-046).
     AudioNodeConfigResponse:
       type: object
       description: The body of GET and PUT /config/audio.node/{id}.

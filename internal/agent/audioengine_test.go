@@ -1002,3 +1002,195 @@ func TestConnectAndInstallCapabilityRepublishWiresTheRealCallSite(t *testing.T) 
 		t.Fatalf("republished hello does not declare audio.engine; capabilities = %v", hello.Capabilities)
 	}
 }
+
+// TestAudioEngineSinkFactoryAndPropsDefaultsToALSA proves an omitted (or
+// explicit "alsasink") SinkBackend keeps building exactly the binding
+// every audio.node used before this field existed: alsasink with
+// "device" set to the program route, and no test-only env override in
+// play.
+func TestAudioEngineSinkFactoryAndPropsDefaultsToALSA(t *testing.T) {
+	node := audioNodeConfig{ProgramRoute: "hw:1,0"}
+	factory, props := audioEngineSinkFactoryAndProps(node)
+	if factory != realAudioSinkFactory {
+		t.Errorf("factory = %q, want %q", factory, realAudioSinkFactory)
+	}
+	if props["device"] != "hw:1,0" {
+		t.Errorf("props[device] = %v, want %q", props["device"], "hw:1,0")
+	}
+	if _, has := props["target-object"]; has {
+		t.Errorf("props carries target-object for an alsasink binding")
+	}
+}
+
+// TestAudioEngineSinkFactoryAndPropsPipeWire proves a binding requesting
+// "pipewiresink" builds against that factory with "target-object" set to
+// the program route instead of "device" -- RES-019 section 7.2 candidate
+// A, ADR-046: the "device" property does not apply to a PipeWire-owned
+// graph.
+func TestAudioEngineSinkFactoryAndPropsPipeWire(t *testing.T) {
+	node := audioNodeConfig{ProgramRoute: "showmesh-program", SinkBackend: pipewireAudioSinkFactory}
+	factory, props := audioEngineSinkFactoryAndProps(node)
+	if factory != pipewireAudioSinkFactory {
+		t.Errorf("factory = %q, want %q", factory, pipewireAudioSinkFactory)
+	}
+	if props["target-object"] != "showmesh-program" {
+		t.Errorf("props[target-object] = %v, want %q", props["target-object"], "showmesh-program")
+	}
+	if _, has := props["device"]; has {
+		t.Errorf("props carries device for a pipewiresink binding")
+	}
+}
+
+// TestAudioEngineSinkFactoryAndPropsEnvOverrideWinsOverPipeWire proves
+// the test-only env override still wins outright over a binding
+// requesting pipewiresink, with no properties at all -- a non-hardware
+// sink such as "fakesink" has neither a "device" nor a "target-object"
+// property.
+func TestAudioEngineSinkFactoryAndPropsEnvOverrideWinsOverPipeWire(t *testing.T) {
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+	node := audioNodeConfig{ProgramRoute: "showmesh-program", SinkBackend: pipewireAudioSinkFactory}
+	factory, props := audioEngineSinkFactoryAndProps(node)
+	if factory != "fakesink" {
+		t.Errorf("factory = %q, want %q", factory, "fakesink")
+	}
+	if len(props) != 0 {
+		t.Errorf("props = %v, want empty", props)
+	}
+}
+
+// TestBuildPipelineClockLockedNoSourceWired proves a rebuilder with no
+// [audioEngineRebuilder.SetPHCInterfaceSource] call ever made attempts
+// nothing at all: the engine must build exactly as it did before this
+// seam existed.
+func TestBuildPipelineClockLockedNoSourceWired(t *testing.T) {
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+
+	reader, reason := r.buildPipelineClockLocked()
+	if reader != nil || reason != "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, \"\")", reader, reason)
+	}
+}
+
+// TestBuildPipelineClockLockedNoInterfaceConfigured proves a source that
+// reports ok=false (no node.clock.configure ever accepted) is likewise
+// not a failure.
+func TestBuildPipelineClockLockedNoInterfaceConfigured(t *testing.T) {
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+	r.SetPHCInterfaceSource(func() (string, bool) { return "", false })
+
+	reader, reason := r.buildPipelineClockLocked()
+	if reader != nil || reason != "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, \"\")", reader, reason)
+	}
+}
+
+// TestBuildPipelineClockLockedInterfaceHasNoPHC proves a configured
+// interface whose PHC lookup reports ok=false with no error carries a
+// stated reason through -- this is a real, nameable failure ("this
+// interface has no PHC"), not the unconfigured case above.
+func TestBuildPipelineClockLockedInterfaceHasNoPHC(t *testing.T) {
+	origLookup := phcIndexForInterface
+	t.Cleanup(func() { phcIndexForInterface = origLookup })
+	phcIndexForInterface = func(iface string) (int, bool, error) { return 0, false, nil }
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
+
+	reader, reason := r.buildPipelineClockLocked()
+	if reader != nil {
+		t.Fatalf("buildPipelineClockLocked() reader = %v, want nil", reader)
+	}
+	if reason == "" {
+		t.Fatalf("buildPipelineClockLocked() reason is empty, want a stated reason for a named interface with no PHC")
+	}
+}
+
+// TestBuildPipelineClockLockedLookupError proves a PHC lookup that
+// itself errors (not merely ok=false) is carried through the same way.
+func TestBuildPipelineClockLockedLookupError(t *testing.T) {
+	origLookup := phcIndexForInterface
+	t.Cleanup(func() { phcIndexForInterface = origLookup })
+	wantErr := os.ErrPermission
+	phcIndexForInterface = func(iface string) (int, bool, error) { return 0, false, wantErr }
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
+
+	reader, reason := r.buildPipelineClockLocked()
+	if reader != nil || reason == "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, a stated reason)", reader, reason)
+	}
+}
+
+// TestBuildPipelineClockLockedOpensTheReaderTheInjectedFactoryReturns
+// proves a successfully found PHC index is opened via [newPHCReader] and
+// the resulting reader is handed back with no reason.
+func TestBuildPipelineClockLockedOpensTheReaderTheInjectedFactoryReturns(t *testing.T) {
+	origLookup := phcIndexForInterface
+	origReader := newPHCReader
+	t.Cleanup(func() { phcIndexForInterface = origLookup; newPHCReader = origReader })
+	phcIndexForInterface = func(iface string) (int, bool, error) { return 3, true, nil }
+	stub := &closingClockReaderStub{}
+	newPHCReader = func(index int) (gstengine.ClockReader, error) {
+		if index != 3 {
+			t.Fatalf("newPHCReader called with index %d, want 3", index)
+		}
+		return stub, nil
+	}
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
+
+	reader, reason := r.buildPipelineClockLocked()
+	if reader != stub {
+		t.Fatalf("buildPipelineClockLocked() reader = %v, want the injected stub", reader)
+	}
+	if reason != "" {
+		t.Fatalf("buildPipelineClockLocked() reason = %q, want \"\"", reason)
+	}
+}
+
+// TestBuildPipelineClockLockedOpenFailure proves newPHCReader itself
+// failing (device exists per the lookup, but cannot be opened -- e.g. a
+// permissions gap) is carried through with a stated reason too.
+func TestBuildPipelineClockLockedOpenFailure(t *testing.T) {
+	origLookup := phcIndexForInterface
+	origReader := newPHCReader
+	t.Cleanup(func() { phcIndexForInterface = origLookup; newPHCReader = origReader })
+	phcIndexForInterface = func(iface string) (int, bool, error) { return 3, true, nil }
+	newPHCReader = func(index int) (gstengine.ClockReader, error) { return nil, os.ErrPermission }
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
+
+	reader, reason := r.buildPipelineClockLocked()
+	if reader != nil || reason == "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, a stated reason)", reader, reason)
+	}
+}
+
+// closingClockReaderStub is a minimal [gstengine.ClockReader] test
+// double: identity matters to these tests (whether buildPipelineClockLocked
+// hands back the SAME reader newPHCReader produced), not behavior.
+type closingClockReaderStub struct{}
+
+func (*closingClockReaderStub) Now() (time.Time, error) { return time.Time{}, nil }
+func (*closingClockReaderStub) Close() error            { return nil }

@@ -105,6 +105,14 @@ func pushNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() tim
 		params["ltcRoute"] = payload.LTCRoute
 		params["ltcChannel"] = payload.LTCChannel
 	}
+	// Omitted rather than always pushed: the agent's own default
+	// ("alsasink") matches every audio.node written before this field
+	// existed, and the agent refuses an unrecognized value rather than
+	// silently ignoring it, so there is no reason to push the default
+	// explicitly.
+	if payload.SinkBackend != "" && payload.SinkBackend != config.AudioNodeSinkBackendDefault {
+		params["sinkBackend"] = payload.SinkBackend
+	}
 	idempotencyKey := fmt.Sprintf("audio.node.configure/%s/rev-%d", nodeID, obj.CurrentRevision)
 	return publish(ctx, pub, now, nodeID, "audio.node.configure", idempotencyKey, params)
 }

@@ -294,3 +294,43 @@ func TestDecodeAudioNodeConfigStillRejectsBadLTCWhenDeclared(t *testing.T) {
 		t.Fatal("decodeAudioNodeConfig accepted a declared ltcChannel of 0")
 	}
 }
+
+// TestDecodeAudioNodeConfigSinkBackendDefaultsToALSA proves an omitted
+// sinkBackend decodes to the empty string, which
+// [audioEngineSinkFactoryAndProps] treats as "alsasink" -- every
+// audio.node binding before this field existed.
+func TestDecodeAudioNodeConfigSinkBackendDefaultsToALSA(t *testing.T) {
+	p, err := decodeAudioNodeConfig(programOnlyNodeParams())
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if p.SinkBackend != "" {
+		t.Errorf("SinkBackend = %q, want empty for an omitted field", p.SinkBackend)
+	}
+}
+
+// TestDecodeAudioNodeConfigAcceptsPipeWireSinkBackend proves the agent
+// accepts the RES-019 section 7.2 candidate A backend choice.
+func TestDecodeAudioNodeConfigAcceptsPipeWireSinkBackend(t *testing.T) {
+	params := programOnlyNodeParams()
+	params["sinkBackend"] = "pipewiresink"
+	p, err := decodeAudioNodeConfig(params)
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if p.SinkBackend != pipewireAudioSinkFactory {
+		t.Errorf("SinkBackend = %q, want %q", p.SinkBackend, pipewireAudioSinkFactory)
+	}
+}
+
+// TestDecodeAudioNodeConfigRejectsUnknownSinkBackend proves a value
+// outside the two-member closed vocabulary is refused rather than
+// silently accepted and later mismatched against no real GStreamer
+// factory.
+func TestDecodeAudioNodeConfigRejectsUnknownSinkBackend(t *testing.T) {
+	params := programOnlyNodeParams()
+	params["sinkBackend"] = "pulsesink"
+	if _, err := decodeAudioNodeConfig(params); err == nil {
+		t.Fatal("decodeAudioNodeConfig accepted an unrecognized sinkBackend")
+	}
+}

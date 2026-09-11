@@ -14,6 +14,22 @@ import (
 // fixture files.
 type AssetResolver func(media pkgaudio.MediaRef) (string, error)
 
+// ClockReader is the pipeline clock source [Config.Clock] wraps —
+// internal/agent/clock.PHCReader in production, opened once by the
+// caller and handed here already open, so the GStreamer clock callback
+// never itself opens or closes a device file (RES-019 section 7.2
+// candidate A: the callback runs on GStreamer's own scheduling and must
+// be cheap and never block). A test may inject any implementation.
+type ClockReader interface {
+	// Now reads the current time off this clock source.
+	Now() (time.Time, error)
+
+	// Close releases whatever this reader holds open. Called exactly
+	// once, by [Engine.Close], regardless of whether the reader was ever
+	// actually used as the pipeline clock.
+	Close() error
+}
+
 // Config is the output pipeline's fixed shape: one physical sink, its
 // negotiated channel layout, where the mixed program bus lands on that
 // layout, and which channel (if any) carries generated LTC. Every index
@@ -52,6 +68,30 @@ type Config struct {
 	// comparisons. It never affects a reported Position, which always
 	// comes from a live GStreamer query.
 	Now func() time.Time
+
+	// Clock, when non-nil, is this pipeline's own running clock — the
+	// node's PTP hardware clock (PHC), already open, per RES-019 section
+	// 7.2 candidate A (ADR-046): the output pipeline runs on the same
+	// timebase as the card it plays through, so alsasink never needs to
+	// step the playout pointer to correct for a system/card clock drift.
+	// [Engine] reads it once at construction, before the pipeline's
+	// first state change (a clock installed afterward is proven not to
+	// reach an already-playing sink), to confirm it is actually
+	// readable; a failed read there is not fatal — the engine falls back
+	// to GStreamer's own default clock exactly as it did before this
+	// field existed. nil means no PHC clock was configured for this
+	// node at all, which is likewise not a failure.
+	Clock ClockReader
+
+	// ClockUnavailableReason is set by the caller instead of Clock when
+	// a PHC clock was configured for this node but could not even be
+	// opened (no PHC associated with the configured interface, or the
+	// device could not be opened) — carried through so [Engine.
+	// ClockSource] reports the same class of reason whether the failure
+	// happened before or after this package ever saw a reader. Left
+	// empty when Clock is nil because nothing was configured at all;
+	// ignored when Clock is non-nil.
+	ClockUnavailableReason string
 }
 
 // ErrConfigInvalid is returned by [Config.Validate] and wraps the reason.

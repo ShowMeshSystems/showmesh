@@ -36,7 +36,15 @@ type audioNodeConfig struct {
 	LTCChannel            int    `json:"ltcChannel,omitempty"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
-	Revision              int64  `json:"revision"`
+
+	// SinkBackend is the GStreamer output backend this node builds
+	// against: [realAudioSinkFactory] ("alsasink", the default used
+	// whenever this field is omitted, matching every audio.node binding
+	// before this field existed) or [pipewireAudioSinkFactory]
+	// ("pipewiresink", RES-019 section 7.2 candidate A / ADR-046).
+	SinkBackend string `json:"sinkBackend,omitempty"`
+
+	Revision int64 `json:"revision"`
 }
 
 // audioSettingsConfig is "audio.settings.configure"'s params shape,
@@ -187,7 +195,7 @@ func (b *audioBinding) currentSettingsRevision() (revision int64, have bool) {
 var audioNodeConfigureKnownKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true, "programChannels": true,
 	"ltcChannel": true, "clockDomain": true, "clockDomainProvenance": true,
-	"revision": true,
+	"sinkBackend": true, "revision": true,
 }
 
 // decodeAudioNodeConfig validates params' shape against
@@ -246,6 +254,11 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 	}
 	if p.ClockDomainProvenance == "" {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.clockDomainProvenance must be a non-empty string", action)
+	}
+	switch p.SinkBackend {
+	case "", realAudioSinkFactory, pipewireAudioSinkFactory:
+	default:
+		return audioNodeConfig{}, fmt.Errorf("%s: params.sinkBackend %q must be %q or %q", action, p.SinkBackend, realAudioSinkFactory, pipewireAudioSinkFactory)
 	}
 	if p.Revision < 0 {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.revision must not be negative", action)
@@ -426,19 +439,40 @@ func resolveNodeSampleRate(d audio.Discovery, programRoute string) (rate int, so
 const noProbeEvidenceSource = "none: this route has no advertised probe evidence"
 
 // realAudioSinkFactory is the GStreamer sink this node builds against on
-// real hardware. A route bound to it reaches a physical ALSA device,
-// which is where an invented rate or channel count is a defect rather
-// than harmless scaffolding.
+// real hardware when its binding requests no other backend. A route
+// bound to it reaches a physical ALSA device, which is where an
+// invented rate or channel count is a defect rather than harmless
+// scaffolding.
 const realAudioSinkFactory = "alsasink"
 
-// audioEngineSinkFactory reports the GStreamer sink factory this node
-// builds against: [envGstAudioSinkOverride] when set, "alsasink"
-// otherwise.
-func audioEngineSinkFactory() string {
+// pipewireAudioSinkFactory is the GStreamer sink a node's audio.node
+// binding can request instead of [realAudioSinkFactory] (RES-019 section
+// 7.2 candidate A, permitted by ADR-046): PipeWire owns the output
+// graph, clocked from the node's PHC, and rate-matches ALSA output to it
+// through its own resampler. Unlike alsasink's "device" property,
+// pipewiresink takes "target-object" naming the PipeWire target this
+// route resolves to — see [audioEngineSinkFactoryAndProps].
+const pipewireAudioSinkFactory = "pipewiresink"
+
+// audioEngineSinkFactoryAndProps reports the GStreamer sink factory this
+// node builds against and the sink properties naming its output route.
+// [envGstAudioSinkOverride] wins outright when set (test-only, no
+// properties: a non-hardware sink such as "fakesink" has no "device" or
+// "target-object" property, and setting an unknown GObject property is
+// itself something to avoid rather than rely on being harmless).
+// Otherwise node.SinkBackend picks between [pipewireAudioSinkFactory]
+// (with "target-object" set to node.ProgramRoute) and
+// [realAudioSinkFactory] (with "device" set to node.ProgramRoute) — the
+// default whenever SinkBackend is empty, matching every audio.node
+// binding before this field existed.
+func audioEngineSinkFactoryAndProps(node audioNodeConfig) (factory string, props map[string]any) {
 	if v := os.Getenv(envGstAudioSinkOverride); v != "" {
-		return v
+		return v, map[string]any{}
 	}
-	return realAudioSinkFactory
+	if node.SinkBackend == pipewireAudioSinkFactory {
+		return pipewireAudioSinkFactory, map[string]any{"target-object": node.ProgramRoute}
+	}
+	return realAudioSinkFactory, map[string]any{"device": node.ProgramRoute}
 }
 
 // audioNodeChannelCount is the highest channel index the binding uses,

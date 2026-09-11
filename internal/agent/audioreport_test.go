@@ -1523,3 +1523,77 @@ func TestRunAudioReportReportsIntermediateGainAcrossADispatchedFade(t *testing.T
 		t.Fatalf("once the 2s fade's duration has elapsed: Gain = %v, want the dispatched target %v", after.Gain, target)
 	}
 }
+
+// stubEngineBackendInfo is a [stubEngineAvailability] that also
+// implements the [engineBackendInfo] optional interface, matching
+// stubEngineGlitchCounts's identical shape.
+type stubEngineBackendInfo struct {
+	stubEngineAvailability
+	sinkBackend string
+	clockSource string
+	clockReason string
+}
+
+func (s *stubEngineBackendInfo) SinkBackend() string { return s.sinkBackend }
+func (s *stubEngineBackendInfo) ClockSource() (string, string) {
+	return s.clockSource, s.clockReason
+}
+
+// TestApplyEngineBackendInfoNilEngineLeavesFieldsBlank proves a nil
+// engine (no asset directory configured on this node) never fabricates a
+// backend or clock source.
+func TestApplyEngineBackendInfoNilEngineLeavesFieldsBlank(t *testing.T) {
+	payload := mqttproto.AudioPayload{EngineSinkBackend: "stale", EngineClockSource: "stale", EngineClockReason: "stale"}
+	applyEngineBackendInfo(&payload, nil)
+	if payload.EngineSinkBackend != "" || payload.EngineClockSource != "" || payload.EngineClockReason != "" {
+		t.Fatalf("applyEngineBackendInfo with a nil engine left stale values: %+v", payload)
+	}
+}
+
+// TestApplyEngineBackendInfoEngineWithoutTheOptionalInterfaceLeavesFieldsBlank
+// proves an engine that does not implement [engineBackendInfo] (a test
+// double, or an older build) reports blank rather than a fabricated
+// value -- matching applyEngineGlitchCounts's identical rule for engines
+// that do not implement its own optional interface.
+func TestApplyEngineBackendInfoEngineWithoutTheOptionalInterfaceLeavesFieldsBlank(t *testing.T) {
+	engine := &stubEngineAvailability{results: []struct {
+		ok     bool
+		reason string
+	}{{ok: true}}}
+	payload := mqttproto.AudioPayload{EngineSinkBackend: "stale"}
+	applyEngineBackendInfo(&payload, engine)
+	if payload.EngineSinkBackend != "" {
+		t.Fatalf("EngineSinkBackend = %q, want \"\" for an engine with no SinkBackend method", payload.EngineSinkBackend)
+	}
+}
+
+// TestApplyEngineBackendInfoReportsWhatTheEngineBuiltWith proves the
+// live values reach the payload unchanged, fresh on every call -- the
+// same "live, never cached" rule every other applyEngine* function in
+// this file follows.
+func TestApplyEngineBackendInfoReportsWhatTheEngineBuiltWith(t *testing.T) {
+	engine := &stubEngineBackendInfo{sinkBackend: "pipewiresink", clockSource: "phc"}
+	var payload mqttproto.AudioPayload
+	applyEngineBackendInfo(&payload, engine)
+	if payload.EngineSinkBackend != "pipewiresink" {
+		t.Errorf("EngineSinkBackend = %q, want %q", payload.EngineSinkBackend, "pipewiresink")
+	}
+	if payload.EngineClockSource != "phc" {
+		t.Errorf("EngineClockSource = %q, want %q", payload.EngineClockSource, "phc")
+	}
+	if payload.EngineClockReason != "" {
+		t.Errorf("EngineClockReason = %q, want \"\"", payload.EngineClockReason)
+	}
+}
+
+// TestApplyEngineBackendInfoReportsAFallbackClockReason proves a "default"
+// clock source's reason is carried through unchanged.
+func TestApplyEngineBackendInfoReportsAFallbackClockReason(t *testing.T) {
+	engine := &stubEngineBackendInfo{sinkBackend: "alsasink", clockSource: "default", clockReason: "interface eth0 has no associated PHC"}
+	var payload mqttproto.AudioPayload
+	applyEngineBackendInfo(&payload, engine)
+	if payload.EngineClockSource != "default" || payload.EngineClockReason != "interface eth0 has no associated PHC" {
+		t.Errorf("EngineClockSource/EngineClockReason = %q/%q, want %q/%q",
+			payload.EngineClockSource, payload.EngineClockReason, "default", "interface eth0 has no associated PHC")
+	}
+}

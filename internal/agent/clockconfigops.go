@@ -108,6 +108,19 @@ func (b *clockBinding) currentRevision() (revision int64, have bool) {
 	return b.revision, b.haveConfig
 }
 
+// currentInterface reports the network interface this node's currently
+// accepted node.clock configuration names, or ok=false when no
+// node.clock.configure has ever been accepted — read by
+// [audioEngineRebuilder.buildPipelineClockLocked] (audioengine.go) to
+// open this node's audio pipeline clock off the SAME interface
+// node.clock.ptp.* already reports evidence for. Unguarded, matching
+// [clockBinding.currentRevision]'s identical convention: every command
+// this package handles runs one at a time off a single MQTT dispatch
+// goroutine.
+func (b *clockBinding) currentInterface() (iface string, ok bool) {
+	return b.cfg.Interface, b.haveConfig
+}
+
 var clockConfigureKnownKeys = map[string]bool{
 	"schema": true, "provider": true, "interface": true, "domain": true,
 	"clientOnly": true, "holdoverLimitSeconds": true, "priority1": true,

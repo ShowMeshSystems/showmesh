@@ -137,6 +137,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 		applyLTCObservation(ctx, &payload, ltc)
 		applyEngineAvailability(&payload, engine)
 		applyEngineGlitchCounts(&payload, engine)
+		applyEngineBackendInfo(&payload, engine)
 		applyEngineRestoreStatus(&payload, mgr, tickAt)
 		applyTimeline(ctx, &payload, mgr)
 		applySettingsStatus(&payload, mgr)
@@ -344,6 +345,39 @@ func applyEngineGlitchCounts(payload *mqttproto.AudioPayload, engine engineAvail
 	payload.EngineResourceWarningCount = counts.ResourceWarnings
 	payload.EngineOtherWarningCount = counts.OtherWarnings
 	payload.EngineQosDropCount = counts.QosEvents
+}
+
+// engineBackendInfo is the optional interface [gstengine.Engine]
+// implements to report what it actually built against — matching
+// [engineGlitchCounts]'s identical optional-interface shape, so a wired
+// engine that does not implement it (a test fake) reports both fields
+// blank rather than a fabricated value.
+type engineBackendInfo interface {
+	SinkBackend() string
+	ClockSource() (source, reason string)
+}
+
+// applyEngineBackendInfo writes engine's own report of what it built its
+// output pipeline against onto payload — node.audio.engine.sink_backend
+// and node.audio.engine.clock_source/.clock_reason
+// (docs/build/IDENTIFIER-REGISTER.md) — fresh on every call, same
+// "live, never cached" rule as [applyEngineAvailability]. A nil engine,
+// or one that does not implement [engineBackendInfo], leaves all three
+// fields blank: never a fabricated backend for a node with no engine
+// built at all.
+func applyEngineBackendInfo(payload *mqttproto.AudioPayload, engine engineAvailability) {
+	payload.EngineSinkBackend = ""
+	payload.EngineClockSource = ""
+	payload.EngineClockReason = ""
+	if engine == nil {
+		return
+	}
+	b, ok := engine.(engineBackendInfo)
+	if !ok {
+		return
+	}
+	payload.EngineSinkBackend = b.SinkBackend()
+	payload.EngineClockSource, payload.EngineClockReason = b.ClockSource()
 }
 
 // applyEngineRestoreStatus writes mgr's current node-level automatic

@@ -9,6 +9,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/internal/agent/audio/gstengine"
+	"github.com/showmeshsystems/showmesh/internal/agent/clock"
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
@@ -32,7 +33,7 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 	rate, rateSource := resolveNodeSampleRate(d, node.ProgramRoute)
 	channelCount, chCountSource := resolveNodeChannelCount(d, node.ProgramRoute, audioNodeChannelCount(node))
 	cfg = staticGstEngineConfig(assetDir, node)
-	if cfg.SinkFactory != realAudioSinkFactory {
+	if cfg.SinkFactory != realAudioSinkFactory && cfg.SinkFactory != pipewireAudioSinkFactory {
 		if rate <= 0 {
 			rate, rateSource = scaffoldSampleRate, "fallback: non-hardware sink, no advertised probe evidence for this route"
 		}
@@ -54,25 +55,19 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 const scaffoldSampleRate = 48000
 
 // staticGstEngineConfig builds the part of a [gstengine.Config] that
-// needs no route probe: SinkFactory from [audioEngineSinkFactory] (the
-// production "alsasink", or the test-only [envGstAudioSinkOverride]),
-// the "device" sink property set to node.ProgramRoute only when building
-// against the real "alsasink" (a non-hardware test sink such as
-// "fakesink" has no such property, and setting an unknown GObject
-// property is itself something to avoid rather than rely on being
-// harmless), ProgramChannels and LTCChannel from the binding, and
-// ChannelCount at the binding's own floor. SampleRate is left at zero
+// needs no route probe: SinkFactory and its route property from
+// [audioEngineSinkFactoryAndProps] (production "alsasink"/"device" or
+// "pipewiresink"/"target-object" per node.SinkBackend, or the test-only
+// [envGstAudioSinkOverride] with no properties at all), ProgramChannels
+// and LTCChannel from the binding, and ChannelCount at the binding's own
+// floor. SampleRate is left at zero
 // and ChannelCount may still be raised: the caller fills both in from a
 // real probe once one is safe to run (see [audioEngineRebuilder.rebuild],
 // which validates a config built from this BEFORE touching the outgoing
 // engine, so a structurally invalid binding never costs a working engine
 // its device).
 func staticGstEngineConfig(assetDir string, node audioNodeConfig) gstengine.Config {
-	sinkFactory := audioEngineSinkFactory()
-	props := map[string]any{}
-	if sinkFactory == realAudioSinkFactory {
-		props["device"] = node.ProgramRoute
-	}
+	sinkFactory, props := audioEngineSinkFactoryAndProps(node)
 	return gstengine.Config{
 		SinkFactory:     sinkFactory,
 		SinkProperties:  props,
@@ -185,6 +180,22 @@ type audioEngineRebuilder struct {
 	// this rebuilder is (see agent.go).
 	onAvailabilityChange func()
 
+	// phcInterfaceSource, when set, reports the network interface this
+	// node's currently accepted node.clock configuration names (RES-019
+	// section 7.2 candidate A, ADR-046: the audio pipeline clock is the
+	// SAME PHC node.clock.ptp.* already evaluates, read independently of
+	// whatever lock state that provider reports — rate-locking to the
+	// card's own oscillator needs no grandmaster at all). ok is false
+	// when no node.clock.configure has ever been accepted. nil (a node
+	// started with no clock manager wired, or a test that never calls
+	// [audioEngineRebuilder.SetPHCInterfaceSource]) means never attempt
+	// a PHC clock at all: the engine builds exactly as it did before
+	// this field existed. Set via [audioEngineRebuilder.
+	// SetPHCInterfaceSource], matching onAvailabilityChange's identical
+	// post-construction wiring convention (clockBind is built after this
+	// rebuilder — see agent.go).
+	phcInterfaceSource func() (iface string, ok bool)
+
 	mu            sync.Mutex
 	haveBuilt     bool
 	builtRevision int64
@@ -231,6 +242,19 @@ func (r *audioEngineRebuilder) SetAvailabilityChangeCallback(f func()) {
 	r.onAvailabilityChange = f
 	r.mu.Unlock()
 	f()
+}
+
+// SetPHCInterfaceSource installs f as this rebuilder's own
+// phcInterfaceSource. Unlike SetAvailabilityChangeCallback, f is not
+// called immediately: it is only ever read from inside a rebuild, which
+// happens naturally on the next audio.node.configure delivery or restore
+// retry, and a pipeline's clock cannot change without a rebuild anyway
+// (cfg.Clock's own doc comment), so there is no residual race to close
+// here.
+func (r *audioEngineRebuilder) SetPHCInterfaceSource(f func() (string, bool)) {
+	r.mu.Lock()
+	r.phcInterfaceSource = f
+	r.mu.Unlock()
 }
 
 // installAudioCapabilityRepublish wires rebuilder's availability-change
@@ -411,6 +435,7 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 		r.haveBuilt = true
 		return audioRebuildOutcome{Attempted: true, Available: false, Reason: reason}
 	}
+	cfg.Clock, cfg.ClockUnavailableReason = r.buildPipelineClockLocked()
 	engine, err := newGstEngine(cfg)
 	if err != nil {
 		// See newGstEngine's doc comment: production never reaches this
@@ -421,6 +446,9 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 		// engine merely detached: an available-to-unavailable transition
 		// is a withdrawal like any other capability publish, not a
 		// special case that gets to skip re-detection.
+		if cfg.Clock != nil {
+			_ = cfg.Clock.Close()
+		}
 		if r.logger != nil {
 			r.logger.Error("failed to build the real audio engine after releasing the outgoing one; this node has no audio engine until the next audio.node.configure", "revision", node.Revision, "error", err)
 		}
@@ -460,6 +488,59 @@ func (r *audioEngineRebuilder) HeldNode() (node audioNodeConfig, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.heldNode, r.heldNodeOK
+}
+
+// newPHCReader opens index as a [gstengine.ClockReader] — a package var,
+// matching this file's own newGstEngine injection convention, so a test
+// can exercise [audioEngineRebuilder.buildPipelineClockLocked] without a
+// real PHC device.
+var newPHCReader = func(index int) (gstengine.ClockReader, error) {
+	return clock.OpenPHC(index)
+}
+
+// phcIndexForInterface reports iface's PHC index — a package var over
+// [clock.PHCIndexForInterface], matching newPHCReader's identical
+// injection convention, so a test can exercise
+// [audioEngineRebuilder.buildPipelineClockLocked]'s branches without
+// depending on this test host's real network interfaces (this platform
+// may not even support PHC lookups at all — see clock/phc_other.go).
+var phcIndexForInterface = clock.PHCIndexForInterface
+
+// buildPipelineClockLocked attempts to open this node's pipeline clock
+// off the network interface its currently accepted node.clock
+// configuration names (RES-019 section 7.2 candidate A, ADR-046). Caller
+// holds r.mu.
+//
+// reader is nil with no reason at all in the ordinary, unconfigured
+// case: r.phcInterfaceSource is nil (no clock manager wired), or it
+// reports ok=false (no node.clock.configure ever accepted) or an empty
+// interface. That is not a failure — it is exactly what this node
+// reported before this seam existed, so [Config.ClockUnavailableReason]
+// is left empty rather than manufacturing a reason for nothing having
+// been configured. reader is nil WITH a reason when an interface was
+// named but its PHC could not be found or opened; [Engine.installClock]
+// carries that reason through to node.audio.engine.clock_reason
+// unchanged.
+func (r *audioEngineRebuilder) buildPipelineClockLocked() (reader gstengine.ClockReader, unavailableReason string) {
+	if r.phcInterfaceSource == nil {
+		return nil, ""
+	}
+	iface, ok := r.phcInterfaceSource()
+	if !ok || iface == "" {
+		return nil, ""
+	}
+	index, found, err := phcIndexForInterface(iface)
+	if err != nil {
+		return nil, fmt.Sprintf("PHC lookup for interface %s failed: %v", iface, err)
+	}
+	if !found {
+		return nil, fmt.Sprintf("interface %s has no associated PHC", iface)
+	}
+	rd, err := newPHCReader(index)
+	if err != nil {
+		return nil, fmt.Sprintf("opening the PHC device for interface %s failed: %v", iface, err)
+	}
+	return rd, ""
 }
 
 // bind installs engine as this node's current engine through

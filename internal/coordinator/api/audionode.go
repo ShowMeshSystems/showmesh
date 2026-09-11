@@ -383,6 +383,7 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 			ProgramChannels: p.ProgramChannels, LTCChannel: p.LTCChannel,
 			ClockDomain: p.ClockDomain, ClockDomainProvenance: p.ClockDomainProvenance,
 			Role: p.Role, Zone: p.Zone,
+			SinkBackend: p.SinkBackend,
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),

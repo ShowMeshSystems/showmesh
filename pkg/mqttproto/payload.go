@@ -1630,6 +1630,27 @@ type AudioPayload struct {
 	EngineRestoreNextAttemptMs int64  `json:"engineRestoreNextAttemptMs"`
 	EngineRestoreLastReason    string `json:"engineRestoreLastReason"`
 
+	// EngineSinkBackend is the GStreamer output sink factory this node's
+	// engine was built (or attempted) against
+	// (docs/build/IDENTIFIER-REGISTER.md node.audio.engine.sink_backend):
+	// "alsasink" or "pipewiresink" per RES-019 section 7.2 candidate A
+	// (ADR-046). Empty for a node with no engine built at all, or an
+	// agent built before this field existed.
+	EngineSinkBackend string `json:"engineSinkBackend,omitempty"`
+
+	// EngineClockSource and EngineClockReason are which clock this
+	// node's output pipeline actually runs on
+	// (node.audio.engine.clock_source/.clock_reason): "phc" (RES-019
+	// section 7.2 candidate A -- the pipeline is clocked from the node's
+	// PTP hardware clock) or "default" (GStreamer's own system clock,
+	// either because no PHC clock was configured for this node at all,
+	// or because one was configured but could not be used, in which case
+	// EngineClockReason is required). Both empty for a node with no
+	// engine built at all, or an agent built before these fields
+	// existed.
+	EngineClockSource string `json:"engineClockSource,omitempty"`
+	EngineClockReason string `json:"engineClockReason,omitempty"`
+
 	// The Timeline* fields are Track I seam I2's node.audio.timeline.*
 	// evidence for the session this node is currently playing against a
 	// scheduled start instant. All are OPTIONAL: an agent built before
@@ -1785,6 +1806,11 @@ func (p AudioPayload) Validate() error {
 	if p.EngineRestoreAttempts > 0 && p.EngineRestoreLastReason == "" {
 		return fmt.Errorf("%w: engineRestoreLastReason (required whenever engineRestoreAttempts is nonzero)", ErrPayloadMissingField)
 	}
+	switch p.EngineClockSource {
+	case "", "phc", "default":
+	default:
+		return fmt.Errorf("%w: %q", ErrPayloadInvalidEngineClockSource, p.EngineClockSource)
+	}
 	switch p.SettingsState {
 	case "", "accepted", "substituted":
 		// "" is an older agent's omitted field, read as "accepted" -- see
@@ -1936,6 +1962,12 @@ var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognize
 // "scheduled", or "exhausted" -- the closed vocabulary
 // node.audio.engine.restore.state carries (docs/build/IDENTIFIER-REGISTER.md).
 var ErrPayloadInvalidEngineRestoreState = errors.New("mqttproto: engineRestoreState is not a recognized value")
+
+// ErrPayloadInvalidEngineClockSource is wrapped by [AudioPayload.Validate]
+// when EngineClockSource is set to something other than "", "phc", or
+// "default" -- the closed vocabulary node.audio.engine.clock_source
+// carries (docs/build/IDENTIFIER-REGISTER.md).
+var ErrPayloadInvalidEngineClockSource = errors.New("mqttproto: engineClockSource is not a recognized value")
 
 // ErrPayloadInvalidSettingsState is wrapped by [AudioPayload.Validate]
 // when SettingsState is set to something other than "", "accepted", or

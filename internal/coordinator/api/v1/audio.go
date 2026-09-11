@@ -72,6 +72,12 @@ type ConfigAudioNode struct {
 	// Zone is the operator's own name for the independent speaker zone
 	// this node drives, present only when Role is "zone".
 	Zone *string `json:"zone,omitempty"`
+
+	// SinkBackend is the GStreamer output backend this node's agent
+	// builds against: "alsasink" or "pipewiresink" (RES-019 section 7.2
+	// candidate A, ADR-046). Optional on the wire; absent decodes to
+	// "alsasink".
+	SinkBackend string `json:"sinkBackend,omitempty"`
 }
 
 // AudioNodeSummary is one element of [AudioNodeListResponse]: enough to

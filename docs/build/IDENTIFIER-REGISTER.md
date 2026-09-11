@@ -899,6 +899,22 @@ alongside them.
 | `node.audio.engine.restore.attempts` | shipped | SM-384 (node-level counterpart to `audio_session.restore.attempts`) |
 | `node.audio.engine.restore.next_attempt_ms` | shipped | SM-384 (node-level counterpart to `audio_session.restore.next_attempt_ms`; not_collected, not zero, once the state is not `scheduled`) |
 | `node.audio.engine.restore.last_reason` | shipped | SM-384 (node-level counterpart to `audio_session.restore.last_reason`) |
+| `node.audio.engine.sink_backend` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`alsasink` or `pipewiresink`; the sibling `node.audio.engine.*` rows above already carry this section's no-additions-without-the-owner rule's standing exception) |
+| `node.audio.engine.clock_source` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`phc` or `default`) |
+| `node.audio.engine.clock_reason` | shipped | RES-019 section 7.2 candidate A, ADR-046 (required whenever `clock_source` is `default` because a PHC clock was configured but could not be used; blank when nothing was configured at all) |
+
+**The three `node.audio.engine.sink_backend`/`clock_source`/
+`clock_reason` rows are Track I's rate-lock step, 2026-09-11.** Candidate
+A runs the output pipeline's own clock off the node's PTP hardware clock
+(PHC) instead of the system clock, and lets the binding choose PipeWire
+as the output backend instead of alsasink directly, so an operator
+comparing two nodes needs to see which backend and which clock each one
+actually built with — not only whether the engine is available. Both are
+live evidence from the bound [gstengine.Engine] itself
+(`SinkBackend`/`ClockSource`), never derived from the audio.node binding
+alone: a binding can request `pipewiresink` and a PHC clock can be
+configured, and either can still fail to build, in which case these
+report what actually happened, not what was asked for.
 
 **The four `node.audio.engine.restore.*` rows close a gap the widened
 retry driver opened, 2026-09-03.** `Manager.SetRestoreRetryStatus` only
