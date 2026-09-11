@@ -275,3 +275,17 @@ func (e *SwitchableEngine) GlitchCounts() (GlitchCounts, bool) {
 	}
 	return ObserveEngineGlitches(cur)
 }
+
+var _ AlignmentObserver = (*SwitchableEngine)(nil)
+
+// Alignment forwards to whatever engine is currently bound, mirroring
+// [SwitchableEngine.PresentedElapsed]. A never-bound engine reports not
+// known with [SwitchableEngineNoBindingReason] rather than a fabricated
+// sample.
+func (e *SwitchableEngine) Alignment(ctx context.Context, handle EngineHandle) (AlignmentSample, bool, string) {
+	cur, ok := e.get()
+	if !ok {
+		return AlignmentSample{}, false, SwitchableEngineNoBindingReason
+	}
+	return ObserveEngineAlignment(ctx, cur, handle)
+}

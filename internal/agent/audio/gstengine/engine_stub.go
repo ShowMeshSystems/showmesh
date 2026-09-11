@@ -125,3 +125,11 @@ func (e *Engine) PresentedElapsed(_ context.Context) (time.Duration, bool, strin
 func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
 	return agentaudio.GlitchCounts{}, false
 }
+
+var _ agentaudio.AlignmentObserver = (*Engine)(nil)
+
+// Alignment reports not known: this build has no GStreamer backend, so
+// there is no pipeline, no branch, and no LTC generator to sample.
+func (e *Engine) Alignment(context.Context, agentaudio.EngineHandle) (agentaudio.AlignmentSample, bool, string) {
+	return agentaudio.AlignmentSample{}, false, unavailableReason
+}

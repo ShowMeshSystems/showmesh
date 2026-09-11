@@ -323,10 +323,66 @@ func TestSessionItemGapNotCollectedWhenUnknown(t *testing.T) {
 	}
 }
 
-// TestClockAlignmentAlwaysNotCollected proves nothing in this
-// seam ever reports program-to-LTC alignment as measured, regardless of
-// program/LTC bus state.
-func TestClockAlignmentAlwaysNotCollected(t *testing.T) {
+// TestClockAlignmentMeasuredYieldsValueAtTheSampleTime proves a measured
+// payload renders node.audio.clock.alignment as a real value, stamped
+// with the NODE's own sample time, never the coordinator's receipt time:
+// the whole point of a separate AlignmentSampledAt field.
+func TestClockAlignmentMeasuredYieldsValueAtTheSampleTime(t *testing.T) {
+	st := NewStore()
+	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	receivedAt := sampledAt.Add(time.Minute)
+	p := samplePayload()
+	p.AlignmentMeasured = true
+	p.AlignmentOffsetMs = -42
+	p.AlignmentSampledAt = &sampledAt
+	p.AlignmentSessionID = "show"
+	st.Put("audio-01", p, receivedAt)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	align := findObs(t, obs, SignalClockAlignment)
+	if align.Absence != "" {
+		t.Errorf("clock alignment absence = %q, want collected", align.Absence)
+	}
+	if align.Value != int64(-42) {
+		t.Errorf("clock alignment value = %v, want -42", align.Value)
+	}
+	if align.ObservedAt == nil || !align.ObservedAt.Equal(sampledAt) {
+		t.Errorf("clock alignment observedAt = %v, want the node's own sample time %v, never the receipt time", align.ObservedAt, sampledAt)
+	}
+}
+
+// TestClockAlignmentUnmeasuredYieldsNotCollectedWithNodeReason proves an
+// unmeasured payload with its own stated reason reports not_collected
+// carrying THAT reason, never a fabricated value.
+func TestClockAlignmentUnmeasuredYieldsNotCollectedWithNodeReason(t *testing.T) {
+	st := NewStore()
+	p := samplePayload()
+	p.AlignmentMeasured = false
+	p.AlignmentReason = "program branch has not rendered up to its presented position; underrun suspected"
+	st.Put("audio-01", p, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	align := findObs(t, obs, SignalClockAlignment)
+	if align.Absence != observation.StateNotCollected {
+		t.Errorf("clock alignment absence = %q, want %q", align.Absence, observation.StateNotCollected)
+	}
+	if align.Value != nil {
+		t.Errorf("clock alignment value = %v, want nil (never inferred)", align.Value)
+	}
+	if align.Reason != p.AlignmentReason {
+		t.Errorf("clock alignment reason = %q, want the node's own reason %q", align.Reason, p.AlignmentReason)
+	}
+}
+
+// TestClockAlignmentOlderAgentYieldsFallbackReason proves a payload from
+// an agent built before the alignment* fields existed (the whole block
+// omitted, AlignmentReason empty) reports not_collected with this
+// package's own fallback reason, never an empty one.
+func TestClockAlignmentOlderAgentYieldsFallbackReason(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayload(), time.Now())
 	c := New(st)
@@ -339,8 +395,8 @@ func TestClockAlignmentAlwaysNotCollected(t *testing.T) {
 	if align.Value != nil {
 		t.Errorf("clock alignment value = %v, want nil (never inferred)", align.Value)
 	}
-	if align.Reason == "" {
-		t.Error("clock alignment reason is empty, want a stated explanation")
+	if align.Reason != alignmentAbsentFallbackReason {
+		t.Errorf("clock alignment reason = %q, want the fallback reason %q", align.Reason, alignmentAbsentFallbackReason)
 	}
 }
 

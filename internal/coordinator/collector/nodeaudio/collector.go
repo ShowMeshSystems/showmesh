@@ -16,11 +16,12 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// noAlignmentMeasurementReason is [SignalClockAlignment]'s standing
-// reason: no runtime path in this seam measures program-to-LTC alignment
-// — see that signal's own doc comment for why it may never be inferred
-// from anything else this package already reports.
-const noAlignmentMeasurementReason = "no program-to-LTC alignment measurement is implemented; nothing in this seam can measure it"
+// alignmentAbsentFallbackReason is [alignmentObservation]'s reason for a
+// node whose payload carries [mqttproto.AudioPayload.AlignmentMeasured]
+// false with no reason of its own: an agent built before the alignment*
+// fields existed, which omits the whole block rather than explaining its
+// absence.
+const alignmentAbsentFallbackReason = "this node's agent build does not report program-to-LTC alignment"
 
 // timelineAbsentReason states why a timeline signal carries no value.
 // The node's own [mqttproto.AudioPayload.TimelineReason] is preferred
@@ -90,6 +91,25 @@ func timelineObservations(nodeID string, p mqttproto.AudioPayload, observedAt *t
 		)
 	}
 	return obs
+}
+
+// alignmentObservation renders node.audio.clock.alignment from the node's
+// own report. observedAt is the node's own [mqttproto.AudioPayload.
+// AlignmentSampledAt], never rep.receivedAt: a sample taken on an earlier
+// tick and republished unchanged must age exactly like any other stale
+// evidence, not read as current because the report that carried it just
+// arrived.
+func alignmentObservation(nodeID string, p mqttproto.AudioPayload, rep report) observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+	if p.AlignmentMeasured {
+		return buildValue(nodeID, SignalClockAlignment, p.AlignmentOffsetMs, p.AlignmentSampledAt, rep)
+	}
+	reason := p.AlignmentReason
+	if reason == "" {
+		reason = alignmentAbsentFallbackReason
+	}
+	return notCollected(res, SignalClockAlignment, source, reason, rep.receivedAt)
 }
 
 // ltcFrameRateAbsentReason states why a node reports no frame rate, which
@@ -229,7 +249,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 		)
 	}
 
-	obs = append(obs, notCollected(res, SignalClockAlignment, source, noAlignmentMeasurementReason, rep.receivedAt))
+	obs = append(obs, alignmentObservation(nodeID, p, rep))
 
 	obs = append(obs,
 		buildValue(nodeID, SignalLTCGeneratorState, p.LTCGeneratorState, observedAt, rep),

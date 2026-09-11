@@ -42,6 +42,12 @@ type audioSessionSnapshotter interface {
 	// applySettingsStatus, which this report loop calls fresh on every
 	// tick, matching Snapshot's own live-not-cached rule.
 	SettingsSubstitution() (state audio.SettingsState, fields []string, reason string)
+
+	// AlignmentSnapshot is [audio.Manager.AlignmentSnapshot]'s own
+	// signature: this node's node.audio.clock.alignment evidence, sampled
+	// fresh on every tick -- see applyAlignment, matching Snapshot's own
+	// live-not-cached rule.
+	AlignmentSnapshot(ctx context.Context) audio.AlignmentSnapshot
 }
 
 // ltcObserver is the read side of this node's LTC generation — fresh
@@ -139,6 +145,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 		applyEngineGlitchCounts(&payload, engine)
 		applyEngineRestoreStatus(&payload, mgr, tickAt)
 		applyTimeline(ctx, &payload, mgr)
+		applyAlignment(ctx, &payload, mgr)
 		applySettingsStatus(&payload, mgr)
 		publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 	}
@@ -631,4 +638,25 @@ func applyTimeline(ctx context.Context, payload *mqttproto.AudioPayload, mgr aud
 	payload.TimelineExpectedMs = t.ExpectedMs
 	payload.TimelineActualMs = t.ActualMs
 	payload.TimelineErrorMs = t.ErrorMs
+}
+
+// applyAlignment writes mgr's current program-to-LTC alignment onto
+// payload's Alignment* fields, fresh on every call -- matching
+// [applyTimeline]'s own live-not-cached rule. A nil mgr leaves every
+// field zero, which reads on the wire as this node measuring no
+// alignment, never as a session perfectly aligned.
+func applyAlignment(ctx context.Context, payload *mqttproto.AudioPayload, mgr audioSessionSnapshotter) {
+	if mgr == nil {
+		return
+	}
+	a := mgr.AlignmentSnapshot(ctx)
+	payload.AlignmentSessionID = string(a.SessionID)
+	payload.AlignmentReason = a.Reason
+	if !a.Measured {
+		return
+	}
+	payload.AlignmentMeasured = true
+	payload.AlignmentOffsetMs = a.OffsetMs
+	sampledAt := a.SampledAt
+	payload.AlignmentSampledAt = &sampledAt
 }

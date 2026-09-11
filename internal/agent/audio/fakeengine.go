@@ -61,6 +61,14 @@ type FakeEngine struct {
 	// presentedAdjust.
 	presentedEpoch  time.Time
 	presentedAdjust time.Duration
+
+	// alignmentKnown/alignmentSample/alignmentReason are what
+	// [FakeEngine.Alignment] reports, test-injected via [FakeEngine.
+	// SetAlignment]/[FakeEngine.SetAlignmentUnknown]. Nothing in
+	// production writes them; a fresh FakeEngine reports not known.
+	alignmentKnown  bool
+	alignmentSample AlignmentSample
+	alignmentReason string
 }
 
 // fakeLTCNeverStartedReason is FakeEngine's LTC state before StartLTC is
@@ -104,9 +112,16 @@ type fakeFade struct {
 	runningSince time.Time
 }
 
+// fakeAlignmentNotInjectedReason is what a fresh FakeEngine reports from
+// Alignment before any test has called SetAlignment/SetAlignmentUnknown.
+const fakeAlignmentNotInjectedReason = "fake engine: no alignment sample has been injected"
+
 // NewFakeEngine returns a FakeEngine using now for its internal clock.
 func NewFakeEngine(now func() time.Time) *FakeEngine {
-	return &FakeEngine{now: now, handles: make(map[EngineHandle]*fakeHandle), failNext: make(map[EngineHandle]error), presentedEpoch: now()}
+	return &FakeEngine{
+		now: now, handles: make(map[EngineHandle]*fakeHandle), failNext: make(map[EngineHandle]error),
+		presentedEpoch: now(), alignmentReason: fakeAlignmentNotInjectedReason,
+	}
 }
 
 // InjectFailure arms handle so its next call to Load, Start, Pause,
@@ -493,4 +508,37 @@ func (e *FakeEngine) SetPresentedAdjust(d time.Duration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.presentedAdjust = d
+}
+
+// SetAlignment injects sample as what [FakeEngine.Alignment] reports next,
+// known=true, for every handle: a fake has no real per-branch mixer
+// mapping to derive this from, so a test states the raw quantities
+// directly. Test-only: nothing in production calls it.
+func (e *FakeEngine) SetAlignment(sample AlignmentSample) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.alignmentKnown = true
+	e.alignmentSample = sample
+	e.alignmentReason = ""
+}
+
+// SetAlignmentUnknown makes [FakeEngine.Alignment] report known=false with
+// reason, for a test proving the not-measured path. Test-only: nothing in
+// production calls it.
+func (e *FakeEngine) SetAlignmentUnknown(reason string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.alignmentKnown = false
+	e.alignmentSample = AlignmentSample{}
+	e.alignmentReason = reason
+}
+
+// Alignment reports this fake's injected alignment evidence, ignoring
+// handle: a fake has no real per-handle branch to distinguish. Never
+// evidence of a real speaker or a real LTC generator, exactly as this
+// type's own doc comment says of everything else here.
+func (e *FakeEngine) Alignment(_ context.Context, _ EngineHandle) (AlignmentSample, bool, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.alignmentSample, e.alignmentKnown, e.alignmentReason
 }
