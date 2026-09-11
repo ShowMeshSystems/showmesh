@@ -116,18 +116,21 @@ func TestPausedBranchStopsBufferFlow(t *testing.T) {
 		}
 	}
 
-	// Resume must let flow resume: a probe that never counts again would
-	// mean this test is only proving a permanently dead branch.
+	// Resume must let flow resume. A joined branch's own Resume never
+	// flush-seeks it in place (see doc.go / methods.go's swapToPosition):
+	// "pf1" now names a freshly built replacement branch with its own
+	// queue, so the probe that proved silence above cannot observe it:
+	// re-arm it against whatever branch the handle resolves to now.
 	if _, err := e.Resume(ctx, "pf1"); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	afterResume := count()
+	resumedCount := countQueueSrcBuffers(t, e, "pf1")
 	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && count() == afterResume {
+	for time.Now().Before(deadline) && resumedCount() == 0 {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if count() == afterResume {
-		t.Fatalf("no buffers flowed on pf1's queue src pad within 2s of Resume")
+	if resumedCount() == 0 {
+		t.Fatalf("no buffers flowed on the resumed branch's queue src pad within 2s of Resume")
 	}
 
 	_ = e.Release(context.Background(), "pf1")

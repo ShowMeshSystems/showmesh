@@ -39,6 +39,10 @@ type branch struct {
 	filesrcName   string
 	decodebinName string
 
+	// path is the resolved media file build linked filesrc to, read by
+	// swapToPosition to build a replacement for the same media.
+	path string
+
 	// elementNames holds the GStreamer names of every element in
 	// elements(), computed ahead of construction so [Engine.indexBranch]
 	// can register them before the elements themselves exist — see that
@@ -53,8 +57,25 @@ type branch struct {
 	readyOnce sync.Once
 	loadErrCh chan error
 
-	eosCh   chan struct{}
-	eosOnce sync.Once
+	// holdProbeID is the buffer-only BLOCK probe on queue's own SRC pad
+	// that parks this branch's data off the mixer until join removes it.
+	// Guarded by mu; 0 once removed.
+	holdProbeID uint32
+
+	// heldSeq counts every buffer the hold probe has captured. prepare
+	// snapshots it before seeking and waits for it to advance, telling a
+	// post-seek buffer apart from one already parked before the seek.
+	heldSeq atomic.Uint64
+
+	// joined is true once join has linked this branch to the mixer.
+	// Start, Seek, and Resume flush-seek in place only while false; once
+	// true they swap in a replacement instead (see methods.go).
+	joined bool
+
+	// eosSeq counts every real EOS onEOS has observed, incremented before
+	// its early return, so a Completed branch's later re-prepare can
+	// still tell a fresh EOS apart from one already accounted for.
+	eosSeq atomic.Uint64
 
 	media    pkgaudio.MediaRef
 	duration time.Duration
@@ -98,7 +119,11 @@ type branch struct {
 	// the controller is anchored to fadeStartPos exactly as given, so it
 	// already matches fadeSyncedPos's own clock; that gap was entirely
 	// on the other side of fadeArrived's subtraction.
-	fadeStartPos   time.Duration
+	fadeStartPos time.Duration
+	// fadeStartGain is the ramp's value at fadeStartPos, recorded once
+	// when the fade starts: reproducing the curve later (a swap
+	// replacement) must use this, never gain sampled after it decayed.
+	fadeStartGain  pkgaudio.Gain
 	fadeDuration   time.Duration
 	fadeTargetGain pkgaudio.Gain
 
@@ -207,6 +232,7 @@ const queueMaxSizeTime = 100 * time.Millisecond
 func (b *branch) build(path string) error {
 	e := b.engine
 	n := len(e.cfg.ProgramChannels)
+	b.path = path
 
 	name := func(role string) string { return fmt.Sprintf("h%d-%s", b.id, role) }
 	b.filesrcName = name("filesrc")
@@ -258,22 +284,13 @@ func (b *branch) build(path string) error {
 		return fmt.Errorf("gstengine: could not link branch decode chain")
 	}
 
+	// Mixer sink pads are requested only at join, not here: a branch
+	// that has never joined must be seekable entirely off the mixer.
 	b.channelMixerPads = make([]gst.Pad, n)
 	b.deinterleaveSrcPads = make([]gst.Pad, n)
-	for k := 0; k < n; k++ {
-		pad := e.channelMixers[k].RequestPadSimple("sink_%u")
-		if pad == nil {
-			return fmt.Errorf("gstengine: channel mixer %d refused a sink pad request", k)
-		}
-		b.channelMixerPads[k] = pad
-		pad.AddProbe(gst.PadProbeTypeBlock|gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
-			return gst.PadProbeRemove
-		})
-	}
 
 	b.readyCh = make(chan struct{})
 	b.loadErrCh = make(chan error, 1)
-	b.eosCh = make(chan struct{})
 
 	b.decodebin.Connect("pad-added", func(self gst.Element, pad gst.Pad) {
 		if !isAudioPad(pad) {
@@ -296,16 +313,11 @@ func (b *branch) build(path string) error {
 		if !ok || idx < 0 || idx >= n {
 			return
 		}
-		if pad.Link(b.channelMixerPads[idx]) != gst.PadLinkOK {
-			select {
-			case b.loadErrCh <- fmt.Errorf("%w: deinterleave output %d would not link to its channel mixer", pkgaudio.ErrEngineDecodeFailure, idx):
-			default:
-			}
-			return
-		}
+		// Not linked to a mixer here: join does that once this branch is
+		// ready to actually feed the mix (see join in this file).
 		b.deinterleaveSrcPads[idx] = pad
 		if b.linkedCount.Add(1) == int32(n) {
-			b.readyOnce.Do(func() { close(b.readyCh) })
+			b.maybeReady()
 		}
 	})
 
@@ -325,7 +337,8 @@ func (b *branch) build(path string) error {
 	// on its own, distinct from a pipeline-wide EOS this engine never
 	// expects to see (the shared output pipeline never runs out of
 	// input — silence and other branches keep it alive).
-	b.queue.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventDownstream, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	queueSrc := b.queue.GetStaticPad("src")
+	queueSrc.AddProbe(gst.PadProbeTypeEventDownstream, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		ev := info.GetEvent()
 		if ev != nil && ev.GetType() == gst.EventEOS {
 			b.onEOS()
@@ -333,7 +346,29 @@ func (b *branch) build(path string) error {
 		return gst.PadProbeOK
 	})
 
+	// The hold (see holdProbeID): buffer-only, so events still reach
+	// deinterleave and let it create its pads, but no buffer crosses
+	// until join removes the probe.
+	b.holdProbeID = queueSrc.AddProbe(gst.PadProbeTypeBlock|gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		b.heldSeq.Add(1)
+		b.maybeReady()
+		return gst.PadProbeOK
+	})
+
 	return nil
+}
+
+// maybeReady closes readyCh once every deinterleave src pad exists and
+// a buffer is parked at the hold. Called from both signals; readyOnce
+// makes the double-call safe.
+func (b *branch) maybeReady() {
+	n := int32(len(b.deinterleaveSrcPads))
+	if n == 0 {
+		return
+	}
+	if b.linkedCount.Load() == n && b.heldSeq.Load() >= 1 {
+		b.readyOnce.Do(func() { close(b.readyCh) })
+	}
 }
 
 // deinterleavePadIndex parses deinterleave's "src_%u" pad name into its
@@ -361,6 +396,7 @@ func (b *branch) reportLoadError(err error) {
 }
 
 func (b *branch) onEOS() {
+	b.eosSeq.Add(1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state == pkgaudio.StateStopped || b.state == pkgaudio.StateCompleted {
@@ -369,7 +405,6 @@ func (b *branch) onEOS() {
 	b.state = pkgaudio.StateCompleted
 	b.frozen = true
 	b.frozenAt = b.duration
-	b.eosOnce.Do(func() { close(b.eosCh) })
 }
 
 // setElementsState sets every branch element to state, bounded by ctx.
@@ -544,27 +579,9 @@ func (b *branch) pipelineRunningTime() time.Duration {
 	return time.Duration(rt)
 }
 
-// resyncMixerPads re-anchors every channel mixer sink pad this branch
-// feeds so the next buffer lands at the shared pipeline's current
-// running time rather than in GstAudioAggregator's past, which keeps
-// advancing in real time regardless of whether this branch is playing.
-// Callers run this synchronously, before the state change that resumes
-// data flow. atPos is a value the caller already committed to (a seek
-// target, or a position sampled immediately before calling this), so
-// only pipelineRunningTime is read here.
-//
-// This synchronous read is measurably early by however long it then
-// takes decode to actually restart and this branch's own queue to
-// refill: a deferred version that instead computed and applied the
-// offset from inside a probe on each pad's first post-resync buffer was
-// attempted and reverted: it regressed TestStartAfterLoadGapPlaysFrom
-// NamedPosition and TestSeekAfterGapReanchors outright (the branch build
-// pad-added path installs its own first-buffer block probe on the same
-// pad, and a second, later-registered one did not reliably still fire
-// once the first satisfied the block), and did not improve
-// TestResumeDoesNotDiscardTheHeldDuration either. See
-// docs/build/BUILD-LOG.md for the measured per-resume loss this leaves
-// as a named limitation rather than a silently accepted one.
+// resyncMixerPads re-anchors this branch's deinterleave src pads so the
+// next buffer lands at the pipeline's current running time, not in
+// GstAudioAggregator's past. join is the only caller, while held.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
 	offset := int64(b.pipelineRunningTime()) - b.localRunningTime(atPos).Nanoseconds()
 	// A pad offset is only reliable on a source pad, so this offsets deinterleave's src pads, not the mixer's sink pads.
@@ -573,6 +590,125 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 			pad.SetOffset(offset)
 		}
 	}
+}
+
+// prepare seeks to position, then waits, bounded only by ctx, for the
+// first post-seek buffer to reach the hold, or for that seek to land at
+// or past EOS instead; reachedEOS tells the two apart, since onEOS has
+// already set state and frozenAt for the EOS case by the time this
+// returns. When the seek instead holds a buffer, prepare resets a
+// leftover Completed state from an earlier EOS back to Ready, matching
+// what a freshly built, never-joined branch would report. Run only on a
+// branch not yet joined. A ctx-driven failure from either step marks
+// anchorUnknown.
+func (b *branch) prepare(ctx context.Context, position time.Duration) (reachedEOS bool, err error) {
+	b.unblockFlow()
+	beforeHeld := b.heldSeq.Load()
+	beforeEOS := b.eosSeq.Load()
+	if err := b.seekTo(ctx, position, nil); err != nil {
+		return false, err
+	}
+	reachedEOS, err = b.awaitHeldOrEOS(ctx, beforeHeld, beforeEOS)
+	if err != nil {
+		b.markAnchorUnknownOnCtxTimeout(err)
+		return false, err
+	}
+	if !reachedEOS {
+		b.mu.Lock()
+		if b.state == pkgaudio.StateCompleted {
+			b.state = pkgaudio.StateReady
+		}
+		b.mu.Unlock()
+	}
+	return reachedEOS, nil
+}
+
+// awaitHeldOrEOS blocks until heldSeq advances past beforeHeld (a buffer
+// reached the hold), eosSeq advances past beforeEOS (the seek landed at
+// or past the last sample, so no buffer will ever be held), or ctx ends.
+// No fixed timeout, the same rule awaitNoElementRace follows.
+func (b *branch) awaitHeldOrEOS(ctx context.Context, beforeHeld, beforeEOS uint64) (reachedEOS bool, err error) {
+	for {
+		if b.heldSeq.Load() > beforeHeld {
+			return false, nil
+		}
+		if b.eosSeq.Load() > beforeEOS {
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+}
+
+// join requests mixer sink pads, resyncs offsets at atPos, links them,
+// and releases the hold only when releaseHold is true: for a paused or
+// stopped target, only the retained hold keeps queue's buffer silent.
+func (b *branch) join(atPos time.Duration, releaseHold bool) error {
+	e := b.engine
+	n := len(e.cfg.ProgramChannels)
+	for k := 0; k < n; k++ {
+		pad := e.channelMixers[k].RequestPadSimple("sink_%u")
+		if pad == nil {
+			return fmt.Errorf("gstengine: channel mixer %d refused a sink pad request during join", k)
+		}
+		b.channelMixerPads[k] = pad
+	}
+	b.resyncMixerPads(atPos)
+	for k := 0; k < n; k++ {
+		if b.deinterleaveSrcPads[k].Link(b.channelMixerPads[k]) != gst.PadLinkOK {
+			return fmt.Errorf("gstengine: could not link deinterleave output %d to its channel mixer during join", k)
+		}
+	}
+	if releaseHold {
+		b.removeHold()
+	}
+	b.mu.Lock()
+	b.joined = true
+	b.mu.Unlock()
+	return nil
+}
+
+// removeHold detaches the hold probe join installed at build, letting
+// this branch's buffers reach its now-linked mixer pads. A no-op once
+// already removed.
+func (b *branch) removeHold() {
+	b.mu.Lock()
+	id := b.holdProbeID
+	b.holdProbeID = 0
+	b.mu.Unlock()
+	if id != 0 {
+		b.queue.GetStaticPad("src").RemoveProbe(id)
+	}
+}
+
+// removeHoldForTeardown starts a flush on queue's src pad and leaves it
+// flushing, so any held or in-flight buffer is dropped instead of
+// reaching deinterleave's still-unlinked pads (NOT_LINKED). It never
+// sends FLUSH_STOP: that could clear FLUSHING before a woken streaming
+// thread rechecks it, letting a held buffer through anyway. NULL state
+// clears the flag on deactivation.
+func (b *branch) removeHoldForTeardown() {
+	b.mu.Lock()
+	id := b.holdProbeID
+	b.mu.Unlock()
+	if id == 0 {
+		return
+	}
+	pad := b.queue.GetStaticPad("src")
+	pad.PushEvent(gst.NewEventFlushStart())
+	b.removeHold()
+}
+
+// hasJoined reports whether join has already linked this branch to the
+// shared mixers, which Start, Seek, and Resume use to choose between an
+// in-place flush-seek and a swap (see methods.go).
+func (b *branch) hasJoined() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.joined
 }
 
 func (b *branch) currentGain() pkgaudio.Gain {
@@ -641,6 +777,15 @@ func gainWithin(g, target pkgaudio.Gain, tolerance float64) bool {
 		diff = -diff
 	}
 	return diff <= tolerance
+}
+
+// currentState returns b.state. Seek uses this to keep a swap's
+// replacement in whatever state the branch it replaces was already in,
+// since Seek's own contract never changes it.
+func (b *branch) currentState() pkgaudio.State {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state
 }
 
 func (b *branch) setState(s pkgaudio.State) {
@@ -733,16 +878,16 @@ func (b *branch) unfreeze() {
 	b.mu.Unlock()
 }
 
-// gstController is the pair a Fade dispatches: a fresh interpolation
-// source and the absolute binding driving b.volume's "volume" property
-// from it. NewDirectControlBindingAbsolute is required, not New() — the
-// latter maps a 0..1 control value onto the property's full 0..10 range
-// and turns a requested gain of 1.0 into a 10x boost (measured in the
-// phase 1 spike, bench/audio-node/spike-phase1). basePos is the branch's
-// raw stream position when the fade starts, the same clock GstController
-// itself evaluates buffers against (their own PTS), not
-// segmentStart-relative local running time, which a later seek resets.
+// startFade dispatches a fade sampling the branch's own current gain as
+// the ramp's start value. See startFadeFrom.
 func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
+	return b.startFadeFrom(fade, basePos, b.currentGain())
+}
+
+// startFadeFrom ramps from startGain at basePos to fade.TargetGain at
+// basePos+fade.Duration, keyed on buffer PTS. Use NewDirectControlBindingAbsolute,
+// not New(), which maps onto 0..10 and turns a gain of 1.0 into a 10x boost.
+func (b *branch) startFadeFrom(fade pkgaudio.Fade, basePos time.Duration, startGain pkgaudio.Gain) error {
 	volObj := b.volume.(gst.Object)
 	volObj.SetControlBindingDisabled("volume", false)
 
@@ -757,9 +902,8 @@ func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
 	}
 	csObj.SetObjectProperty("mode", gstcontroller.InterpolationModeLinear)
 
-	start := float64(b.currentGain())
 	base := gst.ClockTime(basePos.Nanoseconds())
-	tvcs.Set(base, start)
+	tvcs.Set(base, float64(startGain))
 	tvcs.Set(base+gst.ClockTime(fade.Duration), float64(fade.TargetGain))
 
 	binding := gstcontroller.NewDirectControlBindingAbsolute(volObj, "volume", cs)
@@ -770,15 +914,14 @@ func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
 	b.mu.Lock()
 	b.fadeActive = true
 	b.fadeStartPos = basePos
+	b.fadeStartGain = startGain
 	b.fadeDuration = fade.Duration
 	b.fadeTargetGain = fade.TargetGain
 	b.fadeSyncedPos = basePos
 	b.mu.Unlock()
-	// A fade dispatched while an earlier one is still active supersedes
-	// it without an intervening cancelFade (see Engine.Fade), so any
-	// probe that earlier fade installed must go before this one installs
-	// its own, or the superseded probe would keep paying its per-buffer
-	// cost forever with no fade left to serve.
+	// A superseding fade (see Engine.Fade) must remove the prior fade's
+	// probe before installing its own, or the superseded probe keeps
+	// paying its per-buffer cost with no fade left to serve.
 	b.removeFadeSyncProbe()
 	b.installFadeSyncProbe()
 	return nil

@@ -9,53 +9,80 @@ import (
 	"testing"
 )
 
-// TestResumeReanchorsViaFlushingSeek guards Resume against going back to
-// an offset-only re-anchor (resyncMixerPads/resyncMixerPadsToLivePosition
-// called on their own, without a seek): GstAudioAggregator keeps
-// advancing its own output clock for the whole hold, so buffers still
-// carrying pre-hold timestamps land in its past and are discarded
-// outright rather than played back late. Only a real seek gives the
-// branch a fresh segment the aggregator will actually accept; see
-// engine_real_integration_test.go's resume-continuity tests for the
-// flow-level proof.
-func TestResumeReanchorsViaFlushingSeek(t *testing.T) {
+// findFuncDecl parses filename and returns the top-level function or
+// method named fn, or nil if it is not there.
+func findFuncDecl(t *testing.T, filename, fn string) *ast.FuncDecl {
+	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
+	f, err := parser.ParseFile(fset, filename, nil, 0)
 	if err != nil {
-		t.Fatalf("parsing methods.go: %v", err)
+		t.Fatalf("parsing %s: %v", filename, err)
 	}
-
-	var fn *ast.FuncDecl
+	var found *ast.FuncDecl
 	ast.Inspect(f, func(n ast.Node) bool {
 		d, ok := n.(*ast.FuncDecl)
-		if ok && d.Name.Name == "Resume" {
-			fn = d
+		if ok && d.Name.Name == fn {
+			found = d
 			return false
 		}
 		return true
 	})
-	if fn == nil {
-		t.Fatal("could not find func (e *Engine) Resume in methods.go")
-	}
+	return found
+}
 
-	callsSeekTo := false
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
+// callsSelector reports whether body calls a method or function named
+// name anywhere in its statements.
+func callsSelector(body ast.Node, name string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if sel.Sel.Name == "seekTo" {
-			callsSeekTo = true
+		switch fn := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == name {
+				found = true
+			}
+		case *ast.Ident:
+			if fn.Name == name {
+				found = true
+			}
 		}
 		return true
 	})
+	return found
+}
 
-	if !callsSeekTo {
-		t.Fatal("Resume no longer calls seekTo: an offset-only re-anchor discards the entire held duration once " +
-			"GstAudioAggregator's own output clock has moved past the branch's pre-hold segment")
+// TestResumeReanchorsViaFlushingSeek guards Resume against going back to
+// an offset-only re-anchor: GstAudioAggregator keeps advancing its own
+// output clock for the whole hold, so buffers still carrying pre-hold
+// timestamps land in its past and are discarded outright rather than
+// played back late. Resume never flush-seeks the branch it was called
+// on in place (see swapToPosition's own doc comment); instead it builds
+// a replacement and calls prepare on it, which is the one place a real
+// flushing seek is issued and confirmed against the hold. This checks
+// both hops: Resume calls swapToPosition, and swapToPosition calls
+// prepare. See engine_real_integration_test.go's resume-continuity
+// tests for the flow-level proof.
+func TestResumeReanchorsViaFlushingSeek(t *testing.T) {
+	resumeFn := findFuncDecl(t, "methods.go", "Resume")
+	if resumeFn == nil {
+		t.Fatal("could not find func (e *Engine) Resume in methods.go")
+	}
+	if !callsSelector(resumeFn.Body, "swapToPosition") {
+		t.Fatal("Resume no longer calls swapToPosition: a joined branch must never be flush-seeked in place, " +
+			"since GstAudioAggregator's own output clock keeps advancing for the whole hold and discards buffers " +
+			"still carrying pre-hold timestamps")
+	}
+
+	swapFn := findFuncDecl(t, "methods.go", "swapToPosition")
+	if swapFn == nil {
+		t.Fatal("could not find func (e *Engine) swapToPosition in methods.go")
+	}
+	if !callsSelector(swapFn.Body, "prepare") {
+		t.Fatal("swapToPosition no longer calls prepare on its replacement branch: without a real flushing seek " +
+			"confirmed against the hold, the replacement's segment cannot be trusted to start at the position " +
+			"this swap committed to")
 	}
 }

@@ -60,6 +60,16 @@ type Engine struct {
 	mu      sync.Mutex
 	handles map[agentaudio.EngineHandle]*branch
 
+	// inFlightReplacements holds every swap replacement built but not
+	// yet swapped into handles or torn down, never reachable through
+	// handles, so Close must sweep it too. Guarded by e.mu.
+	inFlightReplacements map[*branch]struct{}
+
+	// retiringBranches holds every branch a swap has already muted and
+	// re-pointed handles away from, whose teardown is still running on
+	// its own goroutine (see retireAsync). Guarded by e.mu.
+	retiringBranches map[*branch]struct{}
+
 	// elementIndex maps every one of a branch's own element names (all
 	// eight from [branch.elements], not only filesrc/decodebin — every
 	// one of them is a direct sibling in the shared pipeline, per
@@ -138,11 +148,13 @@ func New(cfg Config) (*Engine, error) {
 	gst.Init()
 
 	e := &Engine{
-		cfg:          cfg,
-		handles:      make(map[agentaudio.EngineHandle]*branch),
-		elementIndex: make(map[string]*branch),
-		done:         make(chan struct{}),
-		startedAt:    time.Now(),
+		cfg:                  cfg,
+		handles:              make(map[agentaudio.EngineHandle]*branch),
+		inFlightReplacements: make(map[*branch]struct{}),
+		retiringBranches:     make(map[*branch]struct{}),
+		elementIndex:         make(map[string]*branch),
+		done:                 make(chan struct{}),
+		startedAt:            time.Now(),
 	}
 
 	if reason := e.checkPrerequisites(); reason != "" {
@@ -206,10 +218,12 @@ func (e *Engine) releaseAfterFailedBuild() {
 // It holds no device and needs no Close, though Close is safe.
 func NewUnavailable(reason string) *Engine {
 	return &Engine{
-		availReason:  reason,
-		handles:      make(map[agentaudio.EngineHandle]*branch),
-		elementIndex: make(map[string]*branch),
-		done:         make(chan struct{}),
+		availReason:          reason,
+		handles:              make(map[agentaudio.EngineHandle]*branch),
+		inFlightReplacements: make(map[*branch]struct{}),
+		retiringBranches:     make(map[*branch]struct{}),
+		elementIndex:         make(map[string]*branch),
+		done:                 make(chan struct{}),
 	}
 }
 
@@ -289,10 +303,19 @@ func (e *Engine) Close() error {
 		e.markBroken(closedReason)
 		close(e.done)
 		e.mu.Lock()
-		branches := make([]*branch, 0, len(e.handles))
+		branches := make([]*branch, 0, len(e.handles)+len(e.inFlightReplacements)+len(e.retiringBranches))
 		for h, b := range e.handles {
 			branches = append(branches, b)
 			delete(e.handles, h)
+		}
+		// Neither set is reachable through handles; their own goroutines
+		// own removing entries, so this only reads them. teardown is
+		// idempotent, so racing one of those goroutines is harmless.
+		for b := range e.inFlightReplacements {
+			branches = append(branches, b)
+		}
+		for b := range e.retiringBranches {
+			branches = append(branches, b)
 		}
 		e.mu.Unlock()
 		var wg sync.WaitGroup
@@ -907,6 +930,21 @@ func (e *Engine) unindexBranch(b *branch) {
 	for _, name := range b.elementNames {
 		delete(e.elementIndex, name)
 	}
+}
+
+// trackReplacement and untrackReplacement add and remove b from
+// inFlightReplacements; see that field's doc comment for why Close needs
+// this set at all.
+func (e *Engine) trackReplacement(b *branch) {
+	e.mu.Lock()
+	e.inFlightReplacements[b] = struct{}{}
+	e.mu.Unlock()
+}
+
+func (e *Engine) untrackReplacement(b *branch) {
+	e.mu.Lock()
+	delete(e.inFlightReplacements, b)
+	e.mu.Unlock()
 }
 
 // classifyBranchError maps a branch-scoped GStreamer error onto this

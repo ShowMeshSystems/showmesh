@@ -80,12 +80,15 @@ func TestStartLeavesFlowBlockedWhenItsOwnSeekTimesOut(t *testing.T) {
 	_ = e.Release(context.Background(), handle)
 }
 
-// TestSeekOnPausedBranchNeverTouchesTheFlowBlock establishes why this
-// package's own Start, not Seek, is the only call site the ordering
-// hazard above reaches: Seek's implementation (methods.go) never calls
-// unblockFlow or blockFlow at all, so a paused branch stays paused
-// across a Seek regardless of call order. This is a direct runtime
-// check of that, not an inference from reading the source.
+// TestSeekOnPausedBranchNeverTouchesTheFlowBlock proves Seek on a paused,
+// already-joined branch never lets flow resume. Seek on a branch that has
+// already joined the mixer swaps in a replacement rather than
+// flush-seeking in place (see swapToPosition), and passes its own
+// currentState -- here StatePaused -- as the replacement's target, so
+// swapToPosition blocks the replacement's own flow before join ever
+// removes its hold. The handle names a different branch object after
+// this Seek, so the block is checked on whatever branch it resolves to
+// now, not on the one captured before the call.
 func TestSeekOnPausedBranchNeverTouchesTheFlowBlock(t *testing.T) {
 	e := newTestEngine(t)
 	dir := t.TempDir()
@@ -108,10 +111,6 @@ func TestSeekOnPausedBranchNeverTouchesTheFlowBlock(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	count := countQueueSrcBuffers(t, e, handle)
-	time.Sleep(4 * queueMaxSizeTime)
-	baseline := count()
-
 	if _, err := e.Seek(ctx, handle, 3*time.Second); err != nil {
 		t.Fatalf("Seek on a paused branch: %v", err)
 	}
@@ -124,13 +123,14 @@ func TestSeekOnPausedBranchNeverTouchesTheFlowBlock(t *testing.T) {
 	stillBlocked := b.blockProbeID != 0
 	b.mu.Unlock()
 	if !stillBlocked {
-		t.Fatalf("Seek on a paused branch released its flow block: Seek must never touch blockFlow/unblockFlow")
+		t.Fatalf("Seek on a paused branch left its resolved branch unblocked: Seek must never let flow resume")
 	}
 
+	count := countQueueSrcBuffers(t, e, handle)
 	const settle = 500 * time.Millisecond
 	time.Sleep(settle)
-	if got := count(); got != baseline {
-		t.Fatalf("branch produced %d buffer(s) in the %s after Seek on a paused branch, want 0: Seek must not resume flow", got-baseline, settle)
+	if got := count(); got != 0 {
+		t.Fatalf("branch produced %d buffer(s) in the %s after Seek on a paused branch, want 0: Seek must not resume flow", got, settle)
 	}
 
 	_ = e.Release(context.Background(), handle)
