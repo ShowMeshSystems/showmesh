@@ -1685,6 +1685,30 @@ type AudioPayload struct {
 	TimelineErrorMs          int64  `json:"timelineErrorMs"`
 	TimelineReason           string `json:"timelineReason"`
 
+	// The Alignment* fields are node.audio.clock.alignment's own evidence:
+	// the signed millisecond offset between this node's program audio and
+	// its LTC output, sampled against the same pipeline running time, and
+	// the wall-clock instant that sample was taken. All are OPTIONAL: an
+	// agent built before they existed omits them, and an absent
+	// AlignmentMeasured reads as "not measured".
+	//
+	// AlignmentMeasured is true only on a tick this node actually sampled
+	// both signals; AlignmentOffsetMs and AlignmentSampledAt are
+	// meaningful only then, never a fabricated zero otherwise.
+	// AlignmentOffsetMs is positive when LTC is ahead of program audio,
+	// negative when it is behind. AlignmentSampledAt is the NODE's own
+	// sample time, never the report tick's own ObservedAt: a consumer
+	// ages this evidence off AlignmentSampledAt specifically, so a stale
+	// sample republished on a later tick still reads as stale.
+	// AlignmentSessionID names the show session the sample (or the
+	// attempt to take one) was against; AlignmentReason states why no
+	// sample was taken whenever AlignmentMeasured is false.
+	AlignmentMeasured  bool       `json:"alignmentMeasured"`
+	AlignmentOffsetMs  int64      `json:"alignmentOffsetMs"`
+	AlignmentSampledAt *time.Time `json:"alignmentSampledAt"`
+	AlignmentSessionID string     `json:"alignmentSessionId"`
+	AlignmentReason    string     `json:"alignmentReason"`
+
 	// SettingsState, SettingsSubstitutedFields, and SettingsReason are
 	// internal/agent/audio.Manager's own report of whether this node's
 	// most recently applied audio.settings.configure revision landed as
@@ -1830,6 +1854,9 @@ func (p AudioPayload) Validate() error {
 	}
 	if err := p.validateTimeline(); err != nil {
 		return err
+	}
+	if p.AlignmentMeasured && p.AlignmentSampledAt == nil {
+		return fmt.Errorf("%w: alignmentSampledAt (required whenever alignmentMeasured is true)", ErrPayloadMissingField)
 	}
 	return nil
 }

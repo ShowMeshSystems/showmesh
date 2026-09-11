@@ -165,3 +165,39 @@ func TestLTCTimecodeFromFrameCountWrapsAtOneDay(t *testing.T) {
 		t.Errorf("one day plus one second = %s, want 00:00:01:00", got)
 	}
 }
+
+// TestLTCTimecodeDiffMsSignAndMagnitude proves DiffMs is signed: t later
+// than other is positive, t earlier than other is negative, and the
+// magnitude matches the wall-clock gap between them.
+func TestLTCTimecodeDiffMsSignAndMagnitude(t *testing.T) {
+	base := LTCTimecode("01:00:00:00")
+	later, err := base.Advance(2*time.Second, LTCFrameRate25)
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	// -480ms is 12 whole frames at 25fps (40ms/frame), so it round-trips
+	// through Advance with no rounding residue.
+	earlier, err := base.Advance(-480*time.Millisecond, LTCFrameRate25)
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	if got, err := later.DiffMs(base, LTCFrameRate25); err != nil || got != 2000 {
+		t.Errorf("DiffMs(later, base) = %d, %v, want 2000, nil", got, err)
+	}
+	if got, err := earlier.DiffMs(base, LTCFrameRate25); err != nil || got != -480 {
+		t.Errorf("DiffMs(earlier, base) = %d, %v, want -480, nil", got, err)
+	}
+	if got, err := base.DiffMs(base, LTCFrameRate25); err != nil || got != 0 {
+		t.Errorf("DiffMs(base, base) = %d, %v, want 0, nil", got, err)
+	}
+}
+
+func TestLTCTimecodeDiffMsRejectsMalformedInput(t *testing.T) {
+	if _, err := LTCTimecode("not a timecode").DiffMs("00:00:00:00", LTCFrameRate25); err == nil {
+		t.Error("DiffMs with a malformed receiver = nil error, want one")
+	}
+	if _, err := LTCTimecode("00:00:00:00").DiffMs("not a timecode", LTCFrameRate25); err == nil {
+		t.Error("DiffMs with a malformed argument = nil error, want one")
+	}
+}

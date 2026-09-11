@@ -29,12 +29,16 @@ const (
 	SignalClockProvenance   observation.SignalID = "node.audio.clock.provenance"
 
 	// SignalClockAlignment is AUDIO-ENGINE section 15's program-to-LTC
-	// alignment readiness signal. Nothing in this seam measures it — no
-	// loop-back or cross-output timing comparison exists yet — so it is
-	// always [observation.StateNotCollected] with a reason, never
-	// inferred from the program and LTC buses both being usable and
-	// never from ClockDomain/ClockProvenance declaring a shared clock.
-	// See [nodeObservations].
+	// alignment signal: the signed millisecond offset between a node's
+	// program audio and its LTC output, sampled by the agent against one
+	// shared pipeline running time and reported with its own sample time
+	// (see [mqttproto.AudioPayload.AlignmentSampledAt]). It is
+	// [observation.StateNotCollected] with a reason whenever the node's
+	// own report carries no measured sample, an unmeasured tick, or an
+	// agent build that predates this evidence, and never inferred from
+	// the program and LTC buses both being usable or from
+	// ClockDomain/ClockProvenance declaring a shared clock. See
+	// [alignmentObservation].
 	SignalClockAlignment observation.SignalID = "node.audio.clock.alignment"
 
 	// SignalLTCFrameRate, SignalLTCTimecode, SignalLTCGeneratorState, and

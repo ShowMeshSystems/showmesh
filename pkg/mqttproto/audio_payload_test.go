@@ -473,3 +473,38 @@ func TestAudioPayloadValidateRejectsUnrecognizedEngineClockSource(t *testing.T) 
 		t.Errorf("Validate(engineClockSource=%q) = %v, want ErrPayloadInvalidEngineClockSource", p.EngineClockSource, err)
 	}
 }
+
+// TestAudioPayloadValidateAcceptsOmittedAlignmentFields proves an agent
+// built before the alignment* fields existed, which omits the whole
+// block, still validates -- required so that agent's existing reports
+// never start failing Validate the moment a coordinator upgrades.
+func TestAudioPayloadValidateAcceptsOmittedAlignmentFields(t *testing.T) {
+	p := validAudioPayload()
+	if p.AlignmentMeasured || p.AlignmentOffsetMs != 0 || p.AlignmentSampledAt != nil {
+		t.Fatalf("validAudioPayload() alignment* = %+v, want all zero (this test proves the OMITTED case)", p)
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(omitted alignment fields) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresAlignmentSampledAtWhenMeasured(t *testing.T) {
+	p := validAudioPayload()
+	p.AlignmentMeasured = true
+	p.AlignmentSampledAt = nil
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(alignmentMeasured, no sampledAt) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsMeasuredAlignmentWithSampledAt(t *testing.T) {
+	p := validAudioPayload()
+	now := time.Now()
+	p.AlignmentMeasured = true
+	p.AlignmentOffsetMs = -42
+	p.AlignmentSampledAt = &now
+	p.AlignmentSessionID = "show"
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(measured, sampledAt set) = %v, want nil", err)
+	}
+}

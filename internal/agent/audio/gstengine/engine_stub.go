@@ -139,3 +139,11 @@ func (e *Engine) SinkBackend() string { return "" }
 // ClockSource always reports "", "": this build never attempted a
 // pipeline clock at all.
 func (e *Engine) ClockSource() (source, reason string) { return "", "" }
+
+var _ agentaudio.AlignmentObserver = (*Engine)(nil)
+
+// Alignment reports not known: this build has no GStreamer backend, so
+// there is no pipeline, no branch, and no LTC generator to sample.
+func (e *Engine) Alignment(context.Context, agentaudio.EngineHandle) (agentaudio.AlignmentSample, bool, string) {
+	return agentaudio.AlignmentSample{}, false, unavailableReason
+}

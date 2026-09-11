@@ -26,7 +26,7 @@ import (
 func TestResolveFeedAnchorStaysUnresolvedWithNoPipeline(t *testing.T) {
 	ch := &ltcChannel{}
 	ch.resolveFeedAnchor()
-	if ch.anchorKnown {
+	if ch.anchorKnown.Load() {
 		t.Fatal("resolveFeedAnchor set anchorKnown with no pipeline bound")
 	}
 	if ch.feedAnchor != 0 {

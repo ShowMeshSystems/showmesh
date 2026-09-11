@@ -230,7 +230,7 @@ Signals, one namespace per layer so the three failure classes can be told apart:
 - `node.audio.rate.*`: measured interface rate ppm against the media clock, current trim ppm, loop state (`warming`, `tracking`, `frozen`, `clamped`), resampler in use.
 - `node.audio.output.latency.*`: configured offset, method, confidence, measured-at.
 
-"PTP not synchronized" is `node.clock.ptp.state`; "PTP fine but this engine drifts" is a growing `timeline.error` with a `rate.loop` that is `clamped` or `frozen`; "clock and rate fine but this output is offset" is a stable non-zero acoustic error with `timeline.error` near zero, which only a measurement (§8) can show. `node.audio.clock.alignment` (program to LTC) stays a separate, still-unmeasured signal.
+"PTP not synchronized" is `node.clock.ptp.state`; "PTP fine but this engine drifts" is a growing `timeline.error` with a `rate.loop` that is `clamped` or `frozen`; "clock and rate fine but this output is offset" is a stable non-zero acoustic error with `timeline.error` near zero, which only a measurement (§8) can show. `node.audio.clock.alignment` (program to LTC) is now measured per report tick by the node, a separate signal from the three above.
 
 ## 11. Future AES67
 
