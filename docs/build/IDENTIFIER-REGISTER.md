@@ -1311,7 +1311,8 @@ The store schema version, bumped by migrations in
 | v32 | shipped | adds `fpp_playlist_entry_observations.playlist_loop`, FPP's own `mainPlaylist` pass counter exactly as the plugin reported it, NULL when it reported none (`migrateV32AddFPPPlaylistEntryObservationPlaylistLoopColumn`, `migration_v32.go`). Ingestion compares it to see a playlist loop back into an entry it already visited, which is the only signal that does so on FPP 10 |
 | v33 | shipped | a general-purpose `(kind, object_id, field) -> value` credentials table; the fpp.mqtt broker password moves out of its legacy data-directory file into it (owner ruling 2026-09-08, "credentials into SQLite"). Renumbered from the stale v11 reservation above |
 | v34 | shipped | every stored `audio.settings` revision is backfilled with `scheduledStartDeliveryBoundMs`/`scheduledStartMarginMs` when either is missing, using each field's own stated default, so a revision written before the two scheduled-start keys joined the required set still decodes and can be pushed (`migrateV34AudioSettingsBackfillScheduledStartFields`, `migration_v34.go`). Same defect class as v20 and v24. Renumbered from v33 when `dev/clock-sync` took `main`: v33 had already shipped as the credentials table, and a number at or below the stamped maximum can never run |
-| v35+ | unallocated | free |
+| v35 | reserved | long-run program-to-LTC drift recording (2026-09-11): `audio_alignment_runs` plus one sample-rows table beneath that prefix, coordinator-side, appended from the node's own `alignmentSampledAt`/`alignmentOffsetMs` report fields while a run is active |
+| v36+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1512,6 +1513,12 @@ That prefix is recorded here rather than the individual paths, because
 `api/openapi.yaml` remains the register for the paths themselves. J1 is
 expected to add a listing, a per-FPP-host current-program read, and an
 acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
+
+**The long-run drift recording (2026-09-11) owns every path under
+`/api/v1/nodes/{nodeId}/audio/alignment-runs`**, and the `showmeshctl audio
+alignment-run` subcommand. Recorded on the `/api/v1/fallback-programs`
+precedent below; `api/openapi.yaml` remains the register for the paths
+themselves.
 
 **Lane 17a SM-129 owns every path under `/api/v1/emergency-stop`**, plus
 `/api/v1/config/show.emergencystop` and its `/revisions`. Recorded here on
