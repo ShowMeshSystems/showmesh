@@ -189,8 +189,8 @@ export type InspectorRow = {
  * was never advertised, not that its path is failing.
  */
 export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow[]; absent: string | null }[] {
-  const observationRows = (entries: Node['render'], prefix: string): InspectorRow[] =>
-    entries.slice(0, 6).map((entry, index) => ({
+  const observationRows = (entries: Node['render'], prefix: string, limit = 6): InspectorRow[] =>
+    entries.slice(0, limit).map((entry, index) => ({
       key: `${prefix}:${entry.signal}:${index}`,
       label: entry.signal,
       value: entry.value === null ? 'no value' : String(entry.value),
@@ -201,7 +201,12 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
       detail: entry.state === 'current' ? null : entry.reason,
       tone:
         entry.state === 'current'
-          ? 'good'
+          ? // node.audio.clock.alignment.state is a threshold verdict,
+            // not a plain current/stale reading: beyond_threshold
+            // is a warning even while current, never the default good tone.
+            entry.signal === 'node.audio.clock.alignment.state' && entry.value === 'beyond_threshold'
+            ? 'warn'
+            : 'good'
           : entry.state === 'stale'
             ? 'warn'
             : entry.state === 'collection_failed'
@@ -222,7 +227,12 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
     },
     {
       name: 'Audio',
-      rows: observationRows(node.audio, 'audio'),
+      // Widened past the shared 6-row default: node.audio.clock.
+      // alignment and its .state verdict sit at collector positions 12-13
+      // (nodeaudio.AllSignalIDs), past that default's cutoff, and must stay
+      // visible beside device/program/LTC evidence rather than truncated
+      // out of the drawer.
+      rows: observationRows(node.audio, 'audio', 13),
       absent:
         node.audio.length === 0
           ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'

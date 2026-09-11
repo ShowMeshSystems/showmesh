@@ -2,10 +2,14 @@ package nodeaudio
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -397,6 +401,142 @@ func TestClockAlignmentOlderAgentYieldsFallbackReason(t *testing.T) {
 	}
 	if align.Reason != alignmentAbsentFallbackReason {
 		t.Errorf("clock alignment reason = %q, want the fallback reason %q", align.Reason, alignmentAbsentFallbackReason)
+	}
+}
+
+// driftThresholdSource builds a fakeClockDomainSource whose active
+// revision decodes as an audio.settings payload carrying
+// driftIgnoreThresholdMs=thresholdMs, every other field a value
+// [config.DecodeAudioSettingsPayload] accepts.
+func driftThresholdSource(t *testing.T, thresholdMs int) fakeClockDomainSource {
+	t.Helper()
+	payload := config.AudioSettingsDefaultPayload
+	payload.DriftIgnoreThresholdMs = thresholdMs
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal audio.settings payload: %v", err)
+	}
+	return fakeClockDomainSource{
+		obj: store.ConfigObjectRecord{Kind: config.AudioSettingsConfigKind, ID: config.AudioSettingsConfigObjectID, CurrentRevision: 1},
+		rev: store.ConfigRevisionRecord{
+			Kind: config.AudioSettingsConfigKind, ObjectID: config.AudioSettingsConfigObjectID, Revision: 1,
+			PayloadJSON: string(payloadJSON),
+		},
+	}
+}
+
+// TestClockAlignmentStateBeyondThresholdWhenMeasuredOffsetExceedsIt proves
+// a measured 60ms offset against a 40ms threshold reports
+// beyond_threshold, stamped with the alignment sample's own sample time.
+func TestClockAlignmentStateBeyondThresholdWhenMeasuredOffsetExceedsIt(t *testing.T) {
+	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 40)))
+	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	p := samplePayload()
+	p.AlignmentMeasured = true
+	p.AlignmentOffsetMs = 60
+	p.AlignmentSampledAt = &sampledAt
+	st.Put("audio-01", p, sampledAt.Add(time.Minute))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalClockAlignmentState)
+	if state.Value != alignmentStateBeyondThreshold {
+		t.Errorf("clock alignment state = %v, want %q", state.Value, alignmentStateBeyondThreshold)
+	}
+	if state.ObservedAt == nil || !state.ObservedAt.Equal(sampledAt) {
+		t.Errorf("clock alignment state observedAt = %v, want the sample time %v", state.ObservedAt, sampledAt)
+	}
+}
+
+// TestClockAlignmentStateWithinDefaultThresholdWhenMeasuredOffsetIsSmall
+// proves a measured 12ms offset against the shipped default threshold
+// (40ms, config.AudioSettingsDefaultPayload, no audio.settings object
+// ever configured) reports within_threshold.
+func TestClockAlignmentStateWithinDefaultThresholdWhenMeasuredOffsetIsSmall(t *testing.T) {
+	st := NewStore(WithClockDomainSource(fakeClockDomainSource{objErr: store.ErrConfigObjectNotFound}))
+	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	p := samplePayload()
+	p.AlignmentMeasured = true
+	p.AlignmentOffsetMs = 12
+	p.AlignmentSampledAt = &sampledAt
+	st.Put("audio-01", p, sampledAt.Add(time.Minute))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalClockAlignmentState)
+	if state.Value != alignmentStateWithinThreshold {
+		t.Errorf("clock alignment state = %v, want %q", state.Value, alignmentStateWithinThreshold)
+	}
+}
+
+// TestClockAlignmentStateBeyondThresholdUsesAbsoluteOffset proves a
+// negative offset (LTC behind program audio) compares on magnitude, not
+// sign: -60ms against a 40ms threshold is beyond it exactly as +60ms is.
+func TestClockAlignmentStateBeyondThresholdUsesAbsoluteOffset(t *testing.T) {
+	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 40)))
+	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	p := samplePayload()
+	p.AlignmentMeasured = true
+	p.AlignmentOffsetMs = -60
+	p.AlignmentSampledAt = &sampledAt
+	st.Put("audio-01", p, sampledAt.Add(time.Minute))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalClockAlignmentState)
+	if state.Value != alignmentStateBeyondThreshold {
+		t.Errorf("clock alignment state = %v, want %q", state.Value, alignmentStateBeyondThreshold)
+	}
+}
+
+// TestClockAlignmentStateNotCollectedWhenAlignmentItselfIsNotCollected
+// proves node.audio.clock.alignment.state carries alignmentObservation's
+// OWN not_collected reason forward unchanged when the underlying
+// alignment sample was never measured -- never a threshold verdict its
+// own evidence does not support.
+func TestClockAlignmentStateNotCollectedWhenAlignmentItselfIsNotCollected(t *testing.T) {
+	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 40)))
+	p := samplePayload()
+	p.AlignmentMeasured = false
+	p.AlignmentReason = "program branch has not rendered up to its presented position; underrun suspected"
+	st.Put("audio-01", p, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalClockAlignmentState)
+	if state.Absence != observation.StateNotCollected {
+		t.Errorf("clock alignment state absence = %q, want %q", state.Absence, observation.StateNotCollected)
+	}
+	if state.Reason != p.AlignmentReason {
+		t.Errorf("clock alignment state reason = %q, want the alignment sample's own reason %q", state.Reason, p.AlignmentReason)
+	}
+}
+
+// TestClockAlignmentStateCollectionFailedWhenAudioSettingsUnreadable
+// proves a measured alignment sample whose threshold cannot be read (a
+// config store failure, not merely unconfigured) reports
+// collection_failed rather than guessing a threshold or silently
+// omitting the signal, matching lookupClockDomain's identical failure
+// handling on the sibling config kind.
+func TestClockAlignmentStateCollectionFailedWhenAudioSettingsUnreadable(t *testing.T) {
+	st := NewStore(WithClockDomainSource(fakeClockDomainSource{objErr: errors.New("store unavailable")}))
+	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	p := samplePayload()
+	p.AlignmentMeasured = true
+	p.AlignmentOffsetMs = 12
+	p.AlignmentSampledAt = &sampledAt
+	st.Put("audio-01", p, sampledAt.Add(time.Minute))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalClockAlignmentState)
+	if state.Absence != observation.StateCollectionFailed {
+		t.Errorf("clock alignment state absence = %q, want %q", state.Absence, observation.StateCollectionFailed)
 	}
 }
 

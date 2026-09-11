@@ -17899,6 +17899,15 @@ components:
         second signal to cross-check against, so once an output is
         online, a missing item-transition capability reads `failed`
         immediately, even during that same post-connect window.
+
+        It also checks every configured `audio.node` object's measured
+        program-to-LTC alignment against `audio.settings`'
+        `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded`
+        (never `failed`) once the measured offset exceeds the threshold,
+        naming both numbers in `reason`, `healthy` once it is within the
+        threshold, and `not_verifiable` whenever this coordinator holds no
+        current measurement for that node. A drifting show still runs;
+        this is a warning, never a reason `outcome` blocks `start-night`.
       required: [name, state, reason]
       properties:
         name:

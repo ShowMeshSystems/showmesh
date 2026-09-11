@@ -16,6 +16,13 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
+// alignmentStateWithinThreshold and alignmentStateBeyondThreshold are
+// node.audio.clock.alignment.state's two collected values.
+const (
+	alignmentStateWithinThreshold = "within_threshold"
+	alignmentStateBeyondThreshold = "beyond_threshold"
+)
+
 // alignmentAbsentFallbackReason is [alignmentObservation]'s reason for a
 // node whose payload carries [mqttproto.AudioPayload.AlignmentMeasured]
 // false with no reason of its own: an agent built before the alignment*
@@ -110,6 +117,76 @@ func alignmentObservation(nodeID string, p mqttproto.AudioPayload, rep report) o
 		reason = alignmentAbsentFallbackReason
 	}
 	return notCollected(res, SignalClockAlignment, source, reason, rep.receivedAt)
+}
+
+// alignmentStateObservation renders node.audio.clock.alignment.state: the
+// threshold verdict on the SAME sample alignmentObservation just
+// reported, never a fresher or staler one. A measured sample
+// compares its absolute offset against audio.settings'
+// driftIgnoreThresholdMs, read live through clockSrc (the same source
+// [lookupClockDomain] already reads node.audio.clock.domain/provenance
+// through) so an operator's threshold edit is reflected on the next poll.
+// An unmeasured sample carries that sample's own not_collected reason
+// forward unchanged: this signal never claims a verdict its own evidence
+// does not have.
+func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.AudioPayload, rep report, clockSrc ClockDomainSource) observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+
+	if !p.AlignmentMeasured {
+		reason := p.AlignmentReason
+		if reason == "" {
+			reason = alignmentAbsentFallbackReason
+		}
+		return notCollected(res, SignalClockAlignmentState, source, reason, rep.receivedAt)
+	}
+
+	thresholdMs, reason := lookupDriftIgnoreThresholdMs(ctx, clockSrc)
+	if reason != "" {
+		return failed(res, SignalClockAlignmentState, source, reason, rep.receivedAt)
+	}
+
+	offsetMs := p.AlignmentOffsetMs
+	if offsetMs < 0 {
+		offsetMs = -offsetMs
+	}
+	state := alignmentStateWithinThreshold
+	if offsetMs > int64(thresholdMs) {
+		state = alignmentStateBeyondThreshold
+	}
+	return buildValue(nodeID, SignalClockAlignmentState, state, p.AlignmentSampledAt, rep)
+}
+
+// lookupDriftIgnoreThresholdMs reads audio.settings' driftIgnoreThresholdMs
+// live through clockSrc, matching [lookupClockDomain]'s identical
+// not-found/decode-failure handling one config kind over: an object
+// nothing has ever configured reports the shipped default
+// (config.AudioSettingsDefaultPayload), the same value the API's own
+// resolveAudioSettings returns for a GET, never a fabricated "no drift"
+// verdict.
+func lookupDriftIgnoreThresholdMs(ctx context.Context, clockSrc ClockDomainSource) (thresholdMs int, reason string) {
+	if clockSrc == nil {
+		return 0, "no configuration source wired into this coordinator"
+	}
+	obj, err := clockSrc.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+		return config.AudioSettingsDefaultPayload.DriftIgnoreThresholdMs, ""
+	case err != nil:
+		return 0, fmt.Sprintf("failed to read audio.settings configuration: %v", err)
+	case obj.CurrentRevision == 0:
+		return config.AudioSettingsDefaultPayload.DriftIgnoreThresholdMs, ""
+	}
+
+	rev, err := clockSrc.GetConfigRevision(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return 0, fmt.Sprintf("failed to read active audio.settings configuration: %v", err)
+	}
+	payload, verr := config.DecodeAudioSettingsPayload(rev.PayloadJSON)
+	if verr != nil {
+		return 0, fmt.Sprintf("stored audio.settings configuration payload is malformed: %v", verr)
+	}
+	return payload.DriftIgnoreThresholdMs, ""
 }
 
 // ltcFrameRateAbsentReason states why a node reports no frame rate, which
@@ -250,6 +327,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	}
 
 	obs = append(obs, alignmentObservation(nodeID, p, rep))
+	obs = append(obs, alignmentStateObservation(ctx, nodeID, p, rep, clockSrc))
 
 	obs = append(obs,
 		buildValue(nodeID, SignalLTCGeneratorState, p.LTCGeneratorState, observedAt, rep),
