@@ -158,3 +158,22 @@ func (t LTCTimecode) Advance(d time.Duration, r LTCFrameRate) (LTCTimecode, erro
 	}
 	return LTCTimecodeFromFrameCount(base+int64(math.Round(d.Seconds()*r.Rate())), r), nil
 }
+
+// DiffMs returns, in milliseconds, how far t sits past other at r: both
+// timecodes' frame counts differenced and converted through r's real
+// frame rate. Positive means t is later than other. Neither timecode may
+// cross the 24-hour wrap [LTCTimecodeFromFrameCount] applies on the way
+// back to a string, so a caller comparing timecodes that straddle
+// 00:00:00:00 gets a wrong answer rather than a wrapped one; every caller
+// in this codebase compares timecodes seconds apart, never a day apart.
+func (t LTCTimecode) DiffMs(other LTCTimecode, r LTCFrameRate) (int64, error) {
+	tf, err := t.FrameCount(r)
+	if err != nil {
+		return 0, err
+	}
+	of, err := other.FrameCount(r)
+	if err != nil {
+		return 0, err
+	}
+	return int64(math.Round(float64(tf-of) / r.Rate() * 1000)), nil
+}

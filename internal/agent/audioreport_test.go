@@ -444,6 +444,10 @@ type stubSnapshotter struct {
 	settingsState  audio.SettingsState
 	settingsFields []string
 	settingsReason string
+
+	// alignment scripts AlignmentSnapshot's return; left zero, it reports
+	// not measured with a stub reason.
+	alignment audio.AlignmentSnapshot
 }
 
 func (s *stubSnapshotter) TimelineSnapshot(context.Context) audio.TimelineSnapshot {
@@ -486,6 +490,16 @@ func (s *stubSnapshotter) SettingsSubstitution() (audio.SettingsState, []string,
 		return audio.SettingsAccepted, nil, ""
 	}
 	return s.settingsState, s.settingsFields, s.settingsReason
+}
+
+// AlignmentSnapshot reports s.alignment unless a test overrides it,
+// matching a stubSnapshotter's default zero-value convention for
+// everything it does not script.
+func (s *stubSnapshotter) AlignmentSnapshot(context.Context) audio.AlignmentSnapshot {
+	if !s.alignment.Measured && s.alignment.Reason == "" {
+		return audio.AlignmentSnapshot{Reason: "stub: no alignment sample"}
+	}
+	return s.alignment
 }
 
 // TestRunAudioReportRebuildsSessionsEveryTick proves the report's session half of
@@ -1521,5 +1535,69 @@ func TestRunAudioReportReportsIntermediateGainAcrossADispatchedFade(t *testing.T
 	after := session(2)
 	if after.Gain != float64(target) {
 		t.Fatalf("once the 2s fade's duration has elapsed: Gain = %v, want the dispatched target %v", after.Gain, target)
+	}
+}
+
+// TestApplyAlignmentWritesTheFields proves applyAlignment carries a
+// measured snapshot's fields onto the payload's Alignment* fields
+// exactly, including a non-nil AlignmentSampledAt.
+func TestApplyAlignmentWritesTheFields(t *testing.T) {
+	sampledAt := time.Unix(1000, 0).UTC()
+	mgr := &stubSnapshotter{alignment: audio.AlignmentSnapshot{
+		Measured: true, OffsetMs: -1234, SampledAt: sampledAt, SessionID: "show",
+	}}
+
+	var payload mqttproto.AudioPayload
+	applyAlignment(context.Background(), &payload, mgr)
+
+	if !payload.AlignmentMeasured {
+		t.Fatal("AlignmentMeasured = false, want true")
+	}
+	if payload.AlignmentOffsetMs != -1234 {
+		t.Errorf("AlignmentOffsetMs = %d, want -1234", payload.AlignmentOffsetMs)
+	}
+	if payload.AlignmentSampledAt == nil || !payload.AlignmentSampledAt.Equal(sampledAt) {
+		t.Errorf("AlignmentSampledAt = %v, want %v", payload.AlignmentSampledAt, sampledAt)
+	}
+	if payload.AlignmentSessionID != "show" {
+		t.Errorf("AlignmentSessionID = %q, want %q", payload.AlignmentSessionID, "show")
+	}
+}
+
+// TestApplyAlignmentNotMeasuredCarriesReasonNoNumbers proves the
+// not-measured half writes the session id and reason but leaves every
+// numeric field zero and AlignmentSampledAt nil.
+func TestApplyAlignmentNotMeasuredCarriesReasonNoNumbers(t *testing.T) {
+	mgr := &stubSnapshotter{alignment: audio.AlignmentSnapshot{
+		SessionID: "show", Reason: "underrun suspected",
+	}}
+
+	var payload mqttproto.AudioPayload
+	applyAlignment(context.Background(), &payload, mgr)
+
+	if payload.AlignmentMeasured {
+		t.Fatal("AlignmentMeasured = true, want false")
+	}
+	if payload.AlignmentOffsetMs != 0 {
+		t.Errorf("AlignmentOffsetMs = %d, want 0", payload.AlignmentOffsetMs)
+	}
+	if payload.AlignmentSampledAt != nil {
+		t.Errorf("AlignmentSampledAt = %v, want nil", payload.AlignmentSampledAt)
+	}
+	if payload.AlignmentReason != "underrun suspected" {
+		t.Errorf("AlignmentReason = %q, want %q", payload.AlignmentReason, "underrun suspected")
+	}
+}
+
+// TestApplyAlignmentNilManagerLeavesFieldsZero proves a nil mgr (no asset
+// directory configured on this node) leaves every Alignment* field zero,
+// matching applyTimeline's identical nil-safe rule.
+func TestApplyAlignmentNilManagerLeavesFieldsZero(t *testing.T) {
+	var payload mqttproto.AudioPayload
+	applyAlignment(context.Background(), &payload, nil)
+
+	if payload.AlignmentMeasured || payload.AlignmentOffsetMs != 0 || payload.AlignmentSampledAt != nil ||
+		payload.AlignmentSessionID != "" || payload.AlignmentReason != "" {
+		t.Errorf("payload = %+v, want every Alignment* field zero for a nil manager", payload)
 	}
 }
