@@ -863,7 +863,7 @@ right and never inferred from the pipeline still being up.
 | Signal | Status | Owner |
 |---|---|---|
 | `node.audio.clock.alignment` | shipped | C6/C7; measured since 2026-09-11 (PR #451): the node's signed program-to-LTC offset in ms, observedAt = the node's own sample time |
-| `node.audio.clock.alignment.state` | reserved | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_collected` whenever the measured alignment is |
+| `node.audio.clock.alignment.state` | shipped | drift-threshold warning (2026-09-11): `within_threshold` or `beyond_threshold` against `audio.settings.driftIgnoreThresholdMs`, `not_collected` whenever the measured alignment is |
 
 **Until 2026-09-11 it was always `not_collected`, with a reason, by design.** Nothing in
 software could measure program-to-LTC alignment, so it was never derived
