@@ -60,24 +60,14 @@ type Engine struct {
 	mu      sync.Mutex
 	handles map[agentaudio.EngineHandle]*branch
 
-	// inFlightReplacements holds every replacement branch a swap (see
-	// Engine.swapToPosition in methods.go) has built but not yet either
-	// swapped into handles or torn down. A replacement is never
-	// reachable through handles while it exists here, so Close's own
-	// fan-out must check this set too or it would leak one abandoned to
-	// a ctx timeout mid-swap. Guarded by e.mu, the same lock handles
-	// uses.
+	// inFlightReplacements holds every swap replacement built but not
+	// yet swapped into handles or torn down, never reachable through
+	// handles, so Close must sweep it too. Guarded by e.mu.
 	inFlightReplacements map[*branch]struct{}
 
-	// retiringBranches holds every branch a swap (see
-	// Engine.swapToPosition's retireAsync in methods.go) has already
-	// muted and re-pointed handles away from, but whose teardown is still
-	// running on its own goroutine in the background rather than being
-	// waited on by the swap's own caller. Such a branch is reachable
-	// through neither handles nor inFlightReplacements, so Close's own
-	// fan-out must check this set too or it would leak one still
-	// tearing down when Close runs. Guarded by e.mu, the same lock
-	// handles and inFlightReplacements use.
+	// retiringBranches holds every branch a swap has already muted and
+	// re-pointed handles away from, whose teardown is still running on
+	// its own goroutine (see retireAsync). Guarded by e.mu.
 	retiringBranches map[*branch]struct{}
 
 	// elementIndex maps every one of a branch's own element names (all
@@ -318,13 +308,9 @@ func (e *Engine) Close() error {
 			branches = append(branches, b)
 			delete(e.handles, h)
 		}
-		// Neither a replacement mid-swap nor a branch a swap has already
-		// retired is reachable through handles (see inFlightReplacements'
-		// and retiringBranches' own doc comments); each set's own
-		// goroutine still owns removing its entry once it finishes, so
-		// this only reads them rather than deleting -- teardown is
-		// idempotent, so racing that goroutine's own bestEffortTeardown
-		// call here is harmless.
+		// Neither set is reachable through handles; their own goroutines
+		// own removing entries, so this only reads them. teardown is
+		// idempotent, so racing one of those goroutines is harmless.
 		for b := range e.inFlightReplacements {
 			branches = append(branches, b)
 		}

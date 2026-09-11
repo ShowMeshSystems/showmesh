@@ -156,27 +156,9 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 	return b.observe(e.cfg.now()), nil
 }
 
-// Start seeks to position, then brings the branch to PLAYING. The seek
-// runs even for position 0: a branch loaded ahead of Start may have kept
-// decoding while frozen, so only an unconditional seek guarantees Start
-// begins producing from the position it names rather than from wherever
-// the branch had drifted to. A source that refuses this seek — including
-// at position 0 — fails Start as [pkgaudio.ErrEngineDecodeFailure],
-// indistinguishable from an undecodable asset.
-//
-// A branch that has never joined the shared mixers (the common case: the
-// very first Start after Load) is prepared and brought to PLAYING off
-// the mixer, then joined — see [branch.prepare] and [branch.join]. A
-// branch that has already joined is never flush-seeked in place: doing
-// that races GstAudioAggregator's own advancing output offset against
-// however long decode restart takes, which is the defect this package
-// now avoids by building a replacement branch and swapping it in
-// instead (see [Engine.swapToPosition]). Start also clears any flow
-// block a prior Pause or Stop left behind on the branch it ends up
-// producing from: its own contract promises playback, not only that it
-// requires a Resume first, and a Start that reports Playing while
-// nothing flows is exactly the kind of stale claim this package must
-// not make.
+// Start seeks to position, then brings the branch to PLAYING, even at
+// position 0, so it always begins from the position it names. A never-
+// joined branch is prepared here; a joined one swaps in a replacement.
 func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, position time.Duration) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -187,23 +169,22 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 	}
 
 	if b.hasJoined() {
-		// Start's own contract is always to end up Playing, regardless of
-		// whatever state a prior Pause or Stop left the branch it swaps
-		// out in.
+		// Start always ends up Playing, regardless of the state a prior
+		// Pause or Stop left the branch it swaps out in.
 		return e.swapToPosition(ctx, handle, b, position, pkgaudio.StatePlaying)
 	}
 
 	if err := b.prepare(ctx, position); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	// unfreeze only after the transition to PLAYING actually succeeds: it
-	// switches Position reporting from the frozen bookmark to a live
-	// query, and a caller must never see that live query while the
-	// session's own state stays non-playing because this failed. prepare
-	// already committed this branch's segment ahead of this call, so a
-	// ctx timeout here leaves that commitment against a transition that
-	// may still land arbitrarily late, so mark the branch's anchoring
-	// unknown for the same reason prepare does for its own failure.
+	if b.currentState() == pkgaudio.StateCompleted {
+		// position landed at or past EOS: prepare's own wait already
+		// reports this, and there is nothing left to join or play.
+		return b.observe(e.cfg.now()), nil
+	}
+	// unfreeze only once PLAYING succeeds, so Position never reads live
+	// while state stays non-playing; a timeout here still marks
+	// anchorUnknown, since prepare already committed the segment.
 	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		b.markAnchorUnknownOnCtxTimeout(err)
 		return agentaudio.EngineObservation{}, err
@@ -213,13 +194,9 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 	}
 	b.unblockFlow()
 	b.setState(pkgaudio.StatePlaying)
-	// observe while still frozen, so it reports the position this call
-	// just committed to rather than a live query: join's own hold-to-
-	// mixer window lets decode buffer some distance ahead of that
-	// position before this line ever runs, and a live query on volume
-	// would read that decode-ahead distance instead of the position the
-	// mix is actually anchored to. unfreeze runs after, so a later
-	// caller's Observe still gets a live query as normal.
+	// Observe while still frozen: join's own setup window lets decode
+	// buffer ahead of position, and a live query would read that
+	// decode-ahead distance instead of the position just committed to.
 	obs := b.observe(e.cfg.now())
 	b.unfreeze()
 	return obs, nil
@@ -244,14 +221,9 @@ func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (age
 	return b.observe(e.cfg.now()), nil
 }
 
-// Resume continues from the branch's own frozen position. Resume is only
-// ever called on a branch that has already been Started at least once,
-// which means it has already joined the shared mixers, so it always
-// swaps in a replacement rather than flush-seeking the held branch in
-// place: an in-place flush here would race GstAudioAggregator's own
-// advancing output clock against however long decode restart takes,
-// dropping the entire held duration rather than merely resuming it late.
-// See [Engine.swapToPosition].
+// Resume continues from the branch's own frozen position. It always
+// swaps in a replacement (see [Engine.swapToPosition]) since it is only
+// called on a branch already joined to the mixer.
 func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -261,20 +233,13 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 		return agentaudio.EngineObservation{}, err
 	}
 	pos := b.queryPosition()
-	// Resume's own contract is always to end up Playing: it exists
-	// specifically to continue from whatever Pause or Stop just froze.
+	// Resume always ends up Playing: that is its whole purpose.
 	return e.swapToPosition(ctx, handle, b, pos, pkgaudio.StatePlaying)
 }
 
-// Seek re-anchors the branch to position — a discontinuity, never a
-// continuation of pre-seek timing. A branch that has not yet joined the
-// shared mixers is seeked and re-prepared in place, off the mixer, where
-// a flush cannot lose anything the mix has already consumed. A branch
-// that has already joined swaps in a replacement instead, exactly as
-// Start and Resume do — see [Engine.swapToPosition]. Unlike Start and
-// Resume, Seek names no target state of its own: the replacement ends
-// up in whatever state the branch it replaces was already in, playing
-// or paused, since Seek's own contract never changes that.
+// Seek re-anchors the branch to position, a discontinuity. A branch not
+// yet joined is re-prepared in place; one already joined swaps in a
+// replacement instead, keeping whatever state it was already in.
 func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, position time.Duration) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -294,45 +259,14 @@ func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, posit
 	return b.observe(e.cfg.now()), nil
 }
 
-// swapToPosition performs a preroll-and-swap for old, a branch that has
-// already joined the shared mixers: Start, Seek, and Resume never
-// flush-seek a joined branch in place, since that races
-// GstAudioAggregator's own advancing output offset against however long
-// decode restart takes and drops real audio (see resyncMixerPads and
-// docs/build/BUILD-LOG.md for the record). It builds a
-// replacement branch for the same media, prepares it off the mixer at
-// position, brings it to PLAYING at the element level, joins it, mutes
-// old's mixer pads and re-points handle to the replacement under e.mu,
-// then retires old in the background (see retireAsync) rather than
-// waiting for its teardown: old is already silent and unreachable by
-// that point, so nothing this call's own return needs to wait on a live
-// decodebin's NULL transition, a cost measured in the tens of
-// milliseconds that this call's own caller should not have to inherit
-// as pure added latency. "PLAYING" here is the element-level state this
-// whole package uses for a paused branch too (see Pause's own doc
-// comment): targetState is the caller's own contract, not old's current
-// state — Start and Resume always name StatePlaying regardless of what
-// state old was in, and only Seek names old's own current state, since
-// Seek alone never changes it. When targetState is not StatePlaying, the
-// replacement is blocked at its own queue sink pad before join ever
-// removes its hold, so nothing it produces reaches the mix even though
-// its elements are PLAYING.
-//
-// Session calls are serialized per handle by the caller's own s.mu (see
-// internal/agent/audio/manager.go: every Start/Seek/Resume/Pause/Stop/
-// Observe call holds it for the call's whole duration), so nothing else
-// can observe handle mid-swap; the only requirement this relies on is
-// that handle is re-pointed under e.mu before old's teardown starts,
-// which the block below does.
-//
-// On any failure preparing the replacement, only the replacement is torn
-// down (best effort, via cleanup); old and its anchoring are left
-// completely untouched — old was never flush-seeked, so it is never
-// marked anchorUnknown for a swap that failed or timed out.
+// swapToPosition replaces old, a branch already joined to the mixer,
+// rather than flush-seeking it in place. A failed preparation tears
+// down only the replacement; old and its anchoring stay untouched.
 func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHandle, old *branch, position time.Duration, targetState pkgaudio.State) (agentaudio.EngineObservation, error) {
 	old.mu.Lock()
 	fadeActive := old.fadeActive
-	fadeStartPos, fadeDuration, fadeTargetGain := old.fadeStartPos, old.fadeDuration, old.fadeTargetGain
+	fadeStartPos, fadeStartGain := old.fadeStartPos, old.fadeStartGain
+	fadeDuration, fadeTargetGain := old.fadeDuration, old.fadeTargetGain
 	old.mu.Unlock()
 	gain := old.currentGain()
 
@@ -340,13 +274,26 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 		id: e.nextID.Add(1), engine: e, media: old.media, duration: old.duration,
 		state: pkgaudio.StateReady, frozen: true, teardownGate: newTeardownGate(),
 	}
-	e.trackReplacement(replacement)
-	defer e.untrackReplacement(replacement)
-
 	if err := replacement.build(old.path); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineDecodeFailure, err)
 	}
+	// Tracked only once build has actually created replacement's
+	// elements: Close's fan-out would otherwise reach a branch whose
+	// element fields are still nil.
+	e.trackReplacement(replacement)
+	defer e.untrackReplacement(replacement)
 	cleanup := func() { _ = bestEffortTeardown(replacement) }
+
+	// Set before any state change: volume sits upstream of queue, so
+	// setting it only after PLAYING would let queued audio already
+	// reach the mix at unity gain first.
+	replacement.volume.SetObjectProperty("volume", float64(gain))
+	if fadeActive {
+		fade := pkgaudio.Fade{Duration: fadeDuration, TargetGain: fadeTargetGain}
+		if err := replacement.startFadeFrom(fade, fadeStartPos, fadeStartGain); err != nil {
+			slog.Warn("gstengine: could not re-attach an active fade to a swap replacement", "branch", replacement.id, "error", err)
+		}
+	}
 
 	if err := replacement.setElementsState(ctx, gst.StatePaused); err != nil {
 		cleanup()
@@ -366,29 +313,38 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 		cleanup()
 		return agentaudio.EngineObservation{}, err
 	}
+	if replacement.currentState() == pkgaudio.StateCompleted {
+		// position landed at or past EOS: swap the handle to the
+		// replacement anyway, so it correctly reports Completed, but
+		// there is nothing left to play or join.
+		return e.commitSwap(handle, old, replacement, replacement.observe(e.cfg.now())), nil
+	}
 	if targetState != pkgaudio.StatePlaying {
-		// The replacement must land paused or stopped, not playing.
-		// blockFlow is called for API consistency (blockProbeID reads
-		// blocked, matching a branch Paused or Stopped the ordinary way),
-		// but it is not what keeps this branch silent: queue keeps
-		// accepting into its own internal buffer on its sink side
-		// regardless of whether its src side is held, so anything it
-		// already accepted before this block existed would still drain
-		// out its src pad the instant join's hold lifted. join is told
-		// not to release its hold at all in this case (see its own doc
-		// comment) -- that is the actual guarantee.
+		// blockFlow is for API consistency (blockProbeID reads blocked);
+		// join's retained hold is what actually keeps this silent.
 		replacement.blockFlow()
 	}
 	if err := replacement.setElementsState(ctx, gst.StatePlaying); err != nil {
 		cleanup()
 		return agentaudio.EngineObservation{}, err
 	}
-	replacement.volume.SetObjectProperty("volume", float64(gain))
 	if err := replacement.join(position, targetState == pkgaudio.StatePlaying); err != nil {
 		cleanup()
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineDecodeFailure, err)
 	}
 
+	replacement.setState(targetState)
+	// Observe while still frozen, so it reports position exactly, not a
+	// live query racing however far decode buffered ahead during join's
+	// own setup window. unfreeze runs after, once this swap is done.
+	obs := replacement.observe(e.cfg.now())
+	return e.commitSwap(handle, old, replacement, obs), nil
+}
+
+// commitSwap mutes old's mixer pads, re-points handle to replacement,
+// unfreezes it if it is Playing, and retires old in the background.
+// Shared by swapToPosition's playing/paused path and its EOS shortcut.
+func (e *Engine) commitSwap(handle agentaudio.EngineHandle, old, replacement *branch, obs agentaudio.EngineObservation) agentaudio.EngineObservation {
 	e.mu.Lock()
 	for _, pad := range old.channelMixerPads {
 		if pad != nil {
@@ -398,40 +354,16 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 	e.handles[handle] = replacement
 	e.mu.Unlock()
 
-	replacement.setState(targetState)
-	if fadeActive {
-		if err := replacement.startFade(pkgaudio.Fade{Duration: fadeDuration, TargetGain: fadeTargetGain}, fadeStartPos); err != nil {
-			slog.Warn("gstengine: could not re-attach an active fade to a swap replacement", "branch", replacement.id, "error", err)
-		}
-	}
-	// observe while still frozen, so it reports position exactly (the
-	// value this swap just committed to) rather than a live query: join's
-	// own hold-to-mixer window lets decode buffer some distance ahead of
-	// position before this line ever runs, and a live query on volume
-	// would read that decode-ahead distance instead. unfreeze runs after,
-	// so a later caller's Observe gets a live query as normal once this
-	// swap is done.
-	obs := replacement.observe(e.cfg.now())
-	if targetState == pkgaudio.StatePlaying {
+	if obs.State == pkgaudio.StatePlaying {
 		replacement.unfreeze()
 	}
-
 	e.retireAsync(old)
-
-	return obs, nil
+	return obs
 }
 
-// retireAsync tears old down in the background after a swap has already
-// muted its mixer pads and re-pointed the handle away from it: old's
-// audio is already silent and unreachable at this point, so nothing the
-// caller does next needs to wait for its teardown, and a live
-// decodebin's NULL transition measurably costs tens of milliseconds a
-// caller's own return should not inherit (e.g. a session realigning LTC
-// to a Seek's new position immediately after it returns). Close must
-// still be able to find and finish this branch even though it is no
-// longer in handles, so it is tracked the same way an in-flight swap
-// replacement is; branch.teardown's own gate is what makes a concurrent
-// Close racing this goroutine on the same branch safe.
+// retireAsync tears old down in the background, since it is already
+// muted and unreachable. Tracked so Close can still find and finish it;
+// branch.teardown's own gate makes a concurrent Close safe.
 func (e *Engine) retireAsync(old *branch) {
 	e.mu.Lock()
 	e.retiringBranches[old] = struct{}{}
@@ -666,14 +598,13 @@ func (b *branch) doTeardown(ctx context.Context) error {
 	b.teardownClaimed = true
 	b.mu.Unlock()
 
-	// A blocked pad holds a streaming thread waiting inside the probe;
-	// the state change below must never race that wait, so both blocks
-	// this branch can carry are always released first, whether or not
-	// this branch was ever paused or ever joined the mixer. This also
-	// runs ahead of the drain wait below, because an abandoned state
-	// change is exactly the thing a blocked pad can be holding up.
+	// Release any flow block first so the state change below never
+	// races it. The hold stays if never joined: releasing it could
+	// reach deinterleave's still-unlinked pads; NULL deactivates it.
 	b.unblockFlow()
-	b.removeHold()
+	if b.hasJoined() {
+		b.removeHold()
+	}
 
 	if !b.awaitNoElementRace(ctx, teardownTimeout) {
 		slog.Warn("gstengine: teardown deferred because an earlier abandoned state change may still be driving this branch's elements; leaving them in the pipeline rather than racing it", "branch", b.id)

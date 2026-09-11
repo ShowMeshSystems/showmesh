@@ -39,10 +39,8 @@ type branch struct {
 	filesrcName   string
 	decodebinName string
 
-	// path is the resolved media file build linked filesrc to. A swap
-	// (see Engine.swapToPosition in methods.go) reads this to build a
-	// replacement branch for the same media without threading the path
-	// through every call site that can trigger one.
+	// path is the resolved media file build linked filesrc to, read by
+	// swapToPosition to build a replacement for the same media.
 	path string
 
 	// elementNames holds the GStreamer names of every element in
@@ -60,28 +58,18 @@ type branch struct {
 	loadErrCh chan error
 
 	// holdProbeID is the buffer-only BLOCK probe on queue's own SRC pad
-	// that parks this branch's data off the shared mixers until join
-	// removes it: events (stream-start, caps, segment) still pass, so
-	// deinterleave creates its pads and readyCh's pad-count half can
-	// still close, but no buffer reaches a mixer before join links it in.
-	// Installed once in build, removed exactly once by join. Guarded by
-	// mu; 0 once removed.
+	// that parks this branch's data off the mixer until join removes it.
+	// Guarded by mu; 0 once removed.
 	holdProbeID uint32
 
-	// heldSeq counts every buffer the hold probe has ever captured,
-	// including one a later flush discards before it is delivered
-	// anywhere. prepare snapshots this immediately before issuing its
-	// flushing seek and waits for it to advance past that snapshot,
-	// which is what tells the first POST-flush buffer apart from one
-	// already parked at the hold before the flush.
+	// heldSeq counts every buffer the hold probe has captured. prepare
+	// snapshots it before seeking and waits for it to advance, telling a
+	// post-seek buffer apart from one already parked before the seek.
 	heldSeq atomic.Uint64
 
-	// joined is true once this branch's deinterleave src pads are linked
-	// to the shared channel mixers and the hold is released (see join).
-	// Start, Seek, and Resume flush-seek a branch in place only while
-	// this is false; once true, they build and swap in a replacement
-	// instead (see Engine.swapToPosition in methods.go) rather than
-	// flush-seeking a branch the mixer is already consuming from.
+	// joined is true once join has linked this branch to the mixer.
+	// Start, Seek, and Resume flush-seek in place only while false; once
+	// true they swap in a replacement instead (see methods.go).
 	joined bool
 
 	eosCh   chan struct{}
@@ -129,7 +117,11 @@ type branch struct {
 	// the controller is anchored to fadeStartPos exactly as given, so it
 	// already matches fadeSyncedPos's own clock; that gap was entirely
 	// on the other side of fadeArrived's subtraction.
-	fadeStartPos   time.Duration
+	fadeStartPos time.Duration
+	// fadeStartGain is the ramp's value at fadeStartPos, recorded once
+	// when the fade starts: reproducing the curve later (a swap
+	// replacement) must use this, never gain sampled after it decayed.
+	fadeStartGain  pkgaudio.Gain
 	fadeDuration   time.Duration
 	fadeTargetGain pkgaudio.Gain
 
@@ -290,10 +282,8 @@ func (b *branch) build(path string) error {
 		return fmt.Errorf("gstengine: could not link branch decode chain")
 	}
 
-	// Mixer sink pads are requested only at join, not here: a branch that
-	// has never joined must be preroll-able and seekable entirely off
-	// the shared mixers (see join in this file and Engine.swapToPosition
-	// in methods.go).
+	// Mixer sink pads are requested only at join, not here: a branch
+	// that has never joined must be seekable entirely off the mixer.
 	b.channelMixerPads = make([]gst.Pad, n)
 	b.deinterleaveSrcPads = make([]gst.Pad, n)
 
@@ -355,13 +345,9 @@ func (b *branch) build(path string) error {
 		return gst.PadProbeOK
 	})
 
-	// The hold point (see holdProbeID's doc comment): a buffer-only BLOCK
-	// probe, so stream-start/caps/segment still reach deinterleave and
-	// let it create its pads, but no buffer crosses this pad until join
-	// removes the probe. A FLUSH_START arriving while a buffer is parked
-	// here drops it (returns FLUSHING) rather than delivering it; the
-	// probe stays installed across the flush and fires again on the
-	// first post-flush buffer, which is exactly what prepare waits for.
+	// The hold (see holdProbeID): buffer-only, so events still reach
+	// deinterleave and let it create its pads, but no buffer crosses
+	// until join removes the probe.
 	b.holdProbeID = queueSrc.AddProbe(gst.PadProbeTypeBlock|gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		b.heldSeq.Add(1)
 		b.maybeReady()
@@ -371,11 +357,9 @@ func (b *branch) build(path string) error {
 	return nil
 }
 
-// maybeReady closes readyCh the first time both halves of "ready" are
-// true: every deinterleave src pad exists (linkedCount reached n) and at
-// least one buffer is parked at the hold. Called from both the
-// deinterleave pad-added handler and the hold probe, since either can be
-// the one that completes the pair; readyOnce makes the double-call safe.
+// maybeReady closes readyCh once every deinterleave src pad exists and
+// a buffer is parked at the hold. Called from both signals; readyOnce
+// makes the double-call safe.
 func (b *branch) maybeReady() {
 	n := int32(len(b.deinterleaveSrcPads))
 	if n == 0 {
@@ -594,24 +578,9 @@ func (b *branch) pipelineRunningTime() time.Duration {
 	return time.Duration(rt)
 }
 
-// resyncMixerPads re-anchors every channel mixer sink pad this branch
-// feeds so the next buffer lands at the shared pipeline's current
-// running time rather than in GstAudioAggregator's past, which keeps
-// advancing in real time regardless of whether this branch is playing.
-// atPos is a value the caller already committed to (a seek target, or a
-// position sampled immediately before calling this), so only
-// pipelineRunningTime is read here.
-//
-// join is this method's only caller: it runs after this branch has
-// already reached PLAYING off the mixer and prerolled a fresh buffer at
-// the hold, immediately before linking to the mixer and releasing that
-// hold, so the read is no longer racing however long decode restart and
-// queue refill take (see docs/build/BUILD-LOG.md for the record of the
-// flush-in-place approach this replaced, and the per-resume loss it
-// left as a named limitation). Never called against a branch still
-// flowing through the hold: the earlier reverted deferred-offset attempt
-// this comment used to describe raced the hold probe itself for exactly
-// that reason.
+// resyncMixerPads re-anchors this branch's deinterleave src pads so the
+// next buffer lands at the pipeline's current running time, not in
+// GstAudioAggregator's past. join is the only caller, while held.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
 	offset := int64(b.pipelineRunningTime()) - b.localRunningTime(atPos).Nanoseconds()
 	// A pad offset is only reliable on a source pad, so this offsets deinterleave's src pads, not the mixer's sink pads.
@@ -622,17 +591,11 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 	}
 }
 
-// prepare issues a flushing, accurate seek to position and then waits,
-// bounded only by ctx, until the first buffer arriving strictly after
-// that seek is parked at the hold — never a buffer already held before
-// it. Callers run this on a branch that has not yet joined the mixer:
-// Load's initial preroll for the very first Start, or a freshly built
-// replacement branch for a swap (see Engine.swapToPosition in
-// methods.go). A ctx-driven failure, whether from the seek itself or
-// this wait, marks anchorUnknown exactly as seekTo already does on its
-// own, since either leaves the caller unable to tell whether a
-// still-running abandoned goroutine will land this seek later.
+// prepare seeks to position, then waits, bounded only by ctx, for the
+// first post-seek buffer to reach the hold. Run only on a branch not
+// yet joined. A ctx-driven failure from either step marks anchorUnknown.
 func (b *branch) prepare(ctx context.Context, position time.Duration) error {
+	b.unblockFlow()
 	before := b.heldSeq.Load()
 	if err := b.seekTo(ctx, position, nil); err != nil {
 		return err
@@ -644,16 +607,17 @@ func (b *branch) prepare(ctx context.Context, position time.Duration) error {
 	return nil
 }
 
-// awaitHeldPast blocks until heldSeq has advanced past before — a buffer
-// reached the hold strictly after before was read — or ctx ends first.
-// No fixed timeout: bounded only by the caller's own ctx, the same rule
-// awaitNoElementRace follows for a different wait in this package.
+// awaitHeldPast blocks until heldSeq advances past before, ctx ends, or
+// EOS arrives (a seek at or past the last sample holds no buffer). No
+// fixed timeout, the same rule awaitNoElementRace follows.
 func (b *branch) awaitHeldPast(ctx context.Context, before uint64) error {
 	for {
 		if b.heldSeq.Load() > before {
 			return nil
 		}
 		select {
+		case <-b.eosCh:
+			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(2 * time.Millisecond):
@@ -661,24 +625,9 @@ func (b *branch) awaitHeldPast(ctx context.Context, before uint64) error {
 	}
 }
 
-// join requests a fresh mixer sink pad for each of this branch's
-// deinterleave src pads, resyncs their offsets to the shared pipeline's
-// current running time at atPos, links them to the mixer, and, only
-// when releaseHold is true, then releases the hold: offset and links
-// are committed before any buffer can reach the mixer. Never called
-// twice on the same branch; callers run it only after this branch has
-// already reached PLAYING off the mixer (see Start and
-// Engine.swapToPosition in methods.go).
-//
-// releaseHold is false for a swap whose target is paused or stopped:
-// queue keeps accepting into its own internal buffer on its sink side
-// regardless of whether its src side is held, so a branch meant to land
-// silent must never have its hold released at all, no matter how early
-// blockFlow re-blocks that sink side afterward -- content queue already
-// accepted before that block existed would still drain out its src pad
-// the instant the hold lifted. Leaving the hold in place instead is what
-// actually keeps it silent; b.joined is still set true either way, since
-// it tracks the mixer link topology, not whether data is flowing.
+// join requests mixer sink pads, resyncs offsets at atPos, links them,
+// and releases the hold only when releaseHold is true: for a paused or
+// stopped target, only the retained hold keeps queue's buffer silent.
 func (b *branch) join(atPos time.Duration, releaseHold bool) error {
 	e := b.engine
 	n := len(e.cfg.ProgramChannels)
@@ -718,9 +667,8 @@ func (b *branch) removeHold() {
 }
 
 // hasJoined reports whether join has already linked this branch to the
-// shared mixers. Start, Seek, and Resume use this to decide between an
-// in-place flush-seek (never joined) and a swap (already joined) — see
-// methods.go.
+// shared mixers, which Start, Seek, and Resume use to choose between an
+// in-place flush-seek and a swap (see methods.go).
 func (b *branch) hasJoined() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -894,16 +842,16 @@ func (b *branch) unfreeze() {
 	b.mu.Unlock()
 }
 
-// gstController is the pair a Fade dispatches: a fresh interpolation
-// source and the absolute binding driving b.volume's "volume" property
-// from it. NewDirectControlBindingAbsolute is required, not New() — the
-// latter maps a 0..1 control value onto the property's full 0..10 range
-// and turns a requested gain of 1.0 into a 10x boost (measured in the
-// phase 1 spike, bench/audio-node/spike-phase1). basePos is the branch's
-// raw stream position when the fade starts, the same clock GstController
-// itself evaluates buffers against (their own PTS), not
-// segmentStart-relative local running time, which a later seek resets.
+// startFade dispatches a fade sampling the branch's own current gain as
+// the ramp's start value. See startFadeFrom.
 func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
+	return b.startFadeFrom(fade, basePos, b.currentGain())
+}
+
+// startFadeFrom ramps from startGain at basePos to fade.TargetGain at
+// basePos+fade.Duration, keyed on buffer PTS. Use NewDirectControlBindingAbsolute,
+// not New(), which maps onto 0..10 and turns a gain of 1.0 into a 10x boost.
+func (b *branch) startFadeFrom(fade pkgaudio.Fade, basePos time.Duration, startGain pkgaudio.Gain) error {
 	volObj := b.volume.(gst.Object)
 	volObj.SetControlBindingDisabled("volume", false)
 
@@ -918,9 +866,8 @@ func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
 	}
 	csObj.SetObjectProperty("mode", gstcontroller.InterpolationModeLinear)
 
-	start := float64(b.currentGain())
 	base := gst.ClockTime(basePos.Nanoseconds())
-	tvcs.Set(base, start)
+	tvcs.Set(base, float64(startGain))
 	tvcs.Set(base+gst.ClockTime(fade.Duration), float64(fade.TargetGain))
 
 	binding := gstcontroller.NewDirectControlBindingAbsolute(volObj, "volume", cs)
@@ -931,15 +878,14 @@ func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
 	b.mu.Lock()
 	b.fadeActive = true
 	b.fadeStartPos = basePos
+	b.fadeStartGain = startGain
 	b.fadeDuration = fade.Duration
 	b.fadeTargetGain = fade.TargetGain
 	b.fadeSyncedPos = basePos
 	b.mu.Unlock()
-	// A fade dispatched while an earlier one is still active supersedes
-	// it without an intervening cancelFade (see Engine.Fade), so any
-	// probe that earlier fade installed must go before this one installs
-	// its own, or the superseded probe would keep paying its per-buffer
-	// cost forever with no fade left to serve.
+	// A superseding fade (see Engine.Fade) must remove the prior fade's
+	// probe before installing its own, or the superseded probe keeps
+	// paying its per-buffer cost with no fade left to serve.
 	b.removeFadeSyncProbe()
 	b.installFadeSyncProbe()
 	return nil
