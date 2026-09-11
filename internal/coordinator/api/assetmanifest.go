@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -131,7 +133,37 @@ func (h *handlers) handleNodeAssetManifest(w http.ResponseWriter, r *http.Reques
 		h.writeInternalError(w, now, "build node asset manifest", err)
 		return
 	}
-	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: mapNodeAssetManifest(m, h.deps.AssetSettings.ContentBaseURL() != "", h.deps.AssetFetchFailures)})
+	manifest := mapNodeAssetManifest(m, h.deps.AssetSettings.ContentBaseURL() != "", h.deps.AssetFetchFailures)
+	manifest.ResyncRequest = h.latestResyncRequestStatus(r.Context(), nodeID)
+	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: manifest})
+}
+
+// latestResyncRequestStatus reads nodeID's most recently issued
+// asset.inventory.request commands row (there is exactly one command
+// family this action ever writes — see [assetsync.ResyncCommandAction]'s
+// own doc comment) and renders it for GET /nodes/{nodeId}/assets. Returns
+// nil when this node has never had one (store.ErrCommandNotFound) or when
+// the lookup itself fails: an operator missing this optional, additive
+// field is far better than this route failing the request it was already
+// able to answer without it.
+func (h *handlers) latestResyncRequestStatus(ctx context.Context, nodeID string) *v1.ResyncRequestStatus {
+	rec, err := h.deps.Commands.GetLatestCommandByTargetAction(ctx, assetsync.ResyncCommandTargetKind, nodeID, assetsync.ResyncCommandAction)
+	if err != nil {
+		if !errors.Is(err, store.ErrCommandNotFound) {
+			h.logger.Warn("resync: failed to look up the latest resync request command", "node_id", nodeID, "error", err)
+		}
+		return nil
+	}
+	out := &v1.ResyncRequestStatus{CommandID: rec.ID, State: rec.State, IssuedAt: formatTime(rec.CreatedAt)}
+	if rec.OutcomeReason != "" {
+		reason := rec.OutcomeReason
+		out.OutcomeReason = &reason
+	}
+	if rec.ResolvedAt != nil {
+		resolvedAt := formatTime(*rec.ResolvedAt)
+		out.ResolvedAt = &resolvedAt
+	}
+	return out
 }
 
 // --- mapping: assetsync.NodeManifest -> v1 wire types ---

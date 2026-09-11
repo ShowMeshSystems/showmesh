@@ -1084,6 +1084,12 @@ func Run() int {
 	// comment.
 	go api.RunActionInvokeReconciliationLoop(ctx, apiDeps, time.Now, logger)
 
+	// A re-sync request a node never answers otherwise sits "dispatched"
+	// forever, so this loop times each one out after
+	// resyncRequestTimeout — see api.RunResyncRequestReconciliationLoop's
+	// own doc comment (resyncrequest_reconcile.go).
+	go api.RunResyncRequestReconciliationLoop(ctx, apiDeps, time.Now, logger)
+
 	// Track F seam F2 invariant 4: an ambiguous restart never launches a
 	// show by guess — see api.ReconcileNightSessionOnStartup's own doc
 	// comment. Same synchronous, non-fatal, before-ListenAndServe shape as

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -20,11 +22,17 @@ import (
 // (InventoryRequester), and records that this node has an outstanding
 // re-sync intent as of now (AssetSyncNudger.RecordResyncIntent). Neither
 // call waits for the node: this route answers 202 immediately, with
-// acceptance only. The repair itself (assetsync.Service.RequestNode) runs
-// later, from internal/coordinator/inventory's handleAssetInventory, as
-// soon as a live report proves fresher than this intent - see that
-// package's ResyncIntentTrigger. The outcome is never claimed here; it
-// surfaces later on GET /nodes/{nodeId}/assets.
+// acceptance only, PROVIDED the asset.inventory.request publish itself
+// reached the wire - a publish that never reached the node is not an
+// accepted request at all, and this route answers 503
+// (assetResyncPublishFailedProblem) instead, since silently returning 202
+// for a request nothing was ever asked to act on is the same
+// accepted-looking no-op this route's own acceptance criteria forbid. The
+// repair itself (assetsync.Service.RequestNode) runs later, from
+// internal/coordinator/inventory's handleAssetInventory, as soon as a live
+// report proves fresher than this intent - see that package's
+// ResyncIntentTrigger. The outcome is never claimed here; it surfaces
+// later on GET /nodes/{nodeId}/assets.
 //
 // The asset.inventory.request dispatch itself IS recorded as a commands
 // row, though, matching every other MQTT command this coordinator issues
@@ -54,6 +62,26 @@ import (
 // PUBLISH itself reached the wire.
 type InventoryRequester interface {
 	RequestNodeInventory(ctx context.Context, nodeID string, issuer mqttproto.CmdIssuer) (string, error)
+}
+
+// ProblemTypeAssetResyncPublishFailed is POST /nodes/{nodeId}/assets/resync's
+// own upstream failure: the request was valid and the node is declared,
+// but the asset.inventory.request publish itself never reached the wire.
+// Its own type, and a 503 rather than a 500, because the fault is the
+// broker connection between this coordinator and the node, not a
+// coordinator defect — the operator can retry once that connection is
+// restored. A publish failure here still writes a "failed" commands row
+// (see recordInventoryRequestCommand); this problem's detail names that
+// row's id so an operator can find it on GET /nodes/{nodeId}/assets.
+const ProblemTypeAssetResyncPublishFailed = problemBaseURI + "asset-resync-publish-failed"
+
+func assetResyncPublishFailedProblem(nodeID, commandID string, err error) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeAssetResyncPublishFailed,
+		Title:  "Re-sync request could not be sent",
+		Status: http.StatusServiceUnavailable,
+		Detail: fmt.Sprintf("node %q could not be asked for a fresh inventory: %v (command %s)", nodeID, err, commandID),
+	}
 }
 
 func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Request) {
@@ -101,12 +129,11 @@ func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Req
 	h.recordInventoryRequestCommand(ctx, now, nodeID, commandID, issuerID, issuerName, pubErr)
 	if pubErr != nil {
 		h.logger.Warn("resync: failed to publish asset.inventory.request", "node_id", nodeID, "command_id", commandID, "error", pubErr)
+		writeProblem(w, h.logger, now, assetResyncPublishFailedProblem(nodeID, commandID, pubErr))
+		return
 	}
 
-	result := v1.ResyncNodeAssetsResult{Node: nodeID, AcceptedAt: formatTime(now)}
-	if pubErr == nil {
-		result.InventoryRequestCommandID = commandID
-	}
+	result := v1.ResyncNodeAssetsResult{Node: nodeID, AcceptedAt: formatTime(now), InventoryRequestCommandID: commandID}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
@@ -136,8 +163,8 @@ func (h *handlers) handlePostResyncNodeAssets(w http.ResponseWriter, r *http.Req
 // of whether this bookkeeping succeeds.
 func (h *handlers) recordInventoryRequestCommand(ctx context.Context, now time.Time, nodeID, commandID, issuerID, issuerName string, pubErr error) {
 	rec := store.CommandRecord{
-		ID: commandID, IdempotencyKey: commandID, Action: "asset.inventory.request",
-		TargetKind: "node", TargetID: nodeID,
+		ID: commandID, IdempotencyKey: commandID, Action: assetsync.ResyncCommandAction,
+		TargetKind: assetsync.ResyncCommandTargetKind, TargetID: nodeID,
 		IssuerPrincipalID: issuerID, IssuerPrincipalName: issuerName,
 		ConfirmationMethod: "evidence", State: "pending",
 	}

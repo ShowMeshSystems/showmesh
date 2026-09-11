@@ -81,6 +81,29 @@ type NodeAssetManifest struct {
 	Extra      []ExtraAsset       `json:"extra"`
 	ObservedAt *string            `json:"observedAt"`
 	Verdicts   []AssetSyncVerdict `json:"verdicts,omitempty"`
+	// ResyncRequest is this node's most recent operator-issued "Re-sync
+	// all" request (POST /nodes/{nodeId}/assets/resync), populated only
+	// on GET /nodes/{nodeId}/assets (never on GET /assets/manifest's
+	// fleet-wide listing) and omitted entirely when this node has never
+	// had one. Additive: every other field above is unaffected by its
+	// presence or absence.
+	ResyncRequest *ResyncRequestStatus `json:"resyncRequest,omitempty"`
+}
+
+// ResyncRequestStatus is one asset.inventory.request commands row,
+// rendered for an operator reading GET /nodes/{nodeId}/assets rather than
+// the commands table directly. State is the command's own lifecycle word
+// ("dispatched" while still waiting on the node, "resolved" once a fresh
+// report confirmed it, "failed" on a publish failure or a reconciliation
+// sweep timeout); OutcomeReason carries the human-readable reason once
+// State is "resolved" or "failed" and is nil while still "dispatched".
+// ResolvedAt is nil until State leaves "dispatched".
+type ResyncRequestStatus struct {
+	CommandID     string  `json:"commandId"`
+	State         string  `json:"state"`
+	OutcomeReason *string `json:"outcomeReason"`
+	IssuedAt      string  `json:"issuedAt"`
+	ResolvedAt    *string `json:"resolvedAt"`
 }
 
 // NodeAssetManifestResponse is the body of GET /nodes/{nodeId}/assets.
