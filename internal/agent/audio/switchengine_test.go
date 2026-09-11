@@ -186,3 +186,36 @@ func TestSwitchableEngineGlitchCountsForwardsOrReportsUnknown(t *testing.T) {
 		t.Errorf("GlitchCounts() = %+v, want %+v (the bound engine's own counts, forwarded verbatim)", got, want)
 	}
 }
+
+// TestSwitchableEngineAlignmentForwardsOrReportsUnbound proves
+// SwitchableEngine.Alignment reports not known with
+// [SwitchableEngineNoBindingReason] while unbound, rather than a
+// fabricated sample, and forwards a bound engine's own injected sample
+// verbatim once one is set, the same delegation
+// [SwitchableEngine.PresentedElapsed] proves for its own signal.
+func TestSwitchableEngineAlignmentForwardsOrReportsUnbound(t *testing.T) {
+	e := NewSwitchableEngine()
+
+	if sample, known, reason := e.Alignment(context.Background(), "h"); known || reason != SwitchableEngineNoBindingReason {
+		t.Errorf("Alignment() on an unbound SwitchableEngine = (%+v, %v, %q), want (zero, false, %q)", sample, known, reason, SwitchableEngineNoBindingReason)
+	}
+
+	want := AlignmentSample{
+		ProgramPosition: 3 * time.Second,
+		LTCTimecode:     pkgaudio.LTCTimecode("01:00:03:00"),
+		LTCFrameRate:    pkgaudio.LTCFrameRate30,
+		RunningTime:     5 * time.Second,
+		SampledAt:       time.Unix(1000, 0),
+	}
+	fake := NewFakeEngine(time.Now)
+	fake.SetAlignment(want)
+	e.Set(fake)
+
+	got, known, reason := e.Alignment(context.Background(), "h")
+	if !known {
+		t.Fatalf("Alignment() with an AlignmentObserver-implementing engine bound: known = false, reason = %q, want true", reason)
+	}
+	if got != want {
+		t.Errorf("Alignment() = %+v, want %+v (the bound engine's own sample, forwarded verbatim)", got, want)
+	}
+}

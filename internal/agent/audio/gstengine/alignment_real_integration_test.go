@@ -84,6 +84,8 @@ func TestAlignmentSampleNearZeroThenNegativeAfterASeek(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiffMs: %v", err)
 	}
+	// tolerance absorbs the real gap between StartLTC taking effect on the
+	// wire and the program branch joining the shared mixer.
 	if firstOffsetMs > tolerance || firstOffsetMs < -tolerance {
 		t.Fatalf("offset shortly after start = %dms, want within %dms of zero", firstOffsetMs, tolerance)
 	}
@@ -96,9 +98,11 @@ func TestAlignmentSampleNearZeroThenNegativeAfterASeek(t *testing.T) {
 	// bias would land in the seek target, not in the offset this test is
 	// trying to isolate.
 	const seekAdvance = 2 * time.Second
+	rtBeforeSeek := e.pipeline.GetCurrentRunningTime()
 	if _, err := e.Seek(ctx, handle, first.ProgramPosition+seekAdvance); err != nil {
 		t.Fatalf("Seek: %v", err)
 	}
+	rtAfterSeek := e.pipeline.GetCurrentRunningTime()
 
 	second := waitForAlignmentKnown(t, e, handle, ltcOpTimeout)
 	if !second.SampledAt.After(first.SampledAt) {
@@ -108,7 +112,11 @@ func TestAlignmentSampleNearZeroThenNegativeAfterASeek(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiffMs: %v", err)
 	}
-	want := -seekAdvance.Milliseconds()
+	// The replacement branch joins anchored at the running time the Seek
+	// call itself consumed, so the true lag is the seek's own advance
+	// minus that consumed running time, not the seek's advance alone.
+	swapElapsed := time.Duration(rtAfterSeek - rtBeforeSeek)
+	want := -(seekAdvance - swapElapsed).Milliseconds()
 	if secondOffsetMs > want+tolerance || secondOffsetMs < want-tolerance {
 		t.Fatalf("offset after a %s program-only seek = %dms, want within %dms of %dms (LTC behind program, negative)", seekAdvance, secondOffsetMs, tolerance, want)
 	}

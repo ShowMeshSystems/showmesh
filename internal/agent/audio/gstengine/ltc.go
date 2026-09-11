@@ -124,14 +124,9 @@ type ltcChannel struct {
 	active     bool
 	generation uint64
 
-	// generationStartTimecode is the UNCOMPENSATED timecode the current
-	// generation was started at (spec.StartTimecode, before
-	// ltcTotalLeadDuration's advance): the timecode actually audible at
-	// feedAnchor, not the encoder's own internal start. [Engine.Alignment]
-	// reads this, under mu, to compute the timecode audible at any later
-	// running time as generationStartTimecode advanced by the elapsed
-	// time since feedAnchor, exactly the arithmetic runLTCFeeder already
-	// performs per frame via tc.Advance(-ltcTotalLeadDuration, rate).
+	// generationStartTimecode is the UNCOMPENSATED timecode
+	// (spec.StartTimecode) the current generation started at: the value
+	// actually audible at genAnchor, not the encoder's own internal start.
 	generationStartTimecode pkgaudio.LTCTimecode
 
 	// emittedGeneration is the generation of the most recent buffer this
@@ -172,36 +167,18 @@ type ltcChannel struct {
 	stopFeed    chan struct{}
 	feedDone    chan struct{}
 
-	// feedAnchor, anchorKnown and feedSamples are owned exclusively by the
-	// feeder goroutine: the running-time each buffer's PTS is computed
-	// from by adding an exact sample count, never by re-reading the
-	// pipeline clock per buffer, so the LTC stream stays gapless.
-	// anchorKnown is false until a genuine (non-ClockTimeNone) running
-	// time has been read; until then feedAnchor is not a real anchor and
-	// no confirmed emission may be reported as [agentaudio.LTCRunning].
+	// feedAnchor and feedSamples are owned exclusively by the feeder
+	// goroutine. anchorKnown is an atomic instead: [Engine.Alignment]
+	// reads it from another goroutine, so a plain bool would race.
 	feedAnchor  gst.ClockTime
-	anchorKnown bool
+	anchorKnown atomic.Bool
 	feedSamples uint64
 
-	// genAnchorNs/genAnchorGeneration are [Engine.Alignment]'s own safe,
-	// per-generation anchor, published by the feeder goroutine (see
-	// runLTCFeeder) the moment it pushes THIS generation's first real LTC
-	// frame: the running time (nanoseconds) at which generationStartTimecode
-	// is the literal value encoded on the wire. It is feedAnchor plus that
-	// frame's own cumulative sample offset, minus ltcTotalLeadDuration:
-	// the encoder was built ltcTotalLeadDuration ahead of
-	// generationStartTimecode (see StartLTC's compensatedStart), so the
-	// frame audible at genAnchor is generationStartTimecode itself, not
-	// the frame just pushed. Neither field is feedAnchor itself: feedAnchor
-	// is one fixed epoch for the channel's whole lifetime, set once, long
-	// before most generations start, and using it directly here is exactly
-	// the defect this pair exists to avoid. Atomics, not mu, so the
-	// feeder's hot per-frame loop never blocks on a lock to publish them;
-	// genAnchorGeneration lets a reader reject a pairing that is stale
-	// against a fresher generation without needing the two published as
-	// one atomic unit.
-	genAnchorNs         atomic.Int64
-	genAnchorGeneration atomic.Uint64
+	// genAnchor/genAnchorGeneration are [Engine.Alignment]'s own
+	// per-generation anchor: the running time generationStartTimecode is
+	// audible at. Guarded by mu, not atomics: written once per generation.
+	genAnchor           gst.ClockTime
+	genAnchorGeneration uint64
 }
 
 // newLTCChannel builds the appsrc -> audioconvert -> capsfilter -> queue
@@ -290,15 +267,15 @@ func (ch *ltcChannel) bindPipeline(p gst.Pipeline) {
 
 // resolveFeedAnchor sets feedAnchor from the pipeline's current running
 // time, once, the first time that value is not [gst.ClockTimeNone].
-// Called only from the feeder goroutine, which is the sole owner of
+// Called only from the feeder goroutine, which is the sole writer of
 // feedAnchor and anchorKnown.
 func (ch *ltcChannel) resolveFeedAnchor() {
-	if ch.anchorKnown || ch.pipeline == nil {
+	if ch.anchorKnown.Load() || ch.pipeline == nil {
 		return
 	}
 	if t := ch.pipeline.GetCurrentRunningTime(); t != gst.ClockTimeNone {
 		ch.feedAnchor = t
-		ch.anchorKnown = true
+		ch.anchorKnown.Store(true)
 	}
 }
 
@@ -492,7 +469,7 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 	// starve interleave's LTC sink pad long enough to drag program audio
 	// down with it. The per-iteration retry below is the non-blocking path.
 	ch.resolveFeedAnchor()
-	if !ch.anchorKnown {
+	if !ch.anchorKnown.Load() {
 		ch.mu.Lock()
 		ch.obs = agentaudio.LTCObservation{
 			State:  agentaudio.LTCFailed,
@@ -502,7 +479,7 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 	}
 
 	// lastAnchoredGen is this goroutine's own record of which generation
-	// [ltcChannel.genAnchorNs]/[ltcChannel.genAnchorGeneration] were last
+	// [ltcChannel.genAnchor]/[ltcChannel.genAnchorGeneration] were last
 	// published for, so each generation's anchor is published exactly
 	// once, from its own first real frame, never recomputed from a later
 	// one.
@@ -515,7 +492,7 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 		default:
 		}
 
-		if !ch.anchorKnown {
+		if !ch.anchorKnown.Load() {
 			ch.resolveFeedAnchor()
 		}
 
@@ -559,16 +536,14 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 		}
 
 		// Publish this generation's own alignment anchor from its first
-		// real frame, before pushing it: [pushLTCSamples] stamps this
-		// exact frame's PTS from feedAnchor+feedSamples, so reading them
-		// here, ahead of that call incrementing feedSamples, is the same
-		// PTS that frame will carry. See genAnchorNs's own doc comment
-		// for why this must be per-generation, never the channel's one
-		// fixed feedAnchor.
-		if gen != lastAnchoredGen {
+		// real frame, before pushing it, using the same PTS math
+		// pushLTCSamples applies to that frame.
+		if gen != lastAnchoredGen && ch.anchorKnown.Load() {
 			framePTS := ch.feedAnchor + gst.ClockTime(time.Duration(ch.feedSamples)*time.Second/time.Duration(ch.sampleRate))
-			ch.genAnchorNs.Store(int64(framePTS) - int64(ltcTotalLeadDuration))
-			ch.genAnchorGeneration.Store(gen)
+			ch.mu.Lock()
+			ch.genAnchor = framePTS - gst.ClockTime(ltcTotalLeadDuration)
+			ch.genAnchorGeneration = gen
+			ch.mu.Unlock()
 			lastAnchoredGen = gen
 		}
 
@@ -594,7 +569,7 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 		}
 
 		ch.mu.Lock()
-		if pushed && ch.generation == gen && ch.active && ch.anchorKnown && ch.emittedGeneration.Load() == gen {
+		if pushed && ch.generation == gen && ch.active && ch.anchorKnown.Load() && ch.emittedGeneration.Load() == gen {
 			ch.lastConfirmed = e.cfg.now()
 			ch.obs = agentaudio.LTCObservation{
 				State:          agentaudio.LTCRunning,

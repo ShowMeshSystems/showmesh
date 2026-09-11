@@ -39,21 +39,22 @@ func (e *Engine) Alignment(_ context.Context, handle agentaudio.EngineHandle) (a
 	}
 	runningTime := time.Duration(rt)
 
+	if !b.hasJoined() {
+		return agentaudio.AlignmentSample{}, false, "this branch has not joined the shared mixer yet"
+	}
+
 	b.mu.Lock()
 	segmentStart := b.segmentStart
 	renderedPos := b.renderedPos
 	pads := b.deinterleaveSrcPads
 	b.mu.Unlock()
 
-	if len(pads) == 0 || pads[0] == nil {
-		return agentaudio.AlignmentSample{}, false, "this branch has not joined the shared mixer yet"
-	}
 	// A pad offset is only ever set on every one of a branch's src pads
 	// together (resyncMixerPads), so the first is as good evidence as any.
 	offset := time.Duration(pads[0].GetOffset())
 	programPos := segmentStart + (runningTime - offset)
 	if programPos < 0 {
-		programPos = 0
+		return agentaudio.AlignmentSample{}, false, "the branch's pad offset and the pipeline's running time disagree; computed program position is negative"
 	}
 
 	// The branch has not decoded up to the position the pipeline is
@@ -61,7 +62,7 @@ func (e *Engine) Alignment(_ context.Context, handle agentaudio.EngineHandle) (a
 	// this branch's program audio, so a model-derived alignment here would
 	// describe a session that is not actually being heard.
 	if renderedPos < programPos-queueMaxSizeTime {
-		return agentaudio.AlignmentSample{}, false, "program branch has not rendered up to its presented position; underrun suspected"
+		return agentaudio.AlignmentSample{}, false, "program branch has not rendered up to its presented position"
 	}
 
 	e.ltc.mu.Lock()
@@ -69,6 +70,9 @@ func (e *Engine) Alignment(_ context.Context, handle agentaudio.EngineHandle) (a
 	generation := e.ltc.generation
 	rate := e.ltc.rate
 	startTC := e.ltc.generationStartTimecode
+	anchorKnown := e.ltc.anchorKnown.Load()
+	anchorGen := e.ltc.genAnchorGeneration
+	genAnchor := time.Duration(e.ltc.genAnchor)
 	e.ltc.mu.Unlock()
 	emitted := e.ltc.emittedGeneration.Load()
 
@@ -76,11 +80,12 @@ func (e *Engine) Alignment(_ context.Context, handle agentaudio.EngineHandle) (a
 		return agentaudio.AlignmentSample{}, false, "LTC generation is not confirmed active for this sample"
 	}
 
-	anchorGen := e.ltc.genAnchorGeneration.Load()
+	if !anchorKnown {
+		return agentaudio.AlignmentSample{}, false, "this channel's LTC PTS anchor is not yet established"
+	}
 	if anchorGen != generation {
 		return agentaudio.AlignmentSample{}, false, "this generation's LTC alignment anchor is not yet established"
 	}
-	genAnchor := time.Duration(e.ltc.genAnchorNs.Load())
 
 	tc, err := startTC.Advance(runningTime-genAnchor, rate)
 	if err != nil {

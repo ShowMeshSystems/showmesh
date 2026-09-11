@@ -142,3 +142,40 @@ func TestAlignmentSnapshotNotMeasuredWhilePaused(t *testing.T) {
 		t.Fatalf("AlignmentSnapshot while paused = %+v, want Measured false", snap)
 	}
 }
+
+// TestAlignmentSnapshotDoesNotStallOnBusySessionLock proves
+// AlignmentSnapshot uses the same bounded try-lock pattern
+// Manager.Snapshot uses: a session holding its own mutex must not stall
+// AlignmentSnapshot past snapshotLockBudget.
+func TestAlignmentSnapshotDoesNotStallOnBusySessionLock(t *testing.T) {
+	prevBudget := snapshotLockBudget
+	snapshotLockBudget = 50 * time.Millisecond
+	defer func() { snapshotLockBudget = prevBudget }()
+
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	configureLTC(m, pkgaudio.LTCFrameRate30, "00:00:00:00")
+	ctx := context.Background()
+
+	ref := writeTestAsset(t, m.assetDir, "show.wav", "asset-show", []byte("show"))
+	startPlaying(t, m, ctx, "show", ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	s, ok := m.get("show")
+	if !ok {
+		t.Fatal("session not created")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	start := time.Now()
+	snap := m.AlignmentSnapshot(ctx)
+	if elapsed := time.Since(start); elapsed >= snapshotLockBudget*4 {
+		t.Fatalf("AlignmentSnapshot took %s while the session lock was held, want bounded near snapshotLockBudget (%s)", elapsed, snapshotLockBudget)
+	}
+	if snap.Measured {
+		t.Fatalf("AlignmentSnapshot = %+v, want Measured false while the session lock is busy", snap)
+	}
+	if snap.Reason == "" {
+		t.Error("Reason is empty, want a stated explanation naming the busy lock")
+	}
+}
