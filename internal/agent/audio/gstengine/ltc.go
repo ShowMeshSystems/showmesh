@@ -204,7 +204,12 @@ func newLTCChannel(bin gst.Bin, sampleRate int, maskBit uint64) (*ltcChannel, er
 	src.SetObjectProperty("caps", gst.CapsFromString(
 		fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1,layout=interleaved", ltcgen.SampleFormat, sampleRate)))
 	src.SetObjectProperty("format", gst.FormatTime)
-	src.SetObjectProperty("is-live", true)
+	// is-live false so this source does not force the pipeline onto
+	// GstSystemClock (see the silence sources' identical setting in
+	// engine_cgo.go). runLTCFeeder pushes silence from the moment it
+	// starts, before any run is requested, so this appsrc still has data
+	// to offer during preroll.
+	src.SetObjectProperty("is-live", false)
 	// block makes PushBuffer the pacing mechanism: it returns once the
 	// queue below max-bytes has room, not a leaky discard reported as sent.
 	src.SetObjectProperty("block", true)

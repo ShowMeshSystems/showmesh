@@ -529,7 +529,11 @@ func (e *Engine) buildPipeline() error {
 		if silenceSrc == nil {
 			return fmt.Errorf("could not create silence source for channel %d", ch)
 		}
-		silenceSrc.SetObjectProperty("is-live", true)
+		// is-live false so this source does not force the pipeline onto
+		// GstSystemClock: a live source is offered before the sink has
+		// acquired its ring buffer, and clock selection never revisits
+		// that choice once made. See PresentedElapsed's doc comment.
+		silenceSrc.SetObjectProperty("is-live", false)
 		silenceSrc.SetObjectProperty("wave", int32(4)) // GST_AUDIO_TEST_SRC_WAVE_SILENCE
 		conv := gst.ElementFactoryMake("audioconvert", fmt.Sprintf("silence-conv-ch%d", ch))
 		caps := gst.ElementFactoryMake("capsfilter", fmt.Sprintf("silence-caps-ch%d", ch))
@@ -725,7 +729,8 @@ func addMixerKeepAlive(bin gst.Bin, mixer gst.Element, ch int, sampleRate int) e
 	if src == nil || conv == nil || resample == nil || caps == nil {
 		return fmt.Errorf("could not create mixer keep-alive chain for channel %d", ch)
 	}
-	src.SetObjectProperty("is-live", true)
+	// is-live false; see the silence source's own doc comment for why.
+	src.SetObjectProperty("is-live", false)
 	src.SetObjectProperty("wave", int32(4)) // GST_AUDIO_TEST_SRC_WAVE_SILENCE
 	caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, sampleRate)))
 	for _, el := range []gst.Element{src, conv, resample, caps} {
@@ -868,14 +873,15 @@ func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
 // a decoder well ahead of the speaker would answer from the wrong end of
 // the pipeline.
 //
-// UNVERIFIED HERE, AND IT BOUNDS WHAT THIS READING IS WORTH: a source
-// forcing clock selection before the sink has acquired its ring buffer
-// leaves the pipeline running on the system clock rather than the card,
-// which a separate lane is measuring and fixing. Until that lands, this
-// reports whatever clock the pipeline actually selected, which on such a
-// node is the system clock. It is still the output's own running time
-// and never the decode frontier; it is not yet confirmed to be the
-// card's.
+// UNVERIFIED HERE, AND IT BOUNDS WHAT THIS READING IS WORTH: no source in
+// this pipeline is live (see the is-live settings in this file and in
+// ltc.go), so clock selection is no longer forced onto GstSystemClock by
+// a source offering nothing before preroll. That is a construction-time
+// property, not a hardware measurement: the sink's own slaving log on
+// real hardware is what actually confirms the pipeline is running on the
+// card's clock, and that reading has not been taken here. This reports
+// whatever clock the pipeline actually selected; it is still the
+// output's own running time and never the decode frontier.
 //
 // Reported unknown before the pipeline first reaches PLAYING, when it has
 // no running time at all, rather than as a zero that would read as "the
