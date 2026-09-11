@@ -1,0 +1,26 @@
+# Runs WirePlumber (PipeWire's session/policy manager) as a headless
+# system service, for the same reason pipewire-showmesh.service exists:
+# Debian's wireplumber package ships only a user-session unit. Shares
+# pipewire-showmesh.service's runtime directory so it manages that same
+# instance rather than starting a second, independent PipeWire graph.
+# Templated by install-ptp-audio.sh (@USER@, @GROUP@); installed to
+# /etc/systemd/system/wireplumber-showmesh.service.
+[Unit]
+Description=ShowMesh headless WirePlumber (session/policy manager)
+Documentation=https://github.com/ShowMeshSystems/showmesh
+After=pipewire-showmesh.service
+Requires=pipewire-showmesh.service
+BindsTo=pipewire-showmesh.service
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+Environment=PIPEWIRE_RUNTIME_DIR=/run/pipewire
+Environment=XDG_RUNTIME_DIR=/run/pipewire
+ExecStart=/usr/bin/wireplumber
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=multi-user.target

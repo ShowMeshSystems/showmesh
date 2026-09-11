@@ -1,0 +1,200 @@
+# PTP-disciplined PipeWire audio
+
+This is the install path that makes a ShowMesh audio node's sound card
+follow a PTP clock instead of free-running on its own crystal: `ptp4l`
+disciplines a PHC (or, absent one, the system clock), and a PipeWire
+graph driven from that clock rate-matches the ALSA sink to it. Separate
+from `deploy/node/README.md`, which installs the ShowMesh agent itself;
+run both on a node that plays synchronized audio.
+
+RES-019 sections 4.5, 5.1, 5.3, and 7.2 (Track I, seam I4, candidate A,
+ruled by the owner 2026-09-11). [Track I](../../docs/build/TRACK-I-clock-and-sync.md)
+is the build record this seam belongs to.
+
+## Why ptp4l runs as its own systemd service, not inside the agent
+
+The repository already has a ShowMesh-managed PTP provider
+(`internal/agent/clock`'s `ManagedProvider`): given the choice, it writes
+its own `ptp4l` config and supervises the process itself. This install
+path deliberately does **not** use that provider. It installs `ptp4l` as
+an independent systemd service instead, and expects the agent's
+`node.clock` to be configured as `provider=external`, observing that
+service's read-only socket.
+
+The reason is durability, not preference: `PipeWire is a system service
+independent of the ShowMesh agent's own lifecycle. If the agent owned
+`ptp4l`, an agent crash or restart would take the PHC discipline down
+with it, and PipeWire's `clock.device` would lose its sync source for as
+long as the agent was down -- turning an agent-level fault into an audio
+clock fault, which is exactly the kind of coupling the project's
+degrade-safely property forbids. With `ptp4l` running independently, the
+PHC stays disciplined and the PipeWire graph stays clocked from it
+whether or not the agent process is running at all.
+
+**This means exactly one thing about agent configuration**: never set
+this node's `node.clock` to `provider=managed`. RES-019 section 5.3 is
+explicit that exactly one component owns `ptp4l` on an interface, and
+after running this install path, that component is
+`ptp4l-showmesh.service`. Configure the agent instead with:
+
+```sh
+showmeshctl node-clock set <node-id> \
+  --provider external \
+  --interface <interface> \
+  --domain <domain>
+```
+
+(`--external-uds-address` defaults to `/var/run/ptp/ptp4lro`, which is
+exactly the socket `ptp4l-showmesh.service` publishes; only pass it if
+you changed the service's config by hand.) See `cmd/showmeshctl/cmd_nodeclock.go`
+for every flag.
+
+## What `install-ptp-audio.sh` does
+
+```sh
+sudo deploy/node/install-ptp-audio.sh <interface> <domain> [follower|grandmaster|auto]
+```
+
+Idempotent: every file it writes is fully derived from its arguments, so
+re-running it (same or different arguments) simply regenerates them.
+Unlike `deploy/node/install.sh`'s `agent.env`, nothing here is
+operator-edited state that a re-run must avoid touching.
+
+1. **Installs packages**: `linuxptp`, `pipewire`, `pipewire-audio`,
+   `wireplumber`, `gstreamer1.0-pipewire` (Debian 13 package names,
+   confirmed against the real `apt` archive, not assumed).
+2. **Finds the PHC**, reading `/sys/class/net/<iface>/device/ptp/` directly
+   rather than depending on `ethtool` (not installed on the reference
+   node). If a `ptpN` entry exists, `ptp4l` uses hardware timestamping
+   against `/dev/ptpN`. If none does -- the Raspberry Pi 3B+'s LAN7515
+   USB NIC has no PHC at all, RES-019 section 4.6 -- `ptp4l` uses software
+   timestamping instead, which disciplines `CLOCK_REALTIME`. Either way
+   the node ends up PTP-disciplined; only the clock source differs, and
+   the script says plainly which one applies.
+3. **Writes `/etc/showmesh/ptp4l.conf`** and a systemd unit
+   (`ptp4l-showmesh.service`) that runs it, `clientOnly`/`priority1` set
+   by the requested role:
+
+   | Role | clientOnly | priority1 | Behavior |
+   |---|---|---|---|
+   | `follower` (default) | 1 | 255 | Never becomes master no matter what else is on the wire. The Day-0 show network case: the network already has a grandmaster. |
+   | `grandmaster` | 0 | 248 | Runs full BMCA; alone on the wire, elects itself master. The dev-network case: one node, nothing else speaking PTP. 248 is worse than the 128 professional gear typically declares, so real gear introduced later still wins BMCA and demotes this node to follower automatically. |
+   | `auto` | 0 | (unset, linuxptp default 128) | BMCA decides with no thumb on the scale either way. |
+
+   `priority1 255` for `follower` is not optional decoration: a
+   clientOnly port left at linuxptp's plain default (128) BMCA-outranks a
+   `grandmaster`-role node's 248, and the port gets stuck logging "master
+   state recommended in slave only mode" instead of ever reaching SLAVE
+   -- measured in this repository's own `bench/ptp-node`, not assumed.
+
+4. **Installs a udev rule** (`/etc/udev/rules.d/99-showmesh-ptp.rules`)
+   granting the `showmesh` group read access to any `/dev/ptpN`: the
+   agent's external clock provider reads the PHC directly, and PipeWire's
+   node.driver opens it too (the `pipewire` system user this script
+   creates is added to the `showmesh` group for exactly this reason).
+5. **Creates a dedicated `pipewire` system user** and installs
+   `pipewire-showmesh.service` and `wireplumber-showmesh.service`,
+   running both as ordinary headless system services sharing one runtime
+   directory (`/run/pipewire`). This is necessary, not cosmetic: Debian's
+   `pipewire` and `wireplumber` packages ship only user-session units
+   (`/usr/lib/systemd/user/{pipewire,wireplumber}.service`), which assume
+   a logged-in desktop session. This node has none, and `systemctl --user`
+   needs a lingering login this node is never going to have. A PipeWire
+   that only exists inside a user session is a node that goes silent
+   after every reboot.
+6. **Installs the PipeWire clock config**
+   (`/etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf`): a
+   `support.node.driver` named `showmesh-ptp-driver`, `priority.driver
+   210000` (above the stock config's own highest entry, 190000, so it
+   wins driver selection without needing to know every other driver's
+   exact value), clocked from `clock.device=/dev/ptpN` when a PHC was
+   found or `clock.id=realtime` when it was not, and
+   `default.clock.rate=48000` to match the M4's native rate.
+7. **Installs a WirePlumber rate rule**
+   (`/etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf`)
+   pinning the M4's ALSA sink node to 48 kHz and disabling its suspend
+   timeout, so it never goes idle-silent between cues. **Unverified
+   against real hardware**: `bench/ptp-node` has no ALSA card, so this
+   file is syntax-checked (WirePlumber starts cleanly with it present)
+   but its match rule has never matched a real M4.
+8. **Enables and starts everything**, or -- on a host with no systemd PID
+   1 (a plain container) -- installs every file and says exactly what it
+   could not do and why, the same pattern `deploy/node/install.sh` uses.
+9. **Prints a summary**: installed package versions, the PTP role/mode/
+   PHC it configured, the live port state read back from `pmc` (SLAVE
+   with a grandmaster, MASTER if this node is currently the domain's
+   active clock, or an honest "not yet available" if `ptp4l` is still
+   settling), and which clock the PipeWire graph is configured for.
+
+## What `verify-ptp-audio.sh` checks
+
+```sh
+deploy/node/verify-ptp-audio.sh [--play <seconds>]
+```
+
+Read-only; never installs, starts, stops, or reconfigures anything. In
+one pass:
+
+1. **Is `ptp4l` locked, and to whom** -- `pmc GET PORT_DATA_SET` for port
+   state, `pmc GET TIME_STATUS_NP` for `gmIdentity` and `master_offset`.
+   Reports honestly whether this node is itself the domain's grandmaster
+   (`MASTER`) or following one (`SLAVE`), rather than assuming the latter.
+2. **Is the PipeWire graph driven by the PTP driver** -- `pw-dump`,
+   looking for the `showmesh-ptp-driver` node and reporting its clock
+   source, then listing every ALSA node's `node.driver` property (`false`
+   means it is a follower, not its own driver).
+3. **The load-bearing reading**: runs a short `pipewiresink` pipeline
+   with `GST_DEBUG=audiobasesink:6` and counts skew/slaving lines. With
+   the rate lock actually working there should be **none** -- `alsasink`
+   is no longer in the signal path at all, `pipewiresink` is -- so any
+   line here means the pipeline under test is not actually going through
+   this seam (RES-019 section 7.1 explains why `alsasink`'s own slaving
+   was never going to be good enough on its own).
+
+Pass `--play 0` to skip step 3 (faster, but it is the check that actually
+proves the rate lock is doing anything -- steps 1 and 2 only prove the
+pieces exist, not that they are correcting anything).
+
+## What this repository's own verification proved, and what it did not
+
+`bench/ptp-node` (see its own README) proved, on two Debian 13
+containers with no PHC: real package installation, correct PHC/no-PHC
+detection and the `clock.id=realtime` fallback, all three roles producing
+the documented `clientOnly`/`priority1` values, a real `ptp4l` reaching
+MASTER (grandmaster role, alone on the wire and with a follower present)
+and SLAVE (follower role, with `pmc`-reported grandmaster identity and
+offset), a real PipeWire electing the PTP driver, and a `pipewiresink`
+pipeline playing without error.
+
+It did **not** prove, and this repository does not claim: hardware
+timestamping against a real PHC, an actual ALSA sink being rate-matched
+(no `/dev/snd` in a container), the WirePlumber M4 match rule matching a
+real M4, any of this surviving a real systemd boot, or the
+`audiobasesink:6` skew-slaving absence against a real `alsasink` (there
+is none in the bench's own pipeline to have slaved in the first place).
+All of that needs the real node.
+
+## Undoing it
+
+```sh
+sudo systemctl disable --now ptp4l-showmesh.service pipewire-showmesh.service wireplumber-showmesh.service
+sudo rm -f /etc/systemd/system/ptp4l-showmesh.service \
+           /etc/systemd/system/pipewire-showmesh.service \
+           /etc/systemd/system/wireplumber-showmesh.service
+sudo systemctl daemon-reload
+sudo rm -f /etc/showmesh/ptp4l.conf
+sudo rm -f /etc/udev/rules.d/99-showmesh-ptp.rules
+sudo udevadm control --reload-rules
+sudo rm -rf /etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf \
+            /etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf
+sudo userdel pipewire   # only if nothing else on this host uses that account
+sudo apt-get remove linuxptp pipewire pipewire-audio wireplumber gstreamer1.0-pipewire
+```
+
+The `showmesh` group is left in place: `deploy/node/install.sh` also
+depends on it existing for the agent's own account.
+
+If the agent's `node.clock` was set to `provider=external` for this
+node, revert it (or remove the node's clock config entirely) before or
+alongside this teardown -- otherwise the agent keeps polling a socket
+that no longer exists and reports `unsynchronized`.

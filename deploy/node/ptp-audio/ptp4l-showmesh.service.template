@@ -1,0 +1,29 @@
+# ptp4l for a ShowMesh audio node's PHC. Templated by install-ptp-audio.sh
+# (@IFACE@, @CONF@); installed to /etc/systemd/system/ptp4l-showmesh.service.
+#
+# Runs independently of the ShowMesh agent (RES-019 section 5.3, "External
+# linuxptp" provider): the PHC stays disciplined, and PipeWire stays
+# clocked from it, across an agent crash or restart. The agent's own
+# node.clock must be configured provider=external against this unit's
+# read-only socket, never provider=managed -- that would start a second
+# ptp4l on the same interface, which RES-019 section 5.3 forbids outright.
+[Unit]
+Description=ShowMesh PTP client for @IFACE@ (ptp4l)
+Documentation=https://github.com/ShowMeshSystems/showmesh
+After=network-online.target
+Wants=network-online.target
+Before=pipewire-showmesh.service
+
+[Service]
+Type=simple
+# Runs as root (no User= set): ptp4l needs CAP_NET_RAW for its PTP event
+# socket and, in hardware-timestamping mode, CAP_SYS_TIME-class access to
+# adjust the PHC via /dev/ptpN. This matches linuxptp's own upstream unit.
+RuntimeDirectory=ptp
+RuntimeDirectoryMode=0755
+ExecStart=/usr/sbin/ptp4l -f @CONF@ -i @IFACE@ -m
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

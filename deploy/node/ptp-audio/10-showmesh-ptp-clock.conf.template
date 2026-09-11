@@ -1,0 +1,40 @@
+# PipeWire conf.d drop-in: makes a PTP-clocked support.node.driver the
+# graph driver, above the ALSA sink, so the sink becomes a rate-matched
+# follower instead of free-running on its own crystal (RES-019 sections
+# 4.5 and 7.2, Track I seam I4 candidate A). Installed by
+# install-ptp-audio.sh to /etc/pipewire/pipewire.conf.d/, templated on
+# @CLOCK_PROPERTY@ (clock.device=/dev/ptpN when this interface has a PHC,
+# clock.id=realtime when it does not -- see that script for which case
+# applied and why).
+#
+# priority.driver 210000 is chosen above the stock pipewire.conf's own
+# Freewheel-Driver entry (190000, the highest priority.driver shipped by
+# Debian's default /usr/share/pipewire/pipewire.conf), so this driver wins
+# selection over every stock driver without needing to know their exact
+# values. The engine's GStreamer pipeline outputs through pipewiresink
+# (the other half of this seam, on a separate branch) and inherits
+# whichever driver's clock PipeWire elects; this entry is what makes that
+# election land here.
+context.properties = {
+    default.clock.rate      = 48000
+    default.clock.allowed-rates = [ 48000 ]
+}
+
+context.objects = [
+    # factory = spa-node-factory (a generic instantiator), with
+    # args.factory.name naming the actual SPA node type to create -- the
+    # same indirection the stock pipewire.conf uses for its own
+    # Dummy-Driver and Freewheel-Driver entries. A bare
+    # `factory = support.node.driver` (no spa-node-factory wrapper) fails
+    # at startup with "can't find factory support.node.driver" -- caught
+    # by this repository's own bench/ptp-node run, not by inspection.
+    { factory = spa-node-factory
+      args = {
+          factory.name    = support.node.driver
+          node.name       = "showmesh-ptp-driver"
+          priority.driver = 210000
+          @CLOCK_PROPERTY@
+          resync.ms       = 100
+      }
+    }
+]
