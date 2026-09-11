@@ -119,11 +119,12 @@ func TestNightCheckAudioAlignment_WithinThresholdReportsHealthy(t *testing.T) {
 	}
 }
 
-// TestNightCheckAudioAlignment_NoObservationIsNotVerifiableAndDoesNotAffectOutcome
-// proves a configured audio.node with no current alignment.state
-// evidence never counts against readiness (RES-019's absence-is-not-
-// evidence rule): not_verifiable, excluded from the aggregate.
-func TestNightCheckAudioAlignment_NoObservationIsNotVerifiableAndDoesNotAffectOutcome(t *testing.T) {
+// TestNightCheckAudioAlignment_NoObservationReportsUnknown proves a
+// configured audio.node that has never reported node.audio.clock.
+// alignment.state at all reads unknown, not not_verifiable: missing
+// evidence, unlike an explicit not_collected reading, is not a legitimate
+// non-claim.
+func TestNightCheckAudioAlignment_NoObservationReportsUnknown(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	deps := showConfigTestDeps(svc, st)
 	audio := &fakeNodeAudioLister{}
@@ -136,11 +137,84 @@ func TestNightCheckAudioAlignment_NoObservationIsNotVerifiableAndDoesNotAffectOu
 	if len(checks) != 1 {
 		t.Fatalf("checks = %d, want 1", len(checks))
 	}
+	if checks[0].health != nightHealthUnknown() {
+		t.Errorf("health = %q, want unknown", checks[0].health)
+	}
+	if outcome := nightOutcomeFromChecks(checks); outcome != "unknown" {
+		t.Errorf("nightOutcomeFromChecks = %q, want unknown", outcome)
+	}
+}
+
+// TestNightCheckAudioAlignment_NotCollectedIsNotVerifiableAndDoesNotAffectOutcome
+// proves a configured audio.node whose alignment.state observation exists
+// but carries StateNotCollected (the underlying alignment sample itself
+// was never measured, a legitimate non-claim per RES-019) reads
+// not_verifiable, excluded from the aggregate.
+func TestNightCheckAudioAlignment_NotCollectedIsNotVerifiableAndDoesNotAffectOutcome(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	deps := showConfigTestDeps(svc, st)
+	audio := &fakeNodeAudioLister{}
+	deps.Audio = audio
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
+
+	seedAudioNodeConfigObject(t, st, "audio-01")
+	audio.setObservations("audio-01", []observation.Observation{
+		{
+			Resource:    observation.ResourceRef{Kind: observation.ResourceNode, ID: "audio-01"},
+			Signal:      "node.audio.clock.alignment.state",
+			Absence:     observation.StateNotCollected,
+			Reason:      "program branch has not rendered up to its presented position; underrun suspected",
+			CollectedAt: testNow,
+			Source:      "node-audio:audio-01", Quality: observation.QualityDirect,
+		},
+	})
+
+	checks := h.nightCheckAudioAlignment(context.Background(), testNow)
+	if len(checks) != 1 {
+		t.Fatalf("checks = %d, want 1", len(checks))
+	}
 	if checks[0].health != nightCheckStateNotVerifiable {
 		t.Errorf("health = %q, want not_verifiable", checks[0].health)
 	}
 	if outcome := nightOutcomeFromChecks(checks); outcome != "ready" {
 		t.Errorf("nightOutcomeFromChecks = %q, want ready (not_verifiable excluded from the aggregate)", outcome)
+	}
+}
+
+// TestNightCheckAudioAlignment_StaleReportsUnknown proves an
+// alignment.state observation that has aged past its ValidFor reads
+// unknown, never the not_verifiable a legitimate non-claim gets: the
+// node was reporting and stopped, which is not the same as never having
+// made a claim.
+func TestNightCheckAudioAlignment_StaleReportsUnknown(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	deps := showConfigTestDeps(svc, st)
+	audio := &fakeNodeAudioLister{}
+	deps.Audio = audio
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
+
+	seedAudioNodeConfigObject(t, st, "audio-01")
+	observedAt := testNow.Add(-time.Hour)
+	audio.setObservations("audio-01", []observation.Observation{
+		{
+			Resource:    observation.ResourceRef{Kind: observation.ResourceNode, ID: "audio-01"},
+			Signal:      "node.audio.clock.alignment.state",
+			Value:       "within_threshold",
+			ObservedAt:  &observedAt,
+			CollectedAt: testNow, ValidFor: time.Minute,
+			Source: "node-audio:audio-01", Quality: observation.QualityDirect,
+		},
+	})
+
+	checks := h.nightCheckAudioAlignment(context.Background(), testNow)
+	if len(checks) != 1 {
+		t.Fatalf("checks = %d, want 1", len(checks))
+	}
+	if checks[0].health != nightHealthUnknown() {
+		t.Errorf("health = %q, want unknown", checks[0].health)
+	}
+	if outcome := nightOutcomeFromChecks(checks); outcome != "unknown" {
+		t.Errorf("nightOutcomeFromChecks = %q, want unknown", outcome)
 	}
 }
 
@@ -160,10 +234,9 @@ func TestNightCheckAudioAlignment_NoConfiguredAudioNodesReportsNoChecks(t *testi
 }
 
 // TestNightSession_AudioAlignmentBeyondThresholdWarnsButStartNightProceeds
-// is this issue's own acceptance test, run through the real night-session
-// command lifecycle: with the threshold at its default and a measured
-// alignment beyond it, run-readiness reports ready_with_warnings AND
-// start-night is not refused: a drifting show still runs.
+// runs through the real night-session command lifecycle: with the
+// threshold at its default and a measured alignment beyond it,
+// run-readiness reports ready_with_warnings AND start-night proceeds.
 func TestNightSession_AudioAlignmentBeyondThresholdWarnsButStartNightProceeds(t *testing.T) {
 	advanceFn, now := mutableClock(testNow)
 	svc, st, _ := newTestIdentityServiceWithStore(t, now)

@@ -540,6 +540,28 @@ func TestClockAlignmentStateCollectionFailedWhenAudioSettingsUnreadable(t *testi
 	}
 }
 
+// TestClockAlignmentStateNotCollectedWhenThresholdIsZero proves a
+// configured driftIgnoreThresholdMs of 0 reports not_collected, matching
+// the agent's own "no usable threshold" handling, rather than reporting
+// beyond_threshold on every nonzero offset forever.
+func TestClockAlignmentStateNotCollectedWhenThresholdIsZero(t *testing.T) {
+	st := NewStore(WithClockDomainSource(driftThresholdSource(t, 0)))
+	sampledAt := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	p := samplePayload()
+	p.AlignmentMeasured = true
+	p.AlignmentOffsetMs = 1
+	p.AlignmentSampledAt = &sampledAt
+	st.Put("audio-01", p, sampledAt.Add(time.Minute))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findObs(t, obs, SignalClockAlignmentState)
+	if state.Absence != observation.StateNotCollected {
+		t.Errorf("clock alignment state absence = %q, want %q", state.Absence, observation.StateNotCollected)
+	}
+}
+
 // TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt reproduces
 // a review-flagged honesty defect: a session with a restore genuinely
 // queued, but not yet retried by the node's own automatic driver

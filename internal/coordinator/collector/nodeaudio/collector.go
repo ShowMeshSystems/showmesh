@@ -119,16 +119,9 @@ func alignmentObservation(nodeID string, p mqttproto.AudioPayload, rep report) o
 	return notCollected(res, SignalClockAlignment, source, reason, rep.receivedAt)
 }
 
-// alignmentStateObservation renders node.audio.clock.alignment.state: the
-// threshold verdict on the SAME sample alignmentObservation just
-// reported, never a fresher or staler one. A measured sample
-// compares its absolute offset against audio.settings'
-// driftIgnoreThresholdMs, read live through clockSrc (the same source
-// [lookupClockDomain] already reads node.audio.clock.domain/provenance
-// through) so an operator's threshold edit is reflected on the next poll.
-// An unmeasured sample carries that sample's own not_collected reason
-// forward unchanged: this signal never claims a verdict its own evidence
-// does not have.
+// alignmentStateObservation renders node.audio.clock.alignment.state, the
+// threshold verdict on the same sample alignmentObservation reported.
+// An unmeasured sample carries its own not_collected reason forward.
 func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.AudioPayload, rep report, clockSrc ClockDomainSource) observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
@@ -145,6 +138,9 @@ func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.A
 	if reason != "" {
 		return failed(res, SignalClockAlignmentState, source, reason, rep.receivedAt)
 	}
+	if thresholdMs <= 0 {
+		return notCollected(res, SignalClockAlignmentState, source, "no drift threshold is configured; audio.settings driftIgnoreThresholdMs is 0", rep.receivedAt)
+	}
 
 	offsetMs := p.AlignmentOffsetMs
 	if offsetMs < 0 {
@@ -158,12 +154,8 @@ func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.A
 }
 
 // lookupDriftIgnoreThresholdMs reads audio.settings' driftIgnoreThresholdMs
-// live through clockSrc, matching [lookupClockDomain]'s identical
-// not-found/decode-failure handling one config kind over: an object
-// nothing has ever configured reports the shipped default
-// (config.AudioSettingsDefaultPayload), the same value the API's own
-// resolveAudioSettings returns for a GET, never a fabricated "no drift"
-// verdict.
+// live through clockSrc. An object nothing has configured reports the
+// shipped default (config.AudioSettingsDefaultPayload).
 func lookupDriftIgnoreThresholdMs(ctx context.Context, clockSrc ClockDomainSource) (thresholdMs int, reason string) {
 	if clockSrc == nil {
 		return 0, "no configuration source wired into this coordinator"

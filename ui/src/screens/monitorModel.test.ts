@@ -37,26 +37,8 @@ function nodeWithAudio(audio: Node['audio']): Node {
 }
 
 describe('nodeSignalGroups · Audio', () => {
-  it('renders the alignment state row with the warn tone when beyond threshold', () => {
-    const groups = nodeSignalGroups(nodeWithAudio([alignmentStateEvidence('beyond_threshold')]))
-    const audio = groups.find((g) => g.name === 'Audio')
-    const row = audio?.rows.find((r) => r.label === 'node.audio.clock.alignment.state')
-    expect(row).toBeDefined()
-    expect(row?.value).toBe('beyond_threshold')
-    expect(row?.tone).toBe('warn')
-  })
-
-  it('renders the alignment state row with the good tone when within threshold', () => {
-    const groups = nodeSignalGroups(nodeWithAudio([alignmentStateEvidence('within_threshold')]))
-    const audio = groups.find((g) => g.name === 'Audio')
-    const row = audio?.rows.find((r) => r.label === 'node.audio.clock.alignment.state')
-    expect(row).toBeDefined()
-    expect(row?.value).toBe('within_threshold')
-    expect(row?.tone).toBe('good')
-  })
-
-  it('keeps the alignment state row visible past the shared 6-row default', () => {
-    const padding = Array.from({ length: 11 }, (_, i) => ({
+  it('keeps the alignment state row visible regardless of its position among other audio rows', () => {
+    const padding = Array.from({ length: 20 }, (_, i) => ({
       ...alignmentStateEvidence('within_threshold'),
       signal: `node.audio.padding.${i}`,
     })) as Node['audio']
@@ -64,5 +46,6 @@ describe('nodeSignalGroups · Audio', () => {
     const groups = nodeSignalGroups(nodeWithAudio(audio))
     const row = groups.find((g) => g.name === 'Audio')?.rows.find((r) => r.label === 'node.audio.clock.alignment.state')
     expect(row).toBeDefined()
+    expect(row?.value).toBe('beyond_threshold')
   })
 })

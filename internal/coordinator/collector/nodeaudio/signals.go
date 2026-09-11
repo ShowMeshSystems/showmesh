@@ -42,14 +42,8 @@ const (
 	SignalClockAlignment observation.SignalID = "node.audio.clock.alignment"
 
 	// SignalClockAlignmentState is SignalClockAlignment's threshold
-	// verdict against audio.settings' own driftIgnoreThresholdMs:
-	// "within_threshold" or "beyond_threshold" when the alignment sample
-	// is current, [observation.StateNotCollected] with the alignment
-	// sample's own reason whenever that sample itself is not collected,
-	// and [observation.StateCollectionFailed] whenever audio.settings
-	// cannot be read. Never derived from a stale or absent sample. See
-	// [alignmentStateObservation]. Minted identifier,
-	// docs/build/IDENTIFIER-REGISTER.md.
+	// verdict against audio.settings' driftIgnoreThresholdMs. See
+	// [alignmentStateObservation]. Minted identifier, docs/build/IDENTIFIER-REGISTER.md.
 	SignalClockAlignmentState observation.SignalID = "node.audio.clock.alignment.state"
 
 	// SignalLTCFrameRate, SignalLTCTimecode, SignalLTCGeneratorState, and

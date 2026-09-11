@@ -190,31 +190,41 @@ export type InspectorRow = {
  */
 export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow[]; absent: string | null }[] {
   const observationRows = (entries: Node['render'], prefix: string, limit = 6): InspectorRow[] =>
-    entries.slice(0, limit).map((entry, index) => ({
-      key: `${prefix}:${entry.signal}:${index}`,
-      label: entry.signal,
-      value: entry.value === null ? 'no value' : String(entry.value),
-      state:
-        entry.state === 'current'
-          ? null
-          : `${entry.state.replace('_', ' ')}${entry.observedAt === null ? '' : ` · ${formatClock(entry.observedAt) ?? ''}`}`,
-      detail: entry.state === 'current' ? null : entry.reason,
-      tone:
-        entry.state === 'current'
-          ? // node.audio.clock.alignment.state is a threshold verdict,
-            // not a plain current/stale reading: beyond_threshold
-            // is a warning even while current, never the default good tone.
-            entry.signal === 'node.audio.clock.alignment.state' && entry.value === 'beyond_threshold'
-            ? 'warn'
-            : 'good'
-          : entry.state === 'stale'
-            ? 'warn'
-            : entry.state === 'collection_failed'
-              ? 'bad'
-              : entry.state === 'not_collected'
-                ? 'unknown'
-                : 'pending',
-    }))
+    entries.slice(0, limit).map((entry, index) => {
+      const alignmentLabel =
+        entry.signal === 'node.audio.clock.alignment.state' && entry.state === 'current'
+          ? entry.value === 'beyond_threshold'
+            ? 'beyond threshold'
+            : entry.value === 'within_threshold'
+              ? 'within threshold'
+              : null
+          : null
+      return {
+        key: `${prefix}:${entry.signal}:${index}`,
+        label: entry.signal,
+        value: entry.value === null ? 'no value' : String(entry.value),
+        state:
+          alignmentLabel !== null
+            ? alignmentLabel
+            : entry.state === 'current'
+              ? null
+              : `${entry.state.replace('_', ' ')}${entry.observedAt === null ? '' : ` · ${formatClock(entry.observedAt) ?? ''}`}`,
+        detail: entry.state === 'current' ? null : entry.reason,
+        tone:
+          entry.state === 'current'
+            ? // beyond_threshold is a warning even while current.
+              entry.signal === 'node.audio.clock.alignment.state' && entry.value === 'beyond_threshold'
+              ? 'warn'
+              : 'good'
+            : entry.state === 'stale'
+              ? 'warn'
+              : entry.state === 'collection_failed'
+                ? 'bad'
+                : entry.state === 'not_collected'
+                  ? 'unknown'
+                  : 'pending',
+      }
+    })
 
   return [
     {
@@ -227,12 +237,8 @@ export function nodeSignalGroups(node: Node): { name: string; rows: InspectorRow
     },
     {
       name: 'Audio',
-      // Widened past the shared 6-row default: node.audio.clock.
-      // alignment and its .state verdict sit at collector positions 12-13
-      // (nodeaudio.AllSignalIDs), past that default's cutoff, and must stay
-      // visible beside device/program/LTC evidence rather than truncated
-      // out of the drawer.
-      rows: observationRows(node.audio, 'audio', 13),
+      // Unlimited: alignment rows must survive regardless of collector order.
+      rows: observationRows(node.audio, 'audio', node.audio.length),
       absent:
         node.audio.length === 0
           ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'
@@ -417,17 +423,21 @@ function evidenceRows(
   kind: Exclude<FleetKind, 'all'>,
   nowIso: string | null,
 ): SignalRow[] {
-  return entries.map((entry, index) => ({
-    key: `${keyPrefix}:${index}`,
-    resource,
-    resourceTo,
-    kind,
-    signal: entry.signal,
-    value: signalValue(entry),
-    tone: EVIDENCE_TONE[entry.state],
-    state: EVIDENCE_LABEL[entry.state],
-    observed: signalObserved(entry, nowIso),
-  }))
+  return entries.map((entry, index) => {
+    const beyondThreshold = entry.signal === 'node.audio.clock.alignment.state' && entry.state === 'current' && entry.value === 'beyond_threshold'
+    const withinThreshold = entry.signal === 'node.audio.clock.alignment.state' && entry.state === 'current' && entry.value === 'within_threshold'
+    return {
+      key: `${keyPrefix}:${index}`,
+      resource,
+      resourceTo,
+      kind,
+      signal: entry.signal,
+      value: signalValue(entry),
+      tone: beyondThreshold ? 'warn' : EVIDENCE_TONE[entry.state],
+      state: beyondThreshold ? 'beyond threshold' : withinThreshold ? 'within threshold' : EVIDENCE_LABEL[entry.state],
+      observed: signalObserved(entry, nowIso),
+    }
+  })
 }
 
 /**
