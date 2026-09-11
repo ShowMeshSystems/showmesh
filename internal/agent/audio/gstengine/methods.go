@@ -208,7 +208,7 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 		b.markAnchorUnknownOnCtxTimeout(err)
 		return agentaudio.EngineObservation{}, err
 	}
-	if err := b.join(position); err != nil {
+	if err := b.join(position, true); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineDecodeFailure, err)
 	}
 	b.unblockFlow()
@@ -303,7 +303,12 @@ func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, posit
 // replacement branch for the same media, prepares it off the mixer at
 // position, brings it to PLAYING at the element level, joins it, mutes
 // old's mixer pads and re-points handle to the replacement under e.mu,
-// then tears old down. "PLAYING" here is the element-level state this
+// then retires old in the background (see retireAsync) rather than
+// waiting for its teardown: old is already silent and unreachable by
+// that point, so nothing this call's own return needs to wait on a live
+// decodebin's NULL transition, a cost measured in the tens of
+// milliseconds that this call's own caller should not have to inherit
+// as pure added latency. "PLAYING" here is the element-level state this
 // whole package uses for a paused branch too (see Pause's own doc
 // comment): targetState is the caller's own contract, not old's current
 // state — Start and Resume always name StatePlaying regardless of what
@@ -361,18 +366,25 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 		cleanup()
 		return agentaudio.EngineObservation{}, err
 	}
+	if targetState != pkgaudio.StatePlaying {
+		// The replacement must land paused or stopped, not playing.
+		// blockFlow is called for API consistency (blockProbeID reads
+		// blocked, matching a branch Paused or Stopped the ordinary way),
+		// but it is not what keeps this branch silent: queue keeps
+		// accepting into its own internal buffer on its sink side
+		// regardless of whether its src side is held, so anything it
+		// already accepted before this block existed would still drain
+		// out its src pad the instant join's hold lifted. join is told
+		// not to release its hold at all in this case (see its own doc
+		// comment) -- that is the actual guarantee.
+		replacement.blockFlow()
+	}
 	if err := replacement.setElementsState(ctx, gst.StatePlaying); err != nil {
 		cleanup()
 		return agentaudio.EngineObservation{}, err
 	}
 	replacement.volume.SetObjectProperty("volume", float64(gain))
-	if targetState != pkgaudio.StatePlaying {
-		// The replacement must land paused or stopped, not playing: block
-		// its own flow ahead of join so nothing it produces reaches the
-		// mix even once join links it and its elements are PLAYING.
-		replacement.blockFlow()
-	}
-	if err := replacement.join(position); err != nil {
+	if err := replacement.join(position, targetState == pkgaudio.StatePlaying); err != nil {
 		cleanup()
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineDecodeFailure, err)
 	}
@@ -404,11 +416,36 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 		replacement.unfreeze()
 	}
 
-	if err := old.teardown(ctx); err != nil {
-		slog.Warn("gstengine: retired branch teardown after a swap did not complete cleanly", "branch", old.id, "error", err)
-	}
+	e.retireAsync(old)
 
 	return obs, nil
+}
+
+// retireAsync tears old down in the background after a swap has already
+// muted its mixer pads and re-pointed the handle away from it: old's
+// audio is already silent and unreachable at this point, so nothing the
+// caller does next needs to wait for its teardown, and a live
+// decodebin's NULL transition measurably costs tens of milliseconds a
+// caller's own return should not inherit (e.g. a session realigning LTC
+// to a Seek's new position immediately after it returns). Close must
+// still be able to find and finish this branch even though it is no
+// longer in handles, so it is tracked the same way an in-flight swap
+// replacement is; branch.teardown's own gate is what makes a concurrent
+// Close racing this goroutine on the same branch safe.
+func (e *Engine) retireAsync(old *branch) {
+	e.mu.Lock()
+	e.retiringBranches[old] = struct{}{}
+	e.mu.Unlock()
+	go func() {
+		defer func() {
+			e.mu.Lock()
+			delete(e.retiringBranches, old)
+			e.mu.Unlock()
+		}()
+		if err := bestEffortTeardown(old); err != nil {
+			slog.Warn("gstengine: retired branch teardown after a swap did not complete cleanly", "branch", old.id, "error", err)
+		}
+	}()
 }
 
 // Stop ends playback, blocking data flow exactly as Pause does and

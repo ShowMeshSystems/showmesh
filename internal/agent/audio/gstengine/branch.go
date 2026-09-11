@@ -663,12 +663,23 @@ func (b *branch) awaitHeldPast(ctx context.Context, before uint64) error {
 
 // join requests a fresh mixer sink pad for each of this branch's
 // deinterleave src pads, resyncs their offsets to the shared pipeline's
-// current running time at atPos, links them to the mixer, and only then
-// releases the hold: offset and links are committed before any buffer
-// can reach the mixer. Never called twice on the same branch; callers
-// run it only after this branch has already reached PLAYING off the
-// mixer (see Start and Engine.swapToPosition in methods.go).
-func (b *branch) join(atPos time.Duration) error {
+// current running time at atPos, links them to the mixer, and, only
+// when releaseHold is true, then releases the hold: offset and links
+// are committed before any buffer can reach the mixer. Never called
+// twice on the same branch; callers run it only after this branch has
+// already reached PLAYING off the mixer (see Start and
+// Engine.swapToPosition in methods.go).
+//
+// releaseHold is false for a swap whose target is paused or stopped:
+// queue keeps accepting into its own internal buffer on its sink side
+// regardless of whether its src side is held, so a branch meant to land
+// silent must never have its hold released at all, no matter how early
+// blockFlow re-blocks that sink side afterward -- content queue already
+// accepted before that block existed would still drain out its src pad
+// the instant the hold lifted. Leaving the hold in place instead is what
+// actually keeps it silent; b.joined is still set true either way, since
+// it tracks the mixer link topology, not whether data is flowing.
+func (b *branch) join(atPos time.Duration, releaseHold bool) error {
 	e := b.engine
 	n := len(e.cfg.ProgramChannels)
 	for k := 0; k < n; k++ {
@@ -684,7 +695,9 @@ func (b *branch) join(atPos time.Duration) error {
 			return fmt.Errorf("gstengine: could not link deinterleave output %d to its channel mixer during join", k)
 		}
 	}
-	b.removeHold()
+	if releaseHold {
+		b.removeHold()
+	}
 	b.mu.Lock()
 	b.joined = true
 	b.mu.Unlock()

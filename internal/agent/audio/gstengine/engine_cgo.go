@@ -69,6 +69,17 @@ type Engine struct {
 	// uses.
 	inFlightReplacements map[*branch]struct{}
 
+	// retiringBranches holds every branch a swap (see
+	// Engine.swapToPosition's retireAsync in methods.go) has already
+	// muted and re-pointed handles away from, but whose teardown is still
+	// running on its own goroutine in the background rather than being
+	// waited on by the swap's own caller. Such a branch is reachable
+	// through neither handles nor inFlightReplacements, so Close's own
+	// fan-out must check this set too or it would leak one still
+	// tearing down when Close runs. Guarded by e.mu, the same lock
+	// handles and inFlightReplacements use.
+	retiringBranches map[*branch]struct{}
+
 	// elementIndex maps every one of a branch's own element names (all
 	// eight from [branch.elements], not only filesrc/decodebin — every
 	// one of them is a direct sibling in the shared pipeline, per
@@ -150,6 +161,7 @@ func New(cfg Config) (*Engine, error) {
 		cfg:                  cfg,
 		handles:              make(map[agentaudio.EngineHandle]*branch),
 		inFlightReplacements: make(map[*branch]struct{}),
+		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
 		done:                 make(chan struct{}),
 		startedAt:            time.Now(),
@@ -219,6 +231,7 @@ func NewUnavailable(reason string) *Engine {
 		availReason:          reason,
 		handles:              make(map[agentaudio.EngineHandle]*branch),
 		inFlightReplacements: make(map[*branch]struct{}),
+		retiringBranches:     make(map[*branch]struct{}),
 		elementIndex:         make(map[string]*branch),
 		done:                 make(chan struct{}),
 	}
@@ -300,18 +313,22 @@ func (e *Engine) Close() error {
 		e.markBroken(closedReason)
 		close(e.done)
 		e.mu.Lock()
-		branches := make([]*branch, 0, len(e.handles)+len(e.inFlightReplacements))
+		branches := make([]*branch, 0, len(e.handles)+len(e.inFlightReplacements)+len(e.retiringBranches))
 		for h, b := range e.handles {
 			branches = append(branches, b)
 			delete(e.handles, h)
 		}
-		// A replacement mid-swap is never in handles (see
-		// inFlightReplacements' doc comment); its own swap goroutine
-		// still owns removing it from this set once it finishes, so
-		// this only reads it rather than deleting -- teardown is
+		// Neither a replacement mid-swap nor a branch a swap has already
+		// retired is reachable through handles (see inFlightReplacements'
+		// and retiringBranches' own doc comments); each set's own
+		// goroutine still owns removing its entry once it finishes, so
+		// this only reads them rather than deleting -- teardown is
 		// idempotent, so racing that goroutine's own bestEffortTeardown
 		// call here is harmless.
 		for b := range e.inFlightReplacements {
+			branches = append(branches, b)
+		}
+		for b := range e.retiringBranches {
 			branches = append(branches, b)
 		}
 		e.mu.Unlock()
