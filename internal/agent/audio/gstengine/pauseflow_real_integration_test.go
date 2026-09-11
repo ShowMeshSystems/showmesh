@@ -119,7 +119,7 @@ func TestPausedBranchStopsBufferFlow(t *testing.T) {
 	// Resume must let flow resume. A joined branch's own Resume never
 	// flush-seeks it in place (see doc.go / methods.go's swapToPosition):
 	// "pf1" now names a freshly built replacement branch with its own
-	// queue, so the probe that proved silence above cannot observe it —
+	// queue, so the probe that proved silence above cannot observe it:
 	// re-arm it against whatever branch the handle resolves to now.
 	if _, err := e.Resume(ctx, "pf1"); err != nil {
 		t.Fatalf("Resume: %v", err)

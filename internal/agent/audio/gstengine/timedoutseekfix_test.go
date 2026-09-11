@@ -14,12 +14,12 @@ import (
 
 // TestTimedOutSeekNeverMarksTheOldBranchAnchorUnknown is the swap-era
 // counterpart of what this test used to prove: once Start has joined a
-// branch to the mixer, Seek never flush-seeks it in place — it builds a
-// replacement and prepares that off the mixer instead (see
+// branch to the mixer, Seek never flush-seeks it in place (it builds a
+// replacement and prepares that off the mixer instead, see
 // swapToPosition). An exhausted ctx here fails preparing the
 // replacement; the original branch was never issued a seek that could
-// still land late, so — unlike TestTimedOutSeekLeavesSegmentStartStale's
-// genuine in-place seek timeout — it must not be marked errAnchorUnknown,
+// still land late, so, unlike TestTimedOutSeekLeavesSegmentStartStale's
+// genuine in-place seek timeout, it must not be marked errAnchorUnknown,
 // and the handle must still resolve to it, still playable by a later
 // call.
 func TestTimedOutSeekNeverMarksTheOldBranchAnchorUnknown(t *testing.T) {
