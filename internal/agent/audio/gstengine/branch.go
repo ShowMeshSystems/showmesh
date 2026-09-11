@@ -72,8 +72,10 @@ type branch struct {
 	// true they swap in a replacement instead (see methods.go).
 	joined bool
 
-	eosCh   chan struct{}
-	eosOnce sync.Once
+	// eosSeq counts every real EOS onEOS has observed, incremented before
+	// its early return, so a Completed branch's later re-prepare can
+	// still tell a fresh EOS apart from one already accounted for.
+	eosSeq atomic.Uint64
 
 	media    pkgaudio.MediaRef
 	duration time.Duration
@@ -289,7 +291,6 @@ func (b *branch) build(path string) error {
 
 	b.readyCh = make(chan struct{})
 	b.loadErrCh = make(chan error, 1)
-	b.eosCh = make(chan struct{})
 
 	b.decodebin.Connect("pad-added", func(self gst.Element, pad gst.Pad) {
 		if !isAudioPad(pad) {
@@ -395,6 +396,7 @@ func (b *branch) reportLoadError(err error) {
 }
 
 func (b *branch) onEOS() {
+	b.eosSeq.Add(1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state == pkgaudio.StateStopped || b.state == pkgaudio.StateCompleted {
@@ -403,7 +405,6 @@ func (b *branch) onEOS() {
 	b.state = pkgaudio.StateCompleted
 	b.frozen = true
 	b.frozenAt = b.duration
-	b.eosOnce.Do(func() { close(b.eosCh) })
 }
 
 // setElementsState sets every branch element to state, bounded by ctx.
@@ -592,34 +593,51 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 }
 
 // prepare seeks to position, then waits, bounded only by ctx, for the
-// first post-seek buffer to reach the hold. Run only on a branch not
-// yet joined. A ctx-driven failure from either step marks anchorUnknown.
-func (b *branch) prepare(ctx context.Context, position time.Duration) error {
+// first post-seek buffer to reach the hold, or for that seek to land at
+// or past EOS instead; reachedEOS tells the two apart, since onEOS has
+// already set state and frozenAt for the EOS case by the time this
+// returns. When the seek instead holds a buffer, prepare resets a
+// leftover Completed state from an earlier EOS back to Ready, matching
+// what a freshly built, never-joined branch would report. Run only on a
+// branch not yet joined. A ctx-driven failure from either step marks
+// anchorUnknown.
+func (b *branch) prepare(ctx context.Context, position time.Duration) (reachedEOS bool, err error) {
 	b.unblockFlow()
-	before := b.heldSeq.Load()
+	beforeHeld := b.heldSeq.Load()
+	beforeEOS := b.eosSeq.Load()
 	if err := b.seekTo(ctx, position, nil); err != nil {
-		return err
+		return false, err
 	}
-	if err := b.awaitHeldPast(ctx, before); err != nil {
+	reachedEOS, err = b.awaitHeldOrEOS(ctx, beforeHeld, beforeEOS)
+	if err != nil {
 		b.markAnchorUnknownOnCtxTimeout(err)
-		return err
+		return false, err
 	}
-	return nil
+	if !reachedEOS {
+		b.mu.Lock()
+		if b.state == pkgaudio.StateCompleted {
+			b.state = pkgaudio.StateReady
+		}
+		b.mu.Unlock()
+	}
+	return reachedEOS, nil
 }
 
-// awaitHeldPast blocks until heldSeq advances past before, ctx ends, or
-// EOS arrives (a seek at or past the last sample holds no buffer). No
-// fixed timeout, the same rule awaitNoElementRace follows.
-func (b *branch) awaitHeldPast(ctx context.Context, before uint64) error {
+// awaitHeldOrEOS blocks until heldSeq advances past beforeHeld (a buffer
+// reached the hold), eosSeq advances past beforeEOS (the seek landed at
+// or past the last sample, so no buffer will ever be held), or ctx ends.
+// No fixed timeout, the same rule awaitNoElementRace follows.
+func (b *branch) awaitHeldOrEOS(ctx context.Context, beforeHeld, beforeEOS uint64) (reachedEOS bool, err error) {
 	for {
-		if b.heldSeq.Load() > before {
-			return nil
+		if b.heldSeq.Load() > beforeHeld {
+			return false, nil
+		}
+		if b.eosSeq.Load() > beforeEOS {
+			return true, nil
 		}
 		select {
-		case <-b.eosCh:
-			return nil
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
@@ -666,9 +684,12 @@ func (b *branch) removeHold() {
 	}
 }
 
-// removeHoldForTeardown flushes queue's src pad before removing the
-// hold, so a held buffer is dropped instead of reaching deinterleave's
-// still-unlinked pads, which would answer NOT_LINKED.
+// removeHoldForTeardown starts a flush on queue's src pad and leaves it
+// flushing, so any held or in-flight buffer is dropped instead of
+// reaching deinterleave's still-unlinked pads (NOT_LINKED). It never
+// sends FLUSH_STOP: that could clear FLUSHING before a woken streaming
+// thread rechecks it, letting a held buffer through anyway. NULL state
+// clears the flag on deactivation.
 func (b *branch) removeHoldForTeardown() {
 	b.mu.Lock()
 	id := b.holdProbeID
@@ -678,7 +699,6 @@ func (b *branch) removeHoldForTeardown() {
 	}
 	pad := b.queue.GetStaticPad("src")
 	pad.PushEvent(gst.NewEventFlushStart())
-	pad.PushEvent(gst.NewEventFlushStop(true))
 	b.removeHold()
 }
 

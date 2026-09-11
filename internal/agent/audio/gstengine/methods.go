@@ -174,10 +174,11 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 		return e.swapToPosition(ctx, handle, b, position, pkgaudio.StatePlaying)
 	}
 
-	if err := b.prepare(ctx, position); err != nil {
+	reachedEOS, err := b.prepare(ctx, position)
+	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	if b.currentState() == pkgaudio.StateCompleted {
+	if reachedEOS {
 		// position landed at or past EOS: prepare's own wait already
 		// reports this, and there is nothing left to join or play.
 		return b.observe(e.cfg.now()), nil
@@ -253,7 +254,7 @@ func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, posit
 		return e.swapToPosition(ctx, handle, b, position, b.currentState())
 	}
 
-	if err := b.prepare(ctx, position); err != nil {
+	if _, err := b.prepare(ctx, position); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	return b.observe(e.cfg.now()), nil
@@ -309,11 +310,12 @@ func (e *Engine) swapToPosition(ctx context.Context, handle agentaudio.EngineHan
 		return agentaudio.EngineObservation{}, ctx.Err()
 	}
 
-	if err := replacement.prepare(ctx, position); err != nil {
+	reachedEOS, err := replacement.prepare(ctx, position)
+	if err != nil {
 		cleanup()
 		return agentaudio.EngineObservation{}, err
 	}
-	if replacement.currentState() == pkgaudio.StateCompleted {
+	if reachedEOS {
 		// position landed at or past EOS: swap the handle to the
 		// replacement anyway, so it correctly reports Completed, but
 		// there is nothing left to play or join.
