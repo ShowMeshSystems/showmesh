@@ -63,6 +63,55 @@ func TestWatchTickDowngradesStateAfterObserveFailure(t *testing.T) {
 	}
 }
 
+// stallReasonEngine wraps [FakeEngine] and makes Observe against one
+// specific handle report a fixed stall Reason with no error, matching
+// what [gstengine]'s real checkStallLocked returns for a pipeline that
+// reached Playing and stopped presenting: never observable through a
+// shipped FakeEngine, which never sets Reason.
+type stallReasonEngine struct {
+	*FakeEngine
+	stallHandle EngineHandle
+	reason      string
+}
+
+func (e *stallReasonEngine) Observe(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
+	obs, err := e.FakeEngine.Observe(ctx, handle)
+	if handle == e.stallHandle && err == nil {
+		obs.Reason = e.reason
+	}
+	return obs, err
+}
+
+// TestWatchTickReportsStallAsFault proves watchTick's Observe success
+// branch (restore.go) carries a non-empty EngineObservation.Reason onto
+// the session as [pkgaudio.FaultFreeze], so a stalled pipeline stops
+// being reported as a healthy Playing session with no fault.
+func TestWatchTickReportsStallAsFault(t *testing.T) {
+	c := newClock(time.Now())
+	fake := NewFakeEngine(c.now)
+	dir := t.TempDir()
+	m := NewManager(fake, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+
+	s := startPlayingSession(t, m, "s1")
+	s.mu.Lock()
+	handle := s.handle
+	s.mu.Unlock()
+
+	const stallReason = "pipeline reached Playing and has not presented a sample in 3s"
+	m.engine = &stallReasonEngine{FakeEngine: fake, stallHandle: handle, reason: stallReason}
+
+	m.watchTick(context.Background())
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fault != pkgaudio.FaultFreeze {
+		t.Fatalf("session fault = %q, want %q", s.fault, pkgaudio.FaultFreeze)
+	}
+	if s.faultReason != stallReason {
+		t.Fatalf("session fault reason = %q, want %q", s.faultReason, stallReason)
+	}
+}
+
 // TestSnapshotDowngradesStateAfterObserveFailure reproduces defect 3 at
 // its on-demand call site: [Manager.Snapshot] (session.go's
 // snapshotLocked) has the identical gap — a failed Observe sets the

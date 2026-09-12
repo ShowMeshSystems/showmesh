@@ -486,6 +486,8 @@ func (m *Manager) watchTick(ctx context.Context) {
 				s.lastObservedAt = obs.ObservedAt
 				if obs.State == pkgaudio.StateCompleted {
 					s.advanceLocked(ctx, false, obs.ObservedAt)
+				} else if obs.Reason != "" {
+					s.setFaultLocked(pkgaudio.FaultFreeze, obs.Reason)
 				}
 			}
 		}
