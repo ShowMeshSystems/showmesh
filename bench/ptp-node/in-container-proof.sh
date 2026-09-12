@@ -241,20 +241,22 @@ echo "--- step 4: start PipeWire + WirePlumber manually ---"
 export PIPEWIRE_RUNTIME_DIR=/run/pipewire
 export XDG_RUNTIME_DIR=/run/pipewire
 mkdir -p /run/pipewire
-chown pipewire:pipewire /run/pipewire
+chown showmesh:showmesh /run/pipewire
 # The redirects below are opened by this script's own (root) shell before
-# sudo execs into the pipewire user, so the log files land where a root
-# shell can always write them; sudo never touches the redirect itself.
+# sudo execs into the showmesh user (the account install-ptp-audio.sh now
+# runs both PipeWire and the agent as, see that script's own SERVICE_USER
+# comment), so the log files land where a root shell can always write
+# them; sudo never touches the redirect itself.
 # shellcheck disable=SC2024
-sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   /usr/bin/pipewire > /tmp/pipewire.log 2>&1 &
 sleep 2
 # shellcheck disable=SC2024
-sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   /usr/bin/wireplumber > /tmp/wireplumber.log 2>&1 &
 sleep 3
 
-DRIVER_LINE="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+DRIVER_LINE="$(sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   pw-dump 2>/dev/null | python3 -c '
 import json, sys
 objs = json.load(sys.stdin)
@@ -276,6 +278,39 @@ else
 fi
 
 echo ""
+echo "--- step 4b: the actual permission fix -- same-user connect works, a different unprivileged user's does not ---"
+# This is the property node-01 got wrong before install-ptp-audio.sh ran
+# PipeWire as the SAME user as the agent: connect() to a Unix socket needs
+# the WRITE bit, not read+execute, and a socket owned by one unprivileged
+# user denies every OTHER unprivileged user by default regardless of its
+# mode bits being loose in other ways. bench-other exists only to be that
+# other user; it is never added to any group PipeWire's own socket might
+# be group-writable to, so this proves the ownership fix itself, not
+# merely that some group happened to include it.
+CONNECT_PY='import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect("/run/pipewire/pipewire-0")
+except OSError as e:
+    print("CONNECT_FAIL:" + str(e)); sys.exit(1)
+print("CONNECT_OK")'
+if sudo -u showmesh python3 -c "$CONNECT_PY" | grep -q CONNECT_OK; then
+  echo "OK: showmesh (the same user PipeWire itself runs as) can connect() to /run/pipewire/pipewire-0"
+else
+  echo "FAIL: showmesh could not connect() to its own PipeWire socket"
+  exit 1
+fi
+useradd --system --no-create-home --shell /usr/sbin/nologin bench-other
+OTHER_CONNECT="$(sudo -u bench-other python3 -c "$CONNECT_PY" 2>&1 || true)"
+echo "$OTHER_CONNECT"
+if echo "$OTHER_CONNECT" | grep -q CONNECT_FAIL; then
+  echo "OK: bench-other (an unrelated unprivileged user) correctly cannot connect() -- confirms this container's PipeWire socket is not simply world-writable"
+else
+  echo "FAIL: expected bench-other's connect() to fail; if it succeeded this container's socket is unexpectedly permissive and the same-user fix is not what is actually being proven"
+  exit 1
+fi
+
+echo ""
 echo "--- step 5: pipewiresink playback ---"
 # No ALSA hardware in this container, so WirePlumber's ALSA monitor never
 # creates a real sink node for pipewiresink to target -- on the real node
@@ -286,12 +321,12 @@ echo "--- step 5: pipewiresink playback ---"
 # below, the group-election mechanism itself; it says nothing about a real
 # ALSA sink actually rate-matching, which needs the real node.
 # shellcheck disable=SC2024
-sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=showmesh-bench-null-sink media.class=Audio/Sink object.linger=true audio.position=[FL,FR] node.group=\"$PTP_NODE_GROUP\" }" \
   > /tmp/pw-cli-null-sink.log 2>&1
 sleep 1
 # shellcheck disable=SC2024
-if sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+if sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   timeout 6 gst-launch-1.0 audiotestsrc num-buffers=200 ! audioconvert ! pipewiresink target-object=showmesh-bench-null-sink \
   > /tmp/gst-pipewiresink.log 2>&1; then
   echo "OK: gst-launch-1.0 through pipewiresink completed without error"
@@ -316,7 +351,7 @@ echo "--- step 6: node.group driver election (the real node's group bug, without
 # showmesh-ptp-driver's own object id is the one reading that proves
 # election, and is exactly what verify-ptp-audio.sh now checks against a
 # real ALSA node.
-GROUP_READING="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+GROUP_READING="$(sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   pw-dump 2>/dev/null | python3 -c '
 import json, sys
 objs = json.load(sys.stdin)
@@ -363,7 +398,7 @@ echo "--- step 7: driver-election.py against a pw-dump padded past ARG_MAX ---"
 # and feed it to the exact parser verify-ptp-audio.sh now runs -- on
 # stdin, never as an argument or environment variable -- to prove the
 # fix, not just the mechanism the fix replaced.
-REAL_DUMP="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire pw-dump 2>/dev/null)"
+REAL_DUMP="$(sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire pw-dump 2>/dev/null)"
 ARG_MAX_BYTES="$(getconf ARG_MAX)"
 PADDED_DUMP="$(python3 -c "
 import json, sys

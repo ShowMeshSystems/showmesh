@@ -30,8 +30,9 @@ import (
 // [audioEngineRebuilder.rebuild] for the ordering.
 func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeConfig) (cfg gstengine.Config, sampleRateSource, channelCountSource string) {
 	d := discoverAudio(ctx)
-	rate, rateSource := resolveNodeSampleRate(d, node.ProgramRoute)
-	channelCount, chCountSource := resolveNodeChannelCount(d, node.ProgramRoute, audioNodeChannelCount(node))
+	pipewireBacked := node.SinkBackend == pipewireAudioSinkFactory
+	rate, rateSource := resolveNodeSampleRate(d, node.ProgramRoute, pipewireBacked)
+	channelCount, chCountSource := resolveNodeChannelCount(d, node.ProgramRoute, audioNodeChannelCount(node), pipewireBacked)
 	cfg = staticGstEngineConfig(assetDir, node)
 	switch cfg.SinkFactory {
 	case realAudioSinkFactory:

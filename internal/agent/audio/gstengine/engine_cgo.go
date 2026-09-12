@@ -586,9 +586,42 @@ func (e *Engine) buildPipeline() error {
 	e.installClock(pipeline)
 
 	if pipeline.SetState(gst.StatePlaying) == gst.StateChangeFailure {
-		return errors.New("output pipeline refused to reach PLAYING")
+		return fmt.Errorf("output pipeline refused to reach PLAYING: %s", firstBusErrorText(pipeline))
 	}
 	return nil
+}
+
+// firstBusErrorText drains pipeline's own bus for the GStreamer element
+// error behind a synchronous SetState(PLAYING) failure. MEASURED on
+// node-01: a PipeWire socket permission denial and a channel-count
+// mismatch both surfaced as the identical "refused to reach PLAYING",
+// sending an hour of investigation at the wrong cause. Returns a stated
+// absence rather than fabricating a diagnosis when no message arrives
+// within the short window a synchronous failure's own message needs to
+// land.
+func firstBusErrorText(pipeline gst.Pipeline) string {
+	bus := pipeline.GetBus()
+	defer releaseBus(bus)
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return "no GStreamer error message arrived on the bus"
+		}
+		msg := bus.TimedPop(gst.ClockTime(remaining))
+		if msg == nil {
+			return "no GStreamer error message arrived on the bus"
+		}
+		msgType := msg.Type()
+		var text string
+		if msgType == gst.MessageError {
+			text, _ = msg.ParseError()
+		}
+		gst.UnsafeMessageUnref(msg)
+		if msgType == gst.MessageError {
+			return text
+		}
+	}
 }
 
 // clockSourcePHC, clockSourceRealtime and clockSourceDefault are

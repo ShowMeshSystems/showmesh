@@ -161,18 +161,35 @@ operator-edited state that a re-run must avoid touching.
 8. **Installs a udev rule** (`/etc/udev/rules.d/99-showmesh-ptp.rules`)
    granting the `showmesh` group read access to any `/dev/ptpN`: the
    agent's external clock provider reads the PHC directly, and PipeWire's
-   node.driver opens it too (the `pipewire` system user this script
-   creates is added to the `showmesh` group for exactly this reason).
-9. **Creates a dedicated `pipewire` system user** and installs
-   `pipewire-showmesh.service` and `wireplumber-showmesh.service`,
-   running both as ordinary headless system services sharing one runtime
-   directory (`/run/pipewire`). This is necessary, not cosmetic: Debian's
-   `pipewire` and `wireplumber` packages ship only user-session units
+   node.driver opens it too. Both already run as the `showmesh` user (see
+   the next step), so no separate group grant is needed for either.
+9. **Creates the `showmesh` system user** (if `deploy/node/install.sh` has
+   not already, so the two installers' order never matters) and installs
+   `pipewire-showmesh.service` and `wireplumber-showmesh.service` to run
+   as that SAME user, sharing one runtime directory (`/run/pipewire`) with
+   each other and with the agent. Not a separate `pipewire` account: on a
+   ShowMesh audio node, PipeWire and the agent are both ShowMesh's own
+   components with no third party to isolate from, and MEASURED on
+   node-01, a separate account bought nothing but a socket permission
+   problem -- `RuntimeDirectoryMode=0700` makes `pipewire-showmesh.service`
+   create `/run/pipewire/pipewire-0` owned by, and readable/writable only
+   by, its own account, and `connect()` to a Unix socket needs the WRITE
+   bit specifically, so any other account (including the agent's, under
+   the old separate-user design) got `EACCES` before PipeWire's own
+   access module was ever consulted. Sharing the account removes the
+   problem outright rather than loosening the socket's mode. This is
+   necessary, not cosmetic, for another reason too: Debian's `pipewire`
+   and `wireplumber` packages ship only user-session units
    (`/usr/lib/systemd/user/{pipewire,wireplumber}.service`), which assume
    a logged-in desktop session. This node has none, and `systemctl --user`
    needs a lingering login this node is never going to have. A PipeWire
    that only exists inside a user session is a node that goes silent
-   after every reboot.
+   after every reboot. The agent's own systemd unit gets a drop-in
+   (`/etc/systemd/system/showmesh-agent.service.d/10-showmesh-ptp-audio-runtime.conf`)
+   setting `PIPEWIRE_RUNTIME_DIR`/`XDG_RUNTIME_DIR` to this same runtime
+   directory, so its own `pw-dump` and `pipewiresink` calls look in the
+   right place; restart `showmesh-agent.service` after running this
+   script if it was already active.
 10. **Installs the PipeWire clock config**
    (`/etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf`): a
    `support.node.driver` named `showmesh-ptp-driver`, `priority.driver
@@ -356,18 +373,22 @@ sudo rm -f /etc/systemd/system/ptp4l-showmesh.service \
            /etc/systemd/system/wireplumber-showmesh.service \
            /etc/systemd/system/phc2sys-showmesh.service
 sudo rm -f /usr/local/lib/showmesh/announce-grandmaster-timescale.sh   # only present on a grandmaster-role node
+sudo rm -f /etc/systemd/system/showmesh-agent.service.d/10-showmesh-ptp-audio-runtime.conf
 sudo systemctl daemon-reload
 sudo rm -f /etc/showmesh/ptp4l.conf
 sudo rm -f /etc/udev/rules.d/99-showmesh-ptp.rules
 sudo udevadm control --reload-rules
 sudo rm -rf /etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf \
             /etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf
-sudo userdel pipewire   # only if nothing else on this host uses that account
 sudo apt-get remove linuxptp pipewire pipewire-audio wireplumber gstreamer1.0-pipewire
 ```
 
-The `showmesh` group is left in place: `deploy/node/install.sh` also
-depends on it existing for the agent's own account.
+The `showmesh` user and group are left in place: PipeWire runs as the
+same account as the agent (no separate account to remove), and
+`deploy/node/install.sh` depends on the account existing regardless.
+Restart `showmesh-agent.service` if it was active, so it stops carrying
+the now-removed `PIPEWIRE_RUNTIME_DIR`/`XDG_RUNTIME_DIR` drop-in's
+environment forward from its own process state.
 
 If the agent's `node.clock` was set to `provider=external` for this
 node, revert it (or remove the node's clock config entirely) before or

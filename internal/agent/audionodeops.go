@@ -435,14 +435,26 @@ func gstAssetResolver(assetDir string) func(pkgaudio.MediaRef) (string, error) {
 // rate this route never advertised is not evidence, and
 // [buildGstEngineConfig] is what decides whether a guess is tolerable
 // for the sink actually being built against.
-func resolveNodeSampleRate(d audio.Discovery, programRoute string) (rate int, source string) {
+//
+// pipewireBacked skips a non-graph (ALSA) match entirely rather than
+// ever returning it: MEASURED on node-01, a card PipeWire's graph runs
+// at 48000 briefly released the card, and an ALSA probe of the same
+// hardware caught 44100 and won by matching programRoute first — a rate
+// nothing downstream of pipewiresink actually plays at. A route this
+// node's own graph backend owns has no honest ALSA reading; see
+// [pipewireFallbackSampleRateSource] for what a caller reports instead.
+func resolveNodeSampleRate(d audio.Discovery, programRoute string, pipewireBacked bool) (rate int, source string) {
 	for _, r := range d.Routes {
-		if r.Device == programRoute && r.Available && r.Rate > 0 {
-			if r.FromGraph {
-				return r.Rate, pipeWireGraphEvidenceSource
-			}
-			return r.Rate, "advertised route probe evidence"
+		if r.Device != programRoute || !r.Available || r.Rate <= 0 {
+			continue
 		}
+		if r.FromGraph {
+			return r.Rate, pipeWireGraphEvidenceSource
+		}
+		if pipewireBacked {
+			continue
+		}
+		return r.Rate, "advertised route probe evidence"
 	}
 	return 0, noProbeEvidenceSource
 }
@@ -538,7 +550,11 @@ func audioNodeChannelCount(p audioNodeConfig) int {
 // own behavior of fixating to what it truly carries regardless of what
 // was asked. It is read here purely as evidence of the device's real
 // channel count, independent of whether this binding uses LTC at all.
-func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCount int) (count int, source string) {
+// pipewireBacked, as in [resolveNodeSampleRate], skips a non-graph
+// (ALSA) match rather than ever returning it: a card this node's own
+// graph backend owns has no ALSA channel-count reading worth trusting
+// over the graph's own.
+func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCount int, pipewireBacked bool) (count int, source string) {
 	for _, r := range d.Routes {
 		if r.Device != programRoute || !r.Available {
 			continue
@@ -548,6 +564,9 @@ func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCoun
 				return r.Channels, pipeWireGraphEvidenceSource
 			}
 			return bindingCount, "bindings: highest program or LTC channel index, within this route's graph-reported width"
+		}
+		if pipewireBacked {
+			continue
 		}
 		if r.LTCChannels > bindingCount {
 			return r.LTCChannels, "advertised route probe evidence (explicit channel-count probe)"

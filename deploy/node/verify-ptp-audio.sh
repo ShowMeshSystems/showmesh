@@ -46,6 +46,12 @@ done
 
 PTP_RO_SOCKET=/var/run/ptp/ptp4lro
 PTP4L_CONF=/etc/showmesh/ptp4l.conf
+PIPEWIRE_SOCKET=/run/pipewire/pipewire-0
+# The account install-ptp-audio.sh runs both the agent and the headless
+# PipeWire graph as (see that script's own SERVICE_USER comment). Not
+# sourced from install-ptp-audio.sh: this script has no dependency on it
+# beyond the shared ptp-audio/ptp-group.conf constant.
+AGENT_USER=showmesh
 
 # pmc's requests carry a domain number (default 0) that must match the
 # target ptp4l's own domainNumber, or ptp4l silently drops the request --
@@ -113,7 +119,58 @@ else
 fi
 echo ""
 
-# --- 2. PipeWire: does the ALSA node's driver election actually land on
+# --- 2. Can the ShowMesh agent's own account actually reach the socket ---
+#
+# The load-bearing distinction this check exists for: connect() to a Unix
+# socket needs the WRITE bit, not read+execute, and a check run as root
+# (or as the graph's own user) never exercises that gate at all -- root
+# bypasses file permissions outright, and the graph's own user owns the
+# socket it created. MEASURED on node-01: pipewire-showmesh.service's
+# RuntimeDirectory created /run/pipewire/pipewire-0 mode 0755, and every
+# ShowMesh-agent client got EACCES before PipeWire's own access module was
+# ever consulted -- a verify pass run as root reported clean the entire
+# time. install-ptp-audio.sh now runs the graph as the SAME user
+# ($AGENT_USER) the agent runs as, which removes the whole problem, but
+# this check proves that against the actually-running socket rather than
+# trusting the install path's own intent.
+echo "--- Agent socket reachability (as $AGENT_USER, not root, not the graph's own user) ---"
+if ! id "$AGENT_USER" >/dev/null 2>&1; then
+  err "user $AGENT_USER does not exist on this host; cannot check socket reachability as the agent's own account"
+elif [ ! -S "$PIPEWIRE_SOCKET" ]; then
+  bad "$PIPEWIRE_SOCKET does not exist (pipewire-showmesh.service may not be running)"
+elif ! command -v python3 >/dev/null 2>&1; then
+  err "python3 not found; cannot check socket reachability"
+else
+  CONNECT_SCRIPT='import socket,sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect(sys.argv[1])
+except OSError as e:
+    print("CONNECT_FAIL:" + str(e))
+    sys.exit(1)
+print("CONNECT_OK")'
+  CURRENT_USER="$(id -un)"
+  if [ "$CURRENT_USER" = "$AGENT_USER" ]; then
+    CONNECT_OUT="$(python3 -c "$CONNECT_SCRIPT" "$PIPEWIRE_SOCKET" 2>&1)"
+    CONNECT_RC=$?
+  elif [ "$(id -u)" -eq 0 ] && command -v runuser >/dev/null 2>&1; then
+    CONNECT_OUT="$(runuser -u "$AGENT_USER" -- python3 -c "$CONNECT_SCRIPT" "$PIPEWIRE_SOCKET" 2>&1)"
+    CONNECT_RC=$?
+  else
+    CONNECT_OUT=""
+    CONNECT_RC=2
+  fi
+  if [ "$CONNECT_RC" -eq 2 ] && [ -z "$CONNECT_OUT" ]; then
+    err "must run this script as root or as $AGENT_USER to check socket reachability as $AGENT_USER (currently running as $CURRENT_USER, and runuser is unavailable to drop to it)"
+  elif [ "$CONNECT_RC" -eq 0 ] && echo "$CONNECT_OUT" | grep -q '^CONNECT_OK$'; then
+    ok "user $AGENT_USER can connect() to $PIPEWIRE_SOCKET -- the same socket the agent's own pw-dump/pipewiresink calls open"
+  else
+    bad "user $AGENT_USER cannot connect() to $PIPEWIRE_SOCKET ($CONNECT_OUT); check the socket's own mode and this user's group membership, not just whether the service is active"
+  fi
+fi
+echo ""
+
+# --- 3. PipeWire: does the ALSA node's driver election actually land on
 #    the PTP driver, not just "is this node capable of driving" ---
 #
 # A node's own node.driver property (true for a node that CAN act as a
@@ -196,7 +253,7 @@ else
 fi
 echo ""
 
-# --- 2b. xrun count, best-effort via pw-top (not exposed through pw-dump) ---
+# --- 4. xrun count, best-effort via pw-top (not exposed through pw-dump) ---
 echo "--- ALSA sink xrun count ---"
 if ! command -v pw-top >/dev/null 2>&1; then
   info "pw-top not found; xrun count unavailable (part of the pipewire package)"
@@ -221,7 +278,7 @@ else
 fi
 echo ""
 
-# --- 3. The load-bearing reading: does alsasink ever slave-skew ---
+# --- 5. The load-bearing reading: does alsasink ever slave-skew ---
 echo "--- Sink slaving behavior (the reading that actually matters) ---"
 if [ "$PLAY_SECONDS" -le 0 ]; then
   info "skipped (--play 0 or default overridden); this is the check that actually proves the rate lock is doing anything, run it before trusting the graph-driver checks above"

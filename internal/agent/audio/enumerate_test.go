@@ -3,6 +3,8 @@ package audio
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -171,7 +173,7 @@ func TestPwDumpEnumeratorNoBinaryIsCleanAbsence(t *testing.T) {
 	prev := runCommand
 	defer func() { runCommand = prev }()
 	runCommand = func(ctx context.Context, name string, args ...string) (string, error) {
-		return "", errors.New("exec: \"pw-dump\": executable file not found in $PATH")
+		return "", &exec.Error{Name: "pw-dump", Err: exec.ErrNotFound}
 	}
 
 	nodes, present, err := PwDumpEnumerator{}.Nodes(context.Background())
@@ -180,6 +182,35 @@ func TestPwDumpEnumeratorNoBinaryIsCleanAbsence(t *testing.T) {
 	}
 	if present {
 		t.Error("Nodes() present = true, want false: pw-dump did not run")
+	}
+	if len(nodes) != 0 {
+		t.Errorf("Nodes() = %v, want none", nodes)
+	}
+}
+
+// TestPwDumpEnumeratorFoundButDeniedIsAFailureNotAnAbsence pins the
+// node-01 defect directly: pw-dump is installed and runs but exits
+// non-zero because this user cannot connect to the PipeWire socket
+// (EACCES). That must report present=true with the failure text, never
+// the same present=false a genuinely absent pw-dump binary reports --
+// otherwise a sinkBackend=pipewiresink node reads an unreachable graph
+// as "no PipeWire on this host at all".
+func TestPwDumpEnumeratorFoundButDeniedIsAFailureNotAnAbsence(t *testing.T) {
+	prev := runCommand
+	defer func() { runCommand = prev }()
+	runCommand = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "Error: Permission denied\n", &exec.ExitError{}
+	}
+
+	nodes, present, err := PwDumpEnumerator{}.Nodes(context.Background())
+	if !present {
+		t.Error("Nodes() present = false, want true: pw-dump genuinely ran")
+	}
+	if err == nil {
+		t.Fatal("Nodes() returned no error, want one naming the connection failure")
+	}
+	if !strings.Contains(err.Error(), "Permission denied") {
+		t.Errorf("Nodes() error = %q, want it to carry pw-dump's own output", err)
 	}
 	if len(nodes) != 0 {
 		t.Errorf("Nodes() = %v, want none", nodes)

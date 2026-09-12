@@ -135,10 +135,11 @@ func TestResolveNodeChannelCount(t *testing.T) {
 	const route = "hw:1,0"
 
 	cases := []struct {
-		name         string
-		routes       []audio.RouteEvidence
-		bindingCount int
-		want         int
+		name           string
+		routes         []audio.RouteEvidence
+		bindingCount   int
+		pipewireBacked bool
+		want           int
 	}{
 		{
 			name: "LTCChannels wider than the unconstrained probe wins",
@@ -178,12 +179,30 @@ func TestResolveNodeChannelCount(t *testing.T) {
 			bindingCount: 2,
 			want:         0,
 		},
+		{
+			name: "pipewire-backed node ignores an ALSA probe of the same route entirely",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 8}, LTCChannels: 8},
+			},
+			bindingCount:   3,
+			pipewireBacked: true,
+			want:           0,
+		},
+		{
+			name: "pipewire-backed node still uses the graph's own evidence for the same route",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, FromGraph: true},
+			},
+			bindingCount:   3,
+			pipewireBacked: true,
+			want:           4,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := audio.Discovery{Routes: tc.routes}
-			got, source := resolveNodeChannelCount(d, route, tc.bindingCount)
+			got, source := resolveNodeChannelCount(d, route, tc.bindingCount, tc.pipewireBacked)
 			if got != tc.want {
 				t.Errorf("resolveNodeChannelCount() = %d (%s), want %d", got, source, tc.want)
 			}

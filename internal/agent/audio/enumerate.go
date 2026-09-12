@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -158,11 +159,22 @@ type PipeWireEnumerator interface {
 // PwDumpEnumerator is the real [PipeWireEnumerator]: shells `pw-dump`.
 type PwDumpEnumerator struct{}
 
-// Nodes implements [PipeWireEnumerator].
+// Nodes implements [PipeWireEnumerator]. Only pw-dump itself not being on
+// this host (exec.ErrNotFound) is a clean absence: a node with no
+// PipeWire package installed at all. pw-dump found but exiting non-zero
+// -- MEASURED on node-01, EACCES connecting to a socket this user lacks
+// the write bit on -- is present=true with the failure text, never
+// folded into "no PipeWire": a sinkBackend=pipewiresink node reading
+// this as absence reported "no device probe is possible while PipeWire
+// holds the card" for a graph it was never able to reach in the first
+// place.
 func (PwDumpEnumerator) Nodes(ctx context.Context) ([]PipeWireNode, bool, error) {
 	out, err := runCommand(ctx, "pw-dump")
 	if err != nil {
-		return nil, false, nil
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("audio: pw-dump: %w (output: %s)", err, strings.TrimSpace(out))
 	}
 	nodes, err := parsePwDumpSinkNodes(out)
 	if err != nil {

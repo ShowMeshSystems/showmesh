@@ -255,3 +255,49 @@ func TestBuildGstEngineConfigReportsAnUnreadablePipeWireGraphInTheFallback(t *te
 		t.Errorf("rate source %q, want the underlying read failure text carried through", rateSource)
 	}
 }
+
+// TestBuildGstEngineConfigNeverLetsAnALSAProbeOverrideGraphEvidence pins
+// symptom-4 directly: an ALSA probe of the M4 read 44100 while the
+// node's own PipeWire graph runs it at 48000, and the pipeline was built
+// from the ALSA reading because it happened to match programRoute too.
+// A pipewiresink-backed route must always build from the graph's own
+// rate and channel count when the graph reports any evidence at all for
+// that route, never an ALSA probe of the same underlying hardware.
+func TestBuildGstEngineConfigNeverLetsAnALSAProbeOverrideGraphEvidence(t *testing.T) {
+	origDiscoverer := audioDiscoverer
+	origPWDiscoverer := audioPipeWireDiscoverer
+	t.Cleanup(func() {
+		audioDiscoverer = origDiscoverer
+		audioPipeWireDiscoverer = origPWDiscoverer
+	})
+	const route = "alsa_output.usb-MOTU_M4-00.analog-surround-4"
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		return audio.Discovery{Routes: []audio.RouteEvidence{
+			{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100}},
+		}}
+	}
+	audioPipeWireDiscoverer = func(context.Context, audio.PipeWireEnumerator) audio.PipeWireDiscovery {
+		return audio.PipeWireDiscovery{Enumerated: true, Routes: []audio.RouteEvidence{
+			{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 4, Rate: 48000}, FromGraph: true, LTCChannels: 4},
+		}}
+	}
+
+	node := audioNodeConfig{
+		ProgramRoute:       route,
+		SinkBackend:        pipewireAudioSinkFactory,
+		PipewireTargetNode: route,
+		ProgramChannels:    []int{1, 2},
+		LTCChannel:         3,
+	}
+	cfg, rateSource, _ := buildGstEngineConfig(context.Background(), t.TempDir(), node)
+
+	if cfg.SampleRate != 48000 {
+		t.Errorf("SampleRate = %d, want 48000 (the graph's own rate, never the ALSA probe's 44100)", cfg.SampleRate)
+	}
+	if cfg.ChannelCount != 4 {
+		t.Errorf("ChannelCount = %d, want 4 (the graph's own channel count)", cfg.ChannelCount)
+	}
+	if strings.Contains(rateSource, "advertised route probe evidence") {
+		t.Errorf("rate source = %q, want PipeWire graph evidence, never the ALSA probe wording", rateSource)
+	}
+}
