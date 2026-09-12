@@ -193,6 +193,94 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 	}
 }
 
+// TestCmdAudioNodeSetSendsSinkBackendFlags proves --sink-backend and
+// --pipewire-target-node reach the PUT body and the printed detail.
+func TestCmdAudioNodeSetSendsSinkBackendFlags(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0",
+		"--program-channels", "1,2",
+		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
+		"--sink-backend", "pipewiresink", "--pipewire-target-node", "alsa_output.usb-Focusrite",
+		"--server", ts.URL, "--token", "t",
+		"pi-audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if gotMethod != http.MethodPut || gotPath != "/api/v1/config/audio.node/pi-audio-01" {
+		t.Fatalf("last request = %s %s, want PUT /api/v1/config/audio.node/pi-audio-01", gotMethod, gotPath)
+	}
+	for _, want := range []string{`"sinkBackend":"pipewiresink"`, `"pipewireTargetNode":"alsa_output.usb-Focusrite"`} {
+		if !strings.Contains(string(gotBody), want) {
+			t.Errorf("PUT body missing %q; body: %s", want, gotBody)
+		}
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Sink backend:           pipewiresink") || !strings.Contains(out, "PipeWire target node:   alsa_output.usb-Focusrite") {
+		t.Errorf("printed detail missing sink backend / target node:\n%s", out)
+	}
+}
+
+// TestCmdAudioNodeSetPreservesSinkBackendWhenOmitted proves an edit that
+// omits --sink-backend and --pipewire-target-node carries the node's
+// current values forward instead of resetting them: this endpoint is a
+// full replacement, and these two fields have no way to express "leave
+// unchanged" other than reading what "unchanged" currently is. Before
+// this fix, an operator changing only the route silently reset a
+// PipeWire-routed node's agent back to alsasink.
+func TestCmdAudioNodeSetPreservesSinkBackendWhenOmitted(t *testing.T) {
+	var putBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			putBody, _ = io.ReadAll(r.Body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		// An operator changing only the route: no --sink-backend or
+		// --pipewire-target-node at all.
+		"--program-route", "hw:0,1",
+		"--program-channels", "1,2",
+		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
+		"--server", ts.URL, "--token", "t",
+		"pi-audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if putBody == nil {
+		t.Fatal("no PUT request was captured")
+	}
+	for _, want := range []string{`"sinkBackend":"pipewiresink"`, `"pipewireTargetNode":"alsa_output.usb-Focusrite"`} {
+		if !strings.Contains(string(putBody), want) {
+			t.Errorf("PUT body dropped %q on an edit that never touched it; body: %s", want, putBody)
+		}
+	}
+}
+
 // TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel proves the two
 // new flags are required exactly like the four original ones: a missing
 // --program-channels or --ltc-channel is refused locally, before any

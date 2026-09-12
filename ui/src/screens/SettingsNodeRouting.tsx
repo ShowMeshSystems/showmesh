@@ -24,6 +24,13 @@ const ROLE_OPTIONS: readonly { value: AudioNodeRole; label: string }[] = [
   { value: 'zone', label: 'Zone' },
 ]
 
+type AudioSinkBackend = NonNullable<ConfigAudioNode['sinkBackend']>
+const DEFAULT_SINK_BACKEND: AudioSinkBackend = 'alsasink'
+const SINK_BACKEND_OPTIONS: readonly { value: AudioSinkBackend; label: string }[] = [
+  { value: 'alsasink', label: 'ALSA' },
+  { value: 'pipewiresink', label: 'PipeWire' },
+]
+
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 type NodeState =
   | { kind: 'loading' }
@@ -123,6 +130,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const [clockDomainProvenance, setClockDomainProvenance] = useState('')
   const [role, setRole] = useState<AudioNodeRole>(DEFAULT_ROLE)
   const [zone, setZone] = useState('')
+  const [sinkBackend, setSinkBackend] = useState<AudioSinkBackend>(DEFAULT_SINK_BACKEND)
+  const [pipewireTargetNode, setPipewireTargetNode] = useState('')
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -143,6 +152,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         setClockDomainProvenance(response.payload.clockDomainProvenance)
         setRole(response.payload.role ?? DEFAULT_ROLE)
         setZone(response.payload.zone ?? '')
+        setSinkBackend(response.payload.sinkBackend ?? DEFAULT_SINK_BACKEND)
+        setPipewireTargetNode(response.payload.pipewireTargetNode ?? '')
         setDirty(false)
       })
       .catch((err: unknown) => {
@@ -175,6 +186,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
     setClockDomainProvenance(state.response.payload.clockDomainProvenance)
     setRole(state.response.payload.role ?? DEFAULT_ROLE)
     setZone(state.response.payload.zone ?? '')
+    setSinkBackend(state.response.payload.sinkBackend ?? DEFAULT_SINK_BACKEND)
+    setPipewireTargetNode(state.response.payload.pipewireTargetNode ?? '')
     setDirty(false)
     setSaveError(null)
   }
@@ -187,16 +200,34 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
     guardedSave({
       loaded: state.response,
       read: () => getAudioNode(nodeId),
-      write: () =>
-        putAudioNode(nodeId, {
+      // Starts from the payload this edit was loaded from and overrides only
+      // the fields this form manages, rather than assembling a payload from
+      // scratch: a field this screen does not manage (or does not manage
+      // yet) survives the edit instead of being silently dropped, the same
+      // pattern used elsewhere for a full-replacement PUT.
+      write: () => {
+        const payload: ConfigAudioNode = {
+          ...state.response.payload,
           programRoute,
           programChannels,
           clockDomain,
           clockDomainProvenance,
           role,
-          ...(ltcOn ? { ltcRoute: programRoute, ltcChannel: Number(ltcChannelText) } : {}),
-          ...(role === 'zone' ? { zone } : {}),
-        }),
+          sinkBackend,
+        }
+        if (ltcOn) {
+          payload.ltcRoute = programRoute
+          payload.ltcChannel = Number(ltcChannelText)
+        } else {
+          delete payload.ltcRoute
+          delete payload.ltcChannel
+        }
+        if (role === 'zone') payload.zone = zone
+        else delete payload.zone
+        if (sinkBackend === 'pipewiresink' && pipewireTargetNode.trim() !== '') payload.pipewireTargetNode = pipewireTargetNode
+        else delete payload.pipewireTargetNode
+        return putAudioNode(nodeId, payload)
+      },
     })
       .then((outcome) => {
         if (outcome.kind === 'saved') {
@@ -310,6 +341,29 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
               />
             )}
           </Field>
+          <Segmented
+            label="Backend"
+            value={sinkBackend}
+            options={SINK_BACKEND_OPTIONS}
+            onChange={(v) => {
+              setSinkBackend(v)
+              setDirty(true)
+            }}
+          />
+          {sinkBackend === 'pipewiresink' && (
+            <Field label="PipeWire target node" help="The PipeWire node name program audio targets. Leave blank for PipeWire's own default sink.">
+              {(props) => (
+                <Input
+                  {...props}
+                  value={pipewireTargetNode}
+                  onChange={(e) => {
+                    setPipewireTargetNode(e.target.value)
+                    setDirty(true)
+                  }}
+                />
+              )}
+            </Field>
+          )}
         </div>
 
         <div className="sm-panel sm-stack-4">

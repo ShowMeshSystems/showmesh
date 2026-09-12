@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -67,6 +68,15 @@ type configAudioNode struct {
 	ClockDomainProvenance string  `json:"clockDomainProvenance"`
 	Role                  string  `json:"role,omitempty"`
 	Zone                  *string `json:"zone,omitempty"`
+
+	// SinkBackend mirrors v1.ConfigAudioNode.SinkBackend: "alsasink" or
+	// "pipewiresink" (ADR-046). Optional on the wire; absent decodes to
+	// "alsasink" server-side.
+	SinkBackend string `json:"sinkBackend,omitempty"`
+
+	// PipewireTargetNode mirrors v1.ConfigAudioNode.PipewireTargetNode:
+	// present only when SinkBackend is "pipewiresink".
+	PipewireTargetNode *string `json:"pipewireTargetNode,omitempty"`
 }
 
 // audioNodeSummary mirrors v1.AudioNodeSummary: one element of an audio.node
@@ -478,6 +488,14 @@ carry "program+ltc" at a time — a second is refused, naming both node ids.
 --zone names the independent speaker zone this node drives and is accepted
 only when --role is "zone".
 
+--sink-backend (ADR-046) is one of "alsasink" or "pipewiresink"; omitted,
+the coordinator defaults it to "alsasink". --pipewire-target-node names
+the PipeWire node program audio targets and is accepted only when
+--sink-backend is "pipewiresink". Neither flag is required: "set" reads
+the node's current definition first and carries its role, zone,
+sink-backend, and pipewire-target-node forward unchanged when the
+matching flag is omitted, so changing a route never resets them.
+
 Subcommands:
   list             enumerate audio.node objects (id is the node id)
   get <node-id>    show one node's full audio placement
@@ -579,7 +597,7 @@ func cmdAudioNodeGet(args []string, stdout, stderr io.Writer, clock func() time.
 
 func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audio node set", stderr)
-	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance, role, zone string
+	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance, role, zone, sinkBackend, pipewireTargetNode string
 	var ltcChannel int
 	fs.StringVar(&programRoute, "program-route", "", "the advertised output route to carry program audio (required)")
 	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC, must equal --program-route (omit with --ltc-channel for a program-only node)")
@@ -589,15 +607,20 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
 	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone (ADR-045); omitted, defaults to program+ltc")
 	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
+	fs.StringVar(&sinkBackend, "sink-backend", "", "one of alsasink or pipewiresink (ADR-046); omitted, carried forward from the node's current definition, or defaults to alsasink for a new node")
+	fs.StringVar(&pipewireTargetNode, "pipewire-target-node", "", "the PipeWire node name program audio targets; only accepted with --sink-backend pipewiresink; omitted, carried forward from the node's current definition")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only.")
-		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: this command never reads the node's current")
-		_, _ = fmt.Fprintln(stderr, "definition first. Refused unless the node has already advertised the")
-		_, _ = fmt.Fprintln(stderr, "routes in its own capability report — never accepted on the operator's")
-		_, _ = fmt.Fprintln(stderr, "claim alone. --program-route and --ltc-route must name the same route.")
+		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, but --sink-backend and --pipewire-target-node")
+		_, _ = fmt.Fprintln(stderr, "are carried forward from a read of the node's current definition when")
+		_, _ = fmt.Fprintln(stderr, "omitted, so changing a route never resets a PipeWire-routed node back to")
+		_, _ = fmt.Fprintln(stderr, "alsasink. Every other flag reflects only what is passed on this")
+		_, _ = fmt.Fprintln(stderr, "invocation. Refused unless the node has already advertised the routes in")
+		_, _ = fmt.Fprintln(stderr, "its own capability report — never accepted on the operator's claim")
+		_, _ = fmt.Fprintln(stderr, "alone. --program-route and --ltc-route must name the same route.")
 		_, _ = fmt.Fprintln(stderr, "\n--ltc-route and --ltc-channel are the one OPTIONAL pair, and they are")
 		_, _ = fmt.Fprintln(stderr, "optional TOGETHER: omit both to declare a program-only node that emits")
 		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
@@ -625,13 +648,17 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	// the authority on rejecting, mirroring assets settings set's
 	// identical fs.Visit-over-zero-value pattern) is sent through rather
 	// than refused here as if it had been omitted.
-	ltcChannelSet, zoneSet := false, false
+	ltcChannelSet, zoneSet, sinkBackendSet, pipewireTargetNodeSet := false, false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "ltc-channel":
 			ltcChannelSet = true
 		case "zone":
 			zoneSet = true
+		case "sink-backend":
+			sinkBackendSet = true
+		case "pipewire-target-node":
+			pipewireTargetNodeSet = true
 		}
 	})
 	if programRoute == "" || programChannels == "" || clockDomain == "" || clockDomainProvenance == "" {
@@ -666,6 +693,25 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
+	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
+
+	// One read serves both the If-Match precondition and the sink backend /
+	// PipeWire target carried forward below, mirroring "show set"'s own
+	// read-before-write shape (cmd_show.go): --sink-backend and
+	// --pipewire-target-node have no way to express "leave unchanged"
+	// other than reading what "unchanged" currently is, since this
+	// endpoint is a full replacement. A 404 here is this node's first
+	// "set", not a failure; resolveIfMatch's own exitNotFound branch below
+	// turns it into "send no precondition".
+	var current audioNodeConfigResponse
+	readErr := c.getJSON(ctx, apiPath, nil, &current)
+	if readErr != nil {
+		var ce *cliError
+		if !errors.As(readErr, &ce) || ce.code != exitNotFound {
+			return reportError(stderr, "audio node set", readErr)
+		}
+	}
+
 	body := configAudioNode{
 		ProgramRoute:    programRoute,
 		ProgramChannels: channels,
@@ -678,14 +724,20 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	if zoneSet {
 		body.Zone = &zone
 	}
-	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
+	if sinkBackendSet {
+		body.SinkBackend = sinkBackend
+	} else if readErr == nil {
+		body.SinkBackend = current.Payload.SinkBackend
+	}
+	if pipewireTargetNodeSet {
+		body.PipewireTargetNode = &pipewireTargetNode
+	} else if readErr == nil {
+		body.PipewireTargetNode = current.Payload.PipewireTargetNode
+	}
+
 	ifMatchRevision, ifMatchSet := ifMatchFlag()
 	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
-		var r audioNodeConfigResponse
-		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
-			return 0, err
-		}
-		return r.Revision, nil
+		return current.Revision, readErr
 	})
 	if err != nil {
 		return reportError(stderr, "audio node set", err)
@@ -868,6 +920,14 @@ func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 	_, _ = fmt.Fprintf(w, "Role:                   %s\n", role)
 	if p.Zone != nil {
 		_, _ = fmt.Fprintf(w, "Zone:                   %s\n", *p.Zone)
+	}
+	sinkBackend := p.SinkBackend
+	if sinkBackend == "" {
+		sinkBackend = "alsasink (default)"
+	}
+	_, _ = fmt.Fprintf(w, "Sink backend:           %s\n", sinkBackend)
+	if p.PipewireTargetNode != nil {
+		_, _ = fmt.Fprintf(w, "PipeWire target node:   %s\n", *p.PipewireTargetNode)
 	}
 	_, _ = fmt.Fprintf(w, "Revision:               %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:                %s\n", resp.UpdatedAt.Format(time.RFC3339))
