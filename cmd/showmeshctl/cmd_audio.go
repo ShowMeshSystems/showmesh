@@ -497,9 +497,12 @@ only when --role is "zone".
 the coordinator defaults it to "alsasink". --pipewire-target-node names
 the PipeWire node program audio targets and is accepted only when
 --sink-backend is "pipewiresink". Neither flag is required: "set" reads
-the node's current definition first and carries its role, zone,
-sink-backend, and pipewire-target-node forward unchanged when the
-matching flag is omitted, so changing a route never resets them.
+the node's current definition first and carries its sink-backend and
+pipewire-target-node forward unchanged when the matching flag is omitted
+(pipewire-target-node only when the effective sink-backend is
+"pipewiresink"), so changing a route never resets them. --role and --zone
+are not carried forward; every other flag reflects only what is passed on
+this invocation.
 
 Subcommands:
   list             enumerate audio.node objects (id is the node id)
@@ -624,7 +627,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "omitted, so changing a route never resets a PipeWire-routed node back to")
 		_, _ = fmt.Fprintln(stderr, "alsasink. Every other flag reflects only what is passed on this")
 		_, _ = fmt.Fprintln(stderr, "invocation. Refused unless the node has already advertised the routes in")
-		_, _ = fmt.Fprintln(stderr, "its own capability report — never accepted on the operator's claim")
+		_, _ = fmt.Fprintln(stderr, "its own capability report, never accepted on the operator's claim")
 		_, _ = fmt.Fprintln(stderr, "alone. --program-route and --ltc-route must name the same route.")
 		_, _ = fmt.Fprintln(stderr, "\n--ltc-route and --ltc-channel are the one OPTIONAL pair, and they are")
 		_, _ = fmt.Fprintln(stderr, "optional TOGETHER: omit both to declare a program-only node that emits")
@@ -736,7 +739,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	if pipewireTargetNodeSet {
 		body.PipewireTargetNode = &pipewireTargetNode
-	} else if readErr == nil {
+	} else if readErr == nil && body.SinkBackend == "pipewiresink" {
 		body.PipewireTargetNode = current.Payload.PipewireTargetNode
 	}
 

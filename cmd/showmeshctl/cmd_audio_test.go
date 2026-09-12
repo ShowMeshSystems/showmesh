@@ -281,6 +281,50 @@ func TestCmdAudioNodeSetPreservesSinkBackendWhenOmitted(t *testing.T) {
 	}
 }
 
+// TestCmdAudioNodeSetSwitchesBackToAlsasink proves --sink-backend alsasink
+// succeeds on a node currently pipewiresink, by not carrying the now
+// invalid pipewireTargetNode forward. Before this fix, the PUT always
+// carried the current node's pipewireTargetNode forward whenever
+// --pipewire-target-node was omitted, so the server refused the request
+// with sinkBackend alsasink and a non-empty pipewireTargetNode.
+func TestCmdAudioNodeSetSwitchesBackToAlsasink(t *testing.T) {
+	var putBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			putBody, _ = io.ReadAll(r.Body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0",
+		"--program-channels", "1,2",
+		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
+		"--sink-backend", "alsasink",
+		"--server", ts.URL, "--token", "t",
+		"pi-audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if putBody == nil {
+		t.Fatal("no PUT request was captured")
+	}
+	if !strings.Contains(string(putBody), `"sinkBackend":"alsasink"`) {
+		t.Errorf("PUT body missing sinkBackend alsasink; body: %s", putBody)
+	}
+	if strings.Contains(string(putBody), "pipewireTargetNode") {
+		t.Errorf("PUT body carried pipewireTargetNode forward onto an alsasink switch; body: %s", putBody)
+	}
+}
+
 // TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel proves the two
 // new flags are required exactly like the four original ones: a missing
 // --program-channels or --ltc-channel is refused locally, before any
