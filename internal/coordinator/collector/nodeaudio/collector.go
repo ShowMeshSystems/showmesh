@@ -303,6 +303,8 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	obs = append(obs,
 		buildValue(nodeID, SignalOutputsEnumerated, int64(p.EnumeratedCount), observedAt, rep),
 		buildValue(nodeID, SignalOutputsTruncated, p.Truncated, observedAt, rep),
+		buildValue(nodeID, SignalOutputsPipeWireEnumerated, p.PipeWireEnumerated, observedAt, rep),
+		buildValue(nodeID, SignalOutputsPipeWireEnumeratedReason, p.PipeWireEnumeratedReason, observedAt, rep),
 	)
 
 	domain, provenance, declaredAt, reason := lookupClockDomain(ctx, clockSrc, nodeID)

@@ -694,6 +694,14 @@ func (e *Engine) phcClockGetTime(gst.Clock) gst.ClockTime {
 	}
 	nanos := t.UnixNano()
 	e.clockLastNanos.Store(nanos)
+	// A prior call may have reported clockSourceDefault after a transient
+	// read failure; this read succeeded, so the pipeline is in fact still
+	// running on the installed clock (UseClock is never undone) and the
+	// report must say so again rather than staying pinned to the one
+	// failure forever.
+	if status := e.clockStatus.Load(); status == nil || status.backend != e.cfg.clockKind() {
+		e.clockStatus.Store(&clockStatus{backend: e.cfg.clockKind()})
+	}
 	return gst.ClockTime(nanos)
 }
 

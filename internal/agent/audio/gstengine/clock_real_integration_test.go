@@ -18,17 +18,20 @@ import (
 
 // fakeClockReader is a [ClockReader] double: readable until failAfter
 // successful reads, then every further Now() call fails. A negative
-// failAfter never fails.
+// failAfter never fails. failCount, when non-zero, bounds the failure to
+// that many reads before Now() starts succeeding again, for a transient
+// (rather than permanent) failure.
 type fakeClockReader struct {
 	base      time.Time
 	failAfter int
+	failCount int
 	reads     int
 	closed    bool
 }
 
 func (r *fakeClockReader) Now() (time.Time, error) {
 	r.reads++
-	if r.failAfter >= 0 && r.reads > r.failAfter {
+	if r.failAfter >= 0 && r.reads > r.failAfter && (r.failCount == 0 || r.reads <= r.failAfter+r.failCount) {
 		return time.Time{}, errors.New("fake PHC read failure")
 	}
 	return r.base.Add(time.Duration(r.reads) * time.Millisecond), nil
@@ -198,6 +201,41 @@ func TestClockSourceReportsUnreadableAfterInstall(t *testing.T) {
 	}
 	if reason == "" {
 		t.Fatalf("ClockSource() reason is empty; a clock that stopped being readable must state why")
+	}
+}
+
+// TestClockSourceRestoresPHCAfterTransientFailure proves a single transient
+// read failure does not pin ClockSource to clockSourceDefault forever
+// (re-review finding B, PR #454): the pipeline's UseClock is never undone,
+// so once the configured clock is readable again the report must say PHC
+// again, not stay stuck on a failure that already recovered.
+func TestClockSourceRestoresPHCAfterTransientFailure(t *testing.T) {
+	reader := &fakeClockReader{base: time.Now(), failAfter: -1}
+	cfg := testConfig(resolveByRuntimeFilename)
+	cfg.Clock = reader
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	if ok, reason := e.Available(); !ok {
+		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	reader.failAfter = reader.reads
+	reader.failCount = 1
+	e.phcClockGetTime(gst.Clock(nil))
+	if source, _ := e.ClockSource(); source != clockSourceDefault {
+		t.Fatalf("precondition: ClockSource() = %q, want %q right after the transient failure", source, clockSourceDefault)
+	}
+
+	e.phcClockGetTime(gst.Clock(nil))
+	source, reason := e.ClockSource()
+	if source != clockSourcePHC {
+		t.Fatalf("ClockSource() = %q after the configured clock recovered, want %q", source, clockSourcePHC)
+	}
+	if reason != "" {
+		t.Fatalf("ClockSource() reason = %q, want empty once the clock is readable again", reason)
 	}
 }
 

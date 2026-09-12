@@ -290,18 +290,26 @@ a negative result.
 2. **Exactly one writer per clock** -- reads the live process table
    (`pgrep`, then each match's own `/proc/<pid>/cmdline`), not the
    installed systemd units, and fails if more than one `phc2sys` targets
-   the same device (its `-c` argument, or `CLOCK_REALTIME` if none) or
-   more than one `ptp4l` runs on the same interface (`-i`), naming every
-   pid involved. See "Servo health thresholds" below for why this exists.
+   the same device (its `-c` argument resolved to a canonical `/dev/ptpN`
+   path or interface's own PHC where one exists, or `CLOCK_REALTIME` if
+   none) or more than one `ptp4l` runs on the same interface (`-i`),
+   naming every pid involved. Resolving `-c` narrows, but does not close,
+   the spelling gap: a `phc2sys -a -r` writer (no `-c` at all) and two
+   `ptp4l` instances that each take their interface only from a config
+   file (`-f`, no `-i`) still key generically and can hide or misreport a
+   duplicate. See "Servo health thresholds" below for why this check
+   exists.
 3. **Servo health, not just port state** -- samples several seconds of
    the actual servo output for the role this node has (`phc2sys` on a
    grandmaster with a PHC, `ptp4l` on a follower), via
    `deploy/node/ptp-audio/servo-health.py` reading recent `journalctl`
    output for that unit. Prints every sample it read (offset, state,
-   frequency, delay) and fails on a frequency adjustment at or near
-   linuxptp's own clamp, a servo state that changes across the sample
-   window instead of holding steady, or any negative delay. See "Servo
-   health thresholds" below.
+   frequency, delay) and fails on an offset past a 1ms bound, a frequency
+   adjustment at or near linuxptp's own clamp, a servo state that changes
+   across the sample window instead of holding steady, or any negative
+   delay. See "Servo health thresholds" below. A check that could not run
+   its own instrument at all (empty or unparseable log input) is reported
+   as unable to run (exit 2), never a silent pass.
 4. **Does the ALSA node's driver election actually land on the PTP
    driver** -- `pw-dump`, reading each node's `node.driver-id` (the id of
    the node ACTUALLY driving it) rather than a node's own `node.driver`
@@ -361,6 +369,16 @@ together," not "is the clock any good."
 
 **Thresholds, and the reasoning**:
 
+- **Offset: `|offset| >= 1000000` ns (1ms)**. This is the one number that
+  most directly says whether the clock is right, and until this revision
+  it was printed by every sample and never tested by any threshold: eight
+  samples holding one servo state, a modest frequency, and a positive
+  delay still printed "servo settled" while sitting 50ms out of sync,
+  because none of the other three thresholds below is the reading a
+  converged-but-wrong servo actually violates. A Raspberry Pi node on this
+  network locks to about 20 microseconds once settled; 1ms is three orders
+  of magnitude past that, comfortable headroom against ordinary jitter
+  while still catching anything that would be audible.
 - **Saturated frequency: `|freq| >= 100000000` ppb (100,000 ppm)**.
   linuxptp's own `max_frequency` default is 900,000,000 ppb; a frequency
   adjustment at or near that clamp means the servo has given up trying to
@@ -372,7 +390,11 @@ together," not "is the clock any good."
   900,000 ppm clamp, so a real servo correcting a real but unusual drift
   has room to be flagged before it actually saturates. This is not a
   precision claim about how far off the clock actually is; it is a "the
-  servo is fighting something it cannot correct" signal.
+  servo is fighting something it cannot correct" signal. Read honestly,
+  this is a **clamp detector, not a health bound**: it fires only within
+  an order of magnitude of linuxptp's own ceiling, and the offset
+  threshold above is what actually catches an ordinary-looking, merely
+  wrong servo.
 - **Flapping state: more than one distinct servo state (`s0`/`s1`/`s2`)
   across the sampled window**. A converged servo holds `s2` for the
   entire window; node-01's own log alternated `s2`/`s0` one second apart.

@@ -535,4 +535,66 @@ else
 fi
 
 echo ""
+echo "--- step 10: verify-ptp-audio.sh's servo-health check on a converged-but-wrong 50ms offset ---"
+# Re-review finding F on PR #454: eight samples holding one servo state
+# with a modest freq/delay used to print "servo settled" even 50ms out of
+# sync, because offset itself was never tested. Fakes systemctl (report
+# phc2sys-showmesh.service active) and journalctl (return this fixture) on
+# PATH so the actual shell script runs its real thresholds end to end, not
+# just servo-health.py in isolation (step 9 above already proves the parser).
+FAKESYSTEMD=/tmp/showmesh-bench-fakesystemd
+mkdir -p "$FAKESYSTEMD"
+cat > "$FAKESYSTEMD/systemctl" <<'EOF'
+#!/bin/bash
+if [ "$1" = "is-active" ] && [ "$3" = "phc2sys-showmesh.service" ]; then
+  exit 0
+fi
+exit 3
+EOF
+cat > "$FAKESYSTEMD/journalctl" <<'EOF'
+#!/bin/bash
+for i in 1 2 3 4 5 6 7 8; do
+  echo "phc2sys[$i.1]: sys offset 50000000 s2 freq -3021 delay 812"
+done
+EOF
+chmod +x "$FAKESYSTEMD/systemctl" "$FAKESYSTEMD/journalctl"
+
+set +e
+OFFSET_VERIFY_OUT="$(PATH="$FAKESYSTEMD:$PATH" /repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1)"
+OFFSET_VERIFY_RC=$?
+set -e
+echo "$OFFSET_VERIFY_OUT"
+if echo "$OFFSET_VERIFY_OUT" | grep -qE "FAIL:.*offset reached 50000000ns" && [ "$OFFSET_VERIFY_RC" -eq 1 ]; then
+  echo "OK: verify-ptp-audio.sh's servo-health check failed a converged-but-50ms-out-of-sync servo (exit 1)"
+else
+  echo "FAIL: expected verify-ptp-audio.sh to fail (exit 1) the 50ms-offset servo fixture (finding F regression guard)"
+  exit 1
+fi
+
+echo ""
+echo "--- step 11: verify-ptp-audio.sh's servo-health check on an empty journal read ---"
+# Re-review finding G on PR #454: journalctl exiting 0 with no output (the
+# shape a caller outside systemd-journal/adm actually gets, not a crash)
+# used to land in the info() branch, touching neither PASS, FAIL nor ERR,
+# so the script exited 0 having produced no answer. This instrument
+# failure must exit 2.
+cat > "$FAKESYSTEMD/journalctl" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$FAKESYSTEMD/journalctl"
+
+set +e
+EMPTY_VERIFY_OUT="$(PATH="$FAKESYSTEMD:$PATH" /repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1)"
+EMPTY_VERIFY_RC=$?
+set -e
+echo "$EMPTY_VERIFY_OUT"
+if echo "$EMPTY_VERIFY_OUT" | grep -q "ERROR: no parseable servo sample lines" && [ "$EMPTY_VERIFY_RC" -eq 2 ]; then
+  echo "OK: verify-ptp-audio.sh exited 2 on an empty, zero-exit journal read (finding G regression guard)"
+else
+  echo "FAIL: expected verify-ptp-audio.sh to exit 2 on an empty journal read, got rc=$EMPTY_VERIFY_RC"
+  exit 1
+fi
+
+echo ""
 echo "=== in-container-proof.sh: all checks passed for role=$ROLE ==="

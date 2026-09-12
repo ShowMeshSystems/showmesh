@@ -236,6 +236,11 @@ type Session struct {
 	faultAt     time.Time
 	lastProbe   MediaItemResult
 
+	// freezeCleanSince is when watchTick first saw a clean (Reason == "")
+	// observation after a FaultFreeze; zero while stalled or while no
+	// freeze is latched. See [Session.clearRecoveredFreezeLocked].
+	freezeCleanSince time.Time
+
 	// ltcClaimState and ltcClaimReason are this session's own standing
 	// relationship to this node's one LTC run (audio_session.ltc.claim.
 	// state/.reason) — set only by [Manager.startLTCLocked]'s and
@@ -734,6 +739,36 @@ func (s *Session) setFaultLocked(fault pkgaudio.SessionFault, reason string) {
 func (s *Session) clearFaultLocked() {
 	s.fault = pkgaudio.FaultNone
 	s.faultReason = ""
+}
+
+// freezeRecoveryWindow is how long checkStallLocked's own signal must read
+// clean (Reason == "") before clearRecoveredFreezeLocked lets go of a
+// latched FaultFreeze. var, not const: shrunk by tests exercising this
+// bound directly.
+var freezeRecoveryWindow = 3 * time.Second
+
+// clearRecoveredFreezeLocked clears a latched FaultFreeze once watchTick
+// has observed the branch clean for freezeRecoveryWindow. FaultFreeze is
+// the one fault on this path whose own condition clears itself:
+// checkStallLocked resets its tracking the moment the position moves
+// again, unlike every other setFaultLocked caller (a failed Observe, a
+// route change, a load error), none of which can know their condition is
+// over without [Session.prepareLocked]'s full revalidation. That is why
+// this is its own narrow path rather than a change to clearFaultLocked's
+// contract, which stays revalidation-only for those callers.
+func (s *Session) clearRecoveredFreezeLocked(observedAt time.Time) {
+	if s.fault != pkgaudio.FaultFreeze {
+		return
+	}
+	if s.freezeCleanSince.IsZero() {
+		s.freezeCleanSince = observedAt
+		return
+	}
+	if observedAt.Sub(s.freezeCleanSince) >= freezeRecoveryWindow {
+		s.fault = pkgaudio.FaultNone
+		s.faultReason = ""
+		s.freezeCleanSince = time.Time{}
+	}
 }
 
 // resolveBookmarkPositionLocked validates s.bookmark, if any, against

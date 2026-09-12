@@ -325,6 +325,45 @@ func TestCmdAudioNodeSetSwitchesBackToAlsasink(t *testing.T) {
 	}
 }
 
+// TestCmdAudioNodeSetForceCarriesSinkBackendForwardWhenReadSucceeds proves
+// --force does not itself drop sinkBackend/pipewireTargetNode: it only
+// skips If-Match, and the carry-forward read it still performs succeeds
+// here, so a --force route change on a healthy read path must not reset a
+// pipewiresink node to alsasink (re-review finding A, PR #454).
+func TestCmdAudioNodeSetForceCarriesSinkBackendForwardWhenReadSucceeds(t *testing.T) {
+	var putBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			putBody, _ = io.ReadAll(r.Body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"one card","sinkBackend":"pipewiresink","pipewireTargetNode":"alsa_output.usb-Focusrite"},
+			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set", "--force",
+		"--program-route", "hw:0,0",
+		"--program-channels", "1,2",
+		"--clock-domain", "solo", "--clock-domain-provenance", "one card",
+		"--server", ts.URL, "--token", "t",
+		"pi-audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(string(putBody), `"sinkBackend":"pipewiresink"`) {
+		t.Errorf("PUT body must still carry sinkBackend pipewiresink forward under --force when the read succeeds; body: %s", putBody)
+	}
+	if !strings.Contains(string(putBody), `"pipewireTargetNode":"alsa_output.usb-Focusrite"`) {
+		t.Errorf("PUT body must still carry pipewireTargetNode forward under --force when the read succeeds; body: %s", putBody)
+	}
+}
+
 // TestCmdAudioNodeSetSendsOutputLatencyFlags proves every
 // --output-latency-* flag reaches the PUT body together and is displayed
 // in the printed detail.
@@ -451,10 +490,12 @@ func TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven(t *testing.T)
 	}
 }
 
-// TestCmdAudioNodeSetForceSkipsReadWhenNoOutputLatencyFlagGiven proves
-// --force never grows a GET dependency: it exists to write when the read
-// path is degraded, so the carry-forward must not call it under --force.
-func TestCmdAudioNodeSetForceSkipsReadWhenNoOutputLatencyFlagGiven(t *testing.T) {
+// TestCmdAudioNodeSetForceWarnsAndProceedsWhenReadFails proves --force still
+// attempts the carry-forward read (a degraded read path is what --force is
+// for, not a reason to skip it); when that read also fails, the write
+// proceeds anyway and this command warns which fields it will therefore
+// reset instead of silently dropping them (re-review finding A, PR #454).
+func TestCmdAudioNodeSetForceWarnsAndProceedsWhenReadFails(t *testing.T) {
 	var gotBody []byte
 	var getSeen bool
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -485,11 +526,19 @@ func TestCmdAudioNodeSetForceSkipsReadWhenNoOutputLatencyFlagGiven(t *testing.T)
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	if getSeen {
-		t.Error("--force must not perform a GET: it exists for a degraded read path")
+	if !getSeen {
+		t.Error("--force must still attempt the carry-forward read; it only skips If-Match, not this GET")
 	}
 	if strings.Contains(string(gotBody), "outputLatency") {
-		t.Errorf("PUT body must not send outputLatency when --force skipped the read; body: %s", gotBody)
+		t.Errorf("PUT body must not send outputLatency when the carry-forward read failed; body: %s", gotBody)
+	}
+	if strings.Contains(string(gotBody), "sinkBackend") {
+		t.Errorf("PUT body must not send sinkBackend when the carry-forward read failed; body: %s", gotBody)
+	}
+	for _, want := range []string{"sinkBackend", "outputLatency"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr must warn that %s will be reset when --force's read fails; stderr=%s", want, stderr.String())
+		}
 	}
 }
 

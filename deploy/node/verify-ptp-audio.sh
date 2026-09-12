@@ -130,6 +130,31 @@ echo ""
 # clock; this check proves that against the live process table rather than
 # assuming the installed units are the only things running.
 echo "--- Clock writer uniqueness ---"
+# resolve_clock_target canonicalizes a phc2sys -c value to the actual clock
+# device it names, so two writers spelled differently (an interface name
+# and its own /dev/ptpN, or a device reached through a symlink) still key
+# to the same group instead of hiding a second writer under a different
+# string (re-review finding H, PR #454). CLOCK_REALTIME and an unresolvable
+# token are returned as given: this narrows the spelling gap, it does not
+# close every one (see PTP-AUDIO.md).
+resolve_clock_target() {
+  local raw="$1"
+  if [ "$raw" = "CLOCK_REALTIME" ]; then
+    echo "CLOCK_REALTIME"
+    return
+  fi
+  if [ -e "$raw" ]; then
+    realpath "$raw" 2>/dev/null || echo "$raw"
+    return
+  fi
+  local ptp_link
+  ptp_link="$(command ls "/sys/class/net/$raw/device/ptp/" 2>/dev/null | head -n1)"
+  if [ -n "$ptp_link" ]; then
+    realpath "/dev/$ptp_link" 2>/dev/null || echo "/dev/$ptp_link"
+    return
+  fi
+  echo "$raw"
+}
 if ! command -v pgrep >/dev/null 2>&1; then
   err "pgrep not found (part of procps); cannot check for duplicate phc2sys/ptp4l writers"
 else
@@ -137,8 +162,13 @@ else
   PHC2SYS_PIDS="$(pgrep -x phc2sys 2>/dev/null || true)"
   for pid in $PHC2SYS_PIDS; do
     CMDLINE="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    TARGET="$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++) if ($i=="-c") {print $(i+1); found=1} } END{if(!found) print "CLOCK_REALTIME"}')"
-    [ -n "$TARGET" ] || TARGET="(cmdline unreadable)"
+    RAW_TARGET="$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++) if ($i=="-c") {print $(i+1); found=1} } END{if(!found) print "CLOCK_REALTIME"}')"
+    [ -n "$RAW_TARGET" ] || RAW_TARGET="(cmdline unreadable)"
+    if [ "$RAW_TARGET" = "(cmdline unreadable)" ]; then
+      TARGET="$RAW_TARGET"
+    else
+      TARGET="$(resolve_clock_target "$RAW_TARGET")"
+    fi
     PHC2SYS_TARGETS["$TARGET"]="${PHC2SYS_TARGETS[$TARGET]:-}${PHC2SYS_TARGETS[$TARGET]:+ }$pid"
   done
   PHC2SYS_DUP=0
@@ -195,14 +225,17 @@ echo ""
 # ran.
 #
 # Thresholds (see deploy/node/PTP-AUDIO.md for the reasoning):
-#   - |freq| >= 100000000 ppb (100,000 ppm) -- at or near linuxptp's own
-#     900,000,000 ppb clamp, two orders of magnitude past an ordinary
-#     crystal's few-hundred-ppm drift.
+#   - |offset| >= 1000000ns (1ms) -- the one number that most directly says
+#     whether the clock is right, not just whether the servo looks settled.
+#   - |freq| >= 100000000 ppb (100,000 ppm) -- a clamp detector, not a
+#     health bound: it fires only within an order of magnitude of
+#     linuxptp's own 900,000,000 ppb clamp.
 #   - more than one distinct servo state across the sample window -- a
 #     converged servo holds one state (s2) for the whole window.
 #   - any negative path delay/offset-source delay -- never physical.
 echo "--- Servo health (the reading none of the other checks can see) ---"
 SERVO_HEALTH_PY="$SCRIPT_DIR/ptp-audio/servo-health.py"
+OFFSET_BOUND_NS=1000000
 SATURATED_FREQ_PPB=100000000
 SAMPLE_WINDOW=8
 if ! command -v python3 >/dev/null 2>&1; then
@@ -225,50 +258,75 @@ else
   if [ -z "$SERVO_UNIT" ]; then
     info "nothing to sample: no phc2sys running and ptp4l is not in SLAVE (this node has no local servo of its own to check, or check 1 above already explains why)"
   else
-    READING="$(journalctl -u "$SERVO_UNIT" -n 500 --no-pager -o cat 2>/dev/null | python3 "$SERVO_HEALTH_PY")"
-    RC=$?
-    if [ "$RC" -ne 0 ]; then
-      err "the servo health parser failed to run against $SERVO_UNIT's log (exit $RC)"
+    # journalctl and python3 run as two separate commands, not one pipeline,
+    # so each one's own exit code is checked: $? after a pipeline inside a
+    # command substitution reports only the last command's (python3's, which
+    # exits 0 on empty input), leaving a journalctl failure invisible.
+    JOURNAL_OUTPUT="$(journalctl -u "$SERVO_UNIT" -n 500 --no-pager -o cat 2>&1)"
+    JOURNALCTL_RC=$?
+    if [ "$JOURNALCTL_RC" -ne 0 ]; then
+      err "journalctl failed to read $SERVO_UNIT's recent log (exit $JOURNALCTL_RC): $(echo "$JOURNAL_OUTPUT" | tr '\n' ' ')"
     else
-      SAMPLE_COUNT="$(echo "$READING" | awk -F= '/^SAMPLE_COUNT=/{print $2; exit}')"
-      if [ "${SAMPLE_COUNT:-0}" -eq 0 ]; then
-        info "no parseable servo sample lines in $SERVO_UNIT's recent log ($SERVO_LABEL); it may have just (re)started -- re-run in a few seconds"
+      READING="$(printf '%s' "$JOURNAL_OUTPUT" | python3 "$SERVO_HEALTH_PY")"
+      RC=$?
+      if [ "$RC" -ne 0 ]; then
+        err "the servo health parser failed to run against $SERVO_UNIT's log (exit $RC)"
       else
-        SAMPLES="$(echo "$READING" | awk -F= '/^SAMPLE=/{print $2}' | tail -n "$SAMPLE_WINDOW")"
-        STATES=""
-        MIN_DELAY=""
-        MAX_ABS_FREQ=0
-        while IFS='|' read -r offset state freq delay; do
-          [ -n "$offset" ] || continue
-          info "$SERVO_LABEL sample: offset=${offset}ns state=s${state} freq=${freq}ppb delay=${delay}ns"
-          STATES="$STATES s$state"
-          if [ -z "$MIN_DELAY" ] || [ "$delay" -lt "$MIN_DELAY" ]; then
-            MIN_DELAY="$delay"
-          fi
-          ABS_FREQ=${freq#-}
-          if [ "$ABS_FREQ" -gt "$MAX_ABS_FREQ" ]; then
-            MAX_ABS_FREQ="$ABS_FREQ"
-          fi
-        done <<< "$SAMPLES"
+        SAMPLE_COUNT="$(echo "$READING" | awk -F= '/^SAMPLE_COUNT=/{print $2; exit}')"
+        if [ "${SAMPLE_COUNT:-0}" -eq 0 ]; then
+          # No parseable line is not automatically a fresh restart: a user
+          # outside systemd-journal/adm gets an empty, zero-exit journalctl
+          # read, which is this check's own instrument failing to run, not a
+          # confirmed negative -- see the header's exit-2 contract.
+          err "no parseable servo sample lines in $SERVO_UNIT's recent log ($SERVO_LABEL); this may mean the unit just (re)started, or that this account cannot read its journal (needs systemd-journal/adm group membership) -- re-run as a privileged reader before trusting a clean result next to this"
+        else
+          SAMPLES="$(echo "$READING" | awk -F= '/^SAMPLE=/{print $2}' | tail -n "$SAMPLE_WINDOW")"
+          STATES=""
+          MIN_DELAY=""
+          MAX_ABS_FREQ=0
+          MAX_ABS_OFFSET=0
+          ACTUAL_SAMPLES=0
+          while IFS='|' read -r offset state freq delay; do
+            [ -n "$offset" ] || continue
+            info "$SERVO_LABEL sample: offset=${offset}ns state=s${state} freq=${freq}ppb delay=${delay}ns"
+            STATES="$STATES s$state"
+            ACTUAL_SAMPLES=$((ACTUAL_SAMPLES + 1))
+            if [ -z "$MIN_DELAY" ] || [ "$delay" -lt "$MIN_DELAY" ]; then
+              MIN_DELAY="$delay"
+            fi
+            ABS_FREQ=${freq#-}
+            if [ "$ABS_FREQ" -gt "$MAX_ABS_FREQ" ]; then
+              MAX_ABS_FREQ="$ABS_FREQ"
+            fi
+            ABS_OFFSET=${offset#-}
+            if [ "$ABS_OFFSET" -gt "$MAX_ABS_OFFSET" ]; then
+              MAX_ABS_OFFSET="$ABS_OFFSET"
+            fi
+          done <<< "$SAMPLES"
 
-        DISTINCT_STATES="$(echo "$STATES" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')"
-        DISTINCT_COUNT=$(echo "$DISTINCT_STATES" | wc -w)
+          DISTINCT_STATES="$(echo "$STATES" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')"
+          DISTINCT_COUNT=$(echo "$DISTINCT_STATES" | wc -w)
 
-        SERVO_BAD=0
-        if [ "$MAX_ABS_FREQ" -ge "$SATURATED_FREQ_PPB" ]; then
-          bad "$SERVO_LABEL frequency adjustment reached ${MAX_ABS_FREQ}ppb over the last $SAMPLE_WINDOW sample(s) -- at or near linuxptp's own 900000000ppb clamp, not ordinary crystal drift"
-          SERVO_BAD=1
-        fi
-        if [ "$DISTINCT_COUNT" -gt 1 ]; then
-          bad "$SERVO_LABEL servo state is flapping ($DISTINCT_STATES) over the last $SAMPLE_WINDOW sample(s) instead of holding steady"
-          SERVO_BAD=1
-        fi
-        if [ -n "$MIN_DELAY" ] && [ "$MIN_DELAY" -lt 0 ]; then
-          bad "$SERVO_LABEL reported a negative delay (${MIN_DELAY}ns) -- never physically possible, this is the clearest sign the clock is being fought over"
-          SERVO_BAD=1
-        fi
-        if [ "$SERVO_BAD" -eq 0 ]; then
-          ok "$SERVO_LABEL servo settled over the last $SAMPLE_WINDOW sample(s): state held at ${DISTINCT_STATES}, max |freq|=${MAX_ABS_FREQ}ppb, min delay=${MIN_DELAY}ns"
+          SERVO_BAD=0
+          if [ "$MAX_ABS_OFFSET" -ge "$OFFSET_BOUND_NS" ]; then
+            bad "$SERVO_LABEL offset reached ${MAX_ABS_OFFSET}ns over the last $ACTUAL_SAMPLES sample(s) -- past the ${OFFSET_BOUND_NS}ns (1ms) bound, three orders of magnitude past a locked node's own tens-of-microseconds offset"
+            SERVO_BAD=1
+          fi
+          if [ "$MAX_ABS_FREQ" -ge "$SATURATED_FREQ_PPB" ]; then
+            bad "$SERVO_LABEL frequency adjustment reached ${MAX_ABS_FREQ}ppb over the last $ACTUAL_SAMPLES sample(s) -- at or near linuxptp's own 900000000ppb clamp, not ordinary crystal drift"
+            SERVO_BAD=1
+          fi
+          if [ "$DISTINCT_COUNT" -gt 1 ]; then
+            bad "$SERVO_LABEL servo state is flapping ($DISTINCT_STATES) over the last $ACTUAL_SAMPLES sample(s) instead of holding steady"
+            SERVO_BAD=1
+          fi
+          if [ -n "$MIN_DELAY" ] && [ "$MIN_DELAY" -lt 0 ]; then
+            bad "$SERVO_LABEL reported a negative delay (${MIN_DELAY}ns) -- never physically possible, this is the clearest sign the clock is being fought over"
+            SERVO_BAD=1
+          fi
+          if [ "$SERVO_BAD" -eq 0 ]; then
+            ok "$SERVO_LABEL servo settled over the last $ACTUAL_SAMPLES sample(s): state held at ${DISTINCT_STATES}, max |offset|=${MAX_ABS_OFFSET}ns, max |freq|=${MAX_ABS_FREQ}ppb, min delay=${MIN_DELAY}ns"
+          fi
         fi
       fi
     fi

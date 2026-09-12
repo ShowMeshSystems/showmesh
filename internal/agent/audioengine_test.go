@@ -1122,6 +1122,13 @@ func TestRebuildInstallsNoClockForAlsasink(t *testing.T) {
 	if gotCfg.Clock != nil {
 		t.Error("Config.Clock is non-nil for an alsasink node; alsasink must build with no pipeline clock installed")
 	}
+	// Re-review finding E, PR #454: an empty ClockUnavailableReason on an
+	// alsasink node is indistinguishable from a node nothing was ever
+	// configured for. This is a deliberate decision (ADR-046), not an
+	// absence of configuration, and must say so.
+	if gotCfg.ClockUnavailableReason == "" {
+		t.Error("Config.ClockUnavailableReason is empty for an alsasink node; it must name the deliberate no-PHC-clock decision so node.audio.engine.clock_source's default reading is distinguishable from nothing configured")
+	}
 }
 
 // TestBuildPipelineClockLockedNoSourceWired proves a rebuilder with no

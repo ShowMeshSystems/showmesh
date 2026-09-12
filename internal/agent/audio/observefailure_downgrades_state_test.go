@@ -112,6 +112,63 @@ func TestWatchTickReportsStallAsFault(t *testing.T) {
 	}
 }
 
+// TestWatchTickClearsRecoveredFreezeFault proves a FaultFreeze whose
+// underlying stall has genuinely cleared (checkStallLocked stops reporting
+// a Reason once the position moves again) does not latch for the life of
+// the session: it clears once watchTick sees the branch clean for
+// freezeRecoveryWindow, and the session state stays Playing throughout,
+// matching re-review findings C and D on PR #454.
+func TestWatchTickClearsRecoveredFreezeFault(t *testing.T) {
+	orig := freezeRecoveryWindow
+	freezeRecoveryWindow = 2 * time.Second
+	t.Cleanup(func() { freezeRecoveryWindow = orig })
+
+	c := newClock(time.Now())
+	fake := NewFakeEngine(c.now)
+	dir := t.TempDir()
+	m := NewManager(fake, NewFileSessionStore(dir), dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+
+	s := startPlayingSession(t, m, "s1")
+	s.mu.Lock()
+	handle := s.handle
+	s.mu.Unlock()
+
+	stallEngine := &stallReasonEngine{FakeEngine: fake, stallHandle: handle, reason: "position has not advanced"}
+	m.engine = stallEngine
+
+	m.watchTick(context.Background())
+	s.mu.Lock()
+	if s.fault != pkgaudio.FaultFreeze {
+		t.Fatalf("precondition: session fault = %q, want %q", s.fault, pkgaudio.FaultFreeze)
+	}
+	if s.state != pkgaudio.StatePlaying {
+		t.Fatalf("precondition: session state = %q, want %q", s.state, pkgaudio.StatePlaying)
+	}
+	s.mu.Unlock()
+
+	// The stall clears (the position started moving again); a tick before
+	// freezeRecoveryWindow has elapsed must not clear the fault yet.
+	stallEngine.reason = ""
+	c.advance(1 * time.Second)
+	m.watchTick(context.Background())
+	s.mu.Lock()
+	if s.fault != pkgaudio.FaultFreeze {
+		t.Fatalf("session fault = %q after one clean tick under freezeRecoveryWindow, want it still latched at %q", s.fault, pkgaudio.FaultFreeze)
+	}
+	s.mu.Unlock()
+
+	c.advance(2 * time.Second)
+	m.watchTick(context.Background())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fault != pkgaudio.FaultNone {
+		t.Fatalf("session fault = %q after freezeRecoveryWindow of clean ticks, want %q", s.fault, pkgaudio.FaultNone)
+	}
+	if s.state != pkgaudio.StatePlaying {
+		t.Fatalf("session state = %q after the freeze recovered, want %q throughout", s.state, pkgaudio.StatePlaying)
+	}
+}
+
 // TestSnapshotDowngradesStateAfterObserveFailure reproduces defect 3 at
 // its on-demand call site: [Manager.Snapshot] (session.go's
 // snapshotLocked) has the identical gap — a failed Observe sets the

@@ -1500,6 +1500,17 @@ type AudioPayload struct {
 	// enumerator reported, before virtual-name filtering or truncation.
 	EnumeratedCount int64 `json:"enumeratedCount"`
 
+	// PipeWireEnumerated and PipeWireEnumeratedReason mirror
+	// HardwareEnumerated/HardwareEnumeratedReason for this node's PipeWire
+	// graph specifically (a pw-dump failure), reported regardless of
+	// whether ALSA enumeration separately succeeded: an ALSA card's own
+	// success must never hide a PipeWire route silently missing from
+	// Routes. False with an empty reason means no PipeWire graph is
+	// present at all (a clean absence); false with a reason means pw-dump
+	// ran but failed or could not be parsed.
+	PipeWireEnumerated       bool   `json:"pipeWireEnumerated"`
+	PipeWireEnumeratedReason string `json:"pipeWireEnumeratedReason"`
+
 	// DiscoveredAt is when this node actually ran its one-shot discovery
 	// probes (EngineAvailable, HardwareEnumerated, DeviceAvailable,
 	// ProgramAvailable, LTCAvailable, and Routes), on the node's own

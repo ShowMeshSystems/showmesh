@@ -469,6 +469,35 @@ func TestRouteEvidenceCacheEvictsOnlyOnACompleteEnumeration(t *testing.T) {
 	}
 }
 
+// TestDetectAudioCapabilitiesKeepsCacheOnTransientPipeWireFailure proves
+// re-review finding 7 (PR #454): a pw-dump failure with a clean ALSA pass
+// must not evict a PipeWire-only device's cached route evidence, since
+// d.Routes is the merged list and "complete" must require BOTH halves to
+// have enumerated cleanly, not just the one that happened to succeed.
+func TestDetectAudioCapabilitiesKeepsCacheOnTransientPipeWireFailure(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "alsa_output.usb-MOTU_M4", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+	}, true)
+
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true, HardwareEnumerated: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
+		},
+	})
+	withAudioPipeWireDiscoverer(t, audio.PipeWireDiscovery{
+		Enumerated: false, EnumeratedReason: "pw-dump: connect: permission denied",
+	})
+
+	detectAudioCapabilities(context.Background())
+
+	if _, ok := lastKnownGoodRoutes.get("alsa_output.usb-MOTU_M4"); !ok {
+		t.Fatal("PipeWire device evicted on a transient pw-dump failure even though ALSA enumerated cleanly; want its cached evidence kept")
+	}
+}
+
 // TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe proves the
 // fix end to end through detectAudioCapabilities itself: a route this
 // run's own probe reports busy still ships as audio.output.local when it

@@ -75,8 +75,11 @@ type routeEvidenceCache struct {
 
 // update stores routes' successful entries. When complete is true
 // (routes is the full, untruncated candidate list from a successful
-// enumeration), any cached device missing from routes entirely is
-// evicted: gone from ALSA, not merely busy (busy still appears in routes).
+// enumeration of every source it merges), any cached device missing from
+// routes entirely is evicted: gone, not merely busy (busy still appears
+// in routes). complete must be false whenever ANY merged source's own
+// enumeration failed, not just the one that failed: a device this cache
+// still holds evidence for may belong to the source that did not fail.
 func (c *routeEvidenceCache) update(routes []audio.RouteEvidence, complete bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -212,7 +215,15 @@ var audioSessionCapabilityIDs = []capability.ID{
 // audio.node configuration (ADR-039), not anything this agent reports.
 func detectAudioCapabilities(ctx context.Context) capability.Set {
 	d := discoverAudio(ctx)
-	lastKnownGoodRoutes.update(d.Routes, d.HardwareEnumerated && !d.Truncated)
+	// d.Routes is the ALSA+PipeWire merge, so eviction (a device genuinely
+	// gone, not merely busy) requires BOTH halves to have enumerated
+	// cleanly: a transient pw-dump failure with healthy ALSA must not
+	// evict a bound route's cached evidence, the same way an ALSA failure
+	// already does not (re-review finding 7, PR #454). PipeWireEnumerated
+	// false with an empty reason is a clean "no PipeWire here" absence,
+	// not a failure, and does not block eviction.
+	pipeWireFailed := !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != ""
+	lastKnownGoodRoutes.update(d.Routes, d.HardwareEnumerated && !d.Truncated && !pipeWireFailed)
 	if !d.EngineUsable {
 		return nil
 	}

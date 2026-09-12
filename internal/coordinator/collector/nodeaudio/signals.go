@@ -159,6 +159,16 @@ const (
 	SignalSettingsReason            observation.SignalID = "node.audio.settings.reason"
 )
 
+// SignalOutputsPipeWireEnumerated and SignalOutputsPipeWireEnumeratedReason
+// report [mqttproto.AudioPayload.PipeWireEnumerated]/PipeWireEnumeratedReason:
+// whether this node's own PipeWire graph could be read, independent of
+// whether its ALSA enumeration separately succeeded -- a working ALSA card
+// must not hide a broken PipeWire graph on a pipewiresink-backed node.
+const (
+	SignalOutputsPipeWireEnumerated       observation.SignalID = "node.audio.outputs.pipewire_enumerated"
+	SignalOutputsPipeWireEnumeratedReason observation.SignalID = "node.audio.outputs.pipewire_enumerated_reason"
+)
+
 // AllSignalIDs is every signal this package ever emits, in the order
 // [Collector.Poll] builds them for one node.
 var AllSignalIDs = []observation.SignalID{
@@ -169,6 +179,8 @@ var AllSignalIDs = []observation.SignalID{
 	SignalOutputsCount,
 	SignalOutputsEnumerated,
 	SignalOutputsTruncated,
+	SignalOutputsPipeWireEnumerated,
+	SignalOutputsPipeWireEnumeratedReason,
 	SignalProgramState,
 	SignalLTCState,
 	SignalClockDomain,

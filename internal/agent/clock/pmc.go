@@ -64,8 +64,9 @@ var pmcLocalSocketMarkers = []string{"bind failed", "failed to open transport", 
 // /var/run/pmc.$pid — unwritable to a non-root agent (/var/run is
 // root:root 0755), so every GET fails with "uds: bind failed: Permission
 // denied" no matter how healthy the observed ptp4l is. [pmcLocalSocket]
-// gives pmc a path this process can certainly write, unique per
-// invocation so concurrent reads cannot collide, removed here even when
+// gives pmc a path this process can certainly write, drawn from a large
+// enough name space that two concurrent reads landing on the same name is
+// not a failure this package has ever observed, removed here even when
 // the read fails.
 func runPMC(ctx context.Context, uds string, domain int, managementID string, socketDirHint string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, pmcTimeout)

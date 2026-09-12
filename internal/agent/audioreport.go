@@ -598,6 +598,8 @@ func buildAudioPayload(d audio.Discovery, probedAt time.Time) mqttproto.AudioPay
 		Routes:                   make([]mqttproto.AudioRouteReport, 0, len(d.Routes)),
 		Truncated:                d.Truncated,
 		EnumeratedCount:          int64(d.EnumeratedCount),
+		PipeWireEnumerated:       d.PipeWireEnumerated,
+		PipeWireEnumeratedReason: d.PipeWireEnumeratedReason,
 		DiscoveredAt:             &probedAt,
 		ObservedAt:               &probedAt,
 		Sessions:                 []mqttproto.AudioSessionReport{},

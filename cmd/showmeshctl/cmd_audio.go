@@ -669,6 +669,11 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "unchanged, read from the node just before this write.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this node), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
+		_, _ = fmt.Fprintln(stderr, "\n--force only skips If-Match; it still attempts the same read the")
+		_, _ = fmt.Fprintln(stderr, "carry-forward above needs. If that read also fails, the write proceeds")
+		_, _ = fmt.Fprintln(stderr, "anyway (that is what --force is for), and this command prints a warning")
+		_, _ = fmt.Fprintln(stderr, "naming each of sinkBackend, pipewireTargetNode, and outputLatency that")
+		_, _ = fmt.Fprintln(stderr, "will therefore be reset instead of carried forward.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -745,17 +750,22 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	// every "set", which nobody reliably does. Read the node's current
 	// value forward instead, the same carry-forward the UI already
 	// performs on save. fetchCurrent is also reused below for If-Match
-	// resolution, and its GET runs at most once. --force must not gain a
-	// GET dependency: it exists to write when the read path is degraded,
-	// so a forced write carries none of these fields forward instead of
-	// depending on a read that may itself be failing.
+	// resolution, and its GET runs at most once, success or failure:
+	// --force still attempts this read (a degraded read path is what
+	// --force is for, not a reason to skip it), and each carry-forward
+	// that finds it failed warns which field the write will therefore
+	// reset instead of silently dropping it.
 	var current *audioNodeConfigResponse
+	var currentErr error
+	fetchAttempted := false
 	fetchCurrent := func() (*audioNodeConfigResponse, error) {
-		if current != nil {
-			return current, nil
+		if fetchAttempted {
+			return current, currentErr
 		}
+		fetchAttempted = true
 		var r audioNodeConfigResponse
 		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			currentErr = err
 			return nil, err
 		}
 		current = &r
@@ -776,12 +786,15 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	if sinkBackendSet {
 		body.SinkBackend = sinkBackend
-	} else if !forceFlag() {
+	} else {
 		cur, err := fetchCurrent()
 		if err != nil {
 			var ce *cliError
 			if !errors.As(err, &ce) || ce.code != exitNotFound {
-				return reportError(stderr, "audio node set", err)
+				if !forceFlag() {
+					return reportError(stderr, "audio node set", err)
+				}
+				_, _ = fmt.Fprintf(stderr, "showmeshctl audio node set: --force: could not read this node's current sinkBackend (%v); this write will reset sinkBackend to the coordinator's default\n", err)
 			}
 		} else {
 			body.SinkBackend = cur.Payload.SinkBackend
@@ -789,12 +802,15 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	if pipewireTargetNodeSet {
 		body.PipewireTargetNode = &pipewireTargetNode
-	} else if !forceFlag() && body.SinkBackend == "pipewiresink" {
+	} else if body.SinkBackend == "pipewiresink" {
 		cur, err := fetchCurrent()
 		if err != nil {
 			var ce *cliError
 			if !errors.As(err, &ce) || ce.code != exitNotFound {
-				return reportError(stderr, "audio node set", err)
+				if !forceFlag() {
+					return reportError(stderr, "audio node set", err)
+				}
+				_, _ = fmt.Fprintf(stderr, "showmeshctl audio node set: --force: could not read this node's current pipewireTargetNode (%v); this write will reset pipewireTargetNode\n", err)
 			}
 		} else {
 			body.PipewireTargetNode = cur.Payload.PipewireTargetNode
@@ -814,12 +830,15 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 			ol.MeasuredAt = &outputLatencyMeasuredAt
 		}
 		body.OutputLatency = ol
-	} else if !forceFlag() {
+	} else {
 		cur, err := fetchCurrent()
 		if err != nil {
 			var ce *cliError
 			if !errors.As(err, &ce) || ce.code != exitNotFound {
-				return reportError(stderr, "audio node set", err)
+				if !forceFlag() {
+					return reportError(stderr, "audio node set", err)
+				}
+				_, _ = fmt.Fprintf(stderr, "showmeshctl audio node set: --force: could not read this node's current outputLatency (%v); this write will reset outputLatency to unmeasured\n", err)
 			}
 		} else if cur.Payload.OutputLatency != nil && cur.Payload.OutputLatency.Method != "" && cur.Payload.OutputLatency.Method != "unmeasured" {
 			body.OutputLatency = cur.Payload.OutputLatency

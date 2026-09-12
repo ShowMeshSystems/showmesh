@@ -672,6 +672,35 @@ func TestPollOutputsEnumeratedAndTruncatedReported(t *testing.T) {
 	}
 }
 
+// TestPollOutputsPipeWireEnumeratedReported proves re-review finding 6 (PR
+// #454) reaches this layer: a PipeWire enumeration failure is reported
+// regardless of whether ALSA (HardwareEnumerated) succeeded separately.
+func TestPollOutputsPipeWireEnumeratedReported(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.PipeWireEnumerated = false
+	payload.PipeWireEnumeratedReason = "pw-dump: connect: permission denied"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	pwEnumerated := findObs(t, obs, SignalOutputsPipeWireEnumerated)
+	if v, ok := pwEnumerated.Value.(bool); !ok || v {
+		t.Errorf("pipewire enumerated = %v, want false", pwEnumerated.Value)
+	}
+	pwReason := findObs(t, obs, SignalOutputsPipeWireEnumeratedReason)
+	if v, ok := pwReason.Value.(string); !ok || v != payload.PipeWireEnumeratedReason {
+		t.Errorf("pipewire enumerated reason = %v, want %q", pwReason.Value, payload.PipeWireEnumeratedReason)
+	}
+	// samplePayload's own HardwareEnumerated/OutputsCount must report
+	// normally: an ALSA success must not be hidden by the PipeWire failure.
+	device := findObs(t, obs, SignalDeviceState)
+	if device.Value != StateUsable {
+		t.Errorf("device state = %v, want %q (ALSA enumeration succeeded independently of PipeWire)", device.Value, StateUsable)
+	}
+}
+
 func TestPollOutputsCountReported(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayload(), time.Now())
@@ -1063,8 +1092,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 39 {
-		t.Errorf("AllSignalIDs has %d entries, want 39", len(AllSignalIDs))
+	if len(AllSignalIDs) != 41 {
+		t.Errorf("AllSignalIDs has %d entries, want 41", len(AllSignalIDs))
 	}
 }
 

@@ -505,6 +505,8 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 	// external clock would put GstAudioBaseSink into skew stepping.
 	if node.SinkBackend == pipewireAudioSinkFactory {
 		cfg.Clock, cfg.ClockKind, cfg.ClockUnavailableReason = r.buildPipelineClockLocked()
+	} else {
+		cfg.ClockUnavailableReason = fmt.Sprintf("sinkBackend is %q, not %q: this route deliberately runs on the default clock instead of a PHC pipeline clock", node.SinkBackend, pipewireAudioSinkFactory)
 	}
 	engine, err := newGstEngine(cfg)
 	if err != nil {
