@@ -773,6 +773,122 @@ func TestTriggerIfResyncIntentPrecedesNoOpWhenIntentIssuedAfterReport(t *testing
 	}
 }
 
+// insertDispatchedResyncCommand records one asset.inventory.request row
+// in the "dispatched" state, matching noderesync.go's own
+// recordInventoryRequestCommand shape for a successful publish, so a test
+// can prove TriggerIfResyncIntentPrecedes resolves it once a fresh report
+// answers it.
+func insertDispatchedResyncCommand(t *testing.T, st *store.Store, id, nodeID string, dispatchedAt time.Time) store.CommandRecord {
+	t.Helper()
+	rec, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: id, IdempotencyKey: "key-" + id, Action: ResyncCommandAction,
+		TargetKind: ResyncCommandTargetKind, TargetID: nodeID,
+		IssuerPrincipalID: "operator-1", IssuerPrincipalName: "operator-1",
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("insertDispatchedResyncCommand: insert: %v", err)
+	}
+	dispatchedState := "dispatched"
+	if err := st.UpdateCommandOutcome(context.Background(), rec.ID, store.CommandOutcomeUpdate{
+		DispatchedAt: &dispatchedAt, State: &dispatchedState,
+	}); err != nil {
+		t.Fatalf("insertDispatchedResyncCommand: mark dispatched: %v", err)
+	}
+	rec, err = st.GetCommand(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatalf("insertDispatchedResyncCommand: re-read: %v", err)
+	}
+	return rec
+}
+
+// TestTriggerIfResyncIntentPrecedesConfirmsTheOutstandingCommand proves the
+// third leg of "Re-sync all tells the operator what actually happened": a
+// fresh report that triggers the repair also resolves the outstanding
+// asset.inventory.request row "resolved"/"confirmed", naming the report
+// time, so GET /nodes/{nodeId}/assets reads confirmed rather than
+// perpetually "dispatched".
+func TestTriggerIfResyncIntentPrecedesConfirmsTheOutstandingCommand(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	issuedAt := time.Now()
+	cmd := insertDispatchedResyncCommand(t, st, "resync-cmd-1", "render-01", issuedAt)
+	svc.RecordResyncIntent("render-01", issuedAt)
+
+	reportedAt := issuedAt.Add(time.Second)
+	svc.TriggerIfResyncIntentPrecedes("render-01", reportedAt)
+
+	rec, err := st.GetCommand(context.Background(), cmd.ID)
+	if err != nil {
+		t.Fatalf("get command: %v", err)
+	}
+	if rec.State != "resolved" {
+		t.Errorf("state = %q, want %q", rec.State, "resolved")
+	}
+	if rec.OutcomeState != mqttproto.OutcomeConfirmed {
+		t.Errorf("outcome_state = %q, want %q", rec.OutcomeState, mqttproto.OutcomeConfirmed)
+	}
+	if rec.OutcomeReason == "" {
+		t.Error("outcome_reason is empty, want a stated reason naming the report")
+	}
+	if rec.ResolvedAt == nil || !rec.ResolvedAt.Equal(reportedAt) {
+		t.Errorf("resolved_at = %v, want %v", rec.ResolvedAt, reportedAt)
+	}
+}
+
+// TestTriggerIfResyncIntentPrecedesConfirmsBothRowsFromTwoPresses proves
+// two operator presses before either is answered both resolve off the
+// same single report: both commands rows were dispatched before
+// reportedAt, and both must be confirmed, not just the most recent one.
+func TestTriggerIfResyncIntentPrecedesConfirmsBothRowsFromTwoPresses(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	firstPressAt := time.Now()
+	first := insertDispatchedResyncCommand(t, st, "resync-cmd-first", "render-01", firstPressAt)
+	svc.RecordResyncIntent("render-01", firstPressAt)
+
+	secondPressAt := firstPressAt.Add(time.Second)
+	second := insertDispatchedResyncCommand(t, st, "resync-cmd-second", "render-01", secondPressAt)
+	svc.RecordResyncIntent("render-01", secondPressAt)
+
+	reportedAt := secondPressAt.Add(time.Second)
+	svc.TriggerIfResyncIntentPrecedes("render-01", reportedAt)
+
+	for _, cmd := range []store.CommandRecord{first, second} {
+		rec, err := st.GetCommand(context.Background(), cmd.ID)
+		if err != nil {
+			t.Fatalf("get command %s: %v", cmd.ID, err)
+		}
+		if rec.State != "resolved" || rec.OutcomeState != mqttproto.OutcomeConfirmed {
+			t.Errorf("command %s = %+v, want state=resolved outcome_state=%s", cmd.ID, rec, mqttproto.OutcomeConfirmed)
+		}
+	}
+}
+
+// TestTriggerIfResyncIntentPrecedesNeverConfirmsAnotherNodesCommand proves
+// this confirmation is scoped to the node the report is about: a
+// different node's outstanding row must be left untouched.
+func TestTriggerIfResyncIntentPrecedesNeverConfirmsAnotherNodesCommand(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, &fakePublisher{}, discardLogger(), Settings{ContentBaseURL: "https://coordinator.example", InventoryInterval: time.Minute})
+
+	issuedAt := time.Now()
+	other := insertDispatchedResyncCommand(t, st, "resync-cmd-other-node", "render-02", issuedAt)
+	svc.RecordResyncIntent("render-01", issuedAt)
+
+	svc.TriggerIfResyncIntentPrecedes("render-01", issuedAt.Add(time.Second))
+
+	rec, err := st.GetCommand(context.Background(), other.ID)
+	if err != nil {
+		t.Fatalf("get command: %v", err)
+	}
+	if rec.State != "dispatched" {
+		t.Errorf("state = %q, want it untouched at %q", rec.State, "dispatched")
+	}
+}
+
 // TestRecordResyncIntentOverwritesEarlierIntent proves a second press
 // before the first report arrives replaces, rather than queues, the
 // outstanding intent for that node - there is exactly one outstanding

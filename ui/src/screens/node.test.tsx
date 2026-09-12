@@ -302,9 +302,22 @@ describe('Node detail', () => {
     expect(screen.getByText('Sync cannot run while the node is offline.')).toBeInTheDocument()
   })
 
-  it('Re-sync all calls the resync route and states acceptance, never an outcome', async () => {
+  it('Re-sync all calls the resync route, then reloads the manifest and states its real outstanding-request state', async () => {
     stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
-    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    let manifestCalls = 0
+    stubs.getNodeAssetManifest = () => {
+      manifestCalls += 1
+      const withRequest =
+        manifestCalls > 1
+          ? {
+              resyncRequest: {
+                commandId: 'cmd-1', state: 'dispatched' as const, outcomeReason: null,
+                issuedAt: '2026-08-30T21:08:00Z', resolvedAt: null,
+              },
+            }
+          : {}
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest(withRequest) })
+    }
     let calledWith: string | null = null
     stubs.resyncNodeAssets = (nodeId: string) => {
       calledWith = nodeId
@@ -313,8 +326,53 @@ describe('Node detail', () => {
     renderScreen([node()], { session: signedIn(['config:write', 'asset:write']) })
     const button = await screen.findByRole('button', { name: 'Re-sync all' })
     fireEvent.click(button)
-    await waitFor(() => expect(screen.getByText(/Re-sync accepted/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Waiting for the node')).toBeInTheDocument())
     expect(calledWith).toBe('media-garage')
+    expect(screen.queryByText(/Re-sync accepted/)).not.toBeInTheDocument()
+  })
+
+  it('states a resolved re-sync request as confirmed, with the coordinator’s own reason', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
+    stubs.getNodeAssetManifest = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        manifest: manifest({
+          resyncRequest: {
+            commandId: 'cmd-1', state: 'resolved', outcomeReason: 'a fresh inventory report was received at 2026-08-30T21:08:05Z and the repair was requested against it',
+            issuedAt: '2026-08-30T21:08:00Z', resolvedAt: '2026-08-30T21:08:05Z',
+          },
+        }),
+      })
+    renderScreen([node()])
+    await waitFor(() => expect(screen.getByText('Confirmed')).toBeInTheDocument())
+    expect(screen.getByText(/a fresh inventory report was received/)).toBeInTheDocument()
+  })
+
+  it('states a timed-out re-sync request as failed, with the sweep’s own reason', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
+    stubs.getNodeAssetManifest = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        manifest: manifest({
+          resyncRequest: {
+            commandId: 'cmd-1', state: 'failed', outcomeReason: 'the node did not report a fresh inventory within 30s',
+            issuedAt: '2026-08-30T21:08:00Z', resolvedAt: '2026-08-30T21:08:30Z',
+          },
+        }),
+      })
+    renderScreen([node()])
+    await waitFor(() => expect(screen.getByText('Failed')).toBeInTheDocument())
+    expect(screen.getByText(/did not report a fresh inventory/)).toBeInTheDocument()
+  })
+
+  it('shows no re-sync request note when this node has never had one', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    renderScreen([node()])
+    await screen.findByRole('button', { name: 'Re-sync all' })
+    expect(screen.queryByText('Waiting for the node')).not.toBeInTheDocument()
+    expect(screen.queryByText('Confirmed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
   })
 
   it('keeps Remove declaration disabled until the typed id matches exactly', async () => {

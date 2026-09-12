@@ -88,17 +88,29 @@ type extraAssetRecord struct {
 	SizeBytes   int64  `json:"sizeBytes"`
 }
 
+// resyncRequestStatusRecord mirrors v1.ResyncRequestStatus.
+type resyncRequestStatusRecord struct {
+	CommandID     string     `json:"commandId"`
+	State         string     `json:"state"`
+	OutcomeReason *string    `json:"outcomeReason"`
+	IssuedAt      time.Time  `json:"issuedAt"`
+	ResolvedAt    *time.Time `json:"resolvedAt"`
+}
+
 // nodeAssetManifestRecord mirrors v1.NodeAssetManifest. State is one of
 // "ready", "not_ready", "unknown"; Reason is non-nil whenever State is not
-// "ready" (ADR-020).
+// "ready" (ADR-020). ResyncRequest is populated only by
+// GET /nodes/{nodeId}/assets ("assets manifest <nodeId>" / "assets get"),
+// never by the fleet-wide GET /assets/manifest.
 type nodeAssetManifestRecord struct {
-	Node       string               `json:"node"`
-	State      string               `json:"state"`
-	Reason     *string              `json:"reason"`
-	Missing    []missingAssetRecord `json:"missing"`
-	Gaps       []assetGapRecord     `json:"gaps"`
-	Extra      []extraAssetRecord   `json:"extra"`
-	ObservedAt *time.Time           `json:"observedAt"`
+	Node          string                     `json:"node"`
+	State         string                     `json:"state"`
+	Reason        *string                    `json:"reason"`
+	Missing       []missingAssetRecord       `json:"missing"`
+	Gaps          []assetGapRecord           `json:"gaps"`
+	Extra         []extraAssetRecord         `json:"extra"`
+	ObservedAt    *time.Time                 `json:"observedAt"`
+	ResyncRequest *resyncRequestStatusRecord `json:"resyncRequest,omitempty"`
 }
 
 // nodeAssetManifestResponse is the body of GET /api/v1/nodes/{nodeId}/assets.
@@ -982,7 +994,9 @@ func cmdAssetsResync(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "whatever this node is actually missing surfaces later on \"assets")
 		_, _ = fmt.Fprintln(stderr, "manifest\" or \"assets get\" for this node, from its own next asset report.")
 		_, _ = fmt.Fprintln(stderr, "Refused (400) if the coordinator's asset sync is disabled (assets.settings'")
-		_, _ = fmt.Fprintln(stderr, "contentBaseUrl is not set).")
+		_, _ = fmt.Fprintln(stderr, "contentBaseUrl is not set). Fails (503) if the inventory request itself")
+		_, _ = fmt.Fprintln(stderr, "could not be published to the node; a commands row is still recorded")
+		_, _ = fmt.Fprintln(stderr, "failed for it, and its outcome is visible on \"assets manifest\"/\"assets get\".")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -1095,5 +1109,27 @@ func printAssetManifestTable(w io.Writer, nodes []nodeAssetManifestRecord) {
 		for _, g := range n.Gaps {
 			_, _ = fmt.Fprintf(w, "  %s: no coverage for sequence %s (surfaces: %s)\n", n.Node, g.Sequence, strings.Join(g.Surfaces, ", "))
 		}
+		if n.ResyncRequest != nil {
+			_, _ = fmt.Fprintf(w, "  %s: %s\n", n.Node, formatResyncRequestStatus(*n.ResyncRequest))
+		}
+	}
+}
+
+// formatResyncRequestStatus renders one node's most recent "Re-sync all"
+// request as a single line: "waiting for the node" while still
+// dispatched, "confirmed" or "failed" with the outcome reason once
+// resolved.
+func formatResyncRequestStatus(r resyncRequestStatusRecord) string {
+	reason := ""
+	if r.OutcomeReason != nil {
+		reason = *r.OutcomeReason
+	}
+	switch r.State {
+	case "resolved":
+		return fmt.Sprintf("re-sync (%s) confirmed: %s", r.CommandID, reason)
+	case "failed":
+		return fmt.Sprintf("re-sync (%s) failed: %s", r.CommandID, reason)
+	default:
+		return fmt.Sprintf("re-sync (%s) waiting for the node since %s", r.CommandID, r.IssuedAt.Format(time.RFC3339))
 	}
 }

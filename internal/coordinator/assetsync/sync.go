@@ -42,6 +42,19 @@ const (
 	assetSyncIssuerPrincipalName = "ShowMesh asset sync"
 )
 
+// ResyncCommandAction is the commands.action value every operator-issued
+// "Re-sync all" request writes (internal/coordinator/api's noderesync.go)
+// and the one value [Service.TriggerIfResyncIntentPrecedes] and the
+// resync reconciliation sweep (internal/coordinator/api's
+// resyncrequest_reconcile.go) both filter on. Declared here, not in
+// package api, so both packages read the same literal.
+const ResyncCommandAction = "asset.inventory.request"
+
+// ResyncCommandTargetKind is the commands.target_kind value every
+// asset.inventory.request row is stored under: the node it was issued
+// against.
+const ResyncCommandTargetKind = "node"
+
 // assetFetchConfirmationMethod matches internal/agent/command.go's
 // confirmationMethodEvidence by convention, the same independently-chosen
 // literal every CmdPayload.ConfirmationMethod producer in this codebase
@@ -342,10 +355,56 @@ func (s *Service) TriggerIfResyncIntentPrecedes(nodeID string, reportedAt time.T
 		ok = false
 	}
 	s.resyncIntentMu.Unlock()
-	if ok {
-		s.RequestNode(nodeID)
+	if !ok {
+		return
+	}
+	s.RequestNode(nodeID)
+	s.confirmOutstandingResyncCommands(nodeID, reportedAt)
+}
+
+// confirmOutstandingResyncCommands resolves nodeID's outstanding
+// asset.inventory.request commands rows as confirmed: reportedAt already
+// proved (by [TriggerIfResyncIntentPrecedes]'s own check above) that a
+// fresh report was received after those rows were dispatched, so every
+// one of them describes a press this report now answers. Resolving by
+// node/action through the store rather than carrying specific command ids
+// alongside the intent handles two presses before one report the same
+// way as one: both rows were dispatched before reportedAt, so both are
+// still unresolved here and both resolve.
+//
+// Best-effort, matching this Service's own posture toward every other
+// store write on this path (RecordResyncIntent, the dispatch row itself):
+// a lookup or update failure is logged and never blocks the repair this
+// method's caller already queued via RequestNode.
+func (s *Service) confirmOutstandingResyncCommands(nodeID string, reportedAt time.Time) {
+	if s.st == nil {
+		return
+	}
+	ctx := context.Background()
+	rows, err := s.st.ListUnresolvedCommandsByTargetAction(ctx, ResyncCommandTargetKind, nodeID, ResyncCommandAction)
+	if err != nil {
+		s.logger.Warn("asset sync: failed to list outstanding resync commands to confirm", "node_id", nodeID, "error", err)
+		return
+	}
+	reason := fmt.Sprintf("a fresh inventory report was received at %s and the repair was requested against it", reportedAt.UTC().Format(time.RFC3339Nano))
+	for _, rec := range rows {
+		if rec.State != "dispatched" {
+			// Not this method's concern: a row still "pending" never had
+			// its publish confirmed reaching the wire, and a row already
+			// "failed" (a publish failure, or the reconciliation sweep's
+			// own timeout) already has its own final outcome.
+			continue
+		}
+		if err := s.st.UpdateCommandOutcome(ctx, rec.ID, store.CommandOutcomeUpdate{
+			ResolvedAt: &reportedAt, State: strPtr("resolved"),
+			OutcomeState: strPtr(mqttproto.OutcomeConfirmed), OutcomeReason: &reason,
+		}); err != nil {
+			s.logger.Warn("asset sync: failed to confirm an outstanding resync command", "node_id", nodeID, "command_id", rec.ID, "error", err)
+		}
 	}
 }
+
+func strPtr(v string) *string { return &v }
 
 // Run ticks immediately, then waits [Service.syncInterval] (read fresh on
 // every iteration, a [Service.Nudge], a [Service.RequestNode], or

@@ -217,14 +217,16 @@ func TestPostResyncNodeAssetsAcceptedThenEvidence(t *testing.T) {
 	}
 }
 
-// TestPostResyncNodeAssetsAcceptsEvenWhenInventoryRequestFails proves the
-// inventory push is best-effort, matching dispatchReconnectInventoryRequests'
-// own "log and drop" posture one caller over (broker.go): a node the
-// broker cannot currently reach must not turn an operator's press into a
-// failed request. The intent is still recorded - that node's own next
-// ordinary report still carries evidence fresh enough to trigger the
-// repair, just later than a delivered push would have.
-func TestPostResyncNodeAssetsAcceptsEvenWhenInventoryRequestFails(t *testing.T) {
+// TestPostResyncNodeAssetsFailedPublishIs503 proves a failed publish is a
+// failure to the caller (owner ruling): a 202 for a request nothing was
+// ever asked to act on is the same accepted-looking no-op this route's own
+// acceptance criteria forbid, moved one step earlier. The intent is still
+// recorded - that node's own next ordinary report still carries evidence
+// fresh enough to trigger the repair, just later than a delivered push
+// would have - and the commands row this route always writes is still
+// recorded, resolved "failed", never left dangling just because the
+// caller now also sees a failure.
+func TestPostResyncNodeAssetsFailedPublishIs503(t *testing.T) {
 	spy := &spyAssetSyncNudger{}
 	invReq := &spyInventoryRequester{err: errors.New("simulated publish failure")}
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
@@ -240,15 +242,21 @@ func TestPostResyncNodeAssetsAcceptsEvenWhenInventoryRequestFails(t *testing.T) 
 	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/assets/resync", "",
 		map[string]string{"Authorization": "Bearer " + token})
 	resp, body := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202 even when the inventory push fails; body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 when the inventory push fails; body: %s", resp.StatusCode, body)
 	}
-	var decoded v1ResyncNodeAssetsResponseForTest
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		t.Fatalf("decode: %v\nbody: %s", err, body)
+	var problem struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
 	}
-	if decoded.Resync.InventoryRequestCommandID != "" {
-		t.Errorf("resync.inventoryRequestCommandId = %q, want empty: nothing was actually published", decoded.Resync.InventoryRequestCommandID)
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem: %v\nbody: %s", err, body)
+	}
+	if problem.Type != ProblemTypeAssetResyncPublishFailed {
+		t.Errorf("problem type = %q, want %q", problem.Type, ProblemTypeAssetResyncPublishFailed)
+	}
+	if !containsAll(problem.Detail, "render-01") || !containsAll(problem.Detail, "simulated publish failure") {
+		t.Errorf("problem detail = %q, want it to name the node and the publish error", problem.Detail)
 	}
 	if len(spy.recordedIntent) != 1 || spy.recordedIntent[0].nodeID != "render-01" {
 		t.Fatalf("recordedIntent = %+v, want the intent recorded even though the push failed", spy.recordedIntent)
@@ -299,6 +307,9 @@ func TestPostResyncNodeAssetsAcceptsEvenWhenInventoryRequestFails(t *testing.T) 
 	if found.IssuerPrincipalID != admin.ID {
 		t.Fatalf("command issuer = %q, want the authenticated caller %q", found.IssuerPrincipalID, admin.ID)
 	}
+	if !containsAll(problem.Detail, found.ID) {
+		t.Errorf("problem detail = %q, want it to name the failed command's id %q", problem.Detail, found.ID)
+	}
 }
 
 // TestPostResyncNodeAssetsRequestsOnlyTheNamedNode proves two operators
@@ -312,6 +323,7 @@ func TestPostResyncNodeAssetsRequestsOnlyTheNamedNode(t *testing.T) {
 	deps := assetManifestTestDeps(t, svc, st)
 	deps.AssetSettings.(*fakeAssetSettingsSource).contentBaseURL = "https://coordinator.example"
 	deps.AssetSyncNudger = spy
+	deps.InventoryRequester = &spyInventoryRequester{}
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	mustDeclareNode(t, st, "render-01")
 	mustDeclareNode(t, st, "render-02")
