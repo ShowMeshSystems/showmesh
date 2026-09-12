@@ -236,6 +236,7 @@ func TestEncodeDecodeProgramOnlyRoundTrips(t *testing.T) {
 	want := AudioNodePayload{
 		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
 		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	encoded, err := EncodeAudioNodePayload(want)
 	if err != nil {
@@ -561,7 +562,7 @@ func TestValidateAudioNodePlacementRejectsProgramOnlyRouteAsLTC(t *testing.T) {
 
 // TestDecodeAudioNodeOutputLatencyDefaultsUnmeasured proves an
 // audio.node payload with no "outputLatency" key decodes to the zero
-// OutputLatencyPayload, method "unmeasured" — the pre-I5 wire shape every
+// OutputLatencyPayload, method "unmeasured": the pre-I5 wire shape every
 // existing stored revision matches.
 func TestDecodeAudioNodeOutputLatencyDefaultsUnmeasured(t *testing.T) {
 	p, verr := DecodeAudioNodePayload(validAudioNodePayloadJSON())
@@ -632,6 +633,33 @@ func TestDecodeAudioNodeOutputLatencyRejectsOutOfBoundValue(t *testing.T) {
 		`"reference":"datasheet","confidence":"low","configuration":"n/a"}}`
 	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
 		t.Fatal("expected error: valueUs far outside a plausible output delay must be refused")
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyRejectsZeroValue proves a measured
+// method with valueUs 0 is refused: no real output chain has zero delay,
+// and a stored zero cannot be told apart from an operator who tabbed past
+// an empty field.
+func TestDecodeAudioNodeOutputLatencyRejectsZeroValue(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"valueUs":0,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
+		`"reference":"MOTU M4 loopback capture","confidence":"high","configuration":"n/a"}}`
+	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
+		t.Fatal("expected error: valueUs 0 for a measured method must be refused")
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyRequiresMethod proves an outputLatency
+// object with no method is refused rather than silently defaulted to
+// "unmeasured": an empty outputLatency object is not a meaningful
+// request, matching the OpenAPI contract's own required:[method].
+func TestDecodeAudioNodeOutputLatencyRequiresMethod(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{}}`
+	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
+		t.Fatal("expected error: outputLatency.method is required")
 	}
 }
 
