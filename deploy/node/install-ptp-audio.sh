@@ -18,10 +18,10 @@
 # interface, and this script's unit is that component. See
 # deploy/node/PTP-AUDIO.md.
 #
-# Usage: install-ptp-audio.sh <interface> <domain> [role]
-#   interface  the network interface ptp4l runs on (e.g. eno2)
-#   domain     the PTP domain number this node participates in (0-127)
-#   role       follower (default), grandmaster, or auto:
+# Usage: install-ptp-audio.sh <interface> <domain> [role] [audio-card-match]
+#   interface        the network interface ptp4l runs on (e.g. eno2)
+#   domain           the PTP domain number this node participates in (0-127)
+#   role             follower (default), grandmaster, or auto:
 #                follower    clientOnly 1, priority1 255 (worst legal
 #                            value; see the ROLE case below for why this
 #                            is not optional). This node never becomes
@@ -41,6 +41,18 @@
 #                auto        clientOnly 0, no priority1 override (plain
 #                            linuxptp default of 128). BMCA decides with
 #                            no thumb on the scale either way.
+#   audio-card-match a substring/glob fragment of the sound card's ALSA
+#                    device name (default: M4). Pins that card onto
+#                    WirePlumber's pro-audio profile and puts its ALSA
+#                    output node in the same PipeWire node.group as
+#                    showmesh-ptp-driver -- both required for driver
+#                    election to actually land on this driver rather than
+#                    the card's own ALSA node (proven on real node
+#                    hardware, see deploy/node/PTP-AUDIO.md). Any card
+#                    WirePlumber's UCM logic splits by profile has this
+#                    same problem, not just the M4; change this argument
+#                    for a different card instead of editing the
+#                    WirePlumber rule template.
 #
 # Idempotent: safe to re-run with the same or different arguments. Every
 # file this script writes is fully derived from its arguments, so each
@@ -51,6 +63,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/ptp-audio"
+
+# shellcheck source=deploy/node/ptp-audio/ptp-group.conf
+. "$TEMPLATE_DIR/ptp-group.conf"
 
 PTP_GROUP=showmesh
 PIPEWIRE_USER=pipewire
@@ -71,13 +86,14 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-if [ $# -lt 2 ] || [ $# -gt 3 ]; then
-  echo "usage: $0 <interface> <domain> [follower|grandmaster|auto]" >&2
+if [ $# -lt 2 ] || [ $# -gt 4 ]; then
+  echo "usage: $0 <interface> <domain> [follower|grandmaster|auto] [audio-card-match]" >&2
   exit 2
 fi
 IFACE="$1"
 DOMAIN="$2"
 ROLE="${3:-follower}"
+AUDIO_CARD_MATCH="${4:-M4}"
 
 case "$DOMAIN" in
   ''|*[!0-9]*) echo "install-ptp-audio.sh: domain must be a non-negative integer, got '$DOMAIN'" >&2; exit 2 ;;
@@ -120,7 +136,7 @@ if [ ! -e "/sys/class/net/$IFACE" ]; then
   exit 1
 fi
 
-echo "install-ptp-audio.sh: provisioning PTP-disciplined PipeWire audio for interface=$IFACE domain=$DOMAIN role=$ROLE"
+echo "install-ptp-audio.sh: provisioning PTP-disciplined PipeWire audio for interface=$IFACE domain=$DOMAIN role=$ROLE audio-card-match=$AUDIO_CARD_MATCH node.group=$PTP_NODE_GROUP"
 
 # --- Platform note: Debian family assumed, warn otherwise rather than refuse ---
 # Unlike deploy/node/install.sh, this script is not limited to Debian 13: it
@@ -242,10 +258,11 @@ else
   # fallback to an undisciplined monotonic clock.
   CLOCK_PROPERTY="clock.id = realtime"
 fi
-sed -e "s|@CLOCK_PROPERTY@|$CLOCK_PROPERTY|" \
+sed -e "s|@CLOCK_PROPERTY@|$CLOCK_PROPERTY|" -e "s|@NODE_GROUP@|$PTP_NODE_GROUP|g" \
   "$TEMPLATE_DIR/10-showmesh-ptp-clock.conf.template" > "$PIPEWIRE_CLOCK_CONF"
 chmod 0644 "$PIPEWIRE_CLOCK_CONF"
-cp "$TEMPLATE_DIR/51-showmesh-alsa-rate.conf" "$WIREPLUMBER_CONFD/51-showmesh-alsa-rate.conf"
+sed -e "s|@NODE_GROUP@|$PTP_NODE_GROUP|g" -e "s|@CARD_MATCH@|$AUDIO_CARD_MATCH|g" \
+  "$TEMPLATE_DIR/51-showmesh-alsa-rate.conf.template" > "$WIREPLUMBER_CONFD/51-showmesh-alsa-rate.conf"
 chmod 0644 "$WIREPLUMBER_CONFD/51-showmesh-alsa-rate.conf"
 echo "install-ptp-audio.sh: wrote $PIPEWIRE_CLOCK_CONF and $WIREPLUMBER_CONFD/51-showmesh-alsa-rate.conf"
 
@@ -309,7 +326,7 @@ if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
   else
     echo "  ptp4l-showmesh.service: NOT active (systemctl status ptp4l-showmesh.service for why)."
   fi
-  echo "  PipeWire graph clock: $([ -n "$PHC_DEV" ] && echo "configured for $PHC_DEV" || echo "configured for clock.id=realtime (no PHC on $IFACE)"). Run verify-ptp-audio.sh to confirm the running graph actually picked it up."
+  echo "  PipeWire graph clock: $([ -n "$PHC_DEV" ] && echo "configured for $PHC_DEV" || echo "configured for clock.id=realtime (no PHC on $IFACE)"), node.group=$PTP_NODE_GROUP, audio-card-match=$AUDIO_CARD_MATCH. Run verify-ptp-audio.sh to confirm the running graph actually elected this driver for the card, not just that both exist."
 else
   echo "  Services installed but not started (no systemd PID 1 on this host). Run 'systemctl daemon-reload && systemctl enable --now ptp4l-showmesh.service pipewire-showmesh.service wireplumber-showmesh.service' once this host boots under systemd."
 fi

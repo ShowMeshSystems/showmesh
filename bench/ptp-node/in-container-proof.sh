@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs inside one bench/ptp-node container. Proves what a container without
-# a PHC and without systemd as PID 1 actually can:
+# a PHC, without ALSA hardware, and without systemd as PID 1 actually can:
 #
 #  - install-ptp-audio.sh installs its packages and generates correct
 #    config for the given interface/domain/role, and reports (accurately)
@@ -11,13 +11,26 @@
 #  - a real PipeWire + WirePlumber pair, started from the exact generated
 #    config, elects the showmesh-ptp-driver node as a driver in the graph,
 #    clocked from clock.id=realtime (the no-PHC case);
-#  - a pipewiresink GStreamer pipeline plays into that graph without error.
+#  - a pipewiresink GStreamer pipeline plays into that graph without error;
+#  - the node.group election mechanism itself: a synthetic sink node
+#    placed in the same node.group as showmesh-ptp-driver (deploy/node/
+#    ptp-audio/ptp-group.conf's PTP_NODE_GROUP) ends up with node.driver
+#    false while showmesh-ptp-driver reports node.driver true, the same
+#    pw-dump reading verify-ptp-audio.sh now checks for the real ALSA
+#    node. This is the actual fix proven on real node hardware
+#    (showmesh-node-01, RES-019 Track I): PipeWire elects a driver WITHIN
+#    a node.group, so two nodes only compete for driver status when they
+#    share one.
 #
 # What it CANNOT prove, and does not claim to: hardware timestamping,
-# clock.device against a real /dev/ptpN, an actual ALSA sink (no /dev/snd
-# in a container, so no follower/rate-matching claim is made here), or
-# that any of this survives a real systemd (bench/node-install's own
-# README makes the identical point about deploy/node/install.sh).
+# clock.device against a real /dev/ptpN, WirePlumber's own ALSA monitor
+# putting a REAL sound card's node into this group or onto the pro-audio
+# profile (no /dev/snd in a container, so 51-showmesh-alsa-rate.conf's
+# match rules and profile pin are exercised on nothing here -- this bench
+# proves the group-election mechanism generically, not that the M4-facing
+# match rule actually finds the M4), or that any of this survives a real
+# systemd (bench/node-install's own README makes the identical point about
+# deploy/node/install.sh).
 #
 # Usage: in-container-proof.sh <role> <domain>
 #   role        grandmaster or follower
@@ -32,6 +45,9 @@ set -euo pipefail
 
 ROLE="$1"
 DOMAIN="$2"
+
+# shellcheck source=deploy/node/ptp-audio/ptp-group.conf
+. /repo/deploy/node/ptp-audio/ptp-group.conf
 
 # eth0 specifically: a docker bridge network container's real interface,
 # not the tunl0/gre0/etc. placeholder links some Docker network drivers
@@ -155,14 +171,15 @@ echo ""
 echo "--- step 5: pipewiresink playback ---"
 # No ALSA hardware in this container, so WirePlumber's ALSA monitor never
 # creates a real sink node for pipewiresink to target -- on the real node
-# it is the M4 sink 51-showmesh-alsa-rate.conf pins, created automatically.
-# support.null-audio-sink stands in here purely so this bench can prove
-# the PipeWire path end to end (graph reachable, stream negotiated,
-# playback completes without error); it says nothing about a real ALSA
-# sink actually rate-matching, which needs the real node.
+# it is the sound card's sink 51-showmesh-alsa-rate.conf pins, created
+# automatically. support.null-audio-sink stands in here purely so this
+# bench can prove the PipeWire path end to end (graph reachable, stream
+# negotiated, playback completes without error) and, with node.group set
+# below, the group-election mechanism itself; it says nothing about a real
+# ALSA sink actually rate-matching, which needs the real node.
 # shellcheck disable=SC2024
 sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
-  pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=showmesh-bench-null-sink media.class=Audio/Sink object.linger=true audio.position=[FL,FR] }' \
+  pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=showmesh-bench-null-sink media.class=Audio/Sink object.linger=true audio.position=[FL,FR] node.group=\"$PTP_NODE_GROUP\" }" \
   > /tmp/pw-cli-null-sink.log 2>&1
 sleep 1
 # shellcheck disable=SC2024
@@ -179,6 +196,50 @@ else
     cat /tmp/gst-pipewiresink.log
     exit 1
   fi
+fi
+
+echo ""
+echo "--- step 6: node.group driver election (the real node's group bug, without real ALSA hardware) ---"
+# node.driver (true/false) is only "can this node act as a driver", not
+# "who is actually driving it" -- confirmed against a real pw-dump capture
+# in this bench: a synthetic sink created via support.null-audio-sink
+# reports node.driver=true for ITSELF while also carrying node.driver-id
+# pointing at whichever node actually drives it. node.driver-id equal to
+# showmesh-ptp-driver's own object id is the one reading that proves
+# election, and is exactly what verify-ptp-audio.sh now checks against a
+# real ALSA node.
+GROUP_READING="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+  pw-dump 2>/dev/null | python3 -c '
+import json, sys
+objs = json.load(sys.stdin)
+driver_id = None
+driver_group = None
+sink_driven_by = None
+sink_group = None
+for o in objs:
+    props = o.get("info", {}).get("props", {}) or {}
+    name = props.get("node.name") or ""
+    if name == "showmesh-ptp-driver":
+        driver_id = o.get("id")
+        driver_group = props.get("node.group")
+    if name == "showmesh-bench-null-sink":
+        sink_driven_by = props.get("node.driver-id")
+        sink_group = props.get("node.group")
+if driver_id is None or sink_driven_by is None:
+    print("MISSING")
+    sys.exit(0)
+print(f"driver.id={driver_id} driver.node.group={driver_group}")
+print(f"sink.node.driver-id={sink_driven_by} sink.node.group={sink_group}")
+if sink_driven_by == driver_id:
+    print("ELECTION_OK")
+' 2>/dev/null || true)"
+
+echo "$GROUP_READING"
+if echo "$GROUP_READING" | grep -q "ELECTION_OK"; then
+  echo "OK: showmesh-bench-null-sink's node.driver-id points at showmesh-ptp-driver's own id -- the same node.driver-id reading verify-ptp-audio.sh now checks against a real ALSA node"
+else
+  echo "FAIL: node.group election did not land on showmesh-ptp-driver for a synthetic sink placed in its group"
+  exit 1
 fi
 
 echo ""

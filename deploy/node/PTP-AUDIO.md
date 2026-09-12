@@ -52,8 +52,14 @@ for every flag.
 ## What `install-ptp-audio.sh` does
 
 ```sh
-sudo deploy/node/install-ptp-audio.sh <interface> <domain> [follower|grandmaster|auto]
+sudo deploy/node/install-ptp-audio.sh <interface> <domain> [follower|grandmaster|auto] [audio-card-match]
 ```
+
+`audio-card-match` (default `M4`) is a substring/glob fragment of the
+sound card's ALSA device name. It is not cosmetic: it is the only thing
+standing between this script and a hardcoded assumption that every
+ShowMesh audio node uses an MOTU M4. Point it at a different card's name
+fragment to reuse this script unmodified for a different interface.
 
 Idempotent: every file it writes is fully derived from its arguments, so
 re-running it (same or different arguments) simply regenerates them.
@@ -107,16 +113,58 @@ operator-edited state that a re-run must avoid touching.
    `support.node.driver` named `showmesh-ptp-driver`, `priority.driver
    210000` (above the stock config's own highest entry, 190000, so it
    wins driver selection without needing to know every other driver's
-   exact value), clocked from `clock.device=/dev/ptpN` when a PHC was
-   found or `clock.id=realtime` when it was not, and
-   `default.clock.rate=48000` to match the M4's native rate.
+   exact value), `node.group` set to the value in
+   `deploy/node/ptp-audio/ptp-group.conf` (`showmesh-ptp` by default),
+   clocked from `clock.device=/dev/ptpN` when a PHC was found or
+   `clock.id=realtime` when it was not, and `default.clock.rate=48000` to
+   match the sound card's native rate.
+
+   **`node.group` is not optional decoration.** PipeWire/WirePlumber elect
+   a driver *within* a node.group, not graph-wide: a sound card's own
+   ALSA output node sits in its own per-device group by default
+   (WirePlumber's `pro-audio-N`) and elects itself driver there,
+   regardless of `priority.driver`, because the two nodes were never even
+   compared. Proven wrong the hard way on real node hardware
+   (`showmesh-node-01`): before this entry existed, `showmesh-ptp-driver`
+   sat unused in a group of one while the card drove itself. Putting the
+   driver and the card's ALSA output node in the same group is what makes
+   `priority.driver` the comparison that actually happens.
 7. **Installs a WirePlumber rate rule**
-   (`/etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf`)
-   pinning the M4's ALSA sink node to 48 kHz and disabling its suspend
-   timeout, so it never goes idle-silent between cues. **Unverified
-   against real hardware**: `bench/ptp-node` has no ALSA card, so this
-   file is syntax-checked (WirePlumber starts cleanly with it present)
-   but its match rule has never matched a real M4.
+   (`/etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf`,
+   generated from `51-showmesh-alsa-rate.conf.template`) that:
+   - pins the sound card (matched by `audio-card-match`, default `M4`)
+     onto WirePlumber's `pro-audio` profile and disables
+     `api.acp.auto-profile`. **Required, not optional**: WirePlumber's
+     default UCM profile for a multichannel USB interface splits it into
+     plain stereo sinks, and the four-channel node this rate lock needs
+     does not exist under that profile. A `wpctl set-profile` applied by
+     hand does not survive a WirePlumber restart; only a persisted rule
+     does. This is not M4-specific -- any card WirePlumber's UCM logic
+     splits by profile has the identical problem -- but the match stays
+     per-card (via `audio-card-match`) rather than one pattern meant to
+     catch every card on the host, so this script never force-changes a
+     card's profile it was not told to touch.
+   - pins that card's ALSA output node to 48 kHz, puts it in the same
+     `node.group` as `showmesh-ptp-driver`, and disables its suspend
+     timeout so it never goes idle-silent between cues.
+   - deliberately leaves the card's **capture (input)** node out of the
+     group: this seam's proven use case is playback, and grouping the
+     input node would only add an unused follower with no consumer
+     benefiting from it. If a capture use case needs PTP-locked timing
+     later, evaluate it on its own rather than assuming this group
+     applies.
+
+   **Unverified against real hardware by this repository's own bench**:
+   `bench/ptp-node` has no ALSA card, so this file is syntax-checked
+   (WirePlumber starts cleanly with it present) but its match rules and
+   profile pin have never matched a real card there. `bench/ptp-node`
+   does prove the underlying `node.group` election mechanism generically,
+   with a synthetic node (see that bench's own README); the group name,
+   the profile pin, and the M4-specific match were proven separately, by
+   hand, on real node hardware (`showmesh-node-01`) before being encoded
+   here -- see "What this repository's own verification proved" below for
+   exactly what that covered and what still needs a re-run of this
+   script.
 8. **Enables and starts everything**, or -- on a host with no systemd PID
    1 (a plain container) -- installs every file and says exactly what it
    could not do and why, the same pattern `deploy/node/install.sh` uses.
@@ -129,7 +177,7 @@ operator-edited state that a re-run must avoid touching.
 ## What `verify-ptp-audio.sh` checks
 
 ```sh
-deploy/node/verify-ptp-audio.sh [--play <seconds>]
+deploy/node/verify-ptp-audio.sh [--play <seconds>] [--alsa-match <pattern>]
 ```
 
 Read-only; never installs, starts, stops, or reconfigures anything. In
@@ -139,11 +187,20 @@ one pass:
    state, `pmc GET TIME_STATUS_NP` for `gmIdentity` and `master_offset`.
    Reports honestly whether this node is itself the domain's grandmaster
    (`MASTER`) or following one (`SLAVE`), rather than assuming the latter.
-2. **Is the PipeWire graph driven by the PTP driver** -- `pw-dump`,
-   looking for the `showmesh-ptp-driver` node and reporting its clock
-   source, then listing every ALSA node's `node.driver` property (`false`
-   means it is a follower, not its own driver).
-3. **The load-bearing reading**: runs a short `pipewiresink` pipeline
+2. **Does the ALSA node's driver election actually land on the PTP
+   driver** -- `pw-dump`, reading each node's `node.driver-id` (the id of
+   the node ACTUALLY driving it) rather than a node's own `node.driver`
+   flag (which only says a node is *capable* of driving, not who drives
+   it -- this repository's earlier version of this check read exactly
+   that flag and reported a clean pass on real node hardware while the
+   card was in fact driving its own group). Pass unless at least one node
+   matching `--alsa-match` (default `alsa_output`) has a `node.driver-id`
+   equal to `showmesh-ptp-driver`'s own id.
+3. **ALSA sink xrun count** -- best-effort, via `pw-top -b`'s `ERR`
+   column (not exposed through `pw-dump`). Informational only: `pw-top`'s
+   exact column layout is not a guaranteed contract, so a parse failure
+   here is reported and does not fail the run.
+4. **The load-bearing reading**: runs a short `pipewiresink` pipeline
    with `GST_DEBUG=audiobasesink:6` and counts skew/slaving lines. With
    the rate lock actually working there should be **none** -- `alsasink`
    is no longer in the signal path at all, `pipewiresink` is -- so any
@@ -151,9 +208,29 @@ one pass:
    this seam (RES-019 section 7.1 explains why `alsasink`'s own slaving
    was never going to be good enough on its own).
 
-Pass `--play 0` to skip step 3 (faster, but it is the check that actually
-proves the rate lock is doing anything -- steps 1 and 2 only prove the
-pieces exist, not that they are correcting anything).
+Pass `--play 0` to skip step 4 (faster, but it is the check that actually
+proves the rate lock is doing anything -- steps 1-3 only prove the pieces
+exist and are correctly wired to each other, not that the card is
+correcting its rate).
+
+## What a correct driver election looks like, and what a broken one looks like
+
+`pw-top` on the real node, once `node.group` and the pro-audio profile
+pin are both in place, shows the driver with the card and the engine as
+its followers:
+
+```
+R   30  showmesh-ptp-driver                                    (driver, QUANT 1024, RATE 48000)
+R   46  + alsa_output...pro-output-0    S32LE 4 48000          (follower)
+R   53  + ptpharness                    F32LE 4 48000          (follower)
+```
+
+When `node.group` is missing or names don't line up, the card instead
+drives itself, and `showmesh-ptp-driver` shows up alone with no
+followers -- the exact failure this install path used to produce
+silently, and the reason `verify-ptp-audio.sh`'s driver-election check
+now reads `node.driver-id` instead of a node's own `node.driver` flag
+(see above).
 
 ## What this repository's own verification proved, and what it did not
 
@@ -163,16 +240,28 @@ detection and the `clock.id=realtime` fallback, all three roles producing
 the documented `clientOnly`/`priority1` values, a real `ptp4l` reaching
 MASTER (grandmaster role, alone on the wire and with a follower present)
 and SLAVE (follower role, with `pmc`-reported grandmaster identity and
-offset), a real PipeWire electing the PTP driver, and a `pipewiresink`
-pipeline playing without error.
+offset), a real PipeWire electing the PTP driver, a `pipewiresink`
+pipeline playing without error, and the `node.group` driver-election
+mechanism itself (a synthetic sink node placed in `showmesh-ptp-driver`'s
+group ends up with `node.driver-id` pointing at it).
 
-It did **not** prove, and this repository does not claim: hardware
-timestamping against a real PHC, an actual ALSA sink being rate-matched
-(no `/dev/snd` in a container), the WirePlumber M4 match rule matching a
-real M4, any of this surviving a real systemd boot, or the
+It did **not** prove, and this repository does not claim from its own
+bench: hardware timestamping against a real PHC, an actual ALSA sink
+being rate-matched (no `/dev/snd` in a container), WirePlumber's own ALSA
+monitor putting a real card's node into this group or onto the
+pro-audio profile, any of this surviving a real systemd boot, or the
 `audiobasesink:6` skew-slaving absence against a real `alsasink` (there
 is none in the bench's own pipeline to have slaved in the first place).
-All of that needs the real node.
+
+The `node.group` entry, the `device.profile = "pro-audio"` /
+`api.acp.auto-profile = false` pin, and the driver election they produce
+together **were** proven separately, by hand, on real node hardware
+(`showmesh-node-01`) before being encoded into this script: applying
+those same settings by hand there produced the `pw-top` reading shown
+above. What has not yet been verified is this *script*, as changed here,
+against that same real hardware -- that re-run, and a fresh `pw-top`
+capture against it, is the next step and is not this session's own
+evidence.
 
 ## Undoing it
 

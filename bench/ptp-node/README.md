@@ -33,19 +33,32 @@ with a PHC:
 - a `pipewiresink` GStreamer pipeline negotiates against that graph and
   plays without error, into a synthetic `support.null-audio-sink` node
   this bench creates only because the container has no real ALSA card for
-  WirePlumber's monitor to find (`51-showmesh-alsa-rate.conf`, the pinned
-  48 kHz M4 rate rule, is installed but never exercised: nothing in this
-  bench creates an ALSA device for it to match).
+  WirePlumber's monitor to find (`51-showmesh-alsa-rate.conf`'s pinned
+  48 kHz rate rule and pro-audio profile pin are installed but never
+  exercised: nothing in this bench creates an ALSA device for them to
+  match);
+- **the node.group driver-election mechanism itself**: that synthetic sink
+  node is created with `node.group` set to the same
+  `deploy/node/ptp-audio/ptp-group.conf` value `install-ptp-audio.sh`
+  writes into `showmesh-ptp-driver`'s own config, and `pw-dump` confirms
+  the driver (not the sink) ends up with `node.driver=true` while sharing
+  that group -- the exact reading `verify-ptp-audio.sh` now checks against
+  a real ALSA node, and the same mechanism that was silently broken on
+  real node hardware before this node.group entry existed (a sound card's
+  ALSA node sat in its own per-device group and drove itself, regardless
+  of `showmesh-ptp-driver`'s `priority.driver`).
 
 **Cannot prove, and does not claim to**:
 
 - hardware timestamping, or `clock.device` against a real `/dev/ptpN` --
   no container has a PHC, so every run here falls back to
   `clock.id=realtime` and this is the only path exercised;
-- a real ALSA sink actually being rate-matched to the graph driver -- no
-  `/dev/snd` in a container, so `51-showmesh-alsa-rate.conf`'s match rule
-  and rate pin are syntax-checked (WirePlumber starts cleanly with it
-  present) but never exercised against real hardware;
+- a real ALSA sink actually being rate-matched to the graph driver, or
+  WirePlumber's own ALSA monitor actually putting a real sound card's node
+  into `showmesh-ptp-driver`'s group or onto the pro-audio profile -- no
+  `/dev/snd` in a container, so `51-showmesh-alsa-rate.conf`'s match
+  rules, profile pin, and rate pin are syntax-checked (WirePlumber starts
+  cleanly with it present) but never exercised against a real card;
 - that any of this survives a real systemd. This bench manually starts
   `ptp4l`, `pipewire`, and `wireplumber` as plain background processes
   from the exact config `install-ptp-audio.sh` writes, because a plain
@@ -82,6 +95,28 @@ alone did not, all fixed in the scripts this bench exercises:
    `factory = support.node.driver` directly -- the indirection stock
    `pipewire.conf`'s own Dummy-Driver/Freewheel-Driver entries use, which
    a plain read of the file's comments does not make obvious.
+
+Two further bugs were found on real node hardware (`showmesh-node-01`),
+not by this bench (no ALSA card and no WirePlumber ALSA monitor activity
+here), and are covered by this bench only at the mechanism level:
+
+5. Driver election happens **within a node.group**, not graph-wide. A
+   sound card's own ALSA output node sits in its own per-device group by
+   default (WirePlumber's `pro-audio-N`) and elects itself driver there
+   regardless of `showmesh-ptp-driver`'s `priority.driver`, which is never
+   even considered because the two nodes were never in the same group.
+   Fixed by giving `showmesh-ptp-driver` and the card's ALSA output node
+   the same `node.group` (`deploy/node/ptp-audio/ptp-group.conf`). This
+   bench's step 6 proves the mechanism generically with a synthetic sink
+   node in that group; it cannot prove WirePlumber's own ALSA monitor puts
+   a *real* card's node into it, which needs the real node.
+6. WirePlumber's default UCM profile for a multichannel USB interface
+   splits it into plain stereo sinks; the four-channel node this seam
+   needs does not exist under that profile, and a `wpctl set-profile`
+   applied by hand does not survive a WirePlumber restart. Fixed by a
+   persisted `device.profile = "pro-audio"` / `api.acp.auto-profile =
+   false` rule in `51-showmesh-alsa-rate.conf.template`. Unverified by
+   this bench (no ALSA hardware).
 
 ## Running it
 

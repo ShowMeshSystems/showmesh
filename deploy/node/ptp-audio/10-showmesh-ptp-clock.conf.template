@@ -5,7 +5,9 @@
 # install-ptp-audio.sh to /etc/pipewire/pipewire.conf.d/, templated on
 # @CLOCK_PROPERTY@ (clock.device=/dev/ptpN when this interface has a PHC,
 # clock.id=realtime when it does not -- see that script for which case
-# applied and why).
+# applied and why) and @NODE_GROUP@ (deploy/node/ptp-audio/ptp-group.conf,
+# shared with 51-showmesh-alsa-rate.conf.template so the two can never
+# name different groups).
 #
 # priority.driver 210000 is chosen above the stock pipewire.conf's own
 # Freewheel-Driver entry (190000, the highest priority.driver shipped by
@@ -15,6 +17,18 @@
 # (the other half of this seam, on a separate branch) and inherits
 # whichever driver's clock PipeWire elects; this entry is what makes that
 # election land here.
+#
+# node.group matters as much as priority.driver: driver election in
+# PipeWire/WirePlumber happens WITHIN a node.group, not graph-wide. A
+# sound card's ALSA output node WirePlumber manages sits in its own
+# per-device group (e.g. "pro-audio-0") by default and elects itself
+# driver there, so a high-priority driver sitting in a different group
+# never gets considered against it at all -- proven on real node hardware
+# (showmesh-node-01, RES-019 Track I): with this node.group absent, the
+# card ran as its own driver regardless of priority.driver. Putting this
+# driver and the card's node(s) in the same @NODE_GROUP@ group is what
+# makes this priority.driver value the one BMCA-style comparison actually
+# considers.
 context.properties = {
     default.clock.rate      = 48000
     default.clock.allowed-rates = [ 48000 ]
@@ -32,6 +46,7 @@ context.objects = [
       args = {
           factory.name    = support.node.driver
           node.name       = "showmesh-ptp-driver"
+          node.group      = "@NODE_GROUP@"
           priority.driver = 210000
           @CLOCK_PROPERTY@
           resync.ms       = 100
