@@ -329,7 +329,7 @@ func TestDecodeAudioNodeConfigCarriesMeasuredOutputLatency(t *testing.T) {
 }
 
 // TestOutputLatencyConfigUnmeasuredAppliesZero proves the "unmeasured"
-// method reports zero even if ValueUs were somehow non-zero — the
+// method reports zero even if ValueUs were somehow non-zero: the
 // coordinator's own decode already refuses that combination, but this
 // package's own application logic does not additionally trust Method
 // alone without also gating on it.

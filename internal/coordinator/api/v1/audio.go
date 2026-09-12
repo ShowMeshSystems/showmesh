@@ -84,7 +84,7 @@ type ConfigAudioNode struct {
 // from that node's scheduled start instant so playback reaches the air
 // at the intended instant instead of one output-chain delay late.
 // Method "unmeasured" is the default, applies zero, and carries every
-// other field empty/absent — a value beside it would be a fabricated
+// other field empty/absent: a value beside it would be a fabricated
 // measurement. Every other method requires MeasuredAt, Reference,
 // Confidence, and Configuration together with ValueUs: Configuration in
 // particular records the buffer/quantum/sample-rate configuration the

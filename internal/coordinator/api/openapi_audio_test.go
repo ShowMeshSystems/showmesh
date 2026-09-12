@@ -136,8 +136,8 @@ func TestOpenAPIAudioNodeOutputLatencyRoundTrips(t *testing.T) {
 }
 
 // TestOpenAPIAudioNodeOutputLatencyDefaultsUnmeasuredInResponse proves a
-// PUT with no "outputLatency" key still reports one back — method
-// "unmeasured", never omitted — matching api/openapi.yaml's schema.
+// PUT with no "outputLatency" key still reports one back, method
+// "unmeasured", never omitted, matching api/openapi.yaml's schema.
 func TestOpenAPIAudioNodeOutputLatencyDefaultsUnmeasuredInResponse(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))

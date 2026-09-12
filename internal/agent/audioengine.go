@@ -387,7 +387,7 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 	}
 
 	// RES-019 section 8: bound independently of whether the engine build
-	// below succeeds — this is a scheduling adjustment, not part of the
+	// below succeeds. This is a scheduling adjustment, not part of the
 	// playback engine itself, and a node with no working audio output
 	// still owes a refusal at the correct instant rather than a silently
 	// wrong one.

@@ -111,7 +111,7 @@ type Manager struct {
 
 	// outputLatencyUs is this node's currently bound calibrated output
 	// latency (RES-019 section 8), signed microseconds, subtracted from
-	// a scheduled start's T0 — see [Manager.SetOutputLatency] and
+	// a scheduled start's T0. See [Manager.SetOutputLatency] and
 	// timeline.go's resolveScheduleLocked. Zero (the default) applies no
 	// adjustment, exactly the "unmeasured" wire method's own behavior;
 	// the caller resolves method to zero before calling SetOutputLatency,
