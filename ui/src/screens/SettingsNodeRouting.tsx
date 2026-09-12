@@ -47,6 +47,12 @@ function parseChannels(raw: string): number[] {
     .map((s) => Number(s))
 }
 
+// isRfc3339 catches an obvious typo before submit; the server's own
+// decode is the actual RFC 3339 authority.
+function isRfc3339(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s) && !Number.isNaN(Date.parse(s))
+}
+
 export function SettingsNodeRouting() {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -185,10 +191,12 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const channelsValid = programChannels.every((n) => Number.isInteger(n) && n >= 1) && programChannels.length > 0
   const ltcChannelValid = !ltcOn || (Number.isInteger(Number(ltcChannelText)) && ltcChannelText.trim() !== '')
   const zoneValid = role !== 'zone' || zone.trim() !== ''
-  const outputLatencyValueUsValid = outputLatencyMethod === 'unmeasured' || Number.isInteger(Number(outputLatencyValueUsText))
+  const outputLatencyValueUsValid =
+    outputLatencyMethod === 'unmeasured' ||
+    (outputLatencyValueUsText.trim() !== '' && Number.isInteger(Number(outputLatencyValueUsText)))
   const outputLatencyProvenanceValid =
     outputLatencyMethod === 'unmeasured' ||
-    (outputLatencyMeasuredAt.trim() !== '' &&
+    (isRfc3339(outputLatencyMeasuredAt.trim()) &&
       outputLatencyReference.trim() !== '' &&
       outputLatencyConfidence.trim() !== '' &&
       outputLatencyConfiguration.trim() !== '')

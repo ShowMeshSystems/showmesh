@@ -749,6 +749,68 @@ describe('Settings › Node routing', () => {
       },
     })
   })
+
+  it('blocks save on an empty Value field rather than treating it as zero', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig())
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Loopback' }))
+    fireEvent.change(await screen.findByLabelText('Measured at'), { target: { value: '2026-09-11T02:00:00Z' } })
+    fireEvent.change(screen.getByLabelText('Reference'), { target: { value: 'MOTU M4 loopback capture' } })
+    fireEvent.change(screen.getByLabelText('Confidence'), { target: { value: 'high' } })
+    fireEvent.change(screen.getByLabelText('Configuration'), { target: { value: 'PipeWire quantum 1024, 48000 Hz' } })
+    // Value (microseconds) was never typed into: it stays empty.
+    expect(screen.getByRole('button', { name: 'Save routing' })).toBeDisabled()
+  })
+
+  it('carries a stored measured output latency forward across a save that changes an unrelated field', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () =>
+      Promise.resolve(
+        nodeConfig({
+          outputLatency: {
+            valueUs: 55997,
+            method: 'loopback',
+            measuredAt: '2026-09-11T02:00:00Z',
+            reference: 'MOTU M4 loopback capture',
+            confidence: 'high',
+            configuration: 'PipeWire quantum 1024, 48000 Hz',
+          },
+        }),
+      )
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putAudioNode = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeConfig())
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+    const channelsInput = screen.getByLabelText('Program channels')
+    fireEvent.change(channelsInput, { target: { value: '2, 1' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save routing' })).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({
+      outputLatency: {
+        valueUs: 55997,
+        method: 'loopback',
+        measuredAt: '2026-09-11T02:00:00Z',
+        reference: 'MOTU M4 loopback capture',
+        confidence: 'high',
+        configuration: 'PipeWire quantum 1024, 48000 Hz',
+      },
+    })
+  })
 })
 
 describe('Settings › Mode', () => {
