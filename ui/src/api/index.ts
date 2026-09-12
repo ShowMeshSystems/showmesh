@@ -64,6 +64,9 @@ export type {
   AudioAlignmentRunListResponse,
   AudioAlignmentRunDetailResponse,
   AudioAlignmentRunResponse,
+  // Track I seam I1, RES-019, ADR-039: node.clock per-node PTP configuration.
+  ConfigNodeClock,
+  NodeClockConfigResponse,
   FPPInstance,
   // The pending-instanceUuid-change acknowledgement.
   FPPInstanceUUIDChange,
@@ -322,6 +325,9 @@ export {
   startAudioAlignmentRun,
   getAudioAlignmentRun,
   stopAudioAlignmentRun,
+  getNodeClock,
+  putNodeClock,
+  getNodeClockConfigRevisions,
   stopFPPPlaylist,
   startFPPPlaylist,
   stopFPPPlaylistGracefully,

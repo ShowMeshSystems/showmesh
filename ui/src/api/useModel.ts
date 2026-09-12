@@ -92,8 +92,10 @@ import type {
   AudioSettingsConfigResponse,
   ConfigAudioNode,
   ConfigAudioSettingsPayload,
+  ConfigNodeClock,
   CueActivateResponse,
   CueCatalogDeployResult,
+  NodeClockConfigResponse,
   ResolumeActionResult,
   ResyncNodeAssetsResult,
 } from './domain'
@@ -367,6 +369,20 @@ export function stopAudioAlignmentRun(nodeId: string, runId: string, reason?: st
   return store.stopAudioAlignmentRun(nodeId, runId, reason)
 }
 
+// Track I seam I1, RES-019, ADR-039: node.clock per-node PTP configuration.
+// Same thin pass-through pattern as audio.node above.
+export function getNodeClock(id: string): Promise<NodeClockConfigResponse> {
+  return store.getNodeClock(id)
+}
+
+export function putNodeClock(id: string, payload: ConfigNodeClock): Promise<NodeClockConfigResponse> {
+  return store.putNodeClock(id, payload)
+}
+
+export function getNodeClockConfigRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getNodeClockConfigRevisions(id)
+}
+
 // Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
 export function getResolumeRecovery(): Promise<ResolumeRecoveryResponse> {
   return store.getResolumeRecovery()
@@ -630,7 +646,16 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'media.playlist' | 'night.session',
+  kind:
+    | 'show.action'
+    | 'show.macro'
+    | 'show'
+    | 'show.surface'
+    | 'show.cue'
+    | 'show.playlist'
+    | 'media.playlist'
+    | 'night.session'
+    | 'node.clock',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse>
 // audio.node's list carries channel placement, a shape
@@ -647,6 +672,7 @@ export function listConfigObjects(
     | 'show.playlist'
     | 'media.playlist'
     | 'night.session'
+    | 'node.clock'
     | 'audio.node',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {

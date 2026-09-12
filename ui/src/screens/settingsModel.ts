@@ -107,6 +107,53 @@ export function audioNodeVerdict(payload: {
   return { ok: true }
 }
 
+export type NodeClockProvider = 'managed' | 'external' | 'fpp'
+
+export type NodeClockVerdict = { ok: true } | { ok: false; reason: string }
+
+/**
+ * The refusals `PUT /config/node.clock/{id}` names, built to
+ * `internal/coordinator/config/nodeclock.go`'s `DecodeNodeClockPayload`:
+ * provider/interface/domain are always required (domain 0-255); fppBaseUrl
+ * is required exactly when provider is fpp; holdoverLimitSeconds, left
+ * blank, defaults server-side and otherwise must be a positive integer;
+ * priority1, left blank, defaults to 0 and otherwise must be 0-255. The
+ * server accepts a field that does not apply to the chosen provider rather
+ * than refusing it, so this does not either.
+ */
+export function nodeClockVerdict(payload: {
+  provider: NodeClockProvider
+  interfaceName: string
+  domainText: string
+  fppBaseUrl: string
+  holdoverLimitSecondsText: string
+  priority1Text: string
+}): NodeClockVerdict {
+  if (payload.interfaceName.trim() === '') {
+    return { ok: false, reason: 'Interface is required.' }
+  }
+  const domain = Number(payload.domainText)
+  if (payload.domainText.trim() === '' || !Number.isInteger(domain) || domain < 0 || domain > 255) {
+    return { ok: false, reason: 'Domain must be a whole number from 0 to 255.' }
+  }
+  if (payload.provider === 'fpp' && payload.fppBaseUrl.trim() === '') {
+    return { ok: false, reason: 'FPP base URL is required when the provider is fpp.' }
+  }
+  if (payload.holdoverLimitSecondsText.trim() !== '') {
+    const holdover = Number(payload.holdoverLimitSecondsText)
+    if (!Number.isInteger(holdover) || holdover <= 0) {
+      return { ok: false, reason: 'Holdover limit must be a positive whole number of seconds, or left blank for the default.' }
+    }
+  }
+  if (payload.priority1Text.trim() !== '') {
+    const priority1 = Number(payload.priority1Text)
+    if (!Number.isInteger(priority1) || priority1 < 0 || priority1 > 255) {
+      return { ok: false, reason: 'Priority1 must be a whole number from 0 to 255, or left blank for the default.' }
+    }
+  }
+  return { ok: true }
+}
+
 /** The session's currently live cycle, or null when no session reports one. Mode's in-progress warning renders only for this case. */
 export function liveCycle(nightSession: NightSessionState | null): { cycle: number } | null {
   if (nightSession === null || nightSession.state !== 'live') return null

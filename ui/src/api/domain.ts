@@ -241,6 +241,12 @@ export type AudioAlignmentRunListResponse = components['schemas']['AudioAlignmen
 export type AudioAlignmentRunDetailResponse = components['schemas']['AudioAlignmentRunDetailResponse']
 export type AudioAlignmentRunResponse = components['schemas']['AudioAlignmentRunResponse']
 
+// node.clock per-node PTP configuration (Track I seam I1, RES-019,
+// ADR-039), aliased for the identical reason as every type above
+// (ADR-015). A full-replacement config kind, like ConfigAudioNode above.
+export type ConfigNodeClock = components['schemas']['ConfigNodeClock']
+export type NodeClockConfigResponse = components['schemas']['NodeClockConfigResponse']
+
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring. Aliased for the identical reason as every type above
 // (ADR-015).

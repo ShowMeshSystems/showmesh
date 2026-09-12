@@ -130,6 +130,10 @@ type SchemaAudioAlignmentRunListResponse = components['schemas']['AudioAlignment
 type SchemaAudioAlignmentRunDetailResponse = components['schemas']['AudioAlignmentRunDetailResponse']
 type SchemaAudioAlignmentRunResponse = components['schemas']['AudioAlignmentRunResponse']
 type SchemaAudioAlignmentRunStopRequest = components['schemas']['AudioAlignmentRunStopRequest']
+// node.clock per-node PTP configuration (Track I seam I1, RES-019,
+// ADR-039). A full-replacement kind, same shape as audio.node above.
+type SchemaNodeClockConfigResponse = components['schemas']['NodeClockConfigResponse']
+type SchemaConfigNodeClock = components['schemas']['ConfigNodeClock']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
@@ -1295,6 +1299,50 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/config/node.clock/{id}` (Track I seam I1, ADR-039). Throws (404) when no such object exists. */
+  async getNodeClock(id: string): Promise<SchemaNodeClockConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNodeClockConfigResponse>(
+        `/config/node.clock/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/node.clock/{id}` (Track I seam I1, ADR-039). A full
+   * replacement: `provider`, `interface`, and `domain` are required on
+   * every write.
+   */
+  async putNodeClock(id: string, payload: SchemaConfigNodeClock): Promise<SchemaNodeClockConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaNodeClockConfigResponse>(
+        `/config/node.clock/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/node.clock/{id}/revisions` (Track I seam I1): revision history, newest first, metadata only. */
+  async getNodeClockConfigRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/node.clock/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/fpp.endpoints/revisions` (Step 7 seam A): revision history, newest first, metadata only. */
   async getFPPEndpointsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
@@ -2114,7 +2162,16 @@ export class ApiStore {
    * does not accept it on itself.
    */
   async listConfigObjects(
-    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'media.playlist' | 'night.session',
+    kind:
+      | 'show.action'
+      | 'show.macro'
+      | 'show'
+      | 'show.surface'
+      | 'show.cue'
+      | 'show.playlist'
+      | 'media.playlist'
+      | 'night.session'
+      | 'node.clock',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse>
   // audio.node has its own dedicated list response (SchemaAudioNodeListResponse):
@@ -2132,6 +2189,7 @@ export class ApiStore {
       | 'show.playlist'
       | 'media.playlist'
       | 'night.session'
+      | 'node.clock'
       | 'audio.node',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {
