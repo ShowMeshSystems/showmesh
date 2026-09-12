@@ -29,116 +29,177 @@ The **Current state** block at the top of this file is overwritten each session:
 ---
 ## Current state
 
-> **`main` is at `6dfecdd`** (2026-09-05 08:29 CDT). Forty-five pull requests
-> merged between the 2026-09-02 tip `1fbda2b` and this commit, in two recorded
-> sessions: thirty-three on 2026-09-03 and 2026-09-04, the pre-release build
-> (`02e456b` through `41152b5`), and twelve on 2026-09-05, the weekend build
-> (`1c0f4d0` through `6dfecdd`). The two newest dated entries below are those
-> records. Every count and commit identifier in this block is read from
-> `git log` on `main`; every gate statement is read from a pull request's own
-> verification record, a lane handoff's gate line, or a GitHub run identifier,
-> never from a builder's unsupported summary.
+> **`main` is at `a20512d`** (2026-09-09 01:57 CDT). Sixty-eight pull requests
+> merged between the 2026-09-05 tip `6dfecdd` and this commit, in one recorded
+> session: the two-day build of 2026-09-08 and 2026-09-09 (`144c247` through
+> `a20512d`). The newest dated entry below is that record. Every count and
+> commit identifier in this block is read from `git log` on `main`; every gate
+> statement is read from a pull request's own verification record or a GitHub
+> run identifier, never from a builder's unsupported summary. All merges are
+> squashes, so `git log --merges` reports nothing for these two days.
 >
-> **A release spine exists and the release workflow has been run once on
-> `main`.** `VERSION`, `CHANGELOG.md` and the cut procedure in
-> [RELEASING.md](../RELEASING.md) shipped in #318 (`916ef71`); the tag-driven
-> workflow that publishes coordinator and UI images, node agent packages and a
-> GitHub pre-release entry shipped in #327 (`39e514a`); the one-tester
-> quickstart and the `SHOWMESH_RELEASE_VERSION` documentation shipped in #329
-> (`8d8b8e5`). `.github/workflows/release.yml` run `33816138250`, a
-> `workflow_dispatch` on `main` at 2026-09-03T23:06:41Z, concluded `success`.
-> **No release tag has been cut and nothing has been published**, so no
-> published image or package has been pulled or installed by anyone. The armv7
-> node agent package is not produced by that workflow: the cgo build fails on
-> 32-bit and is filed separately.
+> **A release spine exists, and publication has still never been executed.**
+> The tag-driven workflow in `.github/workflows/release.yml` now builds the
+> arm64 node agent on a native `ubuntu-24.04-arm` runner rather than under
+> QEMU (#379, `0133293`), reading the architecture back off the produced file
+> at `:278-289` rather than trusting the build. The publish job at `:354`
+> exists and is reachable, but `:311-312` makes a `workflow_dispatch` a proof
+> run that stops before it, so only a real tag can exercise publication. **No
+> release tag has been cut and nothing has been published.** The armv7 node
+> agent package is still not produced: the 64-bit sentinel that broke the
+> 32-bit cgo build is fixed (#374, `fc718f9`), but no armv7 leg runs in any
+> workflow, as `release.yml:299-308` says in its own text.
 >
-> **Emergency stop, node silence and dispatch deadlines are on `main`.** All
-> three emergency-stop levels now black projection and silence audio with
-> per-kind outcomes (#334, `d5a8a54`), with the Operator UI control in #315
-> (`646e759`). An unconditional per-node `audio.node.silence` reaches the agent
-> (#326, `8a20130`), the coordinator route and the `showmeshctl` verb (#332,
-> `1c2079d`). Every dispatcher carries a wire deadline (#328, `7df8899`) and
-> every dispatch-and-await route now holds the operator's HTTP connection open
-> long enough to report an unconfirmed outcome instead of returning 502
-> (#341, `5840517`).
+> **Schema versions on `main` run to v33, and v34 onward is free.** v31
+> rewrites every stored timestamp to a fixed nine-digit fraction so a string
+> `ORDER BY` sorts chronologically (#370, `de331d4`); v32 adds
+> `fpp_playlist_entry_observations.playlist_loop`, FPP's own pass counter
+> (#385, `3552305`); v33 is a general-purpose credentials table that takes the
+> fpp.mqtt broker password out of its data-directory file (#408, `a8352bf`,
+> owner ruling 2026-09-08). v31 and v32 had shipped while
+> [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) still advertised both as
+> free; #413 (`b52e939`) corrected the register and #414 (`764823d`) makes a
+> stale register row fail the gate rather than sit wrong.
 >
-> **`media.playlist` is a configuration kind with routes, CLI verbs, a screen
-> and a night-session reference.** The kind and its validation landed in #344
-> (`1c0f4d0`), the routes, OpenAPI
-> paths and the `showmeshctl media-playlist` verbs in #350 (`be6ee1c`), the
-> Media Playlists screen in #353 (`7d659ea`), the night-session reference form
-> and its controller pin in #354 (`5f4a31b`), and the night-session picker in
-> #355 (`6dfecdd`). An operator can also fire an announcement cue by hand from
-> Live Control, with per-node outcomes and a visible refusal when nothing would
-> dispatch (#352, `012e021`).
+> **A show now selects which FPP and Resolume instances take part in it.**
+> Participation is selected, never detected (owner ruling 2026-09-09). The
+> show configuration carries both sets (#422, `7e9a890`), readiness and health
+> follow the selection (#427, `72cb6cc`), the attention list and node list
+> report per-node participation (#404 `487390a`, #426 `7430e83`, #416
+> `76a719a`), and `showmeshctl` reports it (#432, `50a3873`). **The attention
+> list does not yet sort FPP and Resolume rows by that selection:**
+> `ui/src/screens/dashboardModel.ts:92,105,125` still hardcode absence for
+> those two row kinds, so only node rows carry a real answer.
 >
-> **Schema versions on `main` run to v30, and v31 onward is free.** v30 adds
-> the nullable `config_objects.deleted_at` tombstone marker that gives every
-> per-object configuration kind a delete (#331, `ed67488`). `media.playlist`
-> took no schema version, because the v30 tombstone path is kind-agnostic.
-> [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is the register; builders
-> never edit it. Four identifiers were minted on 2026-09-05 and are recorded
-> there: the `media.playlist` configuration kind, the `audio.playback.ceiling`
-> node capability, the `asset.inventory.request` agent operation and the
-> `cue:activate` scope.
+> **An operator can ask the plugin to republish its playlist definitions.**
+> The wire shape was frozen first (#412, `a892712`), then the coordinator
+> route, OpenAPI path and `showmeshctl` verb landed (#417, `a42e823`), with
+> the plugin half in `showmesh-fpp-plugin` #28. The UI's re-import control
+> stays deliberately disabled; its wiring is tracked separately. Both routes
+> that ingest plugin data now ignore unknown members and report them rather
+> than rejecting the whole body (#387 `ca6beb8`, #429 `9e0b7d6`).
 >
-> **The FPP plugin can be installed on FPP 10 without compiling on the
-> player.** The prebuilt-object work is in the plugin and packaging
-> repositories, not this one: plugin `main` is at `9628aeb` (pull requests #21,
-> #22, #23 and #24) and fpp-showmesh at `e96de47` (pull request #9). Every
-> result there is containerized. **Nothing has been installed on a real FPP
-> player, no artifact has been published, and the verified-version set holds
-> exactly one entry, 10.0.0**, so every other FPP 10 point release still
-> compiles on the player.
+> **ShowMesh can dim the display.** `SetTransitionGain` had no caller; it now
+> has two, the night lighting cue path (#403, `7a6bd07`) and an operator route
+> plus CLI verb (#410, `8c2b54e`). Night cue readiness downgraded that case
+> from a block to a warning. Hardware acceptance has not been performed.
 >
-> **Two branches remain deliberately off `main`,** unchanged by either session.
-> `dev/multi-audio` is superseded as a branch: its content was rebuilt directly
-> onto `main` and merged as #280 on 2026-09-01, so the branch remains only as
-> history and must not be folded. `dev/clock-sync` holds Lane 22's seam I1 and
-> is unchanged since 2026-08-28.
+> **The 2026-09-08 rig session's audio defects are partly fixed, and the
+> unfixed parts are named.** Prepare-ahead staging no longer collapses its
+> nanosecond revision through float64 (#393, `44c9a0c`), which was a complete
+> fix. A fade's completion is now judged against the synced buffer rather than
+> volume's own position query (#402, `7990cd9`), and `gain.effective` reports
+> what the engine did rather than what the session intended (#400, `6aae061`).
+> Three things measured on the rig are **not** resolved on `main`: the show
+> still starts about eleven seconds late, because `nightDispatchRetryBackoff`
+> is still ten seconds (`nightloop.go:330`) and `:877` still declines a retry
+> inside it, with #380 (`156d3a4`) adding two warning lines rather than a fix;
+> `audio.session.resume` still carries no gain, so the bed still climbs from
+> the fade-down's stored target, though the fade-up is no longer a tick behind;
+> and the node's audio report cadence still cannot resolve a two second fade,
+> because `anyFadeInProgress` is evaluated only inside the resting tick
+> (`internal/agent/audioreport.go:249-260`). That last one means the two fade
+> fixes above are verified by code reading, not by observation.
 >
-> **No hardware, deployed-fleet or live-show verification was performed for
-> anything merged on 2026-09-03, 2026-09-04 or 2026-09-05.** Browser evidence
-> exists for four of the forty-five merges and is named in the dated entries;
-> in each case it was collected against a disposable bench coordinator on
-> isolated ports, never against the rehearsal stack or the fleet. The rig
-> checks the two sessions asked for are the owner's and remain open; each dated
-> entry names its own.
+> **`dev/clock-sync` carries Track I and has never merged to `main`.** It is
+> twenty commits ahead and five behind at `7ca63f7`, 134 files and about
+> 12,100 added lines, and it holds the entire node clock provider: on `main`,
+> `internal/agent/clock/` does not exist and `node.clock` appears zero times in
+> `api/openapi.yaml`. `git merge-tree` reports no conflicts, but ten files were
+> edited on both sides including `api/openapi.yaml` and two generated files,
+> `ui/src/api/generated/schema.d.ts` and
+> `internal/coordinator/api/testdata/golden/snapshot.json`. A textually clean
+> merge of a generated schema and a golden snapshot is the classic silent
+> break; regenerate both and run `make check` after merging rather than
+> trusting the merge result.
 >
-> **Red gate and CI runs from both sessions are recorded and none is retired by
-> a later green.** They are listed in the two dated entries. All of them are
-> wall-clock timing assertions or teardown contamination in packages the diffs
-> did not touch, except the three real defects one gate found in its own diff
-> on #331, which were fixed before that pull request merged.
-> ---
->
-> *The paragraphs below describe earlier lanes and are kept for continuity.*
->
-> **Lane 8 left `main` at `349093a`.** Other lanes were merging concurrently on 2026-08-26, so `main` may already be ahead of that; this paragraph describes what this lane landed, not the tip. The Operator UI fold took it to `53d3db0`, six defect fixes to `cf0c349`, then #115, #116, #117 and #128 to `270aead`, then the audit contract change #129 to `d4aee09`, then the nav and chrome work #114 to `349093a`. Twenty-two pull requests, #91 through #112 excluding #109, were squash-merged between 2026-08-25 18:40Z and 2026-08-26 01:30Z, in merge-time order: 91 (`03a1cc5`), 92 (`03db85a`), 93 (`4efc96c`), 94 (`00f278e`), 95 (`d846f15`), 99 (`bff51fb`), 98 (`87a2c63`), 96 (`af06ddc`), 100 (`89ca8ae`), 101 (`fe3eb99`), 97 (`2400f0d`), 102 (`966cb16`), 103 (`21c65d1`), 104 (`01b081d`), 105 (`03256b9`), 106 (`a1ceb56`), 107 (`5c89297`), 108 (`3ed4ef5`), 110 (`d24a1c6`), 112 (`3c6b06f`), 111 (`53d3db0`). This is the Operator UI fold that ships Track H's **H6**; see the dated entry below. PR #109 (`c7fd5e8`) also merged in this window but is the FPP Connect decisions record, a separate track, and is why a docs-only commit appears inside this range.
->
-> Before this fold, `main` was at `6eafb4e` (`9f28832` after the dependabot `docker/login-action` bump). Eight pull requests, #82 through #89, were squash-merged between `44b16fa` and `6eafb4e` on 2026-08-25, in this order: 84, 85, 86, 82, 83, 87, 89, 88. **Every merge was gated by `make check` on the merged tree** (each pull request merged onto the then-current `main` in a temporary worktree and gated there); #88, the last, also ran `make test-integration` on its merged tree. Before that, twenty-four pull requests, #55 through #78, were folded the same way between `e2d6c47` and `3d7d822` on 2026-08-24 and 2026-08-25 (order: 67, 55, 56, 57, 63, 65, 62, 60, 68, 59, 66, 70, 61, 78, 69, 72, 74, 75, 58, 77, 64, 71, 73, 76), with `make test-integration` on `main` at `410bf22`, `3d2883b` and `3d7d822`. The three 2026-08-25/26 dated entries below (this fold's and the two earlier ones) are the records of the three folds.
->
-> **Tracks B, D, E, F and G are merged to `main`.** Track B's B2 through B5 landed at `e68bc3c` (PR #14); Track D's five seams landed 2026-08-16; Track E's E1 through E7 and Track G's operator-surface parity are on `main`; Track F's F5, F6 and F7's UI half landed 2026-08-22 (`2f35412`, `bd40073`, `1e839f3`, repaired by `ea8ea2f`). **F8 remains outstanding and is not startable on this machine.** The acceptance criteria those tracks left open are unchanged by any of this: Track B's two criteria needing a real FPP player, a real Resolume instance and a real wall are still open and [RES-004](../research/RES-004-virtual-matrix-renderer-performance.md) stays L0; Track D has never been driven end to end in a browser against a real Arena and D-3a's 8 s settle delay is still a stated guess; Track E's remaining half of its standing caveat, an upload over a real network link, is still SM-18.
->
-> **Track H has H1 through H6 merged; H7 is open, and its chain has now been run end to end once.** H1 (`show.cue` and `show.playlist` configuration kinds, `69accc0`) and H2 (FPP playlist import and reconciliation, `b5b7f59`) predate the two earlier 2026-08-25 folds. **H3** at `4c107de` (PR #71): a resolved Cue catalog is deployed to each node and anything outside it is refused. **H4** at `ed9f418` (PR #73): render, audio and LTC follow one Cue activation contract. **H5** at `3d7d822` (PR #76): a show Playlist runs as background audio and announcements play over it. **H6 (Operator UI and readiness) is now merged**, landing as the twenty-two-pull-request Operator UI fold above (`53d3db0`): cue authoring and status, playlist authoring and a stored-playlist-definitions screen, a playlist readiness screen, audio session and per-node audio routing screens including an Apply control, FPP event and playlist detail tables, node signal tables, a render transport probe control (closing the ADR-039 gap Track B left open), and a readability and navigation pass across the Operator UI. **H7 (integrated and failure verification) is under way and its first fixes are merged.** On 2026-08-26 the chain was assembled and run end to end for the first time, on a containerized FPP 10.0, a coordinator and a node agent all on one laptop, and the multi-sequence swap works. Two blocking plugin defects are fixed and merged upstream (plugin pull request #16, plugin repository `main` `e9b511a`). Two of the six defects filed against this repository are now fixed on `main`: the coordinator's shutdown panic at `4d4fb2d` (PR #138), and the render surface report's inability to name the FSEQ a node is rendering at `e2d6274` (PR #137), which adds the four `surface.content.*` signals and makes the swap provable from the coordinator alone. The other four remain filed with no fix. **As of 2026-08-26 evening the open Track H defects are SM-281, SM-285, SM-287, SM-289 and SM-290**, five rather than four, because SM-292 was filed later the same morning against `e2d6274`'s own fix (the four new content signals carried an evidence time from before the content changed) and has since been fixed by Lane 15 at `cc2f9f8` (PR #149). SM-285 is the one in that list worth reading first: four readiness conditions Track H specified were never built, so readiness currently passes shows it cannot run. The bench and its case-by-case record are merged at `f404ebd` (PR #140): `bench/track-h-chain/` and [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md). No hardware, NDI, audio-hardware or wall evidence exists for any of it. See [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) and the dated entry below for what was and was not exercised.
->
-> **The Operator UI fold found six open defects and one binary-classified file, none yet fixed on `main`.** Recorded in full in the dated entry below: an inverted ADR-011 loudness rule in `ui/src/styles/status.css` (non-current freshness/reason text now smaller than healthy-signal text); `AudioSessionPanel.tsx`'s `AudioCommandOutcome` renderer drops the required `attributionDegraded` field six sibling renderers surface; `PlaylistReadiness.tsx` and `CueCatalogPanel.tsx` fetch once on mount, never refetch, and never render the required `serverTime`; five em dashes were reintroduced into on-screen table cells by PRs #105, #106, #111 and #112 after PR #103 removed them; `ShowCueDetail.tsx` coerces a blank millisecond field to 0 instead of refusing it; `FPPResetObservationSequenceControl.tsx` imports `api/generated/schema` directly, the first non-test file under `ui/src` to bypass the API barrel; and `ui/src/views/ShowPlaylistDetail.tsx` carries a literal NUL byte as a composite key separator, which makes git classify the file as binary. All six are fixed and merged as pull requests #119 through #124, taking `main` to `cf0c349`, where `make check` is green. A review of the fold's five remaining pull requests then found defects in three more of them, all green at the time; see the 2026-08-26 entry below. #113 was closed rather than merged because its audit paging was wrong. #114, #115, #116, #117 and #128 are all merged. Every pull request from this lane is now on `main` except the build-log record itself.
->
-> **Track C has the seven Lane 4 audio defect fixes, the positioned-layout fix, the five Lane 7.5 defect fixes, the M4 negotiation fix and the five 2026-08-26 audio-lane fixes merged; real-device acceptance is still open.** The Lane 4 fixes are `f813a8a` (#58), `93af06d` (#61), `e64a958` (#69), `d0ca01e` (#72), `29bf1b8` (#74), `f0101dc` (#75) and `3d2883b` (#77); `c75d085` (#78) assigns channel positions so the engine can open a positioned sink. The 2026-08-25 fold added `e527f5d` (#85, `Start` no longer unblocks a paused branch's flow before its own seek lands), `1bb30b0` (#86, LTC start time and reported timecode no longer lag by the appsrc queue depth), `cf0b575` (#82, a failed start or resume drops the engine handle so the ordinary retry re-prepares), `dde5fd5` (#83, the natural-completion watcher's engine calls are bounded and `Snapshot` reports last-known evidence with `stale` instead of hanging), `15d95ae` (#87, ALSA xrun/warning and QoS bus messages are counted into the audio report) and `96e2338` (#89, the engine asks a positioned sink `QueryAcceptCaps` instead of guessing its layout, which is the fix for the M4 negotiation failure observed on the node). `6eafb4e` (#88) makes the announcement duck depth an operator setting, `duckTargetGain` on `audio.settings`, with a provisional default of 0.25 that has not been heard; SM-240 records the upgrade hazard of the new required field. The Operator UI fold added audio session and per-node audio routing screens (PRs #97, #104, #111) and an Apply control (#110) over this same `audio.settings`/`audio.routing` surface, but did not change the engine itself. **Real-device evidence:** the 2026-08-25 node run (build of `main` at `44b16fa`, before the earlier fold) exercised the real M4 through the ordinary coordinator path and found the negotiation failure fixed by #89 plus the open defects on reboot restore, rebind-while-playing, the frozen audio observation time and the LTC transition tail. None of the audio engine work has run on the node since; the listening checks and the re-run of those cases against a build containing that fold are still the next node session. #86's LTC alignment is loopback and appsink evidence only. **On 2026-08-26 five more merged, taking `main` from `747ba9d` to `7276c9c` and closing four of the five node defects that session filed:** `747ba9d` (#130, a regression test pinning the ordinary retry's recovery of a rebind-while-playing session, no production code changed), `4d83cc3` (#131, `node.audio.engine.state`/`.reason` stamped with the live report tick instead of the frozen startup probe), `510dedc` (#133, a deferred restore re-queued instead of failed when the engine refuses to build), `c9933e6` (#135, LTC observation no longer claiming stopped while about 0.29s of the outgoing run is still on the wire) and `7276c9c` (#134, every operator-facing gain field moved from a linear multiplier to decibels, minting schema v19). That closes SM-239, SM-233, SM-238 and SM-231; SM-236 remains open with no pull request. **None of those five has real-device evidence either.** They are unit, fake-engine and loopback or appsink only, so the audio engine still has not run on the real M4 since 2026-08-25, and the defects these fixes address were found on hardware that has not seen them. See the dated entry below.
->
-> **Show mode, the deployment blockers and the FPP 10 collector work are merged.** ADR-033's installation-wide show mode is implemented at `dfd24a8` (#66). The deployment path gained an install and packaging path for the native node agent at `e483a82` (#59), a refusal for an asset content base URL no remote node can reach at `ffa472e` (#60), and `asset.fetch` failure reasons surfaced on the coordinator at `2df68cc` (#68). The FPP work is `be0f24d` (#55, the plugin route self-contradiction in the contract), `1426c97` (#56, fppd uptime rather than its 0-59 second remainder), `b376142` (#57, FPP 10.0 as a first-class bench target alongside 9.5.3), `17c8c7e` (#63, FPP 10's silent default-unicast MultiSync transport diagnosed and documented), `226fdda` (#65, FPP 10's port-key omission named and the FPP version observed), `34ef154` (#64, FPP endpoints, observations and declarations joined by observed uuid) and `fc5e500` (#67, [RES-015](../research/RES-015-fpp-plugin-distribution-model.md) §7.2 corrected on FPP-native transport failure detection). Render observation gained `84624ae` (#62, frame counters get their own evidence timestamp) and `410bf22` (#70, a render coverage gap fails visibly by operating mode).
->
-> **Schema versions on `main` run to v18, and v19 onward is free.** #64 and #71 both minted v16 on their own branches; the conflict was resolved during the earlier fold by keeping #64 at v16, renumbering #71's cue-catalog acknowledgement table to v17, and renumbering #73's `entry_occurrence_sequence` column to v18. The Operator UI fold minted no schema version. [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) records v17 and v18 as shipped and v19+ as unallocated.
->
-> **The Operator UI fold itself touched only `ui/`**, but the work that followed it did not. `643f492..53d3db0` restricted to `ui/` is 101 files, +9970/-746, with no Go, no `api/openapi.yaml`, no CLI, no workflow and no deployment config changed. **#129 (`d4aee09`) is a deliberate contract change** and does touch all of those: `AuditEntry` gains a required `id`, `GET /audit` gains `order` and `before`, `AuditResponse` gains `order` and `oldestRetainedId`, with the coordinator read path, the regenerated client and `showmeshctl audit` parity per ADR-039. `order` defaults to `asc`, the pre-existing behaviour, so no existing caller changes. It answers SM-62 and SM-270. `make check` on `origin/main` at `53d3db0`, run in a detached scratch worktree, exited 0: go vet clean, golangci-lint 0 issues, all Go packages ok, 917 UI tests passed across 84 files, typecheck and Vite build clean, and `ui-gen-check` confirmed the generated client matches `api/openapi.yaml`. Residual non-blocking noise: 7 eslint warnings (0 errors) and a Rollup 624 kB chunk-size advisory. `make test-integration` was not run for this fold; no coordinator change was made.
->
-> **Browser click-through for the Operator UI fold was collected for one pull request only.** PR #91 (node detail evidence panel) was exercised against the local compose stack at `f102ae6`. Every other pull request in the fold records "not exercised in a browser": the local stack has no audio node, no audio session, no configured cues and no `audio.settings` revision, so those screens' paths are unreachable there. **Nothing in this fold, or in any earlier fold recorded above, ran on real hardware, on a deployed fleet, or against a real Resolume Arena.** Bench and hardware acceptance for the Operator UI fold's screens is tracked separately as SM-253, SM-254, SM-255 and SM-269. The Operator UI parity audit (SM-242) classified 144 API operations and found 41 gaps (20 show-night, 12 authoring, 10 admin); readability is tracked as SM-241; gap issues SM-243 through SM-249 are Done; follow-ups SM-250, SM-251, SM-252, SM-256, SM-257, SM-258, SM-259, SM-268, SM-270 and SM-271 are filed.
->
-> **Track E phase 2, FPP Connect, is on `main`.** Seams FC0, FC1a, FC1b, FC2 and FC3 merged onto `dev/fpp-connect` on 2026-08-26 as `9292931` (#118), `e445e24` (#127), `8e79e15` (#126), `31165fc` (#136) and `5e57e9f` (#144), followed by SM-294's channel-range visibility fix at `23ae13d` (#159). Each was gated by `showmesh-check` on the `showmesh-dev-01` build VM and by GitHub checks, and reviewed by Hermes and by an independent Opus reviewer. Lane 21 folded the branch onto `main` on 2026-08-28 as pull request #178; the 2026-08-28 entry below is that record and the 2026-08-26 entry is the branch's own. **Nothing has run against a real xLights or a real FPP, and no node has run it on hardware**, so FC4, the owner's bench, is still the acceptance gate and none of RES-003 §9's conclusions have moved above L1.
->
-> **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
+> **The CI gate got stricter and more reliable, and one flake class remains.**
+> The test job now aggregates every suite instead of stopping at the first
+> failure (#371, `0379ccb`), the lint job no longer fetches its configuration
+> schema over the network (#389, `8be3af0`), a module download reset is
+> retried (#398, `8839f76`, recovery shown on run `34287332949`), the
+> integration timeout sits above measured worst case (#381, `0231fec`), and a
+> repeated or non-increasing migration version fails the gate (#430,
+> `a4354a1`). Four separate test races were made event-driven (#383, #384,
+> #397, #436). **Eleven pull requests across these two days merged after
+> attributing a local gate failure to the same two tests**,
+> `TestStartAfterLoadGapPlaysFromNamedPosition` and
+> `TestLTCSeekRealignsAudioToNewPosition` in `internal/agent/audio/gstengine`,
+> and re-running. That class is not fixed.
 
 ---
+
+## 2026-09-08 to 2026-09-09 (two-day build: show and instance participation, the FPP definition republish, brightness transition gain, the 09-08 rig session's audio defects, schema v31 to v33, CI aggregation and gate hardening; `main` `6dfecdd` to `a20512d`)
+
+**Goal:** work the defects found in the 2026-09-08 rig session, land the owner
+rulings made across both days, and harden the CI gate that had been reddening
+unrelated pull requests.
+
+**Completed:** sixty-eight pull requests merged to `main`, all squashes. The
+Current state block above records what they produced and what they did not.
+Five further pull requests merged to `dev/clock-sync` (#411, #415, #428, #431,
+#435), which remains unmerged to `main`.
+
+**Decisions made:**
+
+* Participation is selected, not detected. A show names the FPP and Resolume
+  instances that take part; nothing is inferred from connection or playlist
+  membership. Recorded on the owning issue and implemented in #422 and #427.
+* Unknown members on the two plugin ingest routes are ignored and reported,
+  rather than rejecting the whole body. The owner permitted either tolerance or
+  tolerance-plus-reporting; the reporting form shipped (#387, #429).
+* The fpp.mqtt broker password moves out of its data-directory file into a
+  general credentials table in SQLite, as schema v33 (#408).
+* The coordinator asks the plugin to republish playlist definitions rather than
+  reading them from FPP itself, preserving the contract's section 3.1 rule
+  (#412, #417).
+* Go support drops to a single version with the floor at 1.26 (#391).
+
+**Questions raised with the owner:** the placement and icon of the phone-width
+rail drawer opener, and whether the 720px chrome bar breakpoint is reused, both
+left provisional in #425. Whether an unselected instance's attention items sort
+last or hide behind a filter, left open by the participation ruling. Whether a
+viewer role should hold a `config:read` scope or the limitation is recorded in
+SECURITY.md as accepted. None were answered during the session.
+
+**Deferred:**
+
+* The eleven second late show start. #380 added two warning lines; the ten
+  second dispatch retry backoff that produces the delay is unchanged, and the
+  busy-refusal diagnosis remains a hypothesis that fits the arithmetic. A
+  second rig cycle did not reproduce it, measuring a 1.007s gap.
+* Carrying the intended gain on `audio.session.resume`. The fade-up was moved
+  into the same advance as the resume, which removes the leading tick of
+  silence but not the ramp from the stored target.
+* Reporting a fade out of cadence, which is what would let any of the fade work
+  above be verified from the coordinator rather than by reading the diff.
+* The armv7 node agent package, and executing a release publication.
+* Sorting FPP and Resolume attention rows by show participation.
+
+**Verification gates:** `make check` was run per pull request against the pushed
+commit in the ordinary case. Five pull requests (#371, #389, #394, #398, and
+#379's local gate row) record the local gate as `Not run` with the reason that a
+separate manager run owned it; that run is not linked from those pull requests.
+Eleven pull requests (#386, #393, #396, #411, #416, #418, #422, #423, #426,
+#429, #431) record a local gate failure attributed to
+`TestStartAfterLoadGapPlaysFromNamedPosition` or
+`TestLTCSeekRealignsAudioToNewPosition` in `internal/agent/audio/gstengine` and
+merged on a re-run. The eight dependabot pull requests carry no verification
+section and were gated by required CI only. #379 corrected its own verification
+record during review, walking "proven end to end" back to "up to but not
+including publication" after the proof branch was found to have the publish step
+stripped out.
+
+Hardware, browser and deployed-environment acceptance for this session's work
+was not performed and is recorded as unverified.
+
+**Correction, recorded 2026-09-09:** this entry and the Current state block above
+were written on 2026-09-09, after the fact. The session itself recorded nothing:
+#366 brought this file current to `6dfecdd` on the morning of 2026-09-08 and the
+following sixty-seven pull requests merged with no build log entry, so the
+Current state block described `main` as of 2026-09-05 for a full day. Everything
+above was reconstructed from `git log`, pull request bodies and the code on
+`main`, not from a contemporaneous record.
 
 ## 2026-09-05 (weekend build: prepare-ahead audio revisions, end-of-night fade, broker-reconnect inventory, draw-state sample time, gain ceiling on the wire, node asset re-sync, the `media.playlist` kind with routes, screen and night-session reference, hand-fired announcements; `main` `41152b5` to `6dfecdd`)
 
