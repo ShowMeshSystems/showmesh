@@ -98,7 +98,7 @@ func TestCreateAlignmentRunAndGet(t *testing.T) {
 		t.Errorf("StartedAt = %v, want %v", run.StartedAt, clock.t)
 	}
 
-	got, samples, err := st.GetAlignmentRun(ctx, "run-1")
+	got, samples, truncated, _, err := st.GetAlignmentRun(ctx, "run-1", 5000)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -107,6 +107,9 @@ func TestCreateAlignmentRunAndGet(t *testing.T) {
 	}
 	if len(samples) != 0 {
 		t.Errorf("samples = %v, want none", samples)
+	}
+	if truncated {
+		t.Errorf("truncated = true, want false")
 	}
 }
 
@@ -142,7 +145,7 @@ func TestCreateAlignmentRunAllowedAfterStop(t *testing.T) {
 	if _, err := st.CreateAlignmentRun(ctx, AlignmentRunRecord{ID: "run-1", NodeID: "node-a", StartedBy: "op"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := st.StopAlignmentRun(ctx, "run-1", "op", "operator stop"); err != nil {
+	if _, err := st.StopAlignmentRun(ctx, "run-1", "node-a", "op", "op-id", "operator stop"); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 	if _, err := st.CreateAlignmentRun(ctx, AlignmentRunRecord{ID: "run-2", NodeID: "node-a", StartedBy: "op"}); err != nil {
@@ -152,8 +155,26 @@ func TestCreateAlignmentRunAllowedAfterStop(t *testing.T) {
 
 func TestStopAlignmentRunNotFound(t *testing.T) {
 	st := openTestStore(t, nil)
-	if _, err := st.StopAlignmentRun(context.Background(), "missing", "op", "reason"); !errors.Is(err, ErrAlignmentRunNotFound) {
+	if _, err := st.StopAlignmentRun(context.Background(), "missing", "node-a", "op", "op-id", "reason"); !errors.Is(err, ErrAlignmentRunNotFound) {
 		t.Fatalf("error = %v, want ErrAlignmentRunNotFound", err)
+	}
+}
+
+func TestStopAlignmentRunWrongNodeIsNotFound(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	if _, err := st.CreateAlignmentRun(ctx, AlignmentRunRecord{ID: "run-1", NodeID: "node-a", StartedBy: "op"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := st.StopAlignmentRun(ctx, "run-1", "node-b", "op", "op-id", "reason"); !errors.Is(err, ErrAlignmentRunNotFound) {
+		t.Fatalf("error = %v, want ErrAlignmentRunNotFound when stopped under a different node's id", err)
+	}
+	rec, _, _, _, err := st.GetAlignmentRun(ctx, "run-1", 5000)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if rec.StoppedAt != nil {
+		t.Errorf("run stopped after a wrong-node stop attempt, want it to remain active")
 	}
 }
 
@@ -163,10 +184,10 @@ func TestStopAlignmentRunTwiceIsNotFound(t *testing.T) {
 	if _, err := st.CreateAlignmentRun(ctx, AlignmentRunRecord{ID: "run-1", NodeID: "node-a", StartedBy: "op"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := st.StopAlignmentRun(ctx, "run-1", "op", "reason"); err != nil {
+	if _, err := st.StopAlignmentRun(ctx, "run-1", "node-a", "op", "op-id", "reason"); err != nil {
 		t.Fatalf("first stop: %v", err)
 	}
-	if _, err := st.StopAlignmentRun(ctx, "run-1", "op", "reason"); !errors.Is(err, ErrAlignmentRunNotFound) {
+	if _, err := st.StopAlignmentRun(ctx, "run-1", "node-a", "op", "op-id", "reason"); !errors.Is(err, ErrAlignmentRunNotFound) {
 		t.Fatalf("error = %v, want ErrAlignmentRunNotFound on a second stop", err)
 	}
 }
@@ -179,7 +200,7 @@ func TestListAlignmentRunsNewestFirst(t *testing.T) {
 	if _, err := st.CreateAlignmentRun(ctx, AlignmentRunRecord{ID: "run-1", NodeID: "node-a", StartedBy: "op"}); err != nil {
 		t.Fatalf("create run-1: %v", err)
 	}
-	if _, err := st.StopAlignmentRun(ctx, "run-1", "op", "done"); err != nil {
+	if _, err := st.StopAlignmentRun(ctx, "run-1", "node-a", "op", "op-id", "done"); err != nil {
 		t.Fatalf("stop run-1: %v", err)
 	}
 	clock.advance(time.Minute)
@@ -212,12 +233,45 @@ func TestAppendAlignmentSampleDedupsBySampleTime(t *testing.T) {
 		t.Fatalf("second append: %v", err)
 	}
 
-	_, samples, err := st.GetAlignmentRun(ctx, "run-1")
+	_, samples, _, _, err := st.GetAlignmentRun(ctx, "run-1", 5000)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if len(samples) != 1 {
 		t.Fatalf("samples = %+v, want exactly one", samples)
+	}
+}
+
+func TestGetAlignmentRunLimitTruncatesSamplesButNotSummary(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	if _, err := st.CreateAlignmentRun(ctx, AlignmentRunRecord{ID: "run-1", NodeID: "node-a", StartedBy: "op"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	base := mustTime(t, "2026-09-11T00:00:00Z")
+	for i := 0; i < 5; i++ {
+		if err := st.AppendAlignmentSample(ctx, AlignmentSampleRecord{
+			RunID: "run-1", SampledAt: base.Add(time.Duration(i) * time.Second), OffsetMs: float64(i), SessionID: "sess-1",
+		}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	_, samples, truncated, summary, err := st.GetAlignmentRun(ctx, "run-1", 2)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(samples) != 2 {
+		t.Fatalf("samples = %d, want 2 (limited)", len(samples))
+	}
+	if !truncated {
+		t.Errorf("truncated = false, want true with limit 2 and 5 samples")
+	}
+	if summary.SampleCount != 5 {
+		t.Errorf("summary.SampleCount = %d, want 5 (over the full series, not just the limited page)", summary.SampleCount)
+	}
+	if summary.MaxExcursionOffsetMs == nil || *summary.MaxExcursionOffsetMs != 4 {
+		t.Errorf("summary.MaxExcursionOffsetMs = %v, want 4 (from a sample beyond the limit)", summary.MaxExcursionOffsetMs)
 	}
 }
 
@@ -227,13 +281,13 @@ func TestAppendAlignmentSampleNoOpOnStoppedRun(t *testing.T) {
 	if _, err := st.CreateAlignmentRun(ctx, AlignmentRunRecord{ID: "run-1", NodeID: "node-a", StartedBy: "op"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := st.StopAlignmentRun(ctx, "run-1", "op", "done"); err != nil {
+	if _, err := st.StopAlignmentRun(ctx, "run-1", "node-a", "op", "op-id", "done"); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 	if err := st.AppendAlignmentSample(ctx, AlignmentSampleRecord{RunID: "run-1", SampledAt: time.Now(), OffsetMs: 1, SessionID: "s"}); err != nil {
 		t.Fatalf("append to stopped run: %v", err)
 	}
-	_, samples, err := st.GetAlignmentRun(ctx, "run-1")
+	_, samples, _, _, err := st.GetAlignmentRun(ctx, "run-1", 5000)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}

@@ -1195,23 +1195,15 @@ func (noDeclarationStore) RecordNodeDiscoverySeen(context.Context, string, strin
 	return errDeclarationStoreNotConfigured
 }
 
-// noAlignmentRunStore is [Dependencies.AlignmentRuns]'s nil-safe default,
-// matching [noDeclarationStore]'s posture: reads answer empty and
-// successful, writes refuse with an internal error.
+// noAlignmentRunStore is [Dependencies.AlignmentRuns]'s nil-safe default:
+// both its reads answer empty/not-found rather than panicking. Starting
+// and stopping a run do not go through this interface at all (see
+// [AlignmentRunStore]'s own doc comment), so there is nothing to refuse
+// here for those.
 type noAlignmentRunStore struct{}
 
-var errAlignmentRunStoreNotConfigured = errors.New("api: no AlignmentRunStore was wired into this API's Dependencies")
-
-func (noAlignmentRunStore) CreateAlignmentRun(context.Context, store.AlignmentRunRecord) (store.AlignmentRunRecord, error) {
-	return store.AlignmentRunRecord{}, errAlignmentRunStoreNotConfigured
-}
-
-func (noAlignmentRunStore) StopAlignmentRun(context.Context, string, string, string) (store.AlignmentRunRecord, error) {
-	return store.AlignmentRunRecord{}, errAlignmentRunStoreNotConfigured
-}
-
-func (noAlignmentRunStore) GetAlignmentRun(context.Context, string) (store.AlignmentRunRecord, []store.AlignmentSampleRecord, error) {
-	return store.AlignmentRunRecord{}, nil, store.ErrAlignmentRunNotFound
+func (noAlignmentRunStore) GetAlignmentRun(context.Context, string, int) (store.AlignmentRunRecord, []store.AlignmentSampleRecord, bool, store.AlignmentRunSummary, error) {
+	return store.AlignmentRunRecord{}, nil, false, store.AlignmentRunSummary{}, store.ErrAlignmentRunNotFound
 }
 
 func (noAlignmentRunStore) ListAlignmentRuns(context.Context, string) ([]store.AlignmentRunRecord, error) {

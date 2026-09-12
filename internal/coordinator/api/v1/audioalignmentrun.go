@@ -5,13 +5,15 @@ package v1
 
 // AudioAlignmentRun is one run.
 type AudioAlignmentRun struct {
-	ID         string  `json:"id"`
-	NodeID     string  `json:"nodeId"`
-	StartedAt  string  `json:"startedAt"`
-	StoppedAt  *string `json:"stoppedAt"`
-	StartedBy  string  `json:"startedBy"`
-	StoppedBy  *string `json:"stoppedBy"`
-	StopReason *string `json:"stopReason"`
+	ID                   string  `json:"id"`
+	NodeID               string  `json:"nodeId"`
+	StartedAt            string  `json:"startedAt"`
+	StoppedAt            *string `json:"stoppedAt"`
+	StartedBy            string  `json:"startedBy"`
+	StartedByPrincipalID string  `json:"startedByPrincipalId"`
+	StoppedBy            *string `json:"stoppedBy"`
+	StoppedByPrincipalID *string `json:"stoppedByPrincipalId"`
+	StopReason           *string `json:"stopReason"`
 }
 
 // AudioAlignmentSample is one recorded sample.
@@ -54,10 +56,13 @@ type AudioAlignmentRunListResponse struct {
 }
 
 // AudioAlignmentRunDetailResponse is the get-one-run route's response:
-// the run, its samples in ascending sampledAt order, and the summary.
+// the run, up to `limit` of its samples in ascending sampledAt order,
+// whether that page dropped later samples (Truncated), and the summary
+// (always computed over the run's full series, regardless of Truncated).
 type AudioAlignmentRunDetailResponse struct {
 	ServerTime string                   `json:"serverTime"`
 	Run        AudioAlignmentRun        `json:"run"`
 	Samples    []AudioAlignmentSample   `json:"samples"`
+	Truncated  bool                     `json:"truncated"`
 	Summary    AudioAlignmentRunSummary `json:"summary"`
 }

@@ -674,7 +674,7 @@ export interface paths {
         };
         /**
          * One audio alignment run, its samples, and its summary
-         * @description Behind `observation:read`. Samples are in ascending `sampledAt` order. `summary.driftRateMsPerHour` is the least-squares linear regression slope of `offsetMs` against elapsed hours since the first sample, over the whole series; with fewer than two samples it is `null` and `driftRateUnavailableReason` states why, never `0`. `summary.maxExcursionOffsetMs`/`maxExcursionSampledAt` name the sample with the largest absolute offset.
+         * @description Behind `observation:read`. Samples are in ascending `sampledAt` order. `summary.driftRateMsPerHour` is the least-squares linear regression slope of `offsetMs` against elapsed hours since the first sample, fitted against the node's own sample clock, over the whole series; with fewer than two samples it is `null` and `driftRateUnavailableReason` states why, never `0`. `summary.maxExcursionOffsetMs`/`maxExcursionSampledAt` name the sample with the largest absolute offset. A sample whose `sampledAt` collides with an earlier sample already recorded for this run is dropped, not overwritten.
          */
         get: operations["getAudioAlignmentRun"];
         put?: never;
@@ -696,7 +696,7 @@ export interface paths {
         put?: never;
         /**
          * Stop a node's active audio alignment run
-         * @description Behind `audio:command`. Stopping an already-stopped or unknown run is a `404`.
+         * @description Behind `audio:command`. Stopping an already-stopped or unknown run is a `404`: "no active audio alignment run with that id exists for this node; it is unknown or already stopped."
          */
         post: operations["stopAudioAlignmentRun"];
         delete?: never;
@@ -3898,7 +3898,12 @@ export interface components {
             stoppedAt: string | null;
             /** @description The starting principal's display name. */
             startedBy: string;
+            /** @description The starting principal's id. */
+            startedByPrincipalId: string;
+            /** @description The stopping principal's display name. */
             stoppedBy: string | null;
+            /** @description The stopping principal's id. */
+            stoppedByPrincipalId: string | null;
             stopReason: string | null;
         };
         /** @description One recorded sample: the node's own alignmentSampledAt/ alignmentOffsetMs, appended while its run was active. Positive offsetMs means LTC was ahead of program audio, matching node.audio.clock.alignment's own sign convention. */
@@ -3943,7 +3948,10 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             run: components["schemas"]["AudioAlignmentRun"];
+            /** @description The first `limit` samples in ascending sampledAt order. See `truncated` for whether the run holds more than that. */
             samples: components["schemas"]["AudioAlignmentSample"][];
+            /** @description True when the run holds more samples than `limit` returned, so `samples` is a prefix of the full series. `summary` is unaffected: it is always computed over the full series. */
+            truncated: boolean;
             summary: components["schemas"]["AudioAlignmentRunSummary"];
         };
         /** @description The body of POST /nodes/{nodeId}/audio/silence. audio.node.silence takes no params of its own, so idempotencyKey is the only field - unlike AudioSessionNoParamsRequest, there is no revision here. */
@@ -8330,7 +8338,10 @@ export interface operations {
     };
     getAudioAlignmentRun: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Maximum number of samples to return, in ascending sampledAt order. Defaults to 5000, maximum 50000. `summary` always covers the run's full series regardless of this limit; see `truncated` on the response. */
+                limit?: number;
+            };
             header?: never;
             path: {
                 nodeId: string;

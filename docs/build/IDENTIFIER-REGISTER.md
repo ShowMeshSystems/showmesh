@@ -618,6 +618,8 @@ register entry comes from the code and never from a plan.
 | `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
 | `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
 | `show.emergencystop.hard_stop` | shipped | Lane 17a SM-129: level 3 (hard-stop) dispatch, only after fire consumes its own arm token |
+| `audio.alignment_run.start` | shipped | long-run program-to-LTC drift recording: starting a run |
+| `audio.alignment_run.stop` | shipped | long-run program-to-LTC drift recording: stopping a run |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside

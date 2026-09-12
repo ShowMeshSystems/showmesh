@@ -798,20 +798,20 @@ type DeclarationStore interface {
 }
 
 // AlignmentRunStore is what this package needs from the long-run drift
-// recording's tables, satisfied directly by *store.Store, matching
-// [DeclarationStore]'s "the real dependency already has this method" pattern.
+// recording's tables outside the ADR-024 decision 11 write path, satisfied
+// directly by *store.Store, matching [DeclarationStore]'s "the real
+// dependency already has this method" pattern. Starting and stopping a run
+// are coordinator-local state changes whose audit entry must land in the
+// same transaction (decision 11), so those go through
+// [identity.Service.AuditedWrite] and the concrete [store.Tx] it hands the
+// caller (see handleStartAlignmentRun/handleStopAlignmentRun,
+// audioalignmentruns.go) instead of through this interface.
 type AlignmentRunStore interface {
-	// CreateAlignmentRun starts a run. Returns
-	// *[store.AlignmentRunAlreadyActiveError] if the node already has one
-	// active.
-	CreateAlignmentRun(ctx context.Context, run store.AlignmentRunRecord) (store.AlignmentRunRecord, error)
-	// StopAlignmentRun closes runID. Returns
-	// [store.ErrAlignmentRunNotFound] if runID does not exist or is
-	// already stopped.
-	StopAlignmentRun(ctx context.Context, runID, stoppedBy, stopReason string) (store.AlignmentRunRecord, error)
-	// GetAlignmentRun returns one run with its samples in ascending
-	// sampled_at order, or [store.ErrAlignmentRunNotFound].
-	GetAlignmentRun(ctx context.Context, id string) (store.AlignmentRunRecord, []store.AlignmentSampleRecord, error)
+	// GetAlignmentRun returns one run, up to limit of its samples in
+	// ascending sampled_at order, whether that page was truncated, and a
+	// summary computed over the run's full series, or
+	// [store.ErrAlignmentRunNotFound].
+	GetAlignmentRun(ctx context.Context, id string, limit int) (store.AlignmentRunRecord, []store.AlignmentSampleRecord, bool, store.AlignmentRunSummary, error)
 	// ListAlignmentRuns returns nodeID's runs, newest first.
 	ListAlignmentRuns(ctx context.Context, nodeID string) ([]store.AlignmentRunRecord, error)
 }

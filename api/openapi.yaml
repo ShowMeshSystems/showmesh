@@ -2074,10 +2074,13 @@ paths:
         Behind `observation:read`. Samples are in ascending `sampledAt`
         order. `summary.driftRateMsPerHour` is the least-squares linear
         regression slope of `offsetMs` against elapsed hours since the
-        first sample, over the whole series; with fewer than two samples
-        it is `null` and `driftRateUnavailableReason` states why, never
-        `0`. `summary.maxExcursionOffsetMs`/`maxExcursionSampledAt` name
-        the sample with the largest absolute offset.
+        first sample, fitted against the node's own sample clock, over
+        the whole series; with fewer than two samples it is `null` and
+        `driftRateUnavailableReason` states why, never `0`.
+        `summary.maxExcursionOffsetMs`/`maxExcursionSampledAt` name the
+        sample with the largest absolute offset. A sample whose
+        `sampledAt` collides with an earlier sample already recorded for
+        this run is dropped, not overwritten.
       parameters:
         - name: nodeId
           in: path
@@ -2089,6 +2092,19 @@ paths:
           required: true
           schema:
             type: string
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Maximum number of samples to return, in ascending sampledAt
+            order. Defaults to 5000, maximum 50000. `summary` always
+            covers the run's full series regardless of this limit; see
+            `truncated` on the response.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50000
+            default: 5000
       responses:
         "200":
           description: OK
@@ -2115,7 +2131,10 @@ paths:
     post:
       operationId: stopAudioAlignmentRun
       summary: Stop a node's active audio alignment run
-      description: Behind `audio:command`. Stopping an already-stopped or unknown run is a `404`.
+      description: >-
+        Behind `audio:command`. Stopping an already-stopped or unknown run
+        is a `404`: "no active audio alignment run with that id exists for
+        this node; it is unknown or already stopped."
       parameters:
         - name: nodeId
           in: path
@@ -11629,7 +11648,9 @@ components:
     AudioAlignmentRun:
       type: object
       description: One long-run program-to-LTC drift recording.
-      required: [id, nodeId, startedAt, stoppedAt, startedBy, stoppedBy, stopReason]
+      required:
+        [id, nodeId, startedAt, stoppedAt, startedBy, startedByPrincipalId,
+         stoppedBy, stoppedByPrincipalId, stopReason]
       additionalProperties: false
       properties:
         id:
@@ -11646,8 +11667,15 @@ components:
         startedBy:
           type: string
           description: The starting principal's display name.
+        startedByPrincipalId:
+          type: string
+          description: The starting principal's id.
         stoppedBy:
           type: [string, "null"]
+          description: The stopping principal's display name.
+        stoppedByPrincipalId:
+          type: [string, "null"]
+          description: The stopping principal's id.
         stopReason:
           type: [string, "null"]
     AudioAlignmentSample:
@@ -11730,7 +11758,7 @@ components:
     AudioAlignmentRunDetailResponse:
       type: object
       description: The body of a successful response from GET /nodes/{nodeId}/audio/alignment-runs/{runId}.
-      required: [serverTime, run, samples, summary]
+      required: [serverTime, run, samples, truncated, summary]
       additionalProperties: false
       properties:
         serverTime:
@@ -11742,6 +11770,15 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AudioAlignmentSample"
+          description: >-
+            The first `limit` samples in ascending sampledAt order. See
+            `truncated` for whether the run holds more than that.
+        truncated:
+          type: boolean
+          description: >-
+            True when the run holds more samples than `limit` returned,
+            so `samples` is a prefix of the full series. `summary` is
+            unaffected: it is always computed over the full series.
         summary:
           $ref: "#/components/schemas/AudioAlignmentRunSummary"
     AudioNodeSilenceRequest:

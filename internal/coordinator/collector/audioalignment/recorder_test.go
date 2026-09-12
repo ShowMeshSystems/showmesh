@@ -98,6 +98,49 @@ func TestRecorderAppendsNothingWithNoActiveRun(t *testing.T) {
 	}
 }
 
+// blockingStore.FindActiveAlignmentRun blocks until ctx is done, simulating
+// a hung database call on the store's single connection.
+type blockingStore struct {
+	findCalls int
+}
+
+func (f *blockingStore) FindActiveAlignmentRun(ctx context.Context, nodeID string) (store.AlignmentRunRecord, error) {
+	f.findCalls++
+	<-ctx.Done()
+	return store.AlignmentRunRecord{}, ctx.Err()
+}
+
+func (f *blockingStore) AppendAlignmentSample(ctx context.Context, sample store.AlignmentSampleRecord) error {
+	return errors.New("blockingStore: AppendAlignmentSample should not be reached")
+}
+
+func TestRecorderPutBoundedByTimeoutWhenStoreHangs(t *testing.T) {
+	sink := &fakeSink{}
+	fs := &blockingStore{}
+	r := NewRecorder(sink, fs, discardLogger())
+	r.timeout = 50 * time.Millisecond
+
+	sampledAt := time.Now()
+	done := make(chan struct{})
+	go func() {
+		r.Put("node-a", mqttproto.AudioPayload{AlignmentMeasured: true, AlignmentSampledAt: &sampledAt}, time.Now())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Put did not return within the bounded timeout while the store hung")
+	}
+
+	if len(sink.calls) != 1 {
+		t.Fatalf("wrapped sink calls = %d, want 1 even while the store hangs", len(sink.calls))
+	}
+	if fs.findCalls != 1 {
+		t.Errorf("findCalls = %d, want 1", fs.findCalls)
+	}
+}
+
 func TestRecorderAlwaysForwardsToWrappedSink(t *testing.T) {
 	sink := &fakeSink{}
 	fs := &fakeStore{activeErr: errors.New("boom")}

@@ -1,26 +1,41 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // This file is the coordinator-side surface for a long-run drift
-// recording: start/stop/get/list against h.deps.AlignmentRuns.
+// recording: start/stop/get/list against h.deps.AlignmentRuns, except
+// start and stop, which are coordinator-local state changes composed with
+// their ADR-024 decision 11 audit entry via h.deps.Identity.AuditedWrite
+// and the concrete [store.Tx] it hands the caller, see
+// handleStartAlignmentRun/handleStopAlignmentRun.
 
 const maxAlignmentRunStopRequestBodyBytes = 4 * 1024
 
 var alignmentRunStopRequestFields = map[string]bool{"reason": true}
+
+// defaultAlignmentSampleLimit/maxAlignmentSampleLimit bound the "limit"
+// query parameter on GET .../alignment-runs/{runId}: nothing auto-stops a
+// run, so a forgotten one can accumulate hundreds of thousands of samples,
+// and this response must never grow unbounded just because the run did.
+const (
+	defaultAlignmentSampleLimit = 5000
+	maxAlignmentSampleLimit     = 50000
+)
 
 // decodeAlignmentRunStopRequestBody decodes body into a
 // [v1.AudioAlignmentRunStopRequest]. An empty body decodes to the zero
@@ -49,31 +64,93 @@ func decodeAlignmentRunStopRequestBody(body io.Reader) (v1.AudioAlignmentRunStop
 	return req, nil
 }
 
+// parseAlignmentSampleLimit reads the optional "limit" query parameter:
+// absent defaults to defaultAlignmentSampleLimit; present must be a
+// positive integer no greater than maxAlignmentSampleLimit.
+func parseAlignmentSampleLimit(r *http.Request) (int, *v1.Problem) {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return defaultAlignmentSampleLimit, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		p := invalidParameterProblem(fmt.Sprintf("limit must be a positive integer, got %q", raw))
+		return 0, &p
+	}
+	if n > maxAlignmentSampleLimit {
+		p := invalidParameterProblem(fmt.Sprintf("limit must be at most %d, got %d", maxAlignmentSampleLimit, n))
+		return 0, &p
+	}
+	return n, nil
+}
+
 func mapAlignmentRun(rec store.AlignmentRunRecord) v1.AudioAlignmentRun {
 	return v1.AudioAlignmentRun{
-		ID:         rec.ID,
-		NodeID:     rec.NodeID,
-		StartedAt:  formatTime(rec.StartedAt),
-		StoppedAt:  formatTimePtr(rec.StoppedAt),
-		StartedBy:  rec.StartedBy,
-		StoppedBy:  rec.StoppedBy,
-		StopReason: rec.StopReason,
+		ID:                   rec.ID,
+		NodeID:               rec.NodeID,
+		StartedAt:            formatTime(rec.StartedAt),
+		StoppedAt:            formatTimePtr(rec.StoppedAt),
+		StartedBy:            rec.StartedBy,
+		StartedByPrincipalID: rec.StartedByPrincipalID,
+		StoppedBy:            rec.StoppedBy,
+		StoppedByPrincipalID: rec.StoppedByPrincipalID,
+		StopReason:           rec.StopReason,
 	}
 }
 
-// handleStartAlignmentRun serves POST /nodes/{nodeId}/audio/alignment-runs.
+func mapAlignmentRunSummary(s store.AlignmentRunSummary) v1.AudioAlignmentRunSummary {
+	return v1.AudioAlignmentRunSummary{
+		SampleCount:                s.SampleCount,
+		FirstSampleAt:              formatTimePtr(s.FirstSampleAt),
+		LastSampleAt:               formatTimePtr(s.LastSampleAt),
+		MaxExcursionOffsetMs:       s.MaxExcursionOffsetMs,
+		MaxExcursionSampledAt:      formatTimePtr(s.MaxExcursionSampledAt),
+		DriftRateMsPerHour:         s.DriftRateMsPerHour,
+		DriftRateUnavailableReason: s.DriftRateUnavailableReason,
+	}
+}
+
+// alignmentRunNotFoundForNode is the response an unknown run and a run
+// that belongs to a different node render identically as, on both get and
+// stop: a caller must never learn a run id exists under some OTHER node's
+// path than the one requested.
+func alignmentRunNotFoundForNode(runID string) v1.Problem {
+	return resourceNotFoundProblem(fmt.Sprintf("no audio alignment run with id %q exists", runID))
+}
+
+// handleStartAlignmentRun serves POST /nodes/{nodeId}/audio/alignment-runs,
+// composing the run's creation with its ADR-024 decision 11 audit entry in
+// one transaction (identity.Service.AuditedWrite), matching
+// discovery.go's handlePromoteNode.
 func (h *handlers) handleStartAlignmentRun(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	ctx := r.Context()
 	nodeID := r.PathValue("nodeId")
 	if err := mqttproto.ValidateNodeID(nodeID); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem("nodeId is not a syntactically valid node ID: "+err.Error()))
 		return
 	}
 
-	ac := authFromContext(r.Context()) // writeGuard has already required ac.ok
+	ac := authFromContext(ctx) // writeGuard has already required ac.ok
 
-	rec, err := h.deps.AlignmentRuns.CreateAlignmentRun(r.Context(), store.AlignmentRunRecord{
-		ID: uuid.NewString(), NodeID: nodeID, StartedBy: ac.result.Principal.Name,
+	runID := uuid.NewString()
+	var rec store.AlignmentRunRecord
+	err := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		out, err := tx.CreateAlignmentRun(ctx, store.AlignmentRunRecord{
+			ID: runID, NodeID: nodeID,
+			StartedBy: ac.result.Principal.Name, StartedByPrincipalID: ac.result.Principal.ID,
+		})
+		if err != nil {
+			return identity.AuditEntry{}, err
+		}
+		rec = out
+		return identity.AuditEntry{
+			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+			Action: "audio.alignment_run.start", Target: rec.ID,
+			Params: map[string]any{"nodeId": nodeID},
+			Kind:   identity.AuditAdmin,
+		}, nil
 	})
 	var conflict *store.AlignmentRunAlreadyActiveError
 	if errors.As(err, &conflict) {
@@ -81,6 +158,11 @@ func (h *handlers) handleStartAlignmentRun(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
+		// Whether this is identity.ErrAuditWrite (the audit append itself
+		// failed) or fn's own error, ADR-024 decision 11's same-transaction
+		// rule has already rolled the whole write back, matching
+		// handlePromoteNode's identical posture (discovery.go), so both
+		// cases are reported identically, and no run row exists afterward.
 		h.writeInternalError(w, now, "start audio alignment run", err)
 		return
 	}
@@ -89,9 +171,19 @@ func (h *handlers) handleStartAlignmentRun(w http.ResponseWriter, r *http.Reques
 }
 
 // handleStopAlignmentRun serves
-// POST /nodes/{nodeId}/audio/alignment-runs/{runId}/stop.
+// POST /nodes/{nodeId}/audio/alignment-runs/{runId}/stop, composing the
+// stop with its ADR-024 decision 11 audit entry in one transaction. The
+// store scopes the stop to nodeID (store.Tx.StopAlignmentRun), so a run
+// cannot be stopped through any node's path but its own: a mismatch reads
+// identically to an unknown run.
 func (h *handlers) handleStopAlignmentRun(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	ctx := r.Context()
+	nodeID := r.PathValue("nodeId")
+	if err := mqttproto.ValidateNodeID(nodeID); err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem("nodeId is not a syntactically valid node ID: "+err.Error()))
+		return
+	}
 	runID := r.PathValue("runId")
 
 	body, err := decodeAlignmentRunStopRequestBody(r.Body)
@@ -99,15 +191,30 @@ func (h *handlers) handleStopAlignmentRun(w http.ResponseWriter, r *http.Request
 		writeProblem(w, h.logger, now, invalidParameterProblem(err.Error()))
 		return
 	}
-	ac := authFromContext(r.Context())
+	ac := authFromContext(ctx)
 
-	rec, err := h.deps.AlignmentRuns.StopAlignmentRun(r.Context(), runID, ac.result.Principal.Name, body.Reason)
-	if errors.Is(err, store.ErrAlignmentRunNotFound) {
-		writeProblem(w, h.logger, now, resourceNotFoundProblem(fmt.Sprintf("no active audio alignment run with id %q exists", runID)))
+	var rec store.AlignmentRunRecord
+	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		out, err := tx.StopAlignmentRun(ctx, runID, nodeID, ac.result.Principal.Name, ac.result.Principal.ID, body.Reason)
+		if err != nil {
+			return identity.AuditEntry{}, err
+		}
+		rec = out
+		return identity.AuditEntry{
+			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+			Action: "audio.alignment_run.stop", Target: runID,
+			Params: map[string]any{"nodeId": nodeID},
+			Kind:   identity.AuditAdmin,
+		}, nil
+	})
+	if errors.Is(writeErr, store.ErrAlignmentRunNotFound) {
+		writeProblem(w, h.logger, now, resourceNotFoundProblem(
+			"no active audio alignment run with that id exists for this node; it is unknown or already stopped"))
 		return
 	}
-	if err != nil {
-		h.writeInternalError(w, now, "stop audio alignment run", err)
+	if writeErr != nil {
+		h.writeInternalError(w, now, "stop audio alignment run", writeErr)
 		return
 	}
 
@@ -137,17 +244,35 @@ func (h *handlers) handleListAlignmentRuns(w http.ResponseWriter, r *http.Reques
 }
 
 // handleGetAlignmentRun serves GET /nodes/{nodeId}/audio/alignment-runs/{runId}.
+// nodeId in the path is validated against the run's own recorded NodeID:
+// reading a real run id under the wrong node's path answers exactly as an
+// unknown run would, never leaking that the id exists elsewhere.
 func (h *handlers) handleGetAlignmentRun(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	nodeID := r.PathValue("nodeId")
+	if err := mqttproto.ValidateNodeID(nodeID); err != nil {
+		writeProblem(w, h.logger, now, invalidParameterProblem("nodeId is not a syntactically valid node ID: "+err.Error()))
+		return
+	}
 	runID := r.PathValue("runId")
 
-	rec, samples, err := h.deps.AlignmentRuns.GetAlignmentRun(r.Context(), runID)
+	limit, problem := parseAlignmentSampleLimit(r)
+	if problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
+
+	rec, samples, truncated, summary, err := h.deps.AlignmentRuns.GetAlignmentRun(r.Context(), runID, limit)
 	if errors.Is(err, store.ErrAlignmentRunNotFound) {
-		writeProblem(w, h.logger, now, resourceNotFoundProblem(fmt.Sprintf("no audio alignment run with id %q exists", runID)))
+		writeProblem(w, h.logger, now, alignmentRunNotFoundForNode(runID))
 		return
 	}
 	if err != nil {
 		h.writeInternalError(w, now, "get audio alignment run", err)
+		return
+	}
+	if rec.NodeID != nodeID {
+		writeProblem(w, h.logger, now, alignmentRunNotFoundForNode(runID))
 		return
 	}
 
@@ -159,70 +284,7 @@ func (h *handlers) handleGetAlignmentRun(w http.ResponseWriter, r *http.Request)
 	}
 
 	jsonWrite(w, v1.AudioAlignmentRunDetailResponse{
-		ServerTime: formatTime(now), Run: mapAlignmentRun(rec), Samples: outSamples,
-		Summary: summarizeAlignmentSamples(samples),
+		ServerTime: formatTime(now), Run: mapAlignmentRun(rec), Samples: outSamples, Truncated: truncated,
+		Summary: mapAlignmentRunSummary(summary),
 	})
-}
-
-// summarizeAlignmentSamples reduces samples (ascending sampled_at order)
-// to the max excursion and drift rate. Fewer than two samples reports a
-// nil rate with a reason, never zero.
-func summarizeAlignmentSamples(samples []store.AlignmentSampleRecord) v1.AudioAlignmentRunSummary {
-	summary := v1.AudioAlignmentRunSummary{SampleCount: len(samples)}
-	if len(samples) == 0 {
-		summary.DriftRateUnavailableReason = "no samples recorded"
-		return summary
-	}
-
-	first := formatTime(samples[0].SampledAt)
-	last := formatTime(samples[len(samples)-1].SampledAt)
-	summary.FirstSampleAt = &first
-	summary.LastSampleAt = &last
-
-	maxIdx := 0
-	for i, s := range samples {
-		if math.Abs(s.OffsetMs) > math.Abs(samples[maxIdx].OffsetMs) {
-			maxIdx = i
-		}
-	}
-	maxOffset := samples[maxIdx].OffsetMs
-	maxAt := formatTime(samples[maxIdx].SampledAt)
-	summary.MaxExcursionOffsetMs = &maxOffset
-	summary.MaxExcursionSampledAt = &maxAt
-
-	if len(samples) < 2 {
-		summary.DriftRateUnavailableReason = "fewer than two samples: no slope can be computed"
-		return summary
-	}
-
-	rate, ok := leastSquaresSlopeMsPerHour(samples)
-	if !ok {
-		summary.DriftRateUnavailableReason = "every sample shares the same timestamp: no slope can be computed"
-		return summary
-	}
-	summary.DriftRateMsPerHour = &rate
-	return summary
-}
-
-// leastSquaresSlopeMsPerHour fits offset against elapsed hours since
-// samples[0]. ok is false only when every sample shares one timestamp,
-// which leaves the slope undefined rather than zero.
-func leastSquaresSlopeMsPerHour(samples []store.AlignmentSampleRecord) (rate float64, ok bool) {
-	t0 := samples[0].SampledAt
-	n := float64(len(samples))
-
-	var sumX, sumY, sumXY, sumXX float64
-	for _, s := range samples {
-		x := s.SampledAt.Sub(t0).Hours()
-		y := s.OffsetMs
-		sumX += x
-		sumY += y
-		sumXY += x * y
-		sumXX += x * x
-	}
-	denominator := n*sumXX - sumX*sumX
-	if denominator == 0 {
-		return 0, false
-	}
-	return (n*sumXY - sumX*sumY) / denominator, true
 }

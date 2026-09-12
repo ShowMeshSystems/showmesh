@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -13,13 +14,15 @@ import (
 // schemaV33's replay-safety precedent.
 const schemaV35 = `
 CREATE TABLE IF NOT EXISTS audio_alignment_runs (
-	id          TEXT PRIMARY KEY,
-	node_id     TEXT NOT NULL,
-	started_at  TEXT NOT NULL,
-	stopped_at  TEXT,
-	started_by  TEXT NOT NULL,
-	stopped_by  TEXT,
-	stop_reason TEXT
+	id                       TEXT PRIMARY KEY,
+	node_id                  TEXT NOT NULL,
+	started_at               TEXT NOT NULL,
+	stopped_at               TEXT,
+	started_by               TEXT NOT NULL,
+	started_by_principal_id  TEXT NOT NULL,
+	stopped_by               TEXT,
+	stopped_by_principal_id  TEXT,
+	stop_reason              TEXT
 );
 CREATE INDEX IF NOT EXISTS audio_alignment_runs_node_id ON audio_alignment_runs (node_id, started_at DESC);
 
@@ -34,13 +37,15 @@ CREATE TABLE IF NOT EXISTS audio_alignment_samples (
 
 // AlignmentRunRecord is one row of audio_alignment_runs.
 type AlignmentRunRecord struct {
-	ID         string
-	NodeID     string
-	StartedAt  time.Time
-	StoppedAt  *time.Time
-	StartedBy  string
-	StoppedBy  *string
-	StopReason *string
+	ID                   string
+	NodeID               string
+	StartedAt            time.Time
+	StoppedAt            *time.Time
+	StartedBy            string
+	StartedByPrincipalID string
+	StoppedBy            *string
+	StoppedByPrincipalID *string
+	StopReason           *string
 }
 
 // AlignmentSampleRecord is one row of audio_alignment_samples.
@@ -51,8 +56,26 @@ type AlignmentSampleRecord struct {
 	SessionID string
 }
 
+// AlignmentRunSummary is computed from a run's full sample series, streamed
+// from the store rather than materialized from a fully loaded slice: see
+// [Store.GetAlignmentRun]'s own doc comment. DriftRateMsPerHour is nil,
+// with DriftRateUnavailableReason set, when fewer than two samples exist.
+type AlignmentRunSummary struct {
+	SampleCount           int
+	FirstSampleAt         *time.Time
+	LastSampleAt          *time.Time
+	MaxExcursionOffsetMs  *float64
+	MaxExcursionSampledAt *time.Time
+	DriftRateMsPerHour    *float64
+
+	// DriftRateUnavailableReason is set only when DriftRateMsPerHour is nil.
+	DriftRateUnavailableReason string
+}
+
 // ErrAlignmentRunNotFound is returned by [Store.GetAlignmentRun] and
-// [Store.StopAlignmentRun] when the run id does not exist.
+// [Store.StopAlignmentRun]/[Tx.StopAlignmentRun] when the run id does not
+// exist, or (for stop) is already stopped, or (for both) belongs to a
+// different node than the one named.
 var ErrAlignmentRunNotFound = errors.New("store: audio alignment run not found")
 
 // ErrAlignmentRunAlreadyActive is the [errors.Is] sentinel wrapped by
@@ -75,15 +98,19 @@ func (e *AlignmentRunAlreadyActiveError) Error() string {
 // *AlignmentRunAlreadyActiveError.
 func (e *AlignmentRunAlreadyActiveError) Unwrap() error { return ErrAlignmentRunAlreadyActive }
 
-const alignmentRunColumns = `id, node_id, started_at, stopped_at, started_by, stopped_by, stop_reason`
+const alignmentRunColumns = `id, node_id, started_at, stopped_at, started_by, started_by_principal_id, stopped_by, stopped_by_principal_id, stop_reason`
 
 func scanAlignmentRun(row interface{ Scan(dest ...any) error }) (AlignmentRunRecord, error) {
 	var (
-		rec                            AlignmentRunRecord
-		startedAt                      string
-		stoppedAt, stoppedBy, stopReas sql.NullString
+		rec                                        AlignmentRunRecord
+		startedAt                                  string
+		stoppedAt, stoppedBy, stoppedByPrincipalID sql.NullString
+		stopReas                                   sql.NullString
 	)
-	if err := row.Scan(&rec.ID, &rec.NodeID, &startedAt, &stoppedAt, &rec.StartedBy, &stoppedBy, &stopReas); err != nil {
+	if err := row.Scan(
+		&rec.ID, &rec.NodeID, &startedAt, &stoppedAt, &rec.StartedBy, &rec.StartedByPrincipalID,
+		&stoppedBy, &stoppedByPrincipalID, &stopReas,
+	); err != nil {
 		return AlignmentRunRecord{}, err
 	}
 	var err error
@@ -94,6 +121,7 @@ func scanAlignmentRun(row interface{ Scan(dest ...any) error }) (AlignmentRunRec
 		return AlignmentRunRecord{}, fmt.Errorf("store: parse audio alignment run stopped_at: %w", err)
 	}
 	rec.StoppedBy = dbToStringPtr(stoppedBy)
+	rec.StoppedByPrincipalID = dbToStringPtr(stoppedByPrincipalID)
 	rec.StopReason = dbToStringPtr(stopReas)
 	return rec, nil
 }
@@ -119,6 +147,27 @@ func (s *Store) FindActiveAlignmentRun(ctx context.Context, nodeID string) (Alig
 	return findActiveAlignmentRun(ctx, s.db, nodeID)
 }
 
+// createAlignmentRun is the shared body of [Store.CreateAlignmentRun] and
+// [Tx.CreateAlignmentRun]: starts a new run for run.NodeID, stamping
+// StartedAt from now. Returns *[AlignmentRunAlreadyActiveError] if the node
+// already has an open run: at most one active run per node.
+func createAlignmentRun(ctx context.Context, q querier, run AlignmentRunRecord, now time.Time) (AlignmentRunRecord, error) {
+	if active, err := findActiveAlignmentRun(ctx, q, run.NodeID); err == nil {
+		return AlignmentRunRecord{}, &AlignmentRunAlreadyActiveError{Active: active}
+	} else if !errors.Is(err, ErrAlignmentRunNotFound) {
+		return AlignmentRunRecord{}, err
+	}
+
+	run.StartedAt = now
+	if _, err := q.ExecContext(ctx,
+		`INSERT INTO audio_alignment_runs (id, node_id, started_at, started_by, started_by_principal_id) VALUES (?, ?, ?, ?, ?)`,
+		run.ID, run.NodeID, timeToDB(run.StartedAt), run.StartedBy, run.StartedByPrincipalID,
+	); err != nil {
+		return AlignmentRunRecord{}, fmt.Errorf("store: create audio alignment run: %w", err)
+	}
+	return run, nil
+}
+
 // CreateAlignmentRun starts a new run for run.NodeID, stamping StartedAt
 // from the store's own clock. Returns *[AlignmentRunAlreadyActiveError] if
 // the node already has an open run: at most one active run per node.
@@ -130,39 +179,34 @@ func (s *Store) CreateAlignmentRun(ctx context.Context, run AlignmentRunRecord) 
 	}
 	defer func() { _ = sqlTx.Rollback() }()
 
-	if active, err := findActiveAlignmentRun(ctx, sqlTx, run.NodeID); err == nil {
-		return AlignmentRunRecord{}, &AlignmentRunAlreadyActiveError{Active: active}
-	} else if !errors.Is(err, ErrAlignmentRunNotFound) {
+	rec, err := createAlignmentRun(ctx, sqlTx, run, s.now())
+	if err != nil {
 		return AlignmentRunRecord{}, err
-	}
-
-	run.StartedAt = s.now()
-	if _, err := sqlTx.ExecContext(ctx,
-		`INSERT INTO audio_alignment_runs (id, node_id, started_at, started_by) VALUES (?, ?, ?, ?)`,
-		run.ID, run.NodeID, timeToDB(run.StartedAt), run.StartedBy,
-	); err != nil {
-		return AlignmentRunRecord{}, fmt.Errorf("store: create audio alignment run: %w", err)
 	}
 	if err := sqlTx.Commit(); err != nil {
 		return AlignmentRunRecord{}, fmt.Errorf("store: commit create audio alignment run: %w", err)
 	}
-	return run, nil
+	return rec, nil
 }
 
-// StopAlignmentRun sets stopped_at, stopped_by, and stop_reason on runID.
-// Returns [ErrAlignmentRunNotFound] if runID does not exist or is already
-// stopped.
-func (s *Store) StopAlignmentRun(ctx context.Context, runID, stoppedBy, stopReason string) (AlignmentRunRecord, error) {
-	guardNotInTx(ctx, "Store.StopAlignmentRun")
-	sqlTx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return AlignmentRunRecord{}, fmt.Errorf("store: begin stop audio alignment run: %w", err)
-	}
-	defer func() { _ = sqlTx.Rollback() }()
+// CreateAlignmentRun is [Store.CreateAlignmentRun]'s [Tx] form, letting a
+// caller (api.handleStartAlignmentRun, via identity.Service.AuditedWrite)
+// compose this write with its ADR-024 decision 11 audit entry in one
+// transaction.
+func (t *Tx) CreateAlignmentRun(ctx context.Context, run AlignmentRunRecord) (AlignmentRunRecord, error) {
+	return createAlignmentRun(ctx, t.tx, run, t.s.now())
+}
 
-	res, err := sqlTx.ExecContext(ctx,
-		`UPDATE audio_alignment_runs SET stopped_at = ?, stopped_by = ?, stop_reason = ? WHERE id = ? AND stopped_at IS NULL`,
-		timeToDB(s.now()), stoppedBy, stopReason, runID,
+// stopAlignmentRun is the shared body of [Store.StopAlignmentRun] and
+// [Tx.StopAlignmentRun]: sets stopped_at/stopped_by/stopped_by_principal_id/
+// stop_reason on runID, scoped to nodeID so a run cannot be stopped through
+// any other node's path. Returns [ErrAlignmentRunNotFound] if runID does
+// not exist under nodeID or is already stopped.
+func stopAlignmentRun(ctx context.Context, q querier, runID, nodeID, stoppedBy, stoppedByPrincipalID, stopReason string, now time.Time) (AlignmentRunRecord, error) {
+	res, err := q.ExecContext(ctx,
+		`UPDATE audio_alignment_runs SET stopped_at = ?, stopped_by = ?, stopped_by_principal_id = ?, stop_reason = ?
+		 WHERE id = ? AND node_id = ? AND stopped_at IS NULL`,
+		timeToDB(now), stoppedBy, stoppedByPrincipalID, stopReason, runID, nodeID,
 	)
 	if err != nil {
 		return AlignmentRunRecord{}, fmt.Errorf("store: stop audio alignment run %q: %w", runID, err)
@@ -172,7 +216,21 @@ func (s *Store) StopAlignmentRun(ctx context.Context, runID, stoppedBy, stopReas
 	} else if n == 0 {
 		return AlignmentRunRecord{}, ErrAlignmentRunNotFound
 	}
-	rec, err := getAlignmentRun(ctx, sqlTx, runID)
+	return getAlignmentRun(ctx, q, runID)
+}
+
+// StopAlignmentRun sets stopped_at, stopped_by, and stop_reason on runID,
+// scoped to nodeID. Returns [ErrAlignmentRunNotFound] if runID does not
+// exist under nodeID or is already stopped.
+func (s *Store) StopAlignmentRun(ctx context.Context, runID, nodeID, stoppedBy, stoppedByPrincipalID, stopReason string) (AlignmentRunRecord, error) {
+	guardNotInTx(ctx, "Store.StopAlignmentRun")
+	sqlTx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AlignmentRunRecord{}, fmt.Errorf("store: begin stop audio alignment run: %w", err)
+	}
+	defer func() { _ = sqlTx.Rollback() }()
+
+	rec, err := stopAlignmentRun(ctx, sqlTx, runID, nodeID, stoppedBy, stoppedByPrincipalID, stopReason, s.now())
 	if err != nil {
 		return AlignmentRunRecord{}, err
 	}
@@ -180,6 +238,14 @@ func (s *Store) StopAlignmentRun(ctx context.Context, runID, stoppedBy, stopReas
 		return AlignmentRunRecord{}, fmt.Errorf("store: commit stop audio alignment run: %w", err)
 	}
 	return rec, nil
+}
+
+// StopAlignmentRun is [Store.StopAlignmentRun]'s [Tx] form, letting a
+// caller (api.handleStopAlignmentRun, via identity.Service.AuditedWrite)
+// compose this write with its ADR-024 decision 11 audit entry in one
+// transaction.
+func (t *Tx) StopAlignmentRun(ctx context.Context, runID, nodeID, stoppedBy, stoppedByPrincipalID, stopReason string) (AlignmentRunRecord, error) {
+	return stopAlignmentRun(ctx, t.tx, runID, nodeID, stoppedBy, stoppedByPrincipalID, stopReason, t.s.now())
 }
 
 func getAlignmentRun(ctx context.Context, q querier, id string) (AlignmentRunRecord, error) {
@@ -194,47 +260,113 @@ func getAlignmentRun(ctx context.Context, q querier, id string) (AlignmentRunRec
 	return rec, nil
 }
 
-func listAlignmentSamples(ctx context.Context, q querier, runID string) ([]AlignmentSampleRecord, error) {
-	rows, err := q.QueryContext(ctx,
-		`SELECT run_id, sampled_at, offset_ms, session_id FROM audio_alignment_samples WHERE run_id = ? ORDER BY sampled_at`, runID)
-	if err != nil {
-		return nil, fmt.Errorf("store: list audio alignment samples for %q: %w", runID, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var out []AlignmentSampleRecord
-	for rows.Next() {
-		var (
-			rec       AlignmentSampleRecord
-			sampledAt string
-		)
-		if err := rows.Scan(&rec.RunID, &sampledAt, &rec.OffsetMs, &rec.SessionID); err != nil {
-			return nil, fmt.Errorf("store: list audio alignment samples for %q: %w", runID, err)
-		}
-		if rec.SampledAt, err = dbToTime(sampledAt); err != nil {
-			return nil, fmt.Errorf("store: parse audio alignment sample sampled_at: %w", err)
-		}
-		out = append(out, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list audio alignment samples for %q: %w", runID, err)
-	}
-	return out, nil
-}
-
-// GetAlignmentRun returns run and its samples in ascending sampled_at
-// order, or [ErrAlignmentRunNotFound].
-func (s *Store) GetAlignmentRun(ctx context.Context, id string) (AlignmentRunRecord, []AlignmentSampleRecord, error) {
+// GetAlignmentRun returns run and up to limit of its samples in ascending
+// sampled_at order, plus truncated (true when the run holds more than
+// limit samples) and a summary computed over the FULL series. The
+// summary is accumulated while streaming rows off the query (never by
+// materializing every sample into a slice first): nothing bounds how long
+// a run may stay active, so a forgotten run can hold hundreds of
+// thousands of samples, and this must not hold all of them in memory just
+// to answer a bounded request. Returns [ErrAlignmentRunNotFound] if id
+// does not exist.
+func (s *Store) GetAlignmentRun(ctx context.Context, id string, limit int) (AlignmentRunRecord, []AlignmentSampleRecord, bool, AlignmentRunSummary, error) {
 	guardNotInTx(ctx, "Store.GetAlignmentRun")
 	rec, err := getAlignmentRun(ctx, s.db, id)
 	if err != nil {
-		return AlignmentRunRecord{}, nil, err
+		return AlignmentRunRecord{}, nil, false, AlignmentRunSummary{}, err
 	}
-	samples, err := listAlignmentSamples(ctx, s.db, id)
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT sampled_at, offset_ms, session_id FROM audio_alignment_samples WHERE run_id = ? ORDER BY sampled_at`, id)
 	if err != nil {
-		return AlignmentRunRecord{}, nil, err
+		return AlignmentRunRecord{}, nil, false, AlignmentRunSummary{}, fmt.Errorf("store: list audio alignment samples for %q: %w", id, err)
 	}
-	return rec, samples, nil
+	defer func() { _ = rows.Close() }()
+
+	var (
+		samples []AlignmentSampleRecord
+
+		count                    int
+		firstAt, lastAt          time.Time
+		haveFirst                bool
+		maxAbsOffset, maxOffset  float64
+		maxAt                    time.Time
+		haveMax                  bool
+		sumX, sumY, sumXY, sumXX float64
+	)
+	if limit > 0 {
+		samples = make([]AlignmentSampleRecord, 0, minInt(limit, 1024))
+	}
+	for rows.Next() {
+		var (
+			sampledAtStr string
+			offsetMs     float64
+			sessionID    string
+		)
+		if err := rows.Scan(&sampledAtStr, &offsetMs, &sessionID); err != nil {
+			return AlignmentRunRecord{}, nil, false, AlignmentRunSummary{}, fmt.Errorf("store: list audio alignment samples for %q: %w", id, err)
+		}
+		sampledAt, err := dbToTime(sampledAtStr)
+		if err != nil {
+			return AlignmentRunRecord{}, nil, false, AlignmentRunSummary{}, fmt.Errorf("store: parse audio alignment sample sampled_at: %w", err)
+		}
+
+		if !haveFirst {
+			firstAt = sampledAt
+			haveFirst = true
+		}
+		lastAt = sampledAt
+		count++
+
+		if count <= limit {
+			samples = append(samples, AlignmentSampleRecord{RunID: id, SampledAt: sampledAt, OffsetMs: offsetMs, SessionID: sessionID})
+		}
+
+		if abs := math.Abs(offsetMs); !haveMax || abs > maxAbsOffset {
+			maxAbsOffset, maxOffset, maxAt, haveMax = abs, offsetMs, sampledAt, true
+		}
+
+		x := sampledAt.Sub(firstAt).Hours()
+		sumX += x
+		sumY += offsetMs
+		sumXY += x * offsetMs
+		sumXX += x * x
+	}
+	if err := rows.Err(); err != nil {
+		return AlignmentRunRecord{}, nil, false, AlignmentRunSummary{}, fmt.Errorf("store: list audio alignment samples for %q: %w", id, err)
+	}
+	if samples == nil {
+		samples = []AlignmentSampleRecord{}
+	}
+
+	summary := AlignmentRunSummary{SampleCount: count}
+	switch count {
+	case 0:
+		summary.DriftRateUnavailableReason = "no samples recorded"
+	default:
+		ft, lt, mo, ma := firstAt, lastAt, maxOffset, maxAt
+		summary.FirstSampleAt = &ft
+		summary.LastSampleAt = &lt
+		summary.MaxExcursionOffsetMs = &mo
+		summary.MaxExcursionSampledAt = &ma
+		if count < 2 {
+			summary.DriftRateUnavailableReason = "fewer than two samples: no slope can be computed"
+		} else if denominator := float64(count)*sumXX - sumX*sumX; denominator == 0 {
+			summary.DriftRateUnavailableReason = "every sample shares the same timestamp: no slope can be computed"
+		} else {
+			rate := (float64(count)*sumXY - sumX*sumY) / denominator
+			summary.DriftRateMsPerHour = &rate
+		}
+	}
+
+	return rec, samples, count > limit, summary, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ListAlignmentRuns returns nodeID's runs, newest (by started_at) first.

@@ -13,13 +13,15 @@ import (
 // importing internal/coordinator/api/v1, matching cmd_audio_node_silence.go.
 
 type audioAlignmentRun struct {
-	ID         string  `json:"id"`
-	NodeID     string  `json:"nodeId"`
-	StartedAt  string  `json:"startedAt"`
-	StoppedAt  *string `json:"stoppedAt"`
-	StartedBy  string  `json:"startedBy"`
-	StoppedBy  *string `json:"stoppedBy"`
-	StopReason *string `json:"stopReason"`
+	ID                   string  `json:"id"`
+	NodeID               string  `json:"nodeId"`
+	StartedAt            string  `json:"startedAt"`
+	StoppedAt            *string `json:"stoppedAt"`
+	StartedBy            string  `json:"startedBy"`
+	StartedByPrincipalID string  `json:"startedByPrincipalId"`
+	StoppedBy            *string `json:"stoppedBy"`
+	StoppedByPrincipalID *string `json:"stoppedByPrincipalId"`
+	StopReason           *string `json:"stopReason"`
 }
 
 type audioAlignmentSample struct {
@@ -56,6 +58,7 @@ type audioAlignmentRunDetailResponse struct {
 	ServerTime time.Time                `json:"serverTime"`
 	Run        audioAlignmentRun        `json:"run"`
 	Samples    []audioAlignmentSample   `json:"samples"`
+	Truncated  bool                     `json:"truncated"`
 	Summary    audioAlignmentRunSummary `json:"summary"`
 }
 
@@ -304,6 +307,9 @@ func cmdAudioAlignmentRunGet(args []string, stdout, stderr io.Writer, clock func
 func printAudioAlignmentRunDetail(stdout io.Writer, resp audioAlignmentRunDetailResponse) {
 	s := resp.Summary
 	_, _ = fmt.Fprintf(stdout, "run %s on %s: %d sample(s)\n", resp.Run.ID, resp.Run.NodeID, s.SampleCount)
+	if resp.Truncated {
+		_, _ = fmt.Fprintf(stdout, "(showing the first %d of %d samples; summary covers all of them)\n", len(resp.Samples), s.SampleCount)
+	}
 	if s.MaxExcursionOffsetMs != nil {
 		_, _ = fmt.Fprintf(stdout, "max excursion: %.3f ms at %s\n", *s.MaxExcursionOffsetMs, *s.MaxExcursionSampledAt)
 	}

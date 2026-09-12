@@ -204,3 +204,244 @@ func TestGetAlignmentRunSummaryMatchesHandComputedValues(t *testing.T) {
 		}
 	}
 }
+
+// TestGetAlignmentRunUnderWrongNodeReturns404 is the cross-node read
+// check: a run started under node-a must not be readable through node-b's
+// path, and must answer identically to an unknown run id (no leak that the
+// id exists elsewhere).
+func TestGetAlignmentRunUnderWrongNodeReturns404(t *testing.T) {
+	deps, _ := newTestAlignmentRunDeps(t, fixedClock(testNow))
+	auth := adminAuthHeader(t, deps)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	start := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs", nil)
+	start.Header.Set("Authorization", auth)
+	_, startBody := doRawRequest(t, api.Handler, start)
+	runID, _ := decodeMap(t, startBody)["run"].(map[string]any)["id"].(string)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-b/audio/alignment-runs/"+runID, nil)
+	getReq.Header.Set("Authorization", auth)
+	getResp, getBody := doRawRequest(t, api.Handler, getReq)
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get under wrong node status = %d, want 404; body: %s", getResp.StatusCode, getBody)
+	}
+}
+
+// TestStopAlignmentRunUnderWrongNodeReturns404AndRunStaysActive is the
+// cross-node write check: a run started under node-a must not be
+// stoppable through node-b's path, and must remain active afterward.
+func TestStopAlignmentRunUnderWrongNodeReturns404AndRunStaysActive(t *testing.T) {
+	deps, _ := newTestAlignmentRunDeps(t, fixedClock(testNow))
+	auth := adminAuthHeader(t, deps)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	start := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs", nil)
+	start.Header.Set("Authorization", auth)
+	_, startBody := doRawRequest(t, api.Handler, start)
+	runID, _ := decodeMap(t, startBody)["run"].(map[string]any)["id"].(string)
+
+	stop := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-b/audio/alignment-runs/"+runID+"/stop", nil)
+	stop.Header.Set("Authorization", auth)
+	stopResp, stopBody := doRawRequest(t, api.Handler, stop)
+	if stopResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("stop under wrong node status = %d, want 404; body: %s", stopResp.StatusCode, stopBody)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-a/audio/alignment-runs/"+runID, nil)
+	getReq.Header.Set("Authorization", auth)
+	_, getBody := doRawRequest(t, api.Handler, getReq)
+	gm := decodeMap(t, getBody)["run"].(map[string]any)
+	if gm["stoppedAt"] != nil {
+		t.Errorf("run.stoppedAt = %v after a wrong-node stop attempt, want nil (run stays active)", gm["stoppedAt"])
+	}
+}
+
+// TestGetAlignmentRunLimitTruncatesButSummaryCoversFullSeries mirrors
+// TestGetAlignmentRunSummaryMatchesHandComputedValues with a limit smaller
+// than the sample count: the samples page is bounded, truncated is set,
+// and the summary (max excursion, sample count) still reflects every
+// sample, not just the returned page.
+func TestGetAlignmentRunLimitTruncatesButSummaryCoversFullSeries(t *testing.T) {
+	deps, st := newTestAlignmentRunDeps(t, fixedClock(testNow))
+	auth := adminAuthHeader(t, deps)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	start := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs", nil)
+	start.Header.Set("Authorization", auth)
+	_, startBody := doRawRequest(t, api.Handler, start)
+	runID, _ := decodeMap(t, startBody)["run"].(map[string]any)["id"].(string)
+
+	base := testNow
+	offsets := []float64{0, 2, 4, 6, 8}
+	for i, off := range offsets {
+		if err := st.AppendAlignmentSample(context.Background(), store.AlignmentSampleRecord{
+			RunID: runID, SampledAt: base.Add(time.Duration(i) * time.Second), OffsetMs: off, SessionID: "sess-1",
+		}); err != nil {
+			t.Fatalf("append sample %d: %v", i, err)
+		}
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-a/audio/alignment-runs/"+runID+"?limit=2", nil)
+	getReq.Header.Set("Authorization", auth)
+	getResp, getBody := doRawRequest(t, api.Handler, getReq)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	gm := decodeMap(t, getBody)
+
+	samples, _ := gm["samples"].([]any)
+	if len(samples) != 2 {
+		t.Fatalf("samples = %d, want 2 (limited)", len(samples))
+	}
+	if gm["truncated"] != true {
+		t.Errorf("truncated = %v, want true", gm["truncated"])
+	}
+	summary, _ := gm["summary"].(map[string]any)
+	if summary["sampleCount"] != float64(5) {
+		t.Errorf("summary.sampleCount = %v, want 5 (the full series, not the limited page)", summary["sampleCount"])
+	}
+	if summary["maxExcursionOffsetMs"] != float64(8) {
+		t.Errorf("summary.maxExcursionOffsetMs = %v, want 8 (from a sample beyond the limit)", summary["maxExcursionOffsetMs"])
+	}
+}
+
+// alignmentRunTestDeps mirrors configTestDeps for the alignment-run audit
+// tests below, which need direct access to storeDir to install a real
+// SQLite trigger (installFailAuditTrigger, config_test.go).
+func alignmentRunTestDeps(svc identity.Service, st *store.Store) Dependencies {
+	return Dependencies{Identity: svc, AlignmentRuns: st}
+}
+
+// TestStartAlignmentRunProducesAuditEntry and
+// TestStopAlignmentRunProducesAuditEntry are this seam's own version of
+// TestPutFPPEndpointsConfigWithoutFailingAuditSucceeds (config_test.go):
+// asserting the audit entry's actual content, not merely a 200 status,
+// per ADR-024 decision 11.
+func TestStartAlignmentRunProducesAuditEntry(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(alignmentRunTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	runID, _ := decodeMap(t, body)["run"].(map[string]any)["id"].(string)
+
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Action != "audio.alignment_run.start" || e.Target != runID {
+			continue
+		}
+		found = true
+		if e.PrincipalID != admin.ID {
+			t.Errorf("audit entry PrincipalID = %q, want %q", e.PrincipalID, admin.ID)
+		}
+	}
+	if !found {
+		t.Fatalf("no audio.alignment_run.start audit entry for run %q found among %d entries", runID, len(entries))
+	}
+}
+
+func TestStopAlignmentRunProducesAuditEntry(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(alignmentRunTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	start := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs", nil)
+	start.Header.Set("Authorization", "Bearer "+adminToken)
+	_, startBody := doRawRequest(t, api.Handler, start)
+	runID, _ := decodeMap(t, startBody)["run"].(map[string]any)["id"].(string)
+
+	stop := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs/"+runID+"/stop", nil)
+	stop.Header.Set("Authorization", "Bearer "+adminToken)
+	stopResp, stopBody := doRawRequest(t, api.Handler, stop)
+	if stopResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", stopResp.StatusCode, stopBody)
+	}
+
+	entries, err := svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Action != "audio.alignment_run.stop" || e.Target != runID {
+			continue
+		}
+		found = true
+		if e.PrincipalID != admin.ID {
+			t.Errorf("audit entry PrincipalID = %q, want %q", e.PrincipalID, admin.ID)
+		}
+	}
+	if !found {
+		t.Fatalf("no audio.alignment_run.stop audit entry for run %q found among %d entries", runID, len(entries))
+	}
+}
+
+// TestStartAlignmentRunFailsClosedOnAuditFailure and
+// TestStopAlignmentRunFailsClosedOnAuditFailure are this seam's own
+// version of TestPutFPPEndpointsConfigFailsClosedOnAuditFailure
+// (config_test.go): a failed audit write fails the request and leaves no
+// trace of the state change it would have made, via a REAL SQLite
+// trigger, matching that test's own rule.
+func TestStartAlignmentRunFailsClosedOnAuditFailure(t *testing.T) {
+	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(alignmentRunTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	installFailAuditTrigger(t, storeDir)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (write refused: the audit store is failing); body: %s", resp.StatusCode, body)
+	}
+
+	runs, err := st.ListAlignmentRuns(context.Background(), "node-a")
+	if err != nil {
+		t.Fatalf("ListAlignmentRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs after a start whose audit entry failed = %v, want none, same-transaction rule violated", runs)
+	}
+}
+
+func TestStopAlignmentRunFailsClosedOnAuditFailure(t *testing.T) {
+	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	api := New(alignmentRunTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	start := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs", nil)
+	start.Header.Set("Authorization", "Bearer "+adminToken)
+	_, startBody := doRawRequest(t, api.Handler, start)
+	runID, _ := decodeMap(t, startBody)["run"].(map[string]any)["id"].(string)
+
+	installFailAuditTrigger(t, storeDir)
+
+	stop := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-a/audio/alignment-runs/"+runID+"/stop", nil)
+	stop.Header.Set("Authorization", "Bearer "+adminToken)
+	stopResp, stopBody := doRawRequest(t, api.Handler, stop)
+	if stopResp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (write refused: the audit store is failing); body: %s", stopResp.StatusCode, stopBody)
+	}
+
+	rec, _, _, _, err := st.GetAlignmentRun(context.Background(), runID, 1)
+	if err != nil {
+		t.Fatalf("GetAlignmentRun: %v", err)
+	}
+	if rec.StoppedAt != nil {
+		t.Fatalf("run stopped after a stop whose audit entry failed, same-transaction rule violated")
+	}
+}
