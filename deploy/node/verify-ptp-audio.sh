@@ -160,6 +160,13 @@ if ! command -v pgrep >/dev/null 2>&1; then
 else
   declare -A PHC2SYS_TARGETS
   PHC2SYS_PIDS="$(pgrep -x phc2sys 2>/dev/null || true)"
+  # A count kept as a plain integer, not "${#PHC2SYS_TARGETS[@]}": under
+  # set -u, bash's own length expansion on an associative array that never
+  # received a single key throws "unbound variable" (confirmed against a
+  # real bash 5.1 bullseye run), which is exactly the state a PHC-less node
+  # is in for this array and took out this whole section including the
+  # ptp4l half below.
+  PHC2SYS_PID_COUNT=$(echo "$PHC2SYS_PIDS" | wc -w)
   for pid in $PHC2SYS_PIDS; do
     CMDLINE="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
     RAW_TARGET="$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++) if ($i=="-c") {print $(i+1); found=1} } END{if(!found) print "CLOCK_REALTIME"}')"
@@ -180,7 +187,7 @@ else
       PHC2SYS_DUP=1
     fi
   done
-  if [ "${#PHC2SYS_TARGETS[@]}" -eq 0 ]; then
+  if [ "$PHC2SYS_PID_COUNT" -eq 0 ]; then
     info "no phc2sys process running (expected on a follower, or a grandmaster with no PHC)"
   elif [ "$PHC2SYS_DUP" -eq 0 ]; then
     ok "exactly one phc2sys process per target clock (${!PHC2SYS_TARGETS[*]})"
@@ -188,6 +195,7 @@ else
 
   declare -A PTP4L_IFACES
   PTP4L_PIDS="$(pgrep -x ptp4l 2>/dev/null || true)"
+  PTP4L_PID_COUNT=$(echo "$PTP4L_PIDS" | wc -w)
   for pid in $PTP4L_PIDS; do
     CMDLINE="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
     IFACE_ARG="$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++) if ($i=="-i") {print $(i+1); found=1} } END{if(!found) print "(no -i)"}')"
@@ -203,7 +211,9 @@ else
       PTP4L_DUP=1
     fi
   done
-  if [ "${#PTP4L_IFACES[@]}" -gt 0 ] && [ "$PTP4L_DUP" -eq 0 ]; then
+  if [ "$PTP4L_PID_COUNT" -eq 0 ]; then
+    bad "no ptp4l process running -- this script only makes sense on a node running one, unlike phc2sys which is legitimately absent on a PHC-less node"
+  elif [ "$PTP4L_DUP" -eq 0 ]; then
     ok "exactly one ptp4l process per interface (${!PTP4L_IFACES[*]})"
   fi
 fi

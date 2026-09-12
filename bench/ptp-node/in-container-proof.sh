@@ -497,6 +497,41 @@ else
 fi
 
 echo ""
+echo "--- step 8b: the duplicate-writer check with ZERO phc2sys processes still runs the ptp4l half ---"
+# The fake phc2sys processes above are already killed and reaped, so this
+# container now has none running -- exactly the PHC-less-node shape that
+# made PHC2SYS_TARGETS a totally empty associative array. Under set -u,
+# bash's own "${#PHC2SYS_TARGETS[@]}" on that empty array throws "unbound
+# variable" (confirmed against a real bash 5.1), which used to abort the
+# whole script before it ever reached the real ptp4l on $IFACE below. This
+# is the regression guard: without it, this comes back the moment someone
+# adds another optional process class.
+VERIFY_NO_PHC2SYS_OUT="$(/repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1 || true)"
+echo "$VERIFY_NO_PHC2SYS_OUT"
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -qi "unbound variable"; then
+  echo "FAIL: verify-ptp-audio.sh aborted on an unbound variable with zero phc2sys processes running"
+  exit 1
+fi
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -q "INFO: no phc2sys process running"; then
+  echo "OK: verify-ptp-audio.sh reported the expected no-phc2sys line instead of crashing"
+else
+  echo "FAIL: expected an INFO line reporting no phc2sys process running"
+  exit 1
+fi
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -qE "OK: exactly one ptp4l process per interface \($IFACE\)"; then
+  echo "OK: the ptp4l half of the writer-uniqueness check still ran and reported the real ptp4l on $IFACE"
+else
+  echo "FAIL: expected the ptp4l half of the writer-uniqueness check to still run and report the real ptp4l on $IFACE"
+  exit 1
+fi
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -qE "^verify-ptp-audio\.sh: [0-9]+ check\(s\) passed"; then
+  echo "OK: verify-ptp-audio.sh ran to completion and printed its final summary line"
+else
+  echo "FAIL: verify-ptp-audio.sh did not reach its final summary line (script aborted early)"
+  exit 1
+fi
+
+echo ""
 echo "--- step 9: servo-health.py against the actual node-01 saturated/flapping/negative-delay log lines ---"
 # The exact phc2sys log lines from the node-01 incident (see PTP-AUDIO.md):
 # freq pinned at linuxptp's own 900000000ppb clamp, state flapping s2/s0.
