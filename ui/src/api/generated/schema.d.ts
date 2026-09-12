@@ -639,6 +639,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/audio/alignment-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * List a node's audio alignment runs, newest first
+         * @description Behind `observation:read`.
+         */
+        get: operations["listAudioAlignmentRuns"];
+        put?: never;
+        /**
+         * Start a long-run program-to-LTC drift recording on a node
+         * @description Behind `audio:command`. Coordinator-side only: records the samples the node's own `node.audio.clock.alignment` reports already carry (`alignmentMeasured`/`alignmentOffsetMs`/ `alignmentSampledAt`) while the run is active. No agent command and no MQTT topic. At most one active run per node; starting a second is refused with `409`.
+         */
+        post: operations["startAudioAlignmentRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/alignment-runs/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One audio alignment run, its samples, and its summary
+         * @description Behind `observation:read`. Samples are in ascending `sampledAt` order. `summary.driftRateMsPerHour` is the least-squares linear regression slope of `offsetMs` against elapsed hours since the first sample, fitted against the node's own sample clock, over the whole series; with fewer than two samples it is `null` and `driftRateUnavailableReason` states why, never `0`. `summary.maxExcursionOffsetMs`/`maxExcursionSampledAt` name the sample with the largest absolute offset. A sample whose `sampledAt` collides with an earlier sample already recorded for this run is dropped, not overwritten.
+         */
+        get: operations["getAudioAlignmentRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/alignment-runs/{runId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a node's active audio alignment run
+         * @description Behind `audio:command`. Stopping an already-stopped or unknown run is a `404`: "no active audio alignment run with that id exists for this node; it is unknown or already stopped."
+         */
+        post: operations["stopAudioAlignmentRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/{instanceId}/commands": {
         parameters: {
             query?: never;
@@ -3818,6 +3884,75 @@ export interface components {
             resolvedAt: string | null;
             /** @description True when this command's dispatch could not write its audit entry atomically with the command and proceeded anyway under the `audio.session.stop`/`audio.session.clear`/ `audio.output.mute` safety-class exemption (ADR-024 decision 11), with a degraded, stderr-only attribution record. */
             attributionDegraded: boolean;
+        };
+        /** @description One long-run program-to-LTC drift recording. */
+        AudioAlignmentRun: {
+            id: string;
+            nodeId: string;
+            /** Format: date-time */
+            startedAt: string;
+            /**
+             * Format: date-time
+             * @description Null while the run is active.
+             */
+            stoppedAt: string | null;
+            /** @description The starting principal's display name. */
+            startedBy: string;
+            /** @description The starting principal's id. */
+            startedByPrincipalId: string;
+            /** @description The stopping principal's display name. */
+            stoppedBy: string | null;
+            /** @description The stopping principal's id. */
+            stoppedByPrincipalId: string | null;
+            stopReason: string | null;
+        };
+        /** @description One recorded sample: the node's own alignmentSampledAt/ alignmentOffsetMs, appended while its run was active. Positive offsetMs means LTC was ahead of program audio, matching node.audio.clock.alignment's own sign convention. */
+        AudioAlignmentSample: {
+            /** Format: date-time */
+            sampledAt: string;
+            offsetMs: number;
+            sessionId: string;
+        };
+        /** @description Computed from a run's own samples, never stored. See GET /nodes/{nodeId}/audio/alignment-runs/{runId}'s own description for the drift-rate method. */
+        AudioAlignmentRunSummary: {
+            sampleCount: number;
+            /** Format: date-time */
+            firstSampleAt: string | null;
+            /** Format: date-time */
+            lastSampleAt: string | null;
+            maxExcursionOffsetMs: number | null;
+            /** Format: date-time */
+            maxExcursionSampledAt: string | null;
+            driftRateMsPerHour: number | null;
+            /** @description Set only when driftRateMsPerHour is null. */
+            driftRateUnavailableReason?: string;
+        };
+        /** @description The optional body of POST .../alignment-runs/{runId}/stop. */
+        AudioAlignmentRunStopRequest: {
+            reason?: string;
+        };
+        /** @description The body of a successful response from starting or stopping an audio alignment run. */
+        AudioAlignmentRunResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            run: components["schemas"]["AudioAlignmentRun"];
+        };
+        /** @description The body of a successful response from GET /nodes/{nodeId}/audio/alignment-runs. */
+        AudioAlignmentRunListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            runs: components["schemas"]["AudioAlignmentRun"][];
+        };
+        /** @description The body of a successful response from GET /nodes/{nodeId}/audio/alignment-runs/{runId}. */
+        AudioAlignmentRunDetailResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            run: components["schemas"]["AudioAlignmentRun"];
+            /** @description The first `limit` samples in ascending sampledAt order. See `truncated` for whether the run holds more than that. */
+            samples: components["schemas"]["AudioAlignmentSample"][];
+            /** @description True when the run holds more samples than `limit` returned, so `samples` is a prefix of the full series. `summary` is unaffected: it is always computed over the full series. */
+            truncated: boolean;
+            summary: components["schemas"]["AudioAlignmentRunSummary"];
         };
         /** @description The body of POST /nodes/{nodeId}/audio/silence. audio.node.silence takes no params of its own, so idempotencyKey is the only field - unlike AudioSessionNoParamsRequest, there is no revision here. */
         AudioNodeSilenceRequest: {
@@ -8132,6 +8267,139 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAudioAlignmentRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunListResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    startAudioAlignmentRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description This node already has an active audio alignment run. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAudioAlignmentRun: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of samples to return, in ascending sampledAt order. Defaults to 5000, maximum 50000. `summary` always covers the run's full series regardless of this limit; see `truncated` on the response. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                nodeId: string;
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunDetailResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    stopAudioAlignmentRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AudioAlignmentRunStopRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

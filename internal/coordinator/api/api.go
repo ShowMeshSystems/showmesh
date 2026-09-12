@@ -156,6 +156,11 @@ type Dependencies struct {
 	// dependency is not this API failing" posture.
 	Discovery DeclarationStore
 
+	// AlignmentRuns is the long-run drift recording's dependency; see
+	// [AlignmentRunStore]. A nil field is replaced by [noAlignmentRunStore],
+	// matching [Dependencies.Discovery]'s no-op default.
+	AlignmentRuns AlignmentRunStore
+
 	// FPPEndpointsEnvVarSet is whether SHOWMESH_FPP_ENDPOINTS is currently
 	// set in the coordinator PROCESS's environment — internal/coordinator's
 	// Run computes it once, from the same already-loaded
@@ -671,6 +676,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Discovery == nil {
 		d.Discovery = noDeclarationStore{}
 	}
+	if d.AlignmentRuns == nil {
+		d.AlignmentRuns = noAlignmentRunStore{}
+	}
 	if d.Nudger == nil {
 		d.Nudger = noFPPPollNudger{}
 	}
@@ -1185,6 +1193,21 @@ func (noDeclarationStore) ListNodeDeclarations(context.Context) ([]store.NodeDec
 
 func (noDeclarationStore) RecordNodeDiscoverySeen(context.Context, string, string, time.Time) error {
 	return errDeclarationStoreNotConfigured
+}
+
+// noAlignmentRunStore is [Dependencies.AlignmentRuns]'s nil-safe default:
+// both its reads answer empty/not-found rather than panicking. Starting
+// and stopping a run do not go through this interface at all (see
+// [AlignmentRunStore]'s own doc comment), so there is nothing to refuse
+// here for those.
+type noAlignmentRunStore struct{}
+
+func (noAlignmentRunStore) GetAlignmentRun(context.Context, string, int) (store.AlignmentRunRecord, []store.AlignmentSampleRecord, bool, store.AlignmentRunSummary, error) {
+	return store.AlignmentRunRecord{}, nil, false, store.AlignmentRunSummary{}, store.ErrAlignmentRunNotFound
+}
+
+func (noAlignmentRunStore) ListAlignmentRuns(context.Context, string) ([]store.AlignmentRunRecord, error) {
+	return nil, nil
 }
 
 // errMacroRunnerNotConfigured is [noMacroRunner.SubmitRun]'s uniform
@@ -1731,6 +1754,13 @@ func New(deps Dependencies, opts Options) *API {
 	// audio.node.silence (audionodesilence.go): the unconditional
 	// per-node emergency stop, no sessionId. Same audio:command scope.
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/silence", h.writeGuard(&scopeAudioCommand, h.handleAudioNodeSilence))
+
+	// Long-run program-to-LTC drift recording, coordinator-side only.
+	// Start/stop are audio:command; reads are observation:read.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/alignment-runs", h.writeGuard(&scopeAudioCommand, h.handleStartAlignmentRun))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/audio/alignment-runs/{runId}/stop", h.writeGuard(&scopeAudioCommand, h.handleStopAlignmentRun))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/audio/alignment-runs", h.readGuard(identity.ScopeObservationRead, h.handleListAlignmentRuns))
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/audio/alignment-runs/{runId}", h.readGuard(identity.ScopeObservationRead, h.handleGetAlignmentRun))
 
 	mux.HandleFunc("GET /api/v1/observations", h.readGuard(identity.ScopeObservationRead, h.handleObservations))
 	mux.HandleFunc("GET /api/v1/events", h.readGuard(identity.ScopeEventRead, h.handleEvents))

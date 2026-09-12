@@ -1996,6 +1996,184 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/audio/alignment-runs:
+    parameters:
+      - name: nodeId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: startAudioAlignmentRun
+      summary: Start a long-run program-to-LTC drift recording on a node
+      description: >-
+        Behind `audio:command`. Coordinator-side only: records the
+        samples the node's own `node.audio.clock.alignment` reports
+        already carry (`alignmentMeasured`/`alignmentOffsetMs`/
+        `alignmentSampledAt`) while the run is active. No agent command
+        and no MQTT topic. At most one active run per node; starting a
+        second is refused with `409`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioAlignmentRunResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: This node already has an active audio alignment run.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: listAudioAlignmentRuns
+      summary: List a node's audio alignment runs, newest first
+      description: Behind `observation:read`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioAlignmentRunListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/audio/alignment-runs/{runId}:
+    get:
+      operationId: getAudioAlignmentRun
+      summary: One audio alignment run, its samples, and its summary
+      description: >-
+        Behind `observation:read`. Samples are in ascending `sampledAt`
+        order. `summary.driftRateMsPerHour` is the least-squares linear
+        regression slope of `offsetMs` against elapsed hours since the
+        first sample, fitted against the node's own sample clock, over
+        the whole series; with fewer than two samples it is `null` and
+        `driftRateUnavailableReason` states why, never `0`.
+        `summary.maxExcursionOffsetMs`/`maxExcursionSampledAt` name the
+        sample with the largest absolute offset. A sample whose
+        `sampledAt` collides with an earlier sample already recorded for
+        this run is dropped, not overwritten.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Maximum number of samples to return, in ascending sampledAt
+            order. Defaults to 5000, maximum 50000. `summary` always
+            covers the run's full series regardless of this limit; see
+            `truncated` on the response.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50000
+            default: 5000
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioAlignmentRunDetailResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/audio/alignment-runs/{runId}/stop:
+    post:
+      operationId: stopAudioAlignmentRun
+      summary: Stop a node's active audio alignment run
+      description: >-
+        Behind `audio:command`. Stopping an already-stopped or unknown run
+        is a `404`: "no active audio alignment run with that id exists for
+        this node; it is unknown or already stopped."
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AudioAlignmentRunStopRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioAlignmentRunResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /fpp/{instanceId}/commands:
     post:
       operationId: dispatchFPPCommand
@@ -11467,6 +11645,142 @@ components:
             the `audio.session.stop`/`audio.session.clear`/
             `audio.output.mute` safety-class exemption (ADR-024 decision
             11), with a degraded, stderr-only attribution record.
+    AudioAlignmentRun:
+      type: object
+      description: One long-run program-to-LTC drift recording.
+      required:
+        [id, nodeId, startedAt, stoppedAt, startedBy, startedByPrincipalId,
+         stoppedBy, stoppedByPrincipalId, stopReason]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        nodeId:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        stoppedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Null while the run is active.
+        startedBy:
+          type: string
+          description: The starting principal's display name.
+        startedByPrincipalId:
+          type: string
+          description: The starting principal's id.
+        stoppedBy:
+          type: [string, "null"]
+          description: The stopping principal's display name.
+        stoppedByPrincipalId:
+          type: [string, "null"]
+          description: The stopping principal's id.
+        stopReason:
+          type: [string, "null"]
+    AudioAlignmentSample:
+      type: object
+      description: >-
+        One recorded sample: the node's own alignmentSampledAt/
+        alignmentOffsetMs, appended while its run was active. Positive
+        offsetMs means LTC was ahead of program audio, matching
+        node.audio.clock.alignment's own sign convention.
+      required: [sampledAt, offsetMs, sessionId]
+      additionalProperties: false
+      properties:
+        sampledAt:
+          type: string
+          format: date-time
+        offsetMs:
+          type: number
+        sessionId:
+          type: string
+    AudioAlignmentRunSummary:
+      type: object
+      description: >-
+        Computed from a run's own samples, never stored. See
+        GET /nodes/{nodeId}/audio/alignment-runs/{runId}'s own
+        description for the drift-rate method.
+      required:
+        [sampleCount, firstSampleAt, lastSampleAt, maxExcursionOffsetMs,
+         maxExcursionSampledAt, driftRateMsPerHour]
+      additionalProperties: false
+      properties:
+        sampleCount:
+          type: integer
+        firstSampleAt:
+          type: [string, "null"]
+          format: date-time
+        lastSampleAt:
+          type: [string, "null"]
+          format: date-time
+        maxExcursionOffsetMs:
+          type: [number, "null"]
+        maxExcursionSampledAt:
+          type: [string, "null"]
+          format: date-time
+        driftRateMsPerHour:
+          type: [number, "null"]
+        driftRateUnavailableReason:
+          type: string
+          description: Set only when driftRateMsPerHour is null.
+    AudioAlignmentRunStopRequest:
+      type: object
+      description: The optional body of POST .../alignment-runs/{runId}/stop.
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+    AudioAlignmentRunResponse:
+      type: object
+      description: The body of a successful response from starting or stopping an audio alignment run.
+      required: [serverTime, run]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        run:
+          $ref: "#/components/schemas/AudioAlignmentRun"
+    AudioAlignmentRunListResponse:
+      type: object
+      description: The body of a successful response from GET /nodes/{nodeId}/audio/alignment-runs.
+      required: [serverTime, runs]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioAlignmentRun"
+    AudioAlignmentRunDetailResponse:
+      type: object
+      description: The body of a successful response from GET /nodes/{nodeId}/audio/alignment-runs/{runId}.
+      required: [serverTime, run, samples, truncated, summary]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        run:
+          $ref: "#/components/schemas/AudioAlignmentRun"
+        samples:
+          type: array
+          items:
+            $ref: "#/components/schemas/AudioAlignmentSample"
+          description: >-
+            The first `limit` samples in ascending sampledAt order. See
+            `truncated` for whether the run holds more than that.
+        truncated:
+          type: boolean
+          description: >-
+            True when the run holds more samples than `limit` returned,
+            so `samples` is a prefix of the full series. `summary` is
+            unaffected: it is always computed over the full series.
+        summary:
+          $ref: "#/components/schemas/AudioAlignmentRunSummary"
     AudioNodeSilenceRequest:
       type: object
       description: >-

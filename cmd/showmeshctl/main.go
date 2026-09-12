@@ -426,6 +426,15 @@ Commands:
   audio silence <nodeId>
                                         dispatch audio.node.silence: the unconditional
                                         per-node emergency stop (write, requires audio:command)
+  audio alignment-run start --node <id>
+                                        start a long-run program-to-LTC drift recording
+                                        (write, requires audio:command)
+  audio alignment-run stop --node <id> --run <id>
+                                        stop it (write, requires audio:command)
+  audio alignment-run list --node <id>
+                                        list a node's runs, newest first (requires observation:read)
+  audio alignment-run get --node <id> --run <id>
+                                        read one run's series and summary (requires observation:read)
   node-clock list                      enumerate node.clock objects (id is the node id)
   node-clock get <nodeId>              show one node's clock configuration
   node-clock set <nodeId>              write a new node.clock revision (write, full
