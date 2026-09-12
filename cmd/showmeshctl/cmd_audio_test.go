@@ -319,6 +319,48 @@ func TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven(t *testing.T)
 	}
 }
 
+// TestCmdAudioNodeSetForceSkipsReadWhenNoOutputLatencyFlagGiven proves
+// --force never grows a GET dependency: it exists to write when the read
+// path is degraded, so the carry-forward must not call it under --force.
+func TestCmdAudioNodeSetForceSkipsReadWhenNoOutputLatencyFlagGiven(t *testing.T) {
+	var gotBody []byte
+	var getSeen bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			getSeen = true
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"outputLatency":{"method":"unmeasured"}},
+			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set", "--force",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "3",
+		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if getSeen {
+		t.Error("--force must not perform a GET: it exists for a degraded read path")
+	}
+	if strings.Contains(string(gotBody), "outputLatency") {
+		t.Errorf("PUT body must not send outputLatency when --force skipped the read; body: %s", gotBody)
+	}
+}
+
 // TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel proves the two
 // new flags are required exactly like the four original ones: a missing
 // --program-channels or --ltc-channel is refused locally, before any

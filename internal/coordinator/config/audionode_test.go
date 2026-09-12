@@ -650,16 +650,32 @@ func TestDecodeAudioNodeOutputLatencyRejectsZeroValue(t *testing.T) {
 	}
 }
 
-// TestDecodeAudioNodeOutputLatencyRequiresMethod proves an outputLatency
-// object with no method is refused rather than silently defaulted to
-// "unmeasured": an empty outputLatency object is not a meaningful
-// request, matching the OpenAPI contract's own required:[method].
-func TestDecodeAudioNodeOutputLatencyRequiresMethod(t *testing.T) {
+// TestDecodeAudioNodeOutputLatencyAbsentMethodReadsAsUnmeasured proves an
+// outputLatency object with no method decodes as "unmeasured" rather than
+// erroring: a row written before this normalization existed stored
+// "outputLatency":{} with no method, and it must stay readable.
+func TestDecodeAudioNodeOutputLatencyAbsentMethodReadsAsUnmeasured(t *testing.T) {
 	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
 		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
 		`"outputLatency":{}}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.OutputLatency.Method != OutputLatencyMethodUnmeasured {
+		t.Errorf("Method = %q, want %q", p.OutputLatency.Method, OutputLatencyMethodUnmeasured)
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyAbsentMethodStillRejectsMeasuredFields
+// proves the leniency above does not weaken the contract for a client
+// that actually sends measurement fields: those still require method.
+func TestDecodeAudioNodeOutputLatencyAbsentMethodStillRejectsMeasuredFields(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"valueUs":56000}}`
 	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
-		t.Fatal("expected error: outputLatency.method is required")
+		t.Fatal("expected error: valueUs beside an absent (unmeasured) method must be refused")
 	}
 }
 

@@ -2,7 +2,7 @@
 
 [Research tracker](README.md) · [Audio Engine](../architecture/AUDIO-ENGINE.md) · [RES-007](RES-007-audio-node-architecture.md) · [ADR-007](../decisions/ADR-007-gstreamer-media-engine.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [Track C](../build/TRACK-C-audio-node.md)
 
-Status: planned · Risk: **high** · Verification: **L1 source evidence** for upstream FPP master, linuxptp, GStreamer, PipeWire, kernel, and Raspberry Pi driver behavior; **L0** for every ShowMesh measurement, every proposed loop constant, and every hardware claim about the reference installation
+Status: planned · Risk: **high** · Verification: **L1 source evidence** for upstream FPP master, linuxptp, GStreamer, PipeWire, kernel, and Raspberry Pi driver behavior; **L1** for §8.1's output latency stage 0 hardware measurement (2026-09-11); **L0** for every other ShowMesh measurement, every proposed loop constant, and every hardware claim about the reference installation
 
 Research date: 2026-08-28. The FPP facts below were read from `FalconChristmas/fpp` master at commit `d318b1d` (2026-08-28) and are changing daily; §12 lists every commit used. Nothing in this record is a frozen contract, and nothing here has been built.
 

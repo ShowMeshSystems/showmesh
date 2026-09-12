@@ -326,9 +326,17 @@ func decodeAudioNodeOutputLatency(top map[string]json.RawMessage) (OutputLatency
 		return OutputLatencyPayload{}, verr
 	}
 
-	method, verr := decodeRequiredEnum(fields, "method", "outputLatency.method", outputLatencyMethods)
-	if verr != nil {
-		return OutputLatencyPayload{}, verr
+	// An absent method reads as unmeasured rather than a decode error: a
+	// row written before this normalization existed stored
+	// "outputLatency":{} with no method, and this keeps that row
+	// readable without weakening what a client is required to send.
+	method := OutputLatencyMethodUnmeasured
+	if _, present := fields["method"]; present {
+		var verr *ValidationError
+		method, verr = decodeRequiredEnum(fields, "method", "outputLatency.method", outputLatencyMethods)
+		if verr != nil {
+			return OutputLatencyPayload{}, verr
+		}
 	}
 
 	if method == OutputLatencyMethodUnmeasured {

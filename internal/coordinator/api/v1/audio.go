@@ -92,7 +92,10 @@ type ConfigAudioNode struct {
 // moves with PipeWire's graph quantum and a value is only valid for the
 // configuration it was measured under.
 type ConfigAudioOutputLatency struct {
-	ValueUs       int     `json:"valueUs,omitempty"`
+	// ValueUs is a pointer so a stored measured value of exactly 0
+	// microseconds still reaches the wire; a plain int with omitempty
+	// would drop it and break a carry-forward write of that value.
+	ValueUs       *int    `json:"valueUs,omitempty"`
 	Method        string  `json:"method"`
 	MeasuredAt    *string `json:"measuredAt,omitempty"`
 	Reference     string  `json:"reference,omitempty"`
