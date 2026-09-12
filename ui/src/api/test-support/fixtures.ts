@@ -292,6 +292,7 @@ export function makeNightSessionState(overrides: Partial<NightSessionState> = {}
     readiness: { state: 'unknown', reason: 'no run-readiness result yet', sameEpoch: false, fresh: false, checks: [] },
     powerPhase: { state: 'unknown', reason: 'not observed yet' },
     transition: { state: 'unknown', reason: 'not observed yet' },
+    boundary: { state: 'unknown', expectedAt: null, reason: 'not observed yet' },
     cues: { state: 'unknown', reason: 'no cycle started yet', cues: [] },
     backgroundAudio: { state: 'unknown', reason: 'no cycle started yet', steps: [] },
     degraded: false,

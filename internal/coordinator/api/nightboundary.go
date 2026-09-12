@@ -96,6 +96,11 @@ const (
 	nightBoundaryStateArmed   = "armed"
 	nightBoundaryStateInvalid = "invalid"
 	nightBoundaryStateUnknown = "unknown"
+	// nightBoundaryStateNone marks a purpose that carries no
+	// show-transition deadline at all (pre-show and end-of-night
+	// resting), distinct from nightBoundaryStateUnknown: this is a
+	// stated fact, never missing evidence.
+	nightBoundaryStateNone = "none"
 )
 
 const (
@@ -504,6 +509,36 @@ func mapNightTransition(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
 	default:
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: "playback confirmed; this purpose carries no show-transition boundary"}
+	}
+}
+
+// mapNightBoundary is the wire form of the current state's own
+// content-anchor boundary, distinct from mapNightTransition: a purpose
+// with no boundary at all reports "none" here, never "armed".
+func mapNightBoundary(rec store.NightSessionRecord) v1.NightBoundary {
+	if rec.BoundaryJSON == "" {
+		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: "no boundary is armed for the current state"}
+	}
+	boundary, ok := decodeNightBoundary(rec.BoundaryJSON)
+	if !ok {
+		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: "the persisted boundary could not be read"}
+	}
+	switch boundary.State {
+	case nightBoundaryStateArmed:
+		if boundary.ExpectedAt == nil {
+			return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+		}
+		return v1.NightBoundary{
+			State:      v1.NightBoundaryArmed,
+			ExpectedAt: formatTimePtr(boundary.ExpectedAt),
+			Reason:     nightBoundaryReasonOrFallback(boundary, "boundary armed for "+boundary.ExpectedAt.Format(time.RFC3339)),
+		}
+	case nightBoundaryStateInvalid:
+		return v1.NightBoundary{State: v1.NightBoundaryInvalid, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+	case nightBoundaryStateNone:
+		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: nightBoundaryReasonOrFallback(boundary, "this purpose carries no show-transition boundary")}
+	default:
+		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
 	}
 }
 

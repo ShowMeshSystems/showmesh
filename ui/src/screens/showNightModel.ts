@@ -122,15 +122,16 @@ export type NextTransition =
 export function nextTransition(model: Model): NextTransition {
   const instance = model.fpp[0]
   if (instance === undefined) return { known: false, reason: 'No FPP instance is reporting a position.' }
-  const elapsed = findSignal(instance.observations, 'fpp.position.elapsed.seconds')
-  const total = findSignal(instance.observations, 'fpp.position.seconds')
-  if (elapsed === undefined || total === undefined || typeof elapsed.value !== 'number' || typeof total.value !== 'number') {
+  // fpp.position.seconds is FPP's seconds_played, not a duration, so
+  // remaining is read directly rather than derived from it.
+  const remaining = findSignal(instance.observations, 'fpp.position.remaining.seconds')
+  if (remaining === undefined || typeof remaining.value !== 'number') {
     return { known: false, reason: 'The playhead position has not been observed.' }
   }
-  if (elapsed.state !== 'current' || total.state !== 'current') {
-    return { known: false, reason: `The playhead position is ${elapsed.state.replace('_', ' ')}, so the boundary is unknown rather than assumed.` }
+  if (remaining.state !== 'current') {
+    return { known: false, reason: `The playhead position is ${remaining.state.replace('_', ' ')}, so the boundary is unknown rather than assumed.` }
   }
-  return { known: true, remainingSeconds: Math.max(0, total.value - elapsed.value), source: instance.instanceId }
+  return { known: true, remainingSeconds: Math.max(0, remaining.value), source: instance.instanceId }
 }
 
 /**
@@ -212,6 +213,23 @@ const PHASE_TONE: Record<string, Tone> = {
 
 function phaseLabel(name: string, state: string): string {
   return `${name} ${state.replace('_', ' ')}`
+}
+
+/**
+ * The next-transition box's own headline, keyed on `session.boundary.state`
+ * directly, never inferred from `transition`'s reason string.
+ */
+export function boundaryHeadline(boundary: NightSessionState['boundary']): string {
+  switch (boundary.state) {
+    case 'armed':
+      return `Boundary armed for ${formatClock(boundary.expectedAt) ?? 'an unrecorded time'}`
+    case 'invalid':
+      return 'Boundary invalidated'
+    case 'none':
+      return 'No boundary for this purpose'
+    default:
+      return 'Boundary unknown'
+  }
 }
 
 /** Anything not observed says so, and none of these readouts is inferred. */

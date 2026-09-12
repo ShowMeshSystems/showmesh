@@ -78,6 +78,7 @@ function session(overrides: Partial<NightSessionState> = {}): NightSessionState 
     readiness: { state: 'recorded', reason: '', outcome: 'ready', completedAt: '2026-08-28T16:28:00Z', sameEpoch: false, fresh: false, checks: [] },
     powerPhase: { state: 'recorded', reason: 'Garage projector never reported on.' },
     transition: { state: 'recorded', reason: 'Enter-show transition completed.' },
+    boundary: { state: 'none', expectedAt: null, reason: 'no boundary is armed for the current state' },
     cues: { state: 'recorded', reason: '', cues: [] },
     backgroundAudio: { state: 'recorded', reason: 'Ducked to -18 dB.', steps: [] },
     degraded: false,
@@ -212,14 +213,85 @@ describe('Show Night', () => {
   it('makes the boundary unknown when the observed position is stale', () => {
     const instance = {
       instanceId: 'main',
-      observations: [
-        { signal: 'fpp.position.elapsed.seconds', value: 102, state: 'stale', resource: { kind: 'fpp', id: 'main' } },
-        { signal: 'fpp.position.seconds', value: 168, state: 'stale', resource: { kind: 'fpp', id: 'main' } },
-      ],
+      observations: [{ signal: 'fpp.position.remaining.seconds', value: 111, state: 'stale', resource: { kind: 'fpp', id: 'main' } }],
     } as unknown as FPPInstance
     const next = nextTransition({ ...initialModel(), fpp: [instance] })
     expect(next.known).toBe(false)
     if (!next.known) expect(next.reason).toContain('unknown rather than assumed')
+  })
+
+  it('reads the countdown from fpp.position.remaining.seconds directly, not derived from seconds_played', () => {
+    // Real capture (fppd_status_playing.json): seconds_elapsed 8, seconds_played 8,
+    // seconds_remaining 111. total - elapsed with seconds_played would always read 0.
+    const instance = {
+      instanceId: 'main',
+      observations: [{ signal: 'fpp.position.remaining.seconds', value: 111, state: 'current', resource: { kind: 'fpp', id: 'main' } }],
+    } as unknown as FPPInstance
+    const next = nextTransition({ ...initialModel(), fpp: [instance] })
+    expect(next.known).toBe(true)
+    if (next.known) expect(next.remainingSeconds).toBe(111)
+  })
+
+  const knownPositionInstance = {
+    instanceId: 'main',
+    observations: [{ signal: 'fpp.position.remaining.seconds', value: 111, state: 'current', resource: { kind: 'fpp', id: 'main' } }],
+  } as unknown as FPPInstance
+
+  it('reports the boundary armed from session.boundary, not from an empty cue list', () => {
+    renderScreen({
+      nightSession: session({
+        boundary: { state: 'armed', expectedAt: '2026-08-28T21:10:00Z', reason: 'derived from millisecond-precision position' },
+        cues: { state: 'recorded', reason: '', cues: [] },
+      }),
+      fpp: [knownPositionInstance],
+    })
+    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText(/^Boundary armed for /)).toBeInTheDocument()
+    expect(within(boundary).getByText('derived from millisecond-precision position')).toBeInTheDocument()
+    expect(screen.queryByText('No Transition Step is armed')).not.toBeInTheDocument()
+  })
+
+  it('shows no boundary and no contradiction when live playback carries no boundary at all', () => {
+    renderScreen({
+      nightSession: session({
+        state: 'live',
+        boundary: { state: 'none', expectedAt: null, reason: 'no boundary is armed for the current state' },
+        cues: { state: 'recorded', reason: '', cues: [] },
+      }),
+      fpp: [knownPositionInstance],
+    })
+    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText('No boundary for this purpose')).toBeInTheDocument()
+    expect(within(boundary).queryByText(/^Boundary armed/)).not.toBeInTheDocument()
+  })
+
+  it('shows the per-cue armed count as its own line when cues exist', () => {
+    renderScreen({
+      nightSession: session({
+        boundary: { state: 'armed', expectedAt: '2026-08-28T21:10:00Z', reason: 'derived from millisecond-precision position' },
+        cues: { state: 'recorded', reason: '', cues: [cue({}), cue({ name: 'Second' })] },
+      }),
+      fpp: [knownPositionInstance],
+    })
+    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText('2 cues armed this cycle')).toBeInTheDocument()
+  })
+
+  it('still shows the armed boundary when the FPP position is stale, not hidden behind Unknown', () => {
+    const staleInstance = {
+      instanceId: 'main',
+      observations: [{ signal: 'fpp.position.remaining.seconds', value: 111, state: 'stale', resource: { kind: 'fpp', id: 'main' } }],
+    } as unknown as FPPInstance
+    renderScreen({
+      nightSession: session({
+        boundary: { state: 'armed', expectedAt: '2026-08-28T21:10:00Z', reason: 'derived from millisecond-precision position' },
+        cues: { state: 'recorded', reason: '', cues: [] },
+      }),
+      fpp: [staleInstance],
+    })
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText(/^Boundary armed for \d{2}:\d{2}$/)).toBeInTheDocument()
   })
 
   it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {

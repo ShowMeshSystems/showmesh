@@ -18406,6 +18406,31 @@ components:
           enum: [recorded, unknown, not_configured, not_available]
         reason:
           type: string
+    NightBoundary:
+      type: object
+      description: >-
+        The current state's own content-anchor boundary, distinct from
+        `transition`: `transition` states only whether evidence exists for
+        this purpose at all, and can legitimately read "recorded" for a
+        purpose that carries no boundary (a live show, for one). This
+        field states specifically whether a boundary is armed, so the UI
+        never has to infer "armed" from a `transition` reason string.
+      required: [state, expectedAt, reason]
+      properties:
+        state:
+          type: string
+          enum: [armed, invalid, none, unknown]
+          description: >-
+            "armed" is the only state `expectedAt` is non-null for.
+            "none" means this purpose carries no boundary at all (for
+            example, a live show). "invalid" means a boundary was
+            derived and then contradicted or found unusable. "unknown"
+            means no boundary evidence has been produced yet.
+        expectedAt:
+          type: [string, "null"]
+          format: date-time
+        reason:
+          type: string
     NightCue:
       type: object
       description: >-
@@ -18576,7 +18601,7 @@ components:
         [id, configObjectId, configRevision, state, stateEnteredAt, cycle,
          finalShowRequested, finalShowRequestedAt, admissionClosed,
          admissionClosedAt, shutdownIntent, armedShowId, showCommitted,
-         readiness, powerPhase, transition, cues, backgroundAudio,
+         readiness, powerPhase, transition, boundary, cues, backgroundAudio,
          degraded, attributionDegraded, authorization, updatedAt]
       properties:
         id:
@@ -18627,6 +18652,8 @@ components:
           $ref: "#/components/schemas/NightPhaseEvidence"
         transition:
           $ref: "#/components/schemas/NightPhaseEvidence"
+        boundary:
+          $ref: "#/components/schemas/NightBoundary"
         cues:
           $ref: "#/components/schemas/NightCues"
         backgroundAudio:
