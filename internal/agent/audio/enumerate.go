@@ -3,6 +3,8 @@ package audio
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -130,6 +132,119 @@ func alsaCardKey(device string) string {
 		}
 	}
 	return suffix
+}
+
+// PipeWireNode is one Audio/Sink node a PipeWire graph reports, with the
+// real channel count and sample rate PipeWire itself negotiated for it:
+// a graph fact, not an ALSA probe result.
+type PipeWireNode struct {
+	Name        string
+	Description string
+	Channels    int
+	Rate        int
+}
+
+// PipeWireEnumerator reports what this node's PipeWire graph currently
+// exposes. A real implementation ([PwDumpEnumerator]) shells `pw-dump`.
+type PipeWireEnumerator interface {
+	// Nodes returns every Audio/Sink node pw-dump's output describes.
+	// present is false with a nil error when pw-dump itself failed to
+	// run (no PipeWire on this host at all): a clean absence, never an
+	// enumeration failure. err is non-nil only when pw-dump ran but its
+	// output could not be parsed, which IS a failure a caller must
+	// report rather than read as "no PipeWire".
+	Nodes(ctx context.Context) (nodes []PipeWireNode, present bool, err error)
+}
+
+// PwDumpEnumerator is the real [PipeWireEnumerator]: shells `pw-dump`.
+type PwDumpEnumerator struct{}
+
+// Nodes implements [PipeWireEnumerator]. Only pw-dump itself not being on
+// this host (exec.ErrNotFound) is a clean absence: a node with no
+// PipeWire package installed at all. pw-dump found but exiting non-zero
+// -- MEASURED on node-01, EACCES connecting to a socket this user lacks
+// the write bit on -- is present=true with the failure text, never
+// folded into "no PipeWire": a sinkBackend=pipewiresink node reading
+// this as absence reported "no device probe is possible while PipeWire
+// holds the card" for a graph it was never able to reach in the first
+// place.
+func (PwDumpEnumerator) Nodes(ctx context.Context) ([]PipeWireNode, bool, error) {
+	out, err := runCommand(ctx, "pw-dump")
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("audio: pw-dump: %w (output: %s)", err, strings.TrimSpace(out))
+	}
+	nodes, err := parsePwDumpSinkNodes(out)
+	if err != nil {
+		return nil, true, fmt.Errorf("audio: pw-dump: %w", err)
+	}
+	return nodes, true, nil
+}
+
+// pwDumpObject is the subset of one `pw-dump` array entry this package
+// reads: the object's type and its info.props map, which carries every
+// property key pw-dump reports (node.name, node.description,
+// media.class, audio.channels, audio.rate, ...) under loosely-typed JSON
+// values.
+type pwDumpObject struct {
+	Type string `json:"type"`
+	Info struct {
+		Props map[string]any `json:"props"`
+	} `json:"info"`
+}
+
+// pwDumpNodeType and pwDumpSinkMediaClass are the exact object type and
+// media.class `pw-dump` uses for an audio output node.
+const (
+	pwDumpNodeType       = "PipeWire:Interface:Node"
+	pwDumpSinkMediaClass = "Audio/Sink"
+)
+
+// parsePwDumpSinkNodes decodes `pw-dump`'s JSON array and returns every
+// Audio/Sink node it describes. A node missing node.name is skipped: it
+// cannot be named as a route. audio.channels/audio.rate absent or
+// unparseable leave Channels/Rate at 0 rather than failing the whole
+// parse, since a node PipeWire has not finished negotiating is real
+// evidence too, just not yet a usable one.
+func parsePwDumpSinkNodes(out string) ([]PipeWireNode, error) {
+	var objects []pwDumpObject
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &objects); err != nil {
+		return nil, fmt.Errorf("decoding pw-dump JSON: %w", err)
+	}
+	var nodes []PipeWireNode
+	for _, obj := range objects {
+		if obj.Type != pwDumpNodeType {
+			continue
+		}
+		if mc, _ := obj.Info.Props["media.class"].(string); mc != pwDumpSinkMediaClass {
+			continue
+		}
+		name, _ := obj.Info.Props["node.name"].(string)
+		if name == "" {
+			continue
+		}
+		desc, _ := obj.Info.Props["node.description"].(string)
+		nodes = append(nodes, PipeWireNode{
+			Name:        name,
+			Description: desc,
+			Channels:    pwDumpPropInt(obj.Info.Props, "audio.channels"),
+			Rate:        pwDumpPropInt(obj.Info.Props, "audio.rate"),
+		})
+	}
+	return nodes, nil
+}
+
+// pwDumpPropInt reads a numeric pw-dump property. encoding/json decodes
+// every JSON number into float64 when the target is `any`, so this
+// truncates that back to int; a missing or non-numeric key reports 0.
+func pwDumpPropInt(props map[string]any, key string) int {
+	v, ok := props[key].(float64)
+	if !ok {
+		return 0
+	}
+	return int(v)
 }
 
 // CandidateDevices filters devices down to routes worth probing for a real

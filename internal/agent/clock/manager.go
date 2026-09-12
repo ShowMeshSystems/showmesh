@@ -30,6 +30,13 @@ type Config struct {
 	HardwareTimestamping bool
 	ExternalUDSAddress   string
 	FPPBaseURL           string
+
+	// LocalSocketDir is the agent's own known-writable directory (its
+	// configured asset directory), offered to [ExternalProvider] as a
+	// fallback candidate for pmc's local -i socket when systemd sets
+	// neither RUNTIME_DIRECTORY nor STATE_DIRECTORY — see
+	// [ExternalConfig.LocalSocketDir].
+	LocalSocketDir string
 }
 
 // Manager owns this node's current [Provider]/[Tracker] pair (or none, for
@@ -114,6 +121,7 @@ func buildProvider(cfg Config, logger Logger) (Provider, error) {
 	case ProviderExternal:
 		return NewExternalProvider(ExternalConfig{
 			Interface: cfg.Interface, Domain: cfg.Domain, UDSAddress: cfg.ExternalUDSAddress,
+			LocalSocketDir: cfg.LocalSocketDir,
 		}), nil
 	case ProviderFPP:
 		return NewFPPProvider(FPPConfig{Interface: cfg.Interface, BaseURL: cfg.FPPBaseURL}), nil

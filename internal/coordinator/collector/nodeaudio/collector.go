@@ -303,6 +303,8 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	obs = append(obs,
 		buildValue(nodeID, SignalOutputsEnumerated, int64(p.EnumeratedCount), observedAt, rep),
 		buildValue(nodeID, SignalOutputsTruncated, p.Truncated, observedAt, rep),
+		buildValue(nodeID, SignalOutputsPipeWireEnumerated, p.PipeWireEnumerated, observedAt, rep),
+		buildValue(nodeID, SignalOutputsPipeWireEnumeratedReason, p.PipeWireEnumeratedReason, observedAt, rep),
 	)
 
 	domain, provenance, declaredAt, reason := lookupClockDomain(ctx, clockSrc, nodeID)
@@ -344,6 +346,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
 	obs = append(obs, engineRestoreObservations(nodeID, p, observedAt, rep)...)
+	obs = append(obs, engineBackendObservations(nodeID, p, observedAt, rep)...)
 	obs = append(obs, timelineObservations(nodeID, p, observedAt, rep)...)
 	obs = append(obs, settingsObservations(nodeID, p, observedAt, rep)...)
 
@@ -471,6 +474,44 @@ func engineGlitchObservations(nodeID string, p mqttproto.AudioPayload, observedA
 		buildValue(nodeID, SignalEngineWarningsOther, int64(p.EngineOtherWarningCount), observedAt, rep),
 		buildValue(nodeID, SignalEngineQosDrops, int64(p.EngineQosDropCount), observedAt, rep),
 	}
+}
+
+// engineBackendObservations renders the four node.audio.engine.sink_backend/
+// sink_target/clock_source/clock_reason signals (see signals.go).
+// EngineSinkBackend empty is an absent value, not a claimed cause: it
+// covers a node with no engine built, an agent that predates these
+// fields, and any other reason the agent's own report left it blank,
+// matching [engineGlitchObservations]'s identical "known=false reports
+// not_collected on every one" rule, since sink_target/clock_source/
+// clock_reason are meaningless without a reported backend. SinkTarget is
+// reported not_collected on its own, narrower gate: it only ever applies
+// to a pipewiresink backend.
+func engineBackendObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+	if p.EngineSinkBackend == "" {
+		reason := "this node's report did not include an engine sink backend"
+		return []observation.Observation{
+			notCollected(res, SignalEngineSinkBackend, source, reason, rep.receivedAt),
+			notCollected(res, SignalEngineSinkTarget, source, reason, rep.receivedAt),
+			notCollected(res, SignalEngineClockSource, source, reason, rep.receivedAt),
+			notCollected(res, SignalEngineClockReason, source, reason, rep.receivedAt),
+		}
+	}
+
+	obs := []observation.Observation{
+		buildValue(nodeID, SignalEngineSinkBackend, p.EngineSinkBackend, observedAt, rep),
+	}
+	if p.EngineSinkBackend == "pipewiresink" {
+		obs = append(obs, buildValue(nodeID, SignalEngineSinkTarget, p.EngineSinkTarget, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalEngineSinkTarget, source, "this node's engine sink backend is not pipewiresink; no PipeWire target applies", rep.receivedAt))
+	}
+	obs = append(obs,
+		buildValue(nodeID, SignalEngineClockSource, p.EngineClockSource, observedAt, rep),
+		buildValue(nodeID, SignalEngineClockReason, p.EngineClockReason, observedAt, rep),
+	)
+	return obs
 }
 
 // sessionObservations renders every session in rep.payload.Sessions into

@@ -73,6 +73,22 @@ type ConfigAudioNode struct {
 	// this node drives, present only when Role is "zone".
 	Zone *string `json:"zone,omitempty"`
 
+	// SinkBackend is the GStreamer output backend this node's agent
+	// builds against: "alsasink" or "pipewiresink" (RES-019 section 7.2
+	// candidate A, ADR-046). Optional on the wire; absent decodes to
+	// "alsasink".
+	SinkBackend string `json:"sinkBackend,omitempty"`
+
+	// PipewireTargetNode is the PipeWire node name this node's
+	// pipewiresink builds its "target-object" property from, so program
+	// audio goes to a specific PipeWire node rather than whatever
+	// PipeWire's own default sink happens to be. Present only when
+	// SinkBackend is "pipewiresink". Optional even then: omitted,
+	// pipewiresink is built with no target-object property at all
+	// (PipeWire's own default sink, unchanged from before this field
+	// existed).
+	PipewireTargetNode *string `json:"pipewireTargetNode,omitempty"`
+
 	// OutputLatency is this node's calibrated static output-chain delay
 	// (RES-019 section 8), always present so its provenance (or the
 	// "unmeasured" default) is never omitted from a read.

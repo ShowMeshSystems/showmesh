@@ -486,6 +486,15 @@ func (m *Manager) watchTick(ctx context.Context) {
 				s.lastObservedAt = obs.ObservedAt
 				if obs.State == pkgaudio.StateCompleted {
 					s.advanceLocked(ctx, false, obs.ObservedAt)
+				} else if obs.Reason != "" {
+					// State stays Playing, deliberately: the engine is
+					// still answering, so the fault beside it is the
+					// honest signal, not a state downgrade like the
+					// failed-Observe branch above.
+					s.setFaultLocked(pkgaudio.FaultFreeze, obs.Reason)
+					s.freezeCleanSince = time.Time{}
+				} else {
+					s.clearRecoveredFreezeLocked(obs.ObservedAt)
 				}
 			}
 		}

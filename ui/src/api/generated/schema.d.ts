@@ -5061,6 +5061,10 @@ export interface components {
          *
          *     `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the routes run on, never inferred, and are required on a program-only node too. `role` (ADR-045) is one of `program`, `program+ltc`, or `zone`; optional on the wire, and absent decodes to `program+ltc` - the role every pre-ADR-045 audio.node object already implicitly held, since an installation had exactly one and it always carried both program and LTC. At most one audio.node across the installation may carry `program+ltc` at a time (ADR-018's one clock domain, one LTC emitter); a second is refused, naming both node ids. `zone` is the operator's own name for the independent speaker zone this node drives, present only when `role` is `zone` - refused on any other role, since an ignored field would read as an applied one.
          *
+         *     `sinkBackend` (RES-019 section 7.2 candidate A, ADR-046) is the GStreamer output backend this node's agent builds against: `alsasink` or `pipewiresink`. Optional on the wire; absent decodes to `alsasink`, the backend every audio.node ran before this field existed.
+         *
+         *     `pipewireTargetNode` is the PipeWire node name (e.g. `alsa_output.usb-MOTU_M4_M4MA0302TY-00.pro-output-0`) this node's pipewiresink builds its `target-object` property from, present only when `sinkBackend` is `pipewiresink` - refused on any other backend, since an ignored field would read as an applied one. Optional even then: omitted, pipewiresink is built with no target-object property at all, which plays to whatever PipeWire's own default sink happens to be - the behavior every audio.node had before this field existed.
+         *
          *     `outputLatency` (RES-019 section 8) is this node's calibrated static output-chain delay, subtracted from a scheduled start's start instant so the sample reaches the air at the intended time. Optional on the wire; absent decodes to method "unmeasured", which applies zero. A GET response always includes it (never omitted, so its provenance, or the "unmeasured" default, is never silently dropped).
          */
         ConfigAudioNode: {
@@ -5077,6 +5081,13 @@ export interface components {
             role?: "program" | "program+ltc" | "zone";
             /** @description The operator's own name for this node's independent speaker zone. Present only when role is "zone". */
             zone?: string;
+            /**
+             * @description Optional; absent decodes to "alsasink" (RES-019 section 7.2 candidate A, ADR-046).
+             * @enum {string}
+             */
+            sinkBackend?: "alsasink" | "pipewiresink";
+            /** @description The PipeWire node name pipewiresink's "target-object" property is set to. Present only when sinkBackend is "pipewiresink". Optional even then; omitted means no target-object property is set at all (PipeWire's own default sink). */
+            pipewireTargetNode?: string;
             outputLatency?: components["schemas"]["ConfigAudioOutputLatency"];
         };
         /** @description "audio.node.outputLatency" (RES-019 section 8): a signed per-output offset, in microseconds, subtracted from that node's scheduled start instant so playback reaches the air at the intended instant instead of one output-chain delay late. `method` "unmeasured" is the default, applies zero, and every other field MUST be absent alongside it - a value beside it would be a fabricated measurement (RES-019 section 8: "no value is asserted... a fabricated number would be worse than zero"). Every other method (`loopback`, `acoustic`, `declared`) requires `valueUs`, `measuredAt`, `reference`, `confidence`, and `configuration` together. `configuration` records the buffer/quantum/sample-rate configuration the value was measured under: RES-019 section 8 found the offset moves with PipeWire's graph quantum, so a value is only valid for the configuration it was measured under, and this field is how that is recorded and shown next to the number rather than silently going stale. */

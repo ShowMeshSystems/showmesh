@@ -5,6 +5,7 @@ package clock
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 // TestFdToClockIDMatchesFPPMacro checks fdToClockID against hand-computed
@@ -63,5 +64,39 @@ func TestOpenPHCMissingDeviceFailsHonestly(t *testing.T) {
 	_, err := OpenPHC(0)
 	if err == nil {
 		t.Fatalf("expected an error opening a nonexistent PHC device")
+	}
+}
+
+// TestReadPHCCallCost measures a single already-open [PHCReader]'s Now()
+// cost against a real PHC device: RES-019 section 7.2 candidate A's
+// pipeline clock callback keeps one open for the engine's whole life
+// specifically so this per-call cost is only the clock_gettime syscall
+// itself, never an open/close pair; this records what that syscall
+// actually costs on real hardware rather than assuming it. Skipped, with
+// its own stated reason, on any host with no /dev/ptp0 -- this
+// development machine and most CI runners have none, matching every
+// other real-hardware-gated test in this package.
+func TestReadPHCCallCost(t *testing.T) {
+	if _, err := os.Stat("/dev/ptp0"); err != nil {
+		t.Skip("skipping: no /dev/ptp0 on this host; this test needs a real PHC device")
+	}
+	r, err := OpenPHC(0)
+	if err != nil {
+		t.Skipf("skipping: /dev/ptp0 exists but could not be opened: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	const calls = 10000
+	start := time.Now()
+	for i := 0; i < calls; i++ {
+		if _, err := r.Now(); err != nil {
+			t.Fatalf("Now: %v", err)
+		}
+	}
+	elapsed := time.Since(start)
+	perCall := elapsed / calls
+	t.Logf("PHCReader.Now (clock_gettime on an already-open /dev/ptp0): %d calls in %s (%s/call)", calls, elapsed, perCall)
+	if perCall > time.Millisecond {
+		t.Fatalf("PHCReader.Now took %s/call; want well under 1ms (GStreamer's own pipeline clock calls this from its scheduling thread)", perCall)
 	}
 }

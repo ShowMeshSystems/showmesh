@@ -442,6 +442,38 @@ func TestDecodeAudioPayloadEmpty(t *testing.T) {
 	}
 }
 
+// TestAudioPayloadValidateAcceptsOmittedEngineBackendFields proves a
+// report from an agent built before EngineSinkBackend/EngineClockSource/
+// EngineClockReason existed (all left at their zero value) still
+// validates.
+func TestAudioPayloadValidateAcceptsOmittedEngineBackendFields(t *testing.T) {
+	p := validAudioPayload()
+	if p.EngineSinkBackend != "" || p.EngineClockSource != "" || p.EngineClockReason != "" {
+		t.Fatalf("validAudioPayload() engine backend fields = %+v, want all empty (this test proves the OMITTED case)", p)
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(engine backend fields omitted) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsEachEngineClockSource(t *testing.T) {
+	for _, source := range []string{"phc", "default"} {
+		p := validAudioPayload()
+		p.EngineClockSource = source
+		if err := p.Validate(); err != nil {
+			t.Errorf("Validate(engineClockSource=%q) = %v, want nil", source, err)
+		}
+	}
+}
+
+func TestAudioPayloadValidateRejectsUnrecognizedEngineClockSource(t *testing.T) {
+	p := validAudioPayload()
+	p.EngineClockSource = "system"
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInvalidEngineClockSource) {
+		t.Errorf("Validate(engineClockSource=%q) = %v, want ErrPayloadInvalidEngineClockSource", p.EngineClockSource, err)
+	}
+}
+
 // TestAudioPayloadValidateAcceptsOmittedAlignmentFields proves an agent
 // built before the alignment* fields existed, which omits the whole
 // block, still validates -- required so that agent's existing reports

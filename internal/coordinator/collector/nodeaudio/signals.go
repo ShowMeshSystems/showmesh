@@ -98,6 +98,20 @@ const (
 	SignalEngineRestoreLastReason    observation.SignalID = "node.audio.engine.restore.last_reason"
 )
 
+// SignalEngineSinkBackend, SignalEngineSinkTarget, SignalEngineClockSource,
+// and SignalEngineClockReason report what this node's output pipeline
+// was actually built against (mqttproto.AudioPayload.EngineSinkBackend/
+// EngineSinkTarget/EngineClockSource/EngineClockReason) -- already
+// reserved as "shipped" in docs/build/IDENTIFIER-REGISTER.md, published
+// by the agent since RES-019 section 7.2 candidate A but never
+// surfaced past it until this collector read them.
+const (
+	SignalEngineSinkBackend observation.SignalID = "node.audio.engine.sink_backend"
+	SignalEngineSinkTarget  observation.SignalID = "node.audio.engine.sink_target"
+	SignalEngineClockSource observation.SignalID = "node.audio.engine.clock_source"
+	SignalEngineClockReason observation.SignalID = "node.audio.engine.clock_reason"
+)
+
 // SignalTimelineScheduledAt, SignalTimelineExpectedMs,
 // SignalTimelineActualMs, SignalTimelineErrorMs, SignalTimelineResyncs,
 // and SignalTimelineLastResyncReason are Track I seam I2's scheduled
@@ -145,6 +159,16 @@ const (
 	SignalSettingsReason            observation.SignalID = "node.audio.settings.reason"
 )
 
+// SignalOutputsPipeWireEnumerated and SignalOutputsPipeWireEnumeratedReason
+// report [mqttproto.AudioPayload.PipeWireEnumerated]/PipeWireEnumeratedReason:
+// whether this node's own PipeWire graph could be read, independent of
+// whether its ALSA enumeration separately succeeded -- a working ALSA card
+// must not hide a broken PipeWire graph on a pipewiresink-backed node.
+const (
+	SignalOutputsPipeWireEnumerated       observation.SignalID = "node.audio.outputs.pipewire_enumerated"
+	SignalOutputsPipeWireEnumeratedReason observation.SignalID = "node.audio.outputs.pipewire_enumerated_reason"
+)
+
 // AllSignalIDs is every signal this package ever emits, in the order
 // [Collector.Poll] builds them for one node.
 var AllSignalIDs = []observation.SignalID{
@@ -155,6 +179,8 @@ var AllSignalIDs = []observation.SignalID{
 	SignalOutputsCount,
 	SignalOutputsEnumerated,
 	SignalOutputsTruncated,
+	SignalOutputsPipeWireEnumerated,
+	SignalOutputsPipeWireEnumeratedReason,
 	SignalProgramState,
 	SignalLTCState,
 	SignalClockDomain,
@@ -183,6 +209,10 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSettingsState,
 	SignalSettingsSubstitutedFields,
 	SignalSettingsReason,
+	SignalEngineSinkBackend,
+	SignalEngineSinkTarget,
+	SignalEngineClockSource,
+	SignalEngineClockReason,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one

@@ -108,6 +108,17 @@ type branch struct {
 	// errAnchorUnknown.
 	anchorUnknown bool
 
+	// lastAdvancePos/lastAdvanceAt are the most recent position observe
+	// saw actually change while this branch was Playing and unfrozen, and
+	// when. checkStallLocked uses the gap between lastAdvanceAt and now to
+	// tell real playback (position moves on every poll) apart from a
+	// pipeline that reached PLAYING and then never presented another
+	// sample, proven on real Raspberry Pi hardware: Start and Observe
+	// both reported success while the reported position sat frozen at
+	// preroll forever, with no error anywhere.
+	lastAdvancePos time.Duration
+	lastAdvanceAt  time.Time
+
 	fadeActive bool
 	// fadeStartPos anchors both the GstController ramp itself and
 	// fadeArrived's completion bound in the branch's own raw stream
@@ -741,6 +752,7 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 
 	b.mu.Lock()
 	state := b.state
+	reason := b.checkStallLocked(state, pos, now)
 	fadeActive := b.fadeActive
 	arrived := fadeActive && fadeArrived(b.fadeSyncedPos, b.fadeStartPos, b.fadeDuration, gain, b.fadeTargetGain)
 	if arrived {
@@ -756,9 +768,44 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 		State:      state,
 		Position:   pos,
 		ObservedAt: now,
+		Reason:     reason,
 		Gain:       gain,
 		FadeActive: fadeActive,
 	}
+}
+
+// positionStallThreshold is how long a Playing, unfrozen branch's
+// reported position may sit exactly unchanged before checkStallLocked
+// reports a stall. Real playback moves the reported position on every
+// poll; this many seconds of no movement while nominally Playing is not
+// preroll or a slow poll, it is the exact signature measured on a
+// Raspberry Pi node whose output pipeline prerolled and then silently
+// never advanced again. var, not const: shrunk by tests exercising this
+// bound directly.
+var positionStallThreshold = 3 * time.Second
+
+// checkStallLocked reports a non-empty Reason once a Playing, unfrozen
+// branch's position has sat unchanged for at least positionStallThreshold,
+// and resets its own tracking whenever the branch is not in that state or
+// its position has genuinely moved. Caller holds b.mu.
+//
+// The position query this reads from is decode-side, not rendered
+// output, so it is weak evidence about fine playback timing (see this
+// package's own queryPosition doc comment); it is not used that way
+// here. A dead pipeline stops advancing entirely for as long as this
+// threshold, which is a coarser and much more reliable signal than a
+// decode-side reading's ordinary jitter, and is the one thing this check
+// exists to catch.
+func (b *branch) checkStallLocked(state pkgaudio.State, pos time.Duration, now time.Time) string {
+	if state != pkgaudio.StatePlaying || b.frozen || pos != b.lastAdvancePos || b.lastAdvanceAt.IsZero() {
+		b.lastAdvancePos = pos
+		b.lastAdvanceAt = now
+		return ""
+	}
+	if now.Sub(b.lastAdvanceAt) < positionStallThreshold {
+		return ""
+	}
+	return fmt.Sprintf("position has not advanced past %s in over %s while playing; the output pipeline may not be presenting audio", pos, positionStallThreshold)
 }
 
 // fadeArrived reports whether a fade started at fadeStartPos with

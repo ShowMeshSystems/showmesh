@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -135,10 +136,11 @@ func TestResolveNodeChannelCount(t *testing.T) {
 	const route = "hw:1,0"
 
 	cases := []struct {
-		name         string
-		routes       []audio.RouteEvidence
-		bindingCount int
-		want         int
+		name           string
+		routes         []audio.RouteEvidence
+		bindingCount   int
+		pipewireBacked bool
+		want           int
 	}{
 		{
 			name: "LTCChannels wider than the unconstrained probe wins",
@@ -178,17 +180,88 @@ func TestResolveNodeChannelCount(t *testing.T) {
 			bindingCount: 2,
 			want:         0,
 		},
+		{
+			name: "pipewire-backed node ignores an ALSA probe of the same route entirely",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 8}, LTCChannels: 8},
+			},
+			bindingCount:   3,
+			pipewireBacked: true,
+			want:           0,
+		},
+		{
+			name: "pipewire-backed node still uses the graph's own evidence for the same route",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, FromGraph: true},
+			},
+			bindingCount:   3,
+			pipewireBacked: true,
+			want:           4,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := audio.Discovery{Routes: tc.routes}
-			got, source := resolveNodeChannelCount(d, route, tc.bindingCount)
+			got, source := resolveNodeChannelCount(d, route, tc.bindingCount, tc.pipewireBacked)
 			if got != tc.want {
 				t.Errorf("resolveNodeChannelCount() = %d (%s), want %d", got, source, tc.want)
 			}
 			if source == "" {
 				t.Error("source is empty, want a stated reason")
+			}
+		})
+	}
+}
+
+// TestResolveNodeChannelCountFromGraphSourceWording proves the
+// graph-backed branch states wider, equal, and narrower bindings
+// distinctly instead of collapsing equal into "exceeding": a binding
+// exactly as wide as the graph-reported route is not exceeding it.
+func TestResolveNodeChannelCountFromGraphSourceWording(t *testing.T) {
+	const route = "hw:1,0"
+
+	cases := []struct {
+		name         string
+		graphChannel int
+		bindingCount int
+		wantCount    int
+		wantContains string
+	}{
+		{
+			name:         "graph width wider than the binding",
+			graphChannel: 4,
+			bindingCount: 2,
+			wantCount:    4,
+			wantContains: pipeWireGraphEvidenceSource,
+		},
+		{
+			name:         "graph width equal to the binding",
+			graphChannel: 4,
+			bindingCount: 4,
+			wantCount:    4,
+			wantContains: "matching",
+		},
+		{
+			name:         "graph width narrower than the binding",
+			graphChannel: 2,
+			bindingCount: 4,
+			wantCount:    4,
+			wantContains: "exceeding",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := audio.Discovery{Routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: tc.graphChannel}, FromGraph: true},
+			}}
+			got, source := resolveNodeChannelCount(d, route, tc.bindingCount, true)
+			if got != tc.wantCount {
+				t.Errorf("resolveNodeChannelCount() = %d, want %d", got, tc.wantCount)
+			}
+			if !strings.Contains(source, tc.wantContains) {
+				t.Errorf("source = %q, want it to contain %q", source, tc.wantContains)
 			}
 		})
 	}
@@ -292,6 +365,46 @@ func TestDecodeAudioNodeConfigStillRejectsBadLTCWhenDeclared(t *testing.T) {
 	params["ltcChannel"] = float64(0)
 	if _, err := decodeAudioNodeConfig(params); err == nil {
 		t.Fatal("decodeAudioNodeConfig accepted a declared ltcChannel of 0")
+	}
+}
+
+// TestDecodeAudioNodeConfigSinkBackendDefaultsToALSA proves an omitted
+// sinkBackend decodes to the empty string, which
+// [audioEngineSinkFactoryAndProps] treats as "alsasink" -- every
+// audio.node binding before this field existed.
+func TestDecodeAudioNodeConfigSinkBackendDefaultsToALSA(t *testing.T) {
+	p, err := decodeAudioNodeConfig(programOnlyNodeParams())
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if p.SinkBackend != "" {
+		t.Errorf("SinkBackend = %q, want empty for an omitted field", p.SinkBackend)
+	}
+}
+
+// TestDecodeAudioNodeConfigAcceptsPipeWireSinkBackend proves the agent
+// accepts the RES-019 section 7.2 candidate A backend choice.
+func TestDecodeAudioNodeConfigAcceptsPipeWireSinkBackend(t *testing.T) {
+	params := programOnlyNodeParams()
+	params["sinkBackend"] = "pipewiresink"
+	p, err := decodeAudioNodeConfig(params)
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if p.SinkBackend != pipewireAudioSinkFactory {
+		t.Errorf("SinkBackend = %q, want %q", p.SinkBackend, pipewireAudioSinkFactory)
+	}
+}
+
+// TestDecodeAudioNodeConfigRejectsUnknownSinkBackend proves a value
+// outside the two-member closed vocabulary is refused rather than
+// silently accepted and later mismatched against no real GStreamer
+// factory.
+func TestDecodeAudioNodeConfigRejectsUnknownSinkBackend(t *testing.T) {
+	params := programOnlyNodeParams()
+	params["sinkBackend"] = "pulsesink"
+	if _, err := decodeAudioNodeConfig(params); err == nil {
+		t.Fatal("decodeAudioNodeConfig accepted an unrecognized sinkBackend")
 	}
 }
 

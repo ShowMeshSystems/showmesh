@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -137,6 +138,32 @@ func TestBuildAudioPayloadEnumerationFailureIsUnknownNotAbsent(t *testing.T) {
 		if got != d.HardwareEnumeratedReason {
 			t.Errorf("%s = %q, want the enumeration failure's own reason %q, not a confirmed-absence claim", name, got, d.HardwareEnumeratedReason)
 		}
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("built payload fails its own Validate: %v", err)
+	}
+}
+
+// TestBuildAudioPayloadPipeWireReadFailureIsStatedNotSilent proves
+// acceptance 5: a sinkBackend pipewiresink node whose PipeWire graph
+// could not be read (pw-dump ran but returned garbage) states that in
+// DeviceReason/ProgramReason rather than reading identically to a node
+// that simply has no usable hardware at all.
+func TestBuildAudioPayloadPipeWireReadFailureIsStatedNotSilent(t *testing.T) {
+	d := audio.Discovery{
+		EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: false,
+		PipeWireEnumeratedReason: "PipeWire graph enumeration failed: decoding pw-dump JSON: unexpected end of JSON input",
+	}
+	p := buildAudioPayload(d, time.Now())
+
+	if p.DeviceAvailable {
+		t.Fatal("DeviceAvailable = true, want false")
+	}
+	if !strings.Contains(p.DeviceReason, "PipeWire graph could not be read") {
+		t.Errorf("DeviceReason = %q, want it to say the PipeWire graph could not be read", p.DeviceReason)
+	}
+	if !strings.Contains(p.DeviceReason, "unexpected end of JSON input") {
+		t.Errorf("DeviceReason = %q, want the underlying read failure text carried through", p.DeviceReason)
 	}
 	if err := p.Validate(); err != nil {
 		t.Errorf("built payload fails its own Validate: %v", err)
@@ -1535,6 +1562,135 @@ func TestRunAudioReportReportsIntermediateGainAcrossADispatchedFade(t *testing.T
 	after := session(2)
 	if after.Gain != float64(target) {
 		t.Fatalf("once the 2s fade's duration has elapsed: Gain = %v, want the dispatched target %v", after.Gain, target)
+	}
+}
+
+// stubEngineBackendInfo is a [stubEngineAvailability] that also
+// implements the [engineBackendInfo] optional interface, matching
+// stubEngineGlitchCounts's identical shape.
+type stubEngineBackendInfo struct {
+	stubEngineAvailability
+	sinkBackend string
+	sinkTarget  string
+	clockSource string
+	clockReason string
+}
+
+func (s *stubEngineBackendInfo) SinkBackend() string { return s.sinkBackend }
+func (s *stubEngineBackendInfo) SinkTarget() string  { return s.sinkTarget }
+func (s *stubEngineBackendInfo) ClockSource() (string, string) {
+	return s.clockSource, s.clockReason
+}
+
+// TestApplyEngineBackendInfoNilEngineLeavesFieldsBlank proves a nil
+// engine (no asset directory configured on this node) never fabricates a
+// backend or clock source.
+func TestApplyEngineBackendInfoNilEngineLeavesFieldsBlank(t *testing.T) {
+	payload := mqttproto.AudioPayload{EngineSinkBackend: "stale", EngineSinkTarget: "stale", EngineClockSource: "stale", EngineClockReason: "stale"}
+	applyEngineBackendInfo(&payload, nil)
+	if payload.EngineSinkBackend != "" || payload.EngineSinkTarget != "" || payload.EngineClockSource != "" || payload.EngineClockReason != "" {
+		t.Fatalf("applyEngineBackendInfo with a nil engine left stale values: %+v", payload)
+	}
+}
+
+// TestApplyEngineBackendInfoEngineWithoutTheOptionalInterfaceLeavesFieldsBlank
+// proves an engine that does not implement [engineBackendInfo] (a test
+// double, or an older build) reports blank rather than a fabricated
+// value -- matching applyEngineGlitchCounts's identical rule for engines
+// that do not implement its own optional interface.
+func TestApplyEngineBackendInfoEngineWithoutTheOptionalInterfaceLeavesFieldsBlank(t *testing.T) {
+	engine := &stubEngineAvailability{results: []struct {
+		ok     bool
+		reason string
+	}{{ok: true}}}
+	payload := mqttproto.AudioPayload{EngineSinkBackend: "stale"}
+	applyEngineBackendInfo(&payload, engine)
+	if payload.EngineSinkBackend != "" {
+		t.Fatalf("EngineSinkBackend = %q, want \"\" for an engine with no SinkBackend method", payload.EngineSinkBackend)
+	}
+}
+
+// TestApplyEngineBackendInfoReportsWhatTheEngineBuiltWith proves the
+// live values reach the payload unchanged, fresh on every call -- the
+// same "live, never cached" rule every other applyEngine* function in
+// this file follows.
+func TestApplyEngineBackendInfoReportsWhatTheEngineBuiltWith(t *testing.T) {
+	engine := &stubEngineBackendInfo{sinkBackend: "pipewiresink", sinkTarget: "showmesh-pw-target", clockSource: "phc"}
+	var payload mqttproto.AudioPayload
+	applyEngineBackendInfo(&payload, engine)
+	if payload.EngineSinkBackend != "pipewiresink" {
+		t.Errorf("EngineSinkBackend = %q, want %q", payload.EngineSinkBackend, "pipewiresink")
+	}
+	if payload.EngineSinkTarget != "showmesh-pw-target" {
+		t.Errorf("EngineSinkTarget = %q, want %q", payload.EngineSinkTarget, "showmesh-pw-target")
+	}
+	if payload.EngineClockSource != "phc" {
+		t.Errorf("EngineClockSource = %q, want %q", payload.EngineClockSource, "phc")
+	}
+	if payload.EngineClockReason != "" {
+		t.Errorf("EngineClockReason = %q, want \"\"", payload.EngineClockReason)
+	}
+}
+
+// TestApplyEngineBackendInfoReportsAFallbackClockReason proves a "default"
+// clock source's reason is carried through unchanged.
+func TestApplyEngineBackendInfoReportsAFallbackClockReason(t *testing.T) {
+	engine := &stubEngineBackendInfo{sinkBackend: "alsasink", clockSource: "default", clockReason: "interface eth0 has no associated PHC"}
+	var payload mqttproto.AudioPayload
+	applyEngineBackendInfo(&payload, engine)
+	if payload.EngineClockSource != "default" || payload.EngineClockReason != "interface eth0 has no associated PHC" {
+		t.Errorf("EngineClockSource/EngineClockReason = %q/%q, want %q/%q",
+			payload.EngineClockSource, payload.EngineClockReason, "default", "interface eth0 has no associated PHC")
+	}
+}
+
+// stubGstEngineBackendInfo is a [audio.FakeEngine] that also implements
+// [audio.BackendInfoObserver], standing in for [gstengine.Engine] without
+// this package importing it. Bound into a real [audio.SwitchableEngine]
+// (never asserted against directly), it proves applyEngineBackendInfo
+// reaches a real engine's values through the exact wrapper agent.go hands
+// it in production, catching the bug where SwitchableEngine forwarded
+// GlitchCounts and Alignment but not these three methods, so the
+// assertion against engineBackendInfo always failed and every field
+// stayed blank even on a node with a built, playing engine.
+type stubGstEngineBackendInfo struct {
+	*audio.FakeEngine
+	sinkBackend string
+	sinkTarget  string
+	clockSource string
+	clockReason string
+}
+
+func (s *stubGstEngineBackendInfo) SinkBackend() string { return s.sinkBackend }
+func (s *stubGstEngineBackendInfo) SinkTarget() string  { return s.sinkTarget }
+func (s *stubGstEngineBackendInfo) ClockSource() (string, string) {
+	return s.clockSource, s.clockReason
+}
+
+// TestApplyEngineBackendInfoThroughSwitchableEngineReachesTheBoundEngine
+// proves applyEngineBackendInfo works when handed the real
+// [audio.SwitchableEngine] wrapper (as agent.go's runAudioReport call
+// always is), not only a fake implementing [engineBackendInfo] directly.
+func TestApplyEngineBackendInfoThroughSwitchableEngineReachesTheBoundEngine(t *testing.T) {
+	switchable := audio.NewSwitchableEngine()
+	switchable.Set(&stubGstEngineBackendInfo{
+		FakeEngine:  audio.NewFakeEngine(time.Now),
+		sinkBackend: "pipewiresink",
+		sinkTarget:  "showmesh-pw-target",
+		clockSource: "phc",
+	})
+
+	var payload mqttproto.AudioPayload
+	applyEngineBackendInfo(&payload, switchable)
+
+	if payload.EngineSinkBackend != "pipewiresink" {
+		t.Errorf("EngineSinkBackend = %q, want %q (via SwitchableEngine)", payload.EngineSinkBackend, "pipewiresink")
+	}
+	if payload.EngineSinkTarget != "showmesh-pw-target" {
+		t.Errorf("EngineSinkTarget = %q, want %q (via SwitchableEngine)", payload.EngineSinkTarget, "showmesh-pw-target")
+	}
+	if payload.EngineClockSource != "phc" {
+		t.Errorf("EngineClockSource = %q, want %q (via SwitchableEngine)", payload.EngineClockSource, "phc")
 	}
 }
 

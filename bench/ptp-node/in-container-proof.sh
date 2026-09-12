@@ -241,20 +241,22 @@ echo "--- step 4: start PipeWire + WirePlumber manually ---"
 export PIPEWIRE_RUNTIME_DIR=/run/pipewire
 export XDG_RUNTIME_DIR=/run/pipewire
 mkdir -p /run/pipewire
-chown pipewire:pipewire /run/pipewire
+chown showmesh:showmesh /run/pipewire
 # The redirects below are opened by this script's own (root) shell before
-# sudo execs into the pipewire user, so the log files land where a root
-# shell can always write them; sudo never touches the redirect itself.
+# sudo execs into the showmesh user (the account install-ptp-audio.sh now
+# runs both PipeWire and the agent as, see that script's own SERVICE_USER
+# comment), so the log files land where a root shell can always write
+# them; sudo never touches the redirect itself.
 # shellcheck disable=SC2024
-sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   /usr/bin/pipewire > /tmp/pipewire.log 2>&1 &
 sleep 2
 # shellcheck disable=SC2024
-sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   /usr/bin/wireplumber > /tmp/wireplumber.log 2>&1 &
 sleep 3
 
-DRIVER_LINE="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+DRIVER_LINE="$(sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   pw-dump 2>/dev/null | python3 -c '
 import json, sys
 objs = json.load(sys.stdin)
@@ -276,6 +278,39 @@ else
 fi
 
 echo ""
+echo "--- step 4b: the actual permission fix -- same-user connect works, a different unprivileged user's does not ---"
+# This is the property node-01 got wrong before install-ptp-audio.sh ran
+# PipeWire as the SAME user as the agent: connect() to a Unix socket needs
+# the WRITE bit, not read+execute, and a socket owned by one unprivileged
+# user denies every OTHER unprivileged user by default regardless of its
+# mode bits being loose in other ways. bench-other exists only to be that
+# other user; it is never added to any group PipeWire's own socket might
+# be group-writable to, so this proves the ownership fix itself, not
+# merely that some group happened to include it.
+CONNECT_PY='import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect("/run/pipewire/pipewire-0")
+except OSError as e:
+    print("CONNECT_FAIL:" + str(e)); sys.exit(1)
+print("CONNECT_OK")'
+if sudo -u showmesh python3 -c "$CONNECT_PY" | grep -q CONNECT_OK; then
+  echo "OK: showmesh (the same user PipeWire itself runs as) can connect() to /run/pipewire/pipewire-0"
+else
+  echo "FAIL: showmesh could not connect() to its own PipeWire socket"
+  exit 1
+fi
+useradd --system --no-create-home --shell /usr/sbin/nologin bench-other
+OTHER_CONNECT="$(sudo -u bench-other python3 -c "$CONNECT_PY" 2>&1 || true)"
+echo "$OTHER_CONNECT"
+if echo "$OTHER_CONNECT" | grep -q CONNECT_FAIL; then
+  echo "OK: bench-other (an unrelated unprivileged user) correctly cannot connect() -- confirms this container's PipeWire socket is not simply world-writable"
+else
+  echo "FAIL: expected bench-other's connect() to fail; if it succeeded this container's socket is unexpectedly permissive and the same-user fix is not what is actually being proven"
+  exit 1
+fi
+
+echo ""
 echo "--- step 5: pipewiresink playback ---"
 # No ALSA hardware in this container, so WirePlumber's ALSA monitor never
 # creates a real sink node for pipewiresink to target -- on the real node
@@ -286,12 +321,12 @@ echo "--- step 5: pipewiresink playback ---"
 # below, the group-election mechanism itself; it says nothing about a real
 # ALSA sink actually rate-matching, which needs the real node.
 # shellcheck disable=SC2024
-sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=showmesh-bench-null-sink media.class=Audio/Sink object.linger=true audio.position=[FL,FR] node.group=\"$PTP_NODE_GROUP\" }" \
   > /tmp/pw-cli-null-sink.log 2>&1
 sleep 1
 # shellcheck disable=SC2024
-if sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+if sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   timeout 6 gst-launch-1.0 audiotestsrc num-buffers=200 ! audioconvert ! pipewiresink target-object=showmesh-bench-null-sink \
   > /tmp/gst-pipewiresink.log 2>&1; then
   echo "OK: gst-launch-1.0 through pipewiresink completed without error"
@@ -316,7 +351,7 @@ echo "--- step 6: node.group driver election (the real node's group bug, without
 # showmesh-ptp-driver's own object id is the one reading that proves
 # election, and is exactly what verify-ptp-audio.sh now checks against a
 # real ALSA node.
-GROUP_READING="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
+GROUP_READING="$(sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire \
   pw-dump 2>/dev/null | python3 -c '
 import json, sys
 objs = json.load(sys.stdin)
@@ -363,7 +398,7 @@ echo "--- step 7: driver-election.py against a pw-dump padded past ARG_MAX ---"
 # and feed it to the exact parser verify-ptp-audio.sh now runs -- on
 # stdin, never as an argument or environment variable -- to prove the
 # fix, not just the mechanism the fix replaced.
-REAL_DUMP="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire pw-dump 2>/dev/null)"
+REAL_DUMP="$(sudo -u showmesh PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire pw-dump 2>/dev/null)"
 ARG_MAX_BYTES="$(getconf ARG_MAX)"
 PADDED_DUMP="$(python3 -c "
 import json, sys
@@ -394,6 +429,206 @@ if PW_DUMP_JSON="$PADDED_DUMP" env true 2>/tmp/showmesh-argmax-check.log; then
   exit 1
 else
   echo "OK: confirmed the old argument/environment-passing approach does fail past ARG_MAX on this padded payload ($(cat /tmp/showmesh-argmax-check.log))"
+fi
+
+echo ""
+echo "--- step 8: verify-ptp-audio.sh's duplicate-writer check, against real processes on this host ---"
+# The actual node-01 incident: a stray hand-run phc2sys alongside the
+# installed unit fought the same PHC, and every other check verify-ptp-audio.sh
+# runs stayed green throughout. This step proves the fix -- that check
+# reads the live process table, not the installed units -- with inert
+# fake binaries (no real ptp4l/phc2sys protocol run here, only comm/argv),
+# so it needs no PHC and cannot collide with the real ptp4l already running
+# from step 3 above except by DESIGN in the ptp4l case below, which mirrors
+# the incident's own shape: one legitimate process plus a stray one.
+FAKEBIN=/tmp/showmesh-bench-fakebin
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/phc2sys" <<'EOF'
+#!/bin/bash
+trap 'exit 0' TERM
+sleep 60
+EOF
+cat > "$FAKEBIN/ptp4l" <<'EOF'
+#!/bin/bash
+trap 'exit 0' TERM
+sleep 60
+EOF
+chmod +x "$FAKEBIN/phc2sys" "$FAKEBIN/ptp4l"
+
+"$FAKEBIN/phc2sys" -s CLOCK_REALTIME -c /dev/ptp0 -O 0 &
+FAKE_PHC2SYS_1=$!
+"$FAKEBIN/phc2sys" -s CLOCK_REALTIME -c /dev/ptp0 -O 0 &
+FAKE_PHC2SYS_2=$!
+# A second target clock, not shared with the pair above: proves this
+# check groups by target device rather than flagging every phc2sys process
+# on the host as a duplicate.
+"$FAKEBIN/phc2sys" -s CLOCK_REALTIME -c /dev/ptp1 -O 0 &
+FAKE_PHC2SYS_3=$!
+# The real ptp4l from step 3 is still running on $IFACE; this one extra
+# fake process on the same interface reproduces the actual incident shape
+# (one legitimate writer, one stray one) rather than two synthetic ones.
+"$FAKEBIN/ptp4l" -f /etc/showmesh/ptp4l.conf -i "$IFACE" -m &
+FAKE_PTP4L_1=$!
+sleep 1
+
+VERIFY_OUT="$(/repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1 || true)"
+echo "$VERIFY_OUT"
+
+kill "$FAKE_PHC2SYS_1" "$FAKE_PHC2SYS_2" "$FAKE_PHC2SYS_3" "$FAKE_PTP4L_1" 2>/dev/null || true
+wait "$FAKE_PHC2SYS_1" "$FAKE_PHC2SYS_2" "$FAKE_PHC2SYS_3" "$FAKE_PTP4L_1" 2>/dev/null || true
+
+if echo "$VERIFY_OUT" | grep -qE "FAIL: 2 phc2sys processes target /dev/ptp0 at once \(pids:[0-9 ]+\)"; then
+  echo "OK: verify-ptp-audio.sh flagged the two phc2sys processes sharing /dev/ptp0"
+else
+  echo "FAIL: expected a FAIL line naming 2 phc2sys processes on /dev/ptp0"
+  exit 1
+fi
+if echo "$VERIFY_OUT" | grep -q "/dev/ptp1"; then
+  echo "FAIL: the lone phc2sys process on /dev/ptp1 must never be reported as a duplicate"
+  exit 1
+else
+  echo "OK: the lone phc2sys process on /dev/ptp1 was correctly not flagged"
+fi
+if echo "$VERIFY_OUT" | grep -qE "FAIL: 2 ptp4l processes run on interface $IFACE at once \(pids:[0-9 ]+\)"; then
+  echo "OK: verify-ptp-audio.sh flagged the real ptp4l plus the one stray process sharing $IFACE"
+else
+  echo "FAIL: expected a FAIL line naming 2 ptp4l processes on $IFACE (the real one from step 3 plus the stray one started here)"
+  exit 1
+fi
+
+echo ""
+echo "--- step 8b: the duplicate-writer check with ZERO phc2sys processes still runs the ptp4l half ---"
+# The fake phc2sys processes above are already killed and reaped, so this
+# container now has none running -- exactly the PHC-less-node shape that
+# made PHC2SYS_TARGETS a totally empty associative array. Under set -u,
+# bash's own "${#PHC2SYS_TARGETS[@]}" on that empty array throws "unbound
+# variable" (confirmed against a real bash 5.1), which used to abort the
+# whole script before it ever reached the real ptp4l on $IFACE below. This
+# is the regression guard: without it, this comes back the moment someone
+# adds another optional process class.
+VERIFY_NO_PHC2SYS_OUT="$(/repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1 || true)"
+echo "$VERIFY_NO_PHC2SYS_OUT"
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -qi "unbound variable"; then
+  echo "FAIL: verify-ptp-audio.sh aborted on an unbound variable with zero phc2sys processes running"
+  exit 1
+fi
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -q "INFO: no phc2sys process running"; then
+  echo "OK: verify-ptp-audio.sh reported the expected no-phc2sys line instead of crashing"
+else
+  echo "FAIL: expected an INFO line reporting no phc2sys process running"
+  exit 1
+fi
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -qE "OK: exactly one ptp4l process per interface \($IFACE\)"; then
+  echo "OK: the ptp4l half of the writer-uniqueness check still ran and reported the real ptp4l on $IFACE"
+else
+  echo "FAIL: expected the ptp4l half of the writer-uniqueness check to still run and report the real ptp4l on $IFACE"
+  exit 1
+fi
+if echo "$VERIFY_NO_PHC2SYS_OUT" | grep -qE "^verify-ptp-audio\.sh: [0-9]+ check\(s\) passed"; then
+  echo "OK: verify-ptp-audio.sh ran to completion and printed its final summary line"
+else
+  echo "FAIL: verify-ptp-audio.sh did not reach its final summary line (script aborted early)"
+  exit 1
+fi
+
+echo ""
+echo "--- step 9: servo-health.py against the actual node-01 saturated/flapping/negative-delay log lines ---"
+# The exact phc2sys log lines from the node-01 incident (see PTP-AUDIO.md):
+# freq pinned at linuxptp's own 900000000ppb clamp, state flapping s2/s0.
+# Fed directly to the parser, on stdin, the same convention driver-election.py
+# already uses and for the same reason: this bench has no PHC and no real
+# ptp4l/phc2sys servo to sample, so the regression guard is the parser
+# itself, not the systemctl/journalctl-gated check that calls it (never run
+# by this bench, same as every other systemd-gated check -- see README).
+SATURATED_READING="$(printf '%s\n' \
+  '/dev/ptp0 sys offset -288646357 s2 freq -900000000 delay 0' \
+  '/dev/ptp0 sys offset   55730027 s0 freq -900000000 delay 0' \
+  | python3 /repo/deploy/node/ptp-audio/servo-health.py)"
+echo "$SATURATED_READING"
+if echo "$SATURATED_READING" | grep -q '^SAMPLE=-288646357|2|-900000000|0$' \
+   && echo "$SATURATED_READING" | grep -q '^SAMPLE=55730027|0|-900000000|0$' \
+   && echo "$SATURATED_READING" | grep -q '^SAMPLE_COUNT=2$'; then
+  echo "OK: servo-health.py correctly extracted the saturated-freq, flapping-state samples from the actual node-01 log lines"
+else
+  echo "FAIL: servo-health.py did not extract the expected samples from the node-01 fixture lines"
+  exit 1
+fi
+
+# A follower's own ptp4l lines use different label words ("master offset",
+# "path delay") for the same four fields; the negative path delay the
+# node-01 follower actually saw is the clearest single tell this check
+# exists to catch.
+NEGATIVE_DELAY_READING="$(printf '%s\n' \
+  'ptp4l[1234.5]: master offset 80123456 s0 freq 45000 path delay -60123' \
+  | python3 /repo/deploy/node/ptp-audio/servo-health.py)"
+echo "$NEGATIVE_DELAY_READING"
+if echo "$NEGATIVE_DELAY_READING" | grep -q '^SAMPLE=80123456|0|45000|-60123$'; then
+  echo "OK: servo-health.py correctly extracted a negative path delay from a follower's ptp4l log line"
+else
+  echo "FAIL: servo-health.py did not extract the negative-path-delay sample"
+  exit 1
+fi
+
+echo ""
+echo "--- step 10: verify-ptp-audio.sh's servo-health check on a converged-but-wrong 50ms offset ---"
+# Re-review finding F on PR #454: eight samples holding one servo state
+# with a modest freq/delay used to print "servo settled" even 50ms out of
+# sync, because offset itself was never tested. Fakes systemctl (report
+# phc2sys-showmesh.service active) and journalctl (return this fixture) on
+# PATH so the actual shell script runs its real thresholds end to end, not
+# just servo-health.py in isolation (step 9 above already proves the parser).
+FAKESYSTEMD=/tmp/showmesh-bench-fakesystemd
+mkdir -p "$FAKESYSTEMD"
+cat > "$FAKESYSTEMD/systemctl" <<'EOF'
+#!/bin/bash
+if [ "$1" = "is-active" ] && [ "$3" = "phc2sys-showmesh.service" ]; then
+  exit 0
+fi
+exit 3
+EOF
+cat > "$FAKESYSTEMD/journalctl" <<'EOF'
+#!/bin/bash
+for i in 1 2 3 4 5 6 7 8; do
+  echo "phc2sys[$i.1]: sys offset 50000000 s2 freq -3021 delay 812"
+done
+EOF
+chmod +x "$FAKESYSTEMD/systemctl" "$FAKESYSTEMD/journalctl"
+
+set +e
+OFFSET_VERIFY_OUT="$(PATH="$FAKESYSTEMD:$PATH" /repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1)"
+OFFSET_VERIFY_RC=$?
+set -e
+echo "$OFFSET_VERIFY_OUT"
+if echo "$OFFSET_VERIFY_OUT" | grep -qE "FAIL:.*offset reached 50000000ns" && [ "$OFFSET_VERIFY_RC" -eq 1 ]; then
+  echo "OK: verify-ptp-audio.sh's servo-health check failed a converged-but-50ms-out-of-sync servo (exit 1)"
+else
+  echo "FAIL: expected verify-ptp-audio.sh to fail (exit 1) the 50ms-offset servo fixture (finding F regression guard)"
+  exit 1
+fi
+
+echo ""
+echo "--- step 11: verify-ptp-audio.sh's servo-health check on an empty journal read ---"
+# Re-review finding G on PR #454: journalctl exiting 0 with no output (the
+# shape a caller outside systemd-journal/adm actually gets, not a crash)
+# used to land in the info() branch, touching neither PASS, FAIL nor ERR,
+# so the script exited 0 having produced no answer. This instrument
+# failure must exit 2.
+cat > "$FAKESYSTEMD/journalctl" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$FAKESYSTEMD/journalctl"
+
+set +e
+EMPTY_VERIFY_OUT="$(PATH="$FAKESYSTEMD:$PATH" /repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1)"
+EMPTY_VERIFY_RC=$?
+set -e
+echo "$EMPTY_VERIFY_OUT"
+if echo "$EMPTY_VERIFY_OUT" | grep -q "ERROR: no parseable servo sample lines" && [ "$EMPTY_VERIFY_RC" -eq 2 ]; then
+  echo "OK: verify-ptp-audio.sh exited 2 on an empty, zero-exit journal read (finding G regression guard)"
+else
+  echo "FAIL: expected verify-ptp-audio.sh to exit 2 on an empty journal read, got rc=$EMPTY_VERIFY_RC"
+  exit 1
 fi
 
 echo ""

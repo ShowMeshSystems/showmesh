@@ -43,6 +43,33 @@ var audioNodeRoles = map[string]bool{
 	AudioNodeRoleZone:       true,
 }
 
+// The two members of audio.node.sinkBackend (RES-019 section 7.2
+// candidate A, permitted by ADR-046): [AudioNodeSinkBackendALSA] plays
+// through the node's own alsasink, exactly as every audio.node before
+// this field existed; [AudioNodeSinkBackendPipeWire] hands the node's
+// output graph to PipeWire, clocked from the node's PTP hardware clock,
+// so PipeWire (not this codebase) rate-matches ALSA output to it.
+const (
+	AudioNodeSinkBackendALSA     = "alsasink"
+	AudioNodeSinkBackendPipeWire = "pipewiresink"
+
+	// AudioNodeSinkBackendDefault is used whenever a payload omits
+	// "sinkBackend" -- every audio.node written before this field
+	// existed keeps decoding to exactly the backend it already ran.
+	AudioNodeSinkBackendDefault = AudioNodeSinkBackendALSA
+)
+
+var audioNodeSinkBackends = map[string]bool{
+	AudioNodeSinkBackendALSA:     true,
+	AudioNodeSinkBackendPipeWire: true,
+}
+
+// audioNodePipewireTargetNodeConstraintDetail is the refusal text shared
+// between [DecodeAudioNodePayload]'s "present but sinkBackend is not
+// pipewiresink" branch, so the wording matches the field's own doc
+// comment exactly.
+const audioNodePipewireTargetNodeConstraintDetail = "pipewireTargetNode must be absent unless sinkBackend is \"pipewiresink\": an ignored field would read as an applied one"
+
 // The four members of outputLatency.method (RES-019 section 8).
 // "unmeasured" is the default and the only member that must carry no
 // other outputLatency field: see [decodeAudioNodeOutputLatency].
@@ -81,8 +108,9 @@ var audioNodeTopLevelKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true,
 	"programChannels": true, "ltcChannel": true,
 	"clockDomain": true, "clockDomainProvenance": true,
-	"role": true, "zone": true,
-	"outputLatency": true,
+	"role": true, "zone": true, "sinkBackend": true,
+	"pipewireTargetNode": true,
+	"outputLatency":      true,
 }
 
 var outputLatencyTopLevelKeys = map[string]bool{
@@ -162,6 +190,33 @@ type AudioNodePayload struct {
 	// at decode time, matching show.cue's outputs.announcement.duckGainDb
 	// precedent: an ignored field would read as an applied one.
 	Zone *string `json:"zone,omitempty"`
+
+	// SinkBackend is the GStreamer output backend this node's agent
+	// builds against: [AudioNodeSinkBackendALSA] or
+	// [AudioNodeSinkBackendPipeWire]. Optional on the wire; absent
+	// decodes to [AudioNodeSinkBackendDefault] ("alsasink") so every
+	// audio.node written before this field existed keeps decoding
+	// unchanged.
+	SinkBackend string `json:"sinkBackend,omitempty"`
+
+	// PipewireTargetNode is the PipeWire node name (e.g.
+	// "alsa_output.usb-MOTU_M4_M4MA0302TY-00.pro-output-0") this node's
+	// pipewiresink builds its "target-object" property from, so the
+	// engine's output is bound to a specific PipeWire node instead of
+	// whatever PipeWire's own default sink happens to be at the moment,
+	// a show node must never depend on that, since the default can be an
+	// unrelated onboard output changed by hand. Present only when
+	// SinkBackend is [AudioNodeSinkBackendPipeWire]; refused otherwise,
+	// matching Zone's identical "an ignored field would read as an
+	// applied one" rule. Optional even then: omitted, pipewiresink is
+	// built with no target-object property at all, exactly the behavior
+	// this node had before this field existed (PipeWire's own default
+	// sink). ProgramRoute is deliberately NOT reused for this: it names
+	// the node's discovered ALSA device identity (e.g.
+	// "hw:CARD=M4,DEV=0"), not a PipeWire node name, and pipewiresink's
+	// target-object silently ignores a name it does not recognize rather
+	// than failing, which is exactly the gap this field closes.
+	PipewireTargetNode *string `json:"pipewireTargetNode,omitempty"`
 
 	// OutputLatency is this node's calibrated static output-chain delay
 	// (RES-019 section 8). Optional on the wire: absent decodes to
@@ -275,6 +330,11 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		return AudioNodePayload{}, verr
 	}
 
+	sinkBackend, verr := decodeDefaultedEnum(top, "sinkBackend", "sinkBackend", AudioNodeSinkBackendDefault, audioNodeSinkBackends)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
+
 	var zone *string
 	if raw, present := top["zone"]; present {
 		if role != AudioNodeRoleZone {
@@ -296,6 +356,10 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		zone = &s
 	}
 
+	pipewireTargetNode, verr := decodeAudioNodePipewireTargetNode(top, sinkBackend)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
 	outputLatency, verr := decodeAudioNodeOutputLatency(top)
 	if verr != nil {
 		return AudioNodePayload{}, verr
@@ -306,8 +370,39 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		ProgramChannels: programChannels, LTCChannel: ltcChannel,
 		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
 		Role: role, Zone: zone,
-		OutputLatency: outputLatency,
+		SinkBackend:        sinkBackend,
+		PipewireTargetNode: pipewireTargetNode,
+		OutputLatency:      outputLatency,
 	}, nil
+}
+
+// decodeAudioNodePipewireTargetNode decodes the optional
+// "pipewireTargetNode" field, mirroring "zone"'s own decode rules exactly
+// (present-only-when-applicable, never null, never empty): refused unless
+// sinkBackend is [AudioNodeSinkBackendPipeWire], since a value that would
+// never be read must not be silently accepted.
+func decodeAudioNodePipewireTargetNode(top map[string]json.RawMessage, sinkBackend string) (*string, *ValidationError) {
+	raw, present := top["pipewireTargetNode"]
+	if !present {
+		return nil, nil
+	}
+	if sinkBackend != AudioNodeSinkBackendPipeWire {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "pipewireTargetNode",
+			Detail: audioNodePipewireTargetNodeConstraintDetail,
+		}
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: "pipewireTargetNode", Detail: "pipewireTargetNode must not be null; omit it to leave it unset"}
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "pipewireTargetNode", Detail: "pipewireTargetNode must be a string"}
+	}
+	if s == "" {
+		return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: "pipewireTargetNode", Detail: "pipewireTargetNode must not be an empty string"}
+	}
+	return &s, nil
 }
 
 // decodeAudioNodeOutputLatency decodes the optional "outputLatency"

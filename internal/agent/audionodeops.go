@@ -36,7 +36,23 @@ type audioNodeConfig struct {
 	LTCChannel            int    `json:"ltcChannel,omitempty"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
-	Revision              int64  `json:"revision"`
+
+	// SinkBackend is the GStreamer output backend this node builds
+	// against: [realAudioSinkFactory] ("alsasink", the default used
+	// whenever this field is omitted, matching every audio.node binding
+	// before this field existed) or [pipewireAudioSinkFactory]
+	// ("pipewiresink", RES-019 section 7.2 candidate A / ADR-046).
+	SinkBackend string `json:"sinkBackend,omitempty"`
+
+	// PipewireTargetNode is the PipeWire node name pipewiresink's
+	// "target-object" property is built from, present only when
+	// SinkBackend is [pipewireAudioSinkFactory]. Optional even then:
+	// empty builds pipewiresink with no target-object property at all
+	// (PipeWire's own default sink), matching this node's behavior
+	// before this field existed.
+	PipewireTargetNode string `json:"pipewireTargetNode,omitempty"`
+
+	Revision int64 `json:"revision"`
 
 	// OutputLatency is RES-019 section 8's calibrated static output
 	// delay, absent/zero-value ("unmeasured") on a node the operator has
@@ -214,7 +230,8 @@ func (b *audioBinding) currentSettingsRevision() (revision int64, have bool) {
 var audioNodeConfigureKnownKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true, "programChannels": true,
 	"ltcChannel": true, "clockDomain": true, "clockDomainProvenance": true,
-	"revision": true, "outputLatency": true,
+	"sinkBackend": true, "pipewireTargetNode": true, "revision": true,
+	"outputLatency": true,
 }
 
 // decodeAudioNodeConfig validates params' shape against
@@ -273,6 +290,14 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 	}
 	if p.ClockDomainProvenance == "" {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.clockDomainProvenance must be a non-empty string", action)
+	}
+	switch p.SinkBackend {
+	case "", realAudioSinkFactory, pipewireAudioSinkFactory:
+	default:
+		return audioNodeConfig{}, fmt.Errorf("%s: params.sinkBackend %q must be %q or %q", action, p.SinkBackend, realAudioSinkFactory, pipewireAudioSinkFactory)
+	}
+	if p.PipewireTargetNode != "" && p.SinkBackend != pipewireAudioSinkFactory {
+		return audioNodeConfig{}, fmt.Errorf("%s: params.pipewireTargetNode is set but params.sinkBackend is %q, not %q; an ignored field would read as an applied one", action, p.SinkBackend, pipewireAudioSinkFactory)
 	}
 	if p.Revision < 0 {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.revision must not be negative", action)
@@ -438,14 +463,35 @@ func gstAssetResolver(assetDir string) func(pkgaudio.MediaRef) (string, error) {
 // rate this route never advertised is not evidence, and
 // [buildGstEngineConfig] is what decides whether a guess is tolerable
 // for the sink actually being built against.
-func resolveNodeSampleRate(d audio.Discovery, programRoute string) (rate int, source string) {
+//
+// pipewireBacked skips a non-graph (ALSA) match entirely rather than
+// ever returning it: MEASURED on node-01, a card PipeWire's graph runs
+// at 48000 briefly released the card, and an ALSA probe of the same
+// hardware caught 44100 and won by matching programRoute first: a rate
+// nothing downstream of pipewiresink actually plays at. A route this
+// node's own graph backend owns has no honest ALSA reading; see
+// [pipewireFallbackSampleRateSource] for what a caller reports instead.
+func resolveNodeSampleRate(d audio.Discovery, programRoute string, pipewireBacked bool) (rate int, source string) {
 	for _, r := range d.Routes {
-		if r.Device == programRoute && r.Available && r.Rate > 0 {
-			return r.Rate, "advertised route probe evidence"
+		if r.Device != programRoute || !r.Available || r.Rate <= 0 {
+			continue
 		}
+		if r.FromGraph {
+			return r.Rate, pipeWireGraphEvidenceSource
+		}
+		if pipewireBacked {
+			continue
+		}
+		return r.Rate, "advertised route probe evidence"
 	}
 	return 0, noProbeEvidenceSource
 }
+
+// pipeWireGraphEvidenceSource is what both route resolvers report for a
+// route [audio.DiscoverPipeWire] produced: a real fact PipeWire's own
+// graph negotiated for that node, but never an ALSA probe result, so it
+// must not share wording with "advertised route probe evidence".
+const pipeWireGraphEvidenceSource = "PipeWire graph evidence (pw-dump)"
 
 // noProbeEvidenceSource is what both route resolvers report when this
 // node's own discovery run recorded no usable evidence for the bound
@@ -453,19 +499,47 @@ func resolveNodeSampleRate(d audio.Discovery, programRoute string) (rate int, so
 const noProbeEvidenceSource = "none: this route has no advertised probe evidence"
 
 // realAudioSinkFactory is the GStreamer sink this node builds against on
-// real hardware. A route bound to it reaches a physical ALSA device,
-// which is where an invented rate or channel count is a defect rather
-// than harmless scaffolding.
+// real hardware when its binding requests no other backend. A route
+// bound to it reaches a physical ALSA device, which is where an
+// invented rate or channel count is a defect rather than harmless
+// scaffolding.
 const realAudioSinkFactory = "alsasink"
 
-// audioEngineSinkFactory reports the GStreamer sink factory this node
-// builds against: [envGstAudioSinkOverride] when set, "alsasink"
-// otherwise.
-func audioEngineSinkFactory() string {
+// pipewireAudioSinkFactory is the GStreamer sink a node's audio.node
+// binding can request instead of [realAudioSinkFactory] (RES-019 section
+// 7.2 candidate A, permitted by ADR-046): PipeWire owns the output
+// graph, clocked from the node's PHC, and rate-matches ALSA output to it
+// through its own resampler. Unlike alsasink's "device" property,
+// pipewiresink takes "target-object" naming the PipeWire target this
+// route resolves to; see [audioEngineSinkFactoryAndProps].
+const pipewireAudioSinkFactory = "pipewiresink"
+
+// audioEngineSinkFactoryAndProps reports the GStreamer sink factory this
+// node builds against and the sink properties naming its output route.
+// [envGstAudioSinkOverride] wins outright when set (test-only, no
+// properties: a non-hardware sink such as "fakesink" has no "device" or
+// "target-object" property, and setting an unknown GObject property is
+// itself something to avoid rather than rely on being harmless).
+// Otherwise node.SinkBackend picks between [pipewireAudioSinkFactory]
+// (with "target-object" set to node.PipewireTargetNode when given, and no
+// such property at all when it is empty, never node.ProgramRoute, which
+// names an ALSA device identity such as "hw:CARD=M4,DEV=0" rather than a
+// PipeWire node name, and which pipewiresink silently ignores rather than
+// refusing) and [realAudioSinkFactory] (with "device" set to
+// node.ProgramRoute): the default whenever SinkBackend is empty, matching
+// every audio.node binding before this field existed.
+func audioEngineSinkFactoryAndProps(node audioNodeConfig) (factory string, props map[string]any) {
 	if v := os.Getenv(envGstAudioSinkOverride); v != "" {
-		return v
+		return v, map[string]any{}
 	}
-	return realAudioSinkFactory
+	if node.SinkBackend == pipewireAudioSinkFactory {
+		props := map[string]any{}
+		if node.PipewireTargetNode != "" {
+			props["target-object"] = node.PipewireTargetNode
+		}
+		return pipewireAudioSinkFactory, props
+	}
+	return realAudioSinkFactory, map[string]any{"device": node.ProgramRoute}
 }
 
 // audioNodeChannelCount is the highest channel index the binding uses,
@@ -504,9 +578,26 @@ func audioNodeChannelCount(p audioNodeConfig) int {
 // own behavior of fixating to what it truly carries regardless of what
 // was asked. It is read here purely as evidence of the device's real
 // channel count, independent of whether this binding uses LTC at all.
-func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCount int) (count int, source string) {
+// pipewireBacked, as in [resolveNodeSampleRate], skips a non-graph
+// (ALSA) match rather than ever returning it: a card this node's own
+// graph backend owns has no ALSA channel-count reading worth trusting
+// over the graph's own.
+func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCount int, pipewireBacked bool) (count int, source string) {
 	for _, r := range d.Routes {
 		if r.Device != programRoute || !r.Available {
+			continue
+		}
+		if r.FromGraph {
+			switch {
+			case r.Channels > bindingCount:
+				return r.Channels, pipeWireGraphEvidenceSource
+			case r.Channels == bindingCount:
+				return bindingCount, "bindings: highest program or LTC channel index, matching this route's graph-reported width"
+			default:
+				return bindingCount, "bindings: highest program or LTC channel index, exceeding this route's graph-reported width"
+			}
+		}
+		if pipewireBacked {
 			continue
 		}
 		if r.LTCChannels > bindingCount {

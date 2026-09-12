@@ -17,6 +17,20 @@ func withAudioDiscoverer(t *testing.T, d audio.Discovery) {
 	t.Cleanup(func() { audioDiscoverer = orig })
 }
 
+// withAudioPipeWireDiscoverer drives audioPipeWireDiscoverer
+// deterministically, matching withAudioDiscoverer's own injection
+// convention. Every test in this file that predates the PipeWire
+// enumeration seam never calls this, so it keeps hitting the real
+// audio.DiscoverPipeWire against this test host's own (absent) pw-dump,
+// which is a clean absence contributing no routes; see
+// TestDetectAudioCapabilitiesAlsaOnlyAdvertisementUnchangedByRealPipeWireDiscoverer.
+func withAudioPipeWireDiscoverer(t *testing.T, pw audio.PipeWireDiscovery) {
+	t.Helper()
+	orig := audioPipeWireDiscoverer
+	audioPipeWireDiscoverer = func(ctx context.Context, enum audio.PipeWireEnumerator) audio.PipeWireDiscovery { return pw }
+	t.Cleanup(func() { audioPipeWireDiscoverer = orig })
+}
+
 // withAudioEngineAvailable drives [audioEngineAvailable] deterministically,
 // matching withAudioDiscoverer's own injection convention. Every test in
 // this file that predates the engine-availability gate calls this with
@@ -455,6 +469,35 @@ func TestRouteEvidenceCacheEvictsOnlyOnACompleteEnumeration(t *testing.T) {
 	}
 }
 
+// TestDetectAudioCapabilitiesKeepsCacheOnTransientPipeWireFailure proves
+// re-review finding 7 (PR #454): a pw-dump failure with a clean ALSA pass
+// must not evict a PipeWire-only device's cached route evidence, since
+// d.Routes is the merged list and "complete" must require BOTH halves to
+// have enumerated cleanly, not just the one that happened to succeed.
+func TestDetectAudioCapabilitiesKeepsCacheOnTransientPipeWireFailure(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "alsa_output.usb-MOTU_M4", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+	}, true)
+
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true, HardwareEnumerated: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
+		},
+	})
+	withAudioPipeWireDiscoverer(t, audio.PipeWireDiscovery{
+		Enumerated: false, EnumeratedReason: "pw-dump: connect: permission denied",
+	})
+
+	detectAudioCapabilities(context.Background())
+
+	if _, ok := lastKnownGoodRoutes.get("alsa_output.usb-MOTU_M4"); !ok {
+		t.Fatal("PipeWire device evicted on a transient pw-dump failure even though ALSA enumerated cleanly; want its cached evidence kept")
+	}
+}
+
 // TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe proves the
 // fix end to end through detectAudioCapabilities itself: a route this
 // run's own probe reports busy still ships as audio.output.local when it
@@ -477,5 +520,78 @@ func TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe(t *testing.T) {
 	}
 	if local.Attributes["outputCount"] != 1 {
 		t.Errorf("outputCount = %v, want 1", local.Attributes["outputCount"])
+	}
+}
+
+// TestDetectAudioCapabilitiesAdvertisesTheUnionOfAlsaAndPipeWireRoutes
+// proves acceptance 1: a node with both an ALSA-visible card and a
+// PipeWire-held one advertises both, never a backend switch that hides
+// one for the other: the defect symptom-3 traced back to (ALSA cannot
+// see a card PipeWire holds, so the coordinator refused every route).
+func TestDetectAudioCapabilitiesAdvertisesTheUnionOfAlsaAndPipeWireRoutes(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	withAudioEngineAvailable(t, true, "")
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:CARD=PCH,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100}},
+		},
+	})
+	withAudioPipeWireDiscoverer(t, audio.PipeWireDiscovery{
+		Enumerated: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "alsa_output.usb-MOTU_M4-00.analog-surround-4",
+				ProbeResult: audio.ProbeResult{Available: true, Channels: 4, Rate: 48000},
+				FromGraph:   true, LTCChannels: 4},
+		},
+	})
+
+	set := detectAudioCapabilities(context.Background())
+	local, ok := set.Lookup("audio.output.local")
+	if !ok {
+		t.Fatal("audio.output.local not advertised, want present")
+	}
+	routes, _ := local.Attributes["routes"].([]string)
+	if len(routes) != 2 {
+		t.Fatalf("audio.output.local routes = %v, want both the ALSA and PipeWire routes advertised together", routes)
+	}
+	ltc, ok := set.Lookup("audio.output.ltc")
+	if !ok {
+		t.Fatal("audio.output.ltc not advertised, want present: the PipeWire node's 4 graph-reported channels meet MinLTCChannels")
+	}
+	if ltc.Attributes["outputCount"] != 1 {
+		t.Errorf("audio.output.ltc outputCount = %v, want 1 (only the PipeWire route is LTC-capable)", ltc.Attributes["outputCount"])
+	}
+}
+
+// TestDetectAudioCapabilitiesAlsaOnlyAdvertisementUnchangedByRealPipeWireDiscoverer
+// proves acceptance 4: with no PipeWire graph present (this test never
+// stubs audioPipeWireDiscoverer, so detectAudioCapabilities calls the
+// real audio.DiscoverPipeWire against this host's own absent pw-dump),
+// the advertisement is exactly what it was before PipeWire discovery
+// existed.
+func TestDetectAudioCapabilitiesAlsaOnlyAdvertisementUnchangedByRealPipeWireDiscoverer(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	withAudioEngineAvailable(t, true, "")
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:CARD=PCH,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 48000}},
+		},
+	})
+
+	set := detectAudioCapabilities(context.Background())
+	local, ok := set.Lookup("audio.output.local")
+	if !ok {
+		t.Fatal("audio.output.local not advertised, want present")
+	}
+	if local.Attributes["outputCount"] != 1 {
+		t.Errorf("outputCount = %v, want 1: no PipeWire on this host must not change the ALSA-only advertisement", local.Attributes["outputCount"])
+	}
+	routes, _ := local.Attributes["routes"].([]string)
+	if len(routes) != 1 || routes[0] != "hw:CARD=PCH,DEV=0" {
+		t.Errorf("routes = %v, want exactly [hw:CARD=PCH,DEV=0]", routes)
 	}
 }

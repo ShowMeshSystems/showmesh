@@ -68,9 +68,22 @@ TEMPLATE_DIR="$SCRIPT_DIR/ptp-audio"
 . "$TEMPLATE_DIR/ptp-group.conf"
 
 PTP_GROUP=showmesh
-PIPEWIRE_USER=pipewire
-PIPEWIRE_GROUP=pipewire
-PIPEWIRE_STATE_DIR=/var/lib/pipewire
+# The headless PipeWire graph runs as the SAME account as the ShowMesh
+# agent (SERVICE_USER, matching deploy/node/install.sh's own SERVICE_USER
+# exactly) rather than a separate "pipewire" system user. On a ShowMesh
+# audio node both are ShowMesh's own components; there is no third party
+# to isolate PipeWire from, and a dedicated user only bought a socket
+# whose group-writability PipeWire itself controls, not this script.
+# MEASURED on node-01: pipewire-showmesh.service's own RuntimeDirectory
+# creates /run/pipewire/pipewire-0 mode 0755, which grants a non-owner
+# client read+execute but never the write bit connect() needs -- every
+# ShowMesh-agent client got EACCES before PipeWire's own access module
+# was ever consulted. Sharing SERVICE_USER makes the agent the socket's
+# owner, so RuntimeDirectoryMode can stay the systemd default (0700) and
+# there is no socket-mode trick to get durably right.
+SERVICE_USER=showmesh
+SERVICE_GROUP=showmesh
+STATE_DIR=/var/lib/showmesh
 PTP4L_CONF=/etc/showmesh/ptp4l.conf
 PTP4L_UNIT_DEST=/etc/systemd/system/ptp4l-showmesh.service
 UDEV_RULE_DEST=/etc/udev/rules.d/99-showmesh-ptp.rules
@@ -81,6 +94,7 @@ PIPEWIRE_UNIT_DEST=/etc/systemd/system/pipewire-showmesh.service
 WIREPLUMBER_UNIT_DEST=/etc/systemd/system/wireplumber-showmesh.service
 PTP_RO_SOCKET=/var/run/ptp/ptp4lro
 ANNOUNCE_TIMESCALE_DEST=/usr/local/lib/showmesh/announce-grandmaster-timescale.sh
+AGENT_DROPIN_DEST=/etc/systemd/system/showmesh-agent.service.d/10-showmesh-ptp-audio-runtime.conf
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "install-ptp-audio.sh: must be run as root" >&2
@@ -353,23 +367,27 @@ else
   echo "install-ptp-audio.sh: WARNING: udevadm not found; rule installed at $UDEV_RULE_DEST but not (re)applied. Expected inside a plain container; not expected on a real node." >&2
 fi
 
-# --- pipewire system user ---
-if ! getent group "$PIPEWIRE_GROUP" >/dev/null 2>&1; then
-  groupadd --system "$PIPEWIRE_GROUP"
-  echo "install-ptp-audio.sh: created group $PIPEWIRE_GROUP"
+# --- showmesh user/group: created here if deploy/node/install.sh has not
+#     run yet, so this script's own order relative to it never matters.
+#     No separate pipewire account: PipeWire and WirePlumber run as this
+#     same user (see SERVICE_USER above), which already carries $PTP_GROUP
+#     membership by being $SERVICE_GROUP, so no supplementary group grant
+#     is needed for /dev/ptpN access either. ---
+if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+  groupadd --system "$SERVICE_GROUP"
+  echo "install-ptp-audio.sh: created group $SERVICE_GROUP"
 fi
-if ! getent passwd "$PIPEWIRE_USER" >/dev/null 2>&1; then
-  useradd --system --gid "$PIPEWIRE_GROUP" --home-dir "$PIPEWIRE_STATE_DIR" \
+if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+  useradd --system --gid "$SERVICE_GROUP" --home-dir "$STATE_DIR" \
     --no-create-home --shell /usr/sbin/nologin \
-    --comment "ShowMesh headless PipeWire" "$PIPEWIRE_USER"
-  echo "install-ptp-audio.sh: created user $PIPEWIRE_USER"
+    --comment "ShowMesh node agent" "$SERVICE_USER"
+  echo "install-ptp-audio.sh: created user $SERVICE_USER"
 fi
-usermod -aG "$PTP_GROUP" "$PIPEWIRE_USER"
-usermod -aG audio "$PIPEWIRE_USER" 2>/dev/null || \
-  echo "install-ptp-audio.sh: WARNING: could not add $PIPEWIRE_USER to the 'audio' group (group may not exist on this host); ALSA device access may need manual attention."
-mkdir -p "$PIPEWIRE_STATE_DIR"
-chown "$PIPEWIRE_USER:$PIPEWIRE_GROUP" "$PIPEWIRE_STATE_DIR"
-chmod 0750 "$PIPEWIRE_STATE_DIR"
+usermod -aG audio "$SERVICE_USER" 2>/dev/null || \
+  echo "install-ptp-audio.sh: WARNING: could not add $SERVICE_USER to the 'audio' group (group may not exist on this host); ALSA device access may need manual attention."
+mkdir -p "$STATE_DIR"
+chown "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR"
+chmod 0750 "$STATE_DIR"
 
 # --- PipeWire config: PHC-clocked node.driver above the ALSA sink ---
 mkdir -p "$PIPEWIRE_CONFD" "$WIREPLUMBER_CONFD"
@@ -404,12 +422,29 @@ echo "install-ptp-audio.sh: wrote $PIPEWIRE_CLOCK_CONF and $WIREPLUMBER_CONFD/51
 # system account, sharing one runtime directory so WirePlumber's session
 # manager finds the same PipeWire instance a user session would otherwise
 # have found through XDG_RUNTIME_DIR.
-sed -e "s|@USER@|$PIPEWIRE_USER|g" -e "s|@GROUP@|$PIPEWIRE_GROUP|g" \
+sed -e "s|@USER@|$SERVICE_USER|g" -e "s|@GROUP@|$SERVICE_GROUP|g" \
   "$TEMPLATE_DIR/pipewire-showmesh.service.template" > "$PIPEWIRE_UNIT_DEST"
-sed -e "s|@USER@|$PIPEWIRE_USER|g" -e "s|@GROUP@|$PIPEWIRE_GROUP|g" \
+sed -e "s|@USER@|$SERVICE_USER|g" -e "s|@GROUP@|$SERVICE_GROUP|g" \
   "$TEMPLATE_DIR/wireplumber-showmesh.service.template" > "$WIREPLUMBER_UNIT_DEST"
 chmod 0644 "$PIPEWIRE_UNIT_DEST" "$WIREPLUMBER_UNIT_DEST"
 echo "install-ptp-audio.sh: wrote $PIPEWIRE_UNIT_DEST and $WIREPLUMBER_UNIT_DEST"
+
+# --- Agent drop-in: point its own pw-dump/pipewiresink calls at this
+#     graph's runtime directory, not a desktop XDG_RUNTIME_DIR that does
+#     not exist on this host. A drop-in on the agent's own unit, not an
+#     edit to deploy/node/showmesh-agent.service itself: that file ships
+#     to every node, most of which have no PipeWire graph at all. ---
+mkdir -p "$(dirname "$AGENT_DROPIN_DEST")"
+cat > "$AGENT_DROPIN_DEST" <<EOF
+# Written by install-ptp-audio.sh. Points this agent's own pw-dump and
+# pipewiresink calls at the headless PipeWire graph pipewire-showmesh.service
+# runs, which has no desktop session and so no XDG_RUNTIME_DIR of its own.
+[Service]
+Environment=PIPEWIRE_RUNTIME_DIR=/run/pipewire
+Environment=XDG_RUNTIME_DIR=/run/pipewire
+EOF
+chmod 0644 "$AGENT_DROPIN_DEST"
+echo "install-ptp-audio.sh: wrote $AGENT_DROPIN_DEST"
 
 # --- Activate, or report why not ---
 # A real node host runs systemd as PID 1; a container used only to prove
@@ -468,3 +503,6 @@ else
   echo "  Services installed but not started (no systemd PID 1 on this host). Run 'systemctl daemon-reload && systemctl enable --now ptp4l-showmesh.service pipewire-showmesh.service wireplumber-showmesh.service' once this host boots under systemd."
 fi
 echo "  Configure the ShowMesh agent's node.clock as provider=external, interface=$IFACE, domain=$DOMAIN (see deploy/node/PTP-AUDIO.md) -- never provider=managed, which would start a second ptp4l on this interface."
+if [ "$SYSTEMD_AVAILABLE" -eq 1 ] && systemctl is-active --quiet showmesh-agent.service; then
+  echo "  showmesh-agent.service is already running; restart it (systemctl restart showmesh-agent.service) to pick up PIPEWIRE_RUNTIME_DIR/XDG_RUNTIME_DIR from $AGENT_DROPIN_DEST."
+fi

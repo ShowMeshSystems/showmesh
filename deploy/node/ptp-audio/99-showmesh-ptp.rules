@@ -1,7 +1,6 @@
 # Grants group read access to any PTP hardware clock so the ShowMesh
-# agent (runs as the showmesh user) and headless PipeWire (runs as the
-# pipewire user, a member of the showmesh group, see
-# install-ptp-audio.sh) can both open /dev/ptpN: the agent's external
+# agent and the headless PipeWire graph -- both run as the showmesh user,
+# see install-ptp-audio.sh -- can open /dev/ptpN: the agent's external
 # clock provider reads the PHC directly via clock_gettime(FD_TO_CLOCKID),
 # and PipeWire's PTP node.driver opens it read-only for the same reason
 # (RES-019 sections 4.5 and 5.1). Matches on subsystem rather than a

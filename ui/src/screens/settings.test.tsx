@@ -484,6 +484,8 @@ describe('Settings › Node routing', () => {
       ltcChannel: number
       role: 'program' | 'program+ltc' | 'zone'
       zone: string
+      sinkBackend: 'alsasink' | 'pipewiresink'
+      pipewireTargetNode: string
       outputLatency: {
         valueUs?: number
         method: 'unmeasured' | 'loopback' | 'acoustic' | 'declared'
@@ -507,6 +509,8 @@ describe('Settings › Node routing', () => {
         ...(overrides.ltcRoute !== undefined ? { ltcRoute: overrides.ltcRoute, ltcChannel: overrides.ltcChannel } : {}),
         ...(overrides.role !== undefined ? { role: overrides.role } : {}),
         ...(overrides.zone !== undefined ? { zone: overrides.zone } : {}),
+        ...(overrides.sinkBackend !== undefined ? { sinkBackend: overrides.sinkBackend } : {}),
+        ...(overrides.pipewireTargetNode !== undefined ? { pipewireTargetNode: overrides.pipewireTargetNode } : {}),
         outputLatency: overrides.outputLatency ?? { method: 'unmeasured' },
       },
       updatedAt: '2026-08-30T18:00:00Z',
@@ -636,6 +640,54 @@ describe('Settings › Node routing', () => {
     await waitFor(() => expect(sentPayload).not.toBeNull())
     expect(sentPayload).toMatchObject({ role: 'program' })
     expect(sentPayload).not.toHaveProperty('zone')
+  })
+
+  it('loads sink backend and PipeWire target node from the payload, and lets an operator change them', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig({ sinkBackend: 'pipewiresink', pipewireTargetNode: 'alsa_output.usb-Focusrite' }))
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putAudioNode = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeConfig({ sinkBackend: 'pipewiresink', pipewireTargetNode: 'alsa_output.usb-Scarlett' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'PipeWire', pressed: true })).toBeInTheDocument())
+    expect(screen.getByLabelText('PipeWire target node')).toHaveValue('alsa_output.usb-Focusrite')
+
+    fireEvent.change(screen.getByLabelText('PipeWire target node'), { target: { value: 'alsa_output.usb-Scarlett' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ sinkBackend: 'pipewiresink', pipewireTargetNode: 'alsa_output.usb-Scarlett' })
+  })
+
+  it('preserves sink backend and PipeWire target node on a save that only changes the route', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig({ sinkBackend: 'pipewiresink', pipewireTargetNode: 'alsa_output.usb-Focusrite' }))
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putAudioNode = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeConfig({ sinkBackend: 'pipewiresink', pipewireTargetNode: 'alsa_output.usb-Focusrite' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+    // An operator editing only the clock domain, never touching the backend
+    // controls at all: this is the surface's own "audio node set" defect,
+    // fixed by carrying the loaded payload's sinkBackend/pipewireTargetNode
+    // forward rather than rebuilding the PUT body from scratch.
+    fireEvent.change(screen.getByLabelText('Domain'), { target: { value: 'usb-audio-0-renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save routing' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ sinkBackend: 'pipewiresink', pipewireTargetNode: 'alsa_output.usb-Focusrite' })
   })
 
   it('defaults a legacy node with no stored role to program+ltc on save', async () => {

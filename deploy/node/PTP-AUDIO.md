@@ -161,18 +161,35 @@ operator-edited state that a re-run must avoid touching.
 8. **Installs a udev rule** (`/etc/udev/rules.d/99-showmesh-ptp.rules`)
    granting the `showmesh` group read access to any `/dev/ptpN`: the
    agent's external clock provider reads the PHC directly, and PipeWire's
-   node.driver opens it too (the `pipewire` system user this script
-   creates is added to the `showmesh` group for exactly this reason).
-9. **Creates a dedicated `pipewire` system user** and installs
-   `pipewire-showmesh.service` and `wireplumber-showmesh.service`,
-   running both as ordinary headless system services sharing one runtime
-   directory (`/run/pipewire`). This is necessary, not cosmetic: Debian's
-   `pipewire` and `wireplumber` packages ship only user-session units
+   node.driver opens it too. Both already run as the `showmesh` user (see
+   the next step), so no separate group grant is needed for either.
+9. **Creates the `showmesh` system user** (if `deploy/node/install.sh` has
+   not already, so the two installers' order never matters) and installs
+   `pipewire-showmesh.service` and `wireplumber-showmesh.service` to run
+   as that SAME user, sharing one runtime directory (`/run/pipewire`) with
+   each other and with the agent. Not a separate `pipewire` account: on a
+   ShowMesh audio node, PipeWire and the agent are both ShowMesh's own
+   components with no third party to isolate from, and MEASURED on
+   node-01, a separate account bought nothing but a socket permission
+   problem -- `RuntimeDirectoryMode=0700` makes `pipewire-showmesh.service`
+   create `/run/pipewire/pipewire-0` owned by, and readable/writable only
+   by, its own account, and `connect()` to a Unix socket needs the WRITE
+   bit specifically, so any other account (including the agent's, under
+   the old separate-user design) got `EACCES` before PipeWire's own
+   access module was ever consulted. Sharing the account removes the
+   problem outright rather than loosening the socket's mode. This is
+   necessary, not cosmetic, for another reason too: Debian's `pipewire`
+   and `wireplumber` packages ship only user-session units
    (`/usr/lib/systemd/user/{pipewire,wireplumber}.service`), which assume
    a logged-in desktop session. This node has none, and `systemctl --user`
    needs a lingering login this node is never going to have. A PipeWire
    that only exists inside a user session is a node that goes silent
-   after every reboot.
+   after every reboot. The agent's own systemd unit gets a drop-in
+   (`/etc/systemd/system/showmesh-agent.service.d/10-showmesh-ptp-audio-runtime.conf`)
+   setting `PIPEWIRE_RUNTIME_DIR`/`XDG_RUNTIME_DIR` to this same runtime
+   directory, so its own `pw-dump` and `pipewiresink` calls look in the
+   right place; restart `showmesh-agent.service` after running this
+   script if it was already active.
 10. **Installs the PipeWire clock config**
    (`/etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf`): a
    `support.node.driver` named `showmesh-ptp-driver`, `priority.driver
@@ -270,7 +287,30 @@ a negative result.
    state, `pmc GET TIME_STATUS_NP` for `gmIdentity` and `master_offset`.
    Reports honestly whether this node is itself the domain's grandmaster
    (`MASTER`) or following one (`SLAVE`), rather than assuming the latter.
-2. **Does the ALSA node's driver election actually land on the PTP
+2. **Exactly one writer per clock** -- reads the live process table
+   (`pgrep`, then each match's own `/proc/<pid>/cmdline`), not the
+   installed systemd units, and fails if more than one `phc2sys` targets
+   the same device (its `-c` argument resolved to a canonical `/dev/ptpN`
+   path or interface's own PHC where one exists, or `CLOCK_REALTIME` if
+   none) or more than one `ptp4l` runs on the same interface (`-i`),
+   naming every pid involved. Resolving `-c` narrows, but does not close,
+   the spelling gap: a `phc2sys -a -r` writer (no `-c` at all) and two
+   `ptp4l` instances that each take their interface only from a config
+   file (`-f`, no `-i`) still key generically and can hide or misreport a
+   duplicate. See "Servo health thresholds" below for why this check
+   exists.
+3. **Servo health, not just port state** -- samples several seconds of
+   the actual servo output for the role this node has (`phc2sys` on a
+   grandmaster with a PHC, `ptp4l` on a follower), via
+   `deploy/node/ptp-audio/servo-health.py` reading recent `journalctl`
+   output for that unit. Prints every sample it read (offset, state,
+   frequency, delay) and fails on an offset past a 1ms bound, a frequency
+   adjustment at or near linuxptp's own clamp, a servo state that changes
+   across the sample window instead of holding steady, or any negative
+   delay. See "Servo health thresholds" below. A check that could not run
+   its own instrument at all (empty or unparseable log input) is reported
+   as unable to run (exit 2), never a silent pass.
+4. **Does the ALSA node's driver election actually land on the PTP
    driver** -- `pw-dump`, reading each node's `node.driver-id` (the id of
    the node ACTUALLY driving it) rather than a node's own `node.driver`
    flag (which only says a node is *capable* of driving, not who drives
@@ -279,11 +319,11 @@ a negative result.
    card was in fact driving its own group). Pass unless at least one node
    matching `--alsa-match` (default `alsa_output`) has a `node.driver-id`
    equal to `showmesh-ptp-driver`'s own id.
-3. **ALSA sink xrun count** -- best-effort, via `pw-top -b`'s `ERR`
+5. **ALSA sink xrun count** -- best-effort, via `pw-top -b`'s `ERR`
    column (not exposed through `pw-dump`). Informational only: `pw-top`'s
    exact column layout is not a guaranteed contract, so a parse failure
    here is reported and does not fail the run.
-4. **The load-bearing reading**: runs a short `pipewiresink` pipeline
+6. **The load-bearing reading**: runs a short `pipewiresink` pipeline
    with `GST_DEBUG=audiobasesink:6` and counts skew/slaving lines. With
    the rate lock actually working there should be **none** -- `alsasink`
    is no longer in the signal path at all, `pipewiresink` is -- so any
@@ -291,10 +331,87 @@ a negative result.
    this seam (RES-019 section 7.1 explains why `alsasink`'s own slaving
    was never going to be good enough on its own).
 
-Pass `--play 0` to skip step 4 (faster, but it is the check that actually
-proves the rate lock is doing anything -- steps 1-3 only prove the pieces
-exist and are correctly wired to each other, not that the card is
+Pass `--play 0` to skip step 6 (faster, but it is the check that actually
+proves the rate lock is doing anything -- the other steps only prove the
+pieces exist and are correctly wired to each other, not that the card is
 correcting its rate).
+
+## Servo health thresholds, and why checks 1/4/5/6 could not catch this
+
+Measured on `showmesh-node-01`: a stray hand-run `phc2sys` alongside
+`phc2sys-showmesh.service` fought the same PHC. `ptp4l` still reported
+`MASTER`, a driver was still elected, and no `alsasink` skew line ever
+appeared -- checks 1, 4, and 6 all passed the entire time. `phc2sys`
+itself was logging:
+
+```
+clockcheck: clock frequency changed unexpectedly!
+/dev/ptp0 sys offset -288646357 s2 freq -900000000 delay 0
+clockcheck: clock jumped backward or running slower than expected!
+/dev/ptp0 sys offset   55730027 s0 freq -900000000 delay 0
+```
+
+`freq -900000000` is linuxptp's own `max_frequency` clamp (900,000,000
+ppb, the default for both `ptp4l` and `phc2sys`), the offset was
+alternating between -288ms and +55ms, and the servo state was flapping
+between `s2` and `s0`. The follower on the other end of the domain saw
+the consequence: offsets swinging +/-80ms and a **negative path delay**
+of -60ms, which is never physically possible. Killing the stray process
+returned the grandmaster to offsets in the hundreds of nanoseconds at a
+plausible -15.5 ppm (-15500 ppb), and the follower's path delay to about
+170 microseconds.
+
+Checks 2 and 3 above exist because none of the other checks can see this:
+a grandmaster serving a clock that jumps 340ms between samples still
+reports `MASTER`, still gets a driver elected, and produces no
+`alsasink` skew line -- those checks answer "are the pieces wired
+together," not "is the clock any good."
+
+**Thresholds, and the reasoning**:
+
+- **Offset: `|offset| >= 1000000` ns (1ms)**. This is the one number that
+  most directly says whether the clock is right, and until this revision
+  it was printed by every sample and never tested by any threshold: eight
+  samples holding one servo state, a modest frequency, and a positive
+  delay still printed "servo settled" while sitting 50ms out of sync,
+  because none of the other three thresholds below is the reading a
+  converged-but-wrong servo actually violates. A Raspberry Pi node on this
+  network locks to about 20 microseconds once settled; 1ms is three orders
+  of magnitude past that, comfortable headroom against ordinary jitter
+  while still catching anything that would be audible.
+- **Saturated frequency: `|freq| >= 100000000` ppb (100,000 ppm)**.
+  linuxptp's own `max_frequency` default is 900,000,000 ppb; a frequency
+  adjustment at or near that clamp means the servo has given up trying to
+  correct a normal drift and is instead pinned against its own ceiling,
+  which is exactly what the node-01 incident's `-900000000` was. An
+  ordinary crystal drifts a few hundred ppm (a few hundred thousand ppb;
+  node-01's own post-fix reading was -15.5 ppm, -15500 ppb) -- 100,000 ppm
+  is two orders of magnitude past that and still comfortably below the
+  900,000 ppm clamp, so a real servo correcting a real but unusual drift
+  has room to be flagged before it actually saturates. This is not a
+  precision claim about how far off the clock actually is; it is a "the
+  servo is fighting something it cannot correct" signal. Read honestly,
+  this is a **clamp detector, not a health bound**: it fires only within
+  an order of magnitude of linuxptp's own ceiling, and the offset
+  threshold above is what actually catches an ordinary-looking, merely
+  wrong servo.
+- **Flapping state: more than one distinct servo state (`s0`/`s1`/`s2`)
+  across the sampled window**. A converged servo holds `s2` for the
+  entire window; node-01's own log alternated `s2`/`s0` one second apart.
+  Samples are read over several seconds (8 log lines by default, at
+  `ptp4l`/`phc2sys`'s own roughly one-per-second logging rate with
+  `summary_interval 0`), not one line, because a single good line proves
+  nothing about whether the servo is actually settled.
+- **Negative delay: any sampled delay `< 0`**. A path delay or
+  offset-source delay can never be negative in a correctly functioning
+  system; node-01's follower saw exactly this (-60ms). This is the
+  single clearest tell in the whole set, and needs no threshold tuning.
+
+None of these thresholds claims sub-threshold means "healthy" in some
+precise sense -- they say "not obviously fighting something." A servo at
+50,000 ppm with a steady state and no negative delay passes this check
+and might still be worse than node-01's eventual -15.5 ppm; it is simply
+not exhibiting the specific failure this check exists to catch.
 
 ## What a correct driver election looks like, and what a broken one looks like
 
@@ -326,15 +443,26 @@ and SLAVE (follower role, with `pmc`-reported grandmaster identity and
 offset), a real PipeWire electing the PTP driver, a `pipewiresink`
 pipeline playing without error, and the `node.group` driver-election
 mechanism itself (a synthetic sink node placed in `showmesh-ptp-driver`'s
-group ends up with `node.driver-id` pointing at it).
+group ends up with `node.driver-id` pointing at it). It also proves
+`verify-ptp-audio.sh`'s duplicate-writer check itself, against real
+processes on the container's own process table (one real `ptp4l` plus a
+stray inert process sharing its interface, and two `phc2sys`-named
+processes sharing a target device while a third on a different device is
+correctly left alone), and `servo-health.py` against the actual
+node-01 saturated-frequency/flapping-state log lines and a follower's
+negative-path-delay line.
 
 It did **not** prove, and this repository does not claim from its own
 bench: hardware timestamping against a real PHC, an actual ALSA sink
 being rate-matched (no `/dev/snd` in a container), WirePlumber's own ALSA
 monitor putting a real card's node into this group or onto the
-pro-audio profile, any of this surviving a real systemd boot, or the
+pro-audio profile, any of this surviving a real systemd boot, the
 `audiobasesink:6` skew-slaving absence against a real `alsasink` (there
-is none in the bench's own pipeline to have slaved in the first place).
+is none in the bench's own pipeline to have slaved in the first place),
+or the servo-health check's own `journalctl`-reading logic end to end
+(no `journalctl` in a plain container; only its parser, `servo-health.py`,
+is proven here, the same limitation `driver-election.py` has for
+`pw-dump`'s own `systemctl`-gated caller).
 
 The `node.group` entry, the `device.profile = "pro-audio"` /
 `api.acp.auto-profile = false` pin, and the driver election they produce
@@ -356,18 +484,22 @@ sudo rm -f /etc/systemd/system/ptp4l-showmesh.service \
            /etc/systemd/system/wireplumber-showmesh.service \
            /etc/systemd/system/phc2sys-showmesh.service
 sudo rm -f /usr/local/lib/showmesh/announce-grandmaster-timescale.sh   # only present on a grandmaster-role node
+sudo rm -f /etc/systemd/system/showmesh-agent.service.d/10-showmesh-ptp-audio-runtime.conf
 sudo systemctl daemon-reload
 sudo rm -f /etc/showmesh/ptp4l.conf
 sudo rm -f /etc/udev/rules.d/99-showmesh-ptp.rules
 sudo udevadm control --reload-rules
 sudo rm -rf /etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf \
             /etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf
-sudo userdel pipewire   # only if nothing else on this host uses that account
 sudo apt-get remove linuxptp pipewire pipewire-audio wireplumber gstreamer1.0-pipewire
 ```
 
-The `showmesh` group is left in place: `deploy/node/install.sh` also
-depends on it existing for the agent's own account.
+The `showmesh` user and group are left in place: PipeWire runs as the
+same account as the agent (no separate account to remove), and
+`deploy/node/install.sh` depends on the account existing regardless.
+Restart `showmesh-agent.service` if it was active, so it stops carrying
+the now-removed `PIPEWIRE_RUNTIME_DIR`/`XDG_RUNTIME_DIR` drop-in's
+environment forward from its own process state.
 
 If the agent's `node.clock` was set to `provider=external` for this
 node, revert it (or remove the node's clock config entirely) before or

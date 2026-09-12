@@ -34,6 +34,69 @@ func TestLocalRunningTimeClampsToZero(t *testing.T) {
 	}
 }
 
+// TestCheckStallLockedReportsAfterSustainedNoAdvance proves a Playing,
+// unfrozen branch whose position sits exactly unchanged for at least
+// positionStallThreshold reports a non-empty Reason -- the exact
+// signature measured on a Raspberry Pi node whose output pipeline
+// prerolled and then never advanced again, with no error anywhere.
+func TestCheckStallLockedReportsAfterSustainedNoAdvance(t *testing.T) {
+	b := &branch{}
+	base := time.Now()
+
+	// First observation at a given position always resets tracking, even
+	// while Playing: there is nothing to compare against yet.
+	if got := b.checkStallLocked(pkgaudio.StatePlaying, time.Second, base); got != "" {
+		t.Fatalf("checkStallLocked() on the first observation = %q, want \"\"", got)
+	}
+
+	// Same position, but not enough time has passed yet.
+	if got := b.checkStallLocked(pkgaudio.StatePlaying, time.Second, base.Add(positionStallThreshold-time.Millisecond)); got != "" {
+		t.Fatalf("checkStallLocked() just under the threshold = %q, want \"\"", got)
+	}
+
+	// Same position, threshold now exceeded.
+	got := b.checkStallLocked(pkgaudio.StatePlaying, time.Second, base.Add(positionStallThreshold+time.Millisecond))
+	if got == "" {
+		t.Fatalf("checkStallLocked() past the threshold with an unchanged position = \"\", want a stated reason")
+	}
+}
+
+// TestCheckStallLockedResetsWhenPositionAdvances proves ordinary playback
+// -- position genuinely moving between polls -- never reports a stall,
+// regardless of how long the branch has been Playing.
+func TestCheckStallLockedResetsWhenPositionAdvances(t *testing.T) {
+	b := &branch{}
+	base := time.Now()
+	b.checkStallLocked(pkgaudio.StatePlaying, time.Second, base)
+
+	got := b.checkStallLocked(pkgaudio.StatePlaying, 2*time.Second, base.Add(positionStallThreshold+time.Millisecond))
+	if got != "" {
+		t.Fatalf("checkStallLocked() with an advancing position = %q, want \"\"", got)
+	}
+}
+
+// TestCheckStallLockedIgnoresNonPlayingAndFrozenBranches proves a branch
+// that is not Playing, or is Playing but frozen (Pause's own deliberate
+// hold), never reports a stall even after positionStallThreshold has
+// elapsed with no position change -- both are legitimate reasons a
+// position does not move.
+func TestCheckStallLockedIgnoresNonPlayingAndFrozenBranches(t *testing.T) {
+	base := time.Now()
+	later := base.Add(positionStallThreshold + time.Millisecond)
+
+	paused := &branch{}
+	paused.checkStallLocked(pkgaudio.StatePaused, time.Second, base)
+	if got := paused.checkStallLocked(pkgaudio.StatePaused, time.Second, later); got != "" {
+		t.Fatalf("checkStallLocked() for a Paused branch = %q, want \"\"", got)
+	}
+
+	frozen := &branch{frozen: true}
+	frozen.checkStallLocked(pkgaudio.StatePlaying, time.Second, base)
+	if got := frozen.checkStallLocked(pkgaudio.StatePlaying, time.Second, later); got != "" {
+		t.Fatalf("checkStallLocked() for a frozen (Paused-held) branch = %q, want \"\"", got)
+	}
+}
+
 // TestFadeArrivedRequiresGainAtTarget proves the elapsed-duration
 // completion bound never clears FadeActive on elapsed time alone: an
 // elapsed fade whose gain has not reached its target must stay reported

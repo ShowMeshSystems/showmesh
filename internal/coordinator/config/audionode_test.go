@@ -31,6 +31,7 @@ func TestDecodeAudioNodePayloadAccepts(t *testing.T) {
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
 		ClockDomain: "single-interface", ClockDomainProvenance: "one physical interface, both routes on it",
 		Role:          AudioNodeRoleProgramLTC,
+		SinkBackend:   AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	if !reflect.DeepEqual(p, want) {
@@ -58,6 +59,7 @@ func TestEncodeDecodeAudioNodePayloadRoundTrips(t *testing.T) {
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
 		ClockDomain: "domain-a", ClockDomainProvenance: "datasheet",
 		Role:          AudioNodeRoleProgram,
+		SinkBackend:   AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	raw, err := EncodeAudioNodePayload(want)
@@ -82,6 +84,7 @@ func TestEncodeDecodeAudioNodePayloadRoundTripsZone(t *testing.T) {
 		ProgramChannels: []int{1}, LTCChannel: 2,
 		ClockDomain: "domain-b", ClockDomainProvenance: "datasheet",
 		Role: AudioNodeRoleZone, Zone: &zone,
+		SinkBackend:   AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	raw, err := EncodeAudioNodePayload(want)
@@ -560,6 +563,45 @@ func TestValidateAudioNodePlacementRejectsProgramOnlyRouteAsLTC(t *testing.T) {
 	}
 }
 
+// TestDecodeAudioNodePayloadSinkBackendDefaultsALSA proves an omitted
+// sinkBackend decodes to [AudioNodeSinkBackendDefault] ("alsasink"),
+// matching role's identical additive-compatibility rule: every
+// audio.node written before this field existed keeps decoding unchanged.
+func TestDecodeAudioNodePayloadSinkBackendDefaultsALSA(t *testing.T) {
+	p, verr := DecodeAudioNodePayload(validAudioNodePayloadJSON())
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.SinkBackend != AudioNodeSinkBackendDefault {
+		t.Fatalf("sinkBackend = %q, want %q", p.SinkBackend, AudioNodeSinkBackendDefault)
+	}
+}
+
+// TestDecodeAudioNodePayloadAcceptsPipeWireSinkBackend proves the
+// RES-019 section 7.2 candidate A backend choice decodes.
+func TestDecodeAudioNodePayloadAcceptsPipeWireSinkBackend(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
+		`"clockDomain":"d","clockDomainProvenance":"p","sinkBackend":"pipewiresink"}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.SinkBackend != AudioNodeSinkBackendPipeWire {
+		t.Fatalf("sinkBackend = %q, want %q", p.SinkBackend, AudioNodeSinkBackendPipeWire)
+	}
+}
+
+// TestDecodeAudioNodePayloadRejectsUnknownSinkBackend proves
+// "sinkBackend" is a closed enum.
+func TestDecodeAudioNodePayloadRejectsUnknownSinkBackend(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1],"ltcChannel":2,` +
+		`"clockDomain":"d","clockDomainProvenance":"p","sinkBackend":"pulsesink"}`
+	_, verr := DecodeAudioNodePayload(raw)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "sinkBackend" {
+		t.Fatalf("verr = %v, want field-invalid on sinkBackend", verr)
+	}
+}
+
 // TestDecodeAudioNodeOutputLatencyDefaultsUnmeasured proves an
 // audio.node payload with no "outputLatency" key decodes to the zero
 // OutputLatencyPayload, method "unmeasured": the pre-I5 wire shape every
@@ -688,7 +730,8 @@ func TestEncodeDecodeAudioNodePayloadRoundTripsOutputLatency(t *testing.T) {
 		ProgramRoute: "hw:1,0", LTCRoute: "hw:1,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
 		ClockDomain: "domain-a", ClockDomainProvenance: "datasheet",
-		Role: AudioNodeRoleProgram,
+		Role:        AudioNodeRoleProgram,
+		SinkBackend: AudioNodeSinkBackendDefault,
 		OutputLatency: OutputLatencyPayload{
 			ValueUs: 55997, Method: OutputLatencyMethodLoopback, MeasuredAt: &measuredAt,
 			Reference: "MOTU M4 loopback capture", Confidence: "high",

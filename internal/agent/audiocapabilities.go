@@ -18,6 +18,26 @@ var audioDiscoverer = audio.Discover
 // and runAudioReport both probe against.
 var audioEnumerator audio.Enumerator = audio.AlsaEnumerator{}
 
+// audioPipeWireDiscoverer runs this node's PipeWire graph discovery,
+// matching audioDiscoverer's own injection convention.
+var audioPipeWireDiscoverer = audio.DiscoverPipeWire
+
+// audioPipeWireEnumerator is the real [audio.PipeWireEnumerator]
+// audioPipeWireDiscoverer probes against.
+var audioPipeWireEnumerator audio.PipeWireEnumerator = audio.PwDumpEnumerator{}
+
+// discoverAudio runs this node's full ALSA and PipeWire discovery and
+// merges them into one [audio.Discovery]: a PipeWire-backed node's own
+// device model must still describe the node in ALSA terms alongside
+// whatever PipeWire holds, so both discovery methods run on every call,
+// never a backend selector choosing one or the other; see the union
+// advertisement rule documented on [detectAudioCapabilities].
+func discoverAudio(ctx context.Context) audio.Discovery {
+	d := audioDiscoverer(ctx, audioEnumerator)
+	pw := audioPipeWireDiscoverer(ctx, audioPipeWireEnumerator)
+	return d.WithPipeWireRoutes(pw)
+}
+
 // audioEngineAvailable reports whether this node's actual playback
 // engine (the real backend behind internal/agent/audio.Manager, bound to
 // a delivered audio.node configuration) can currently play something —
@@ -55,8 +75,11 @@ type routeEvidenceCache struct {
 
 // update stores routes' successful entries. When complete is true
 // (routes is the full, untruncated candidate list from a successful
-// enumeration), any cached device missing from routes entirely is
-// evicted: gone from ALSA, not merely busy (busy still appears in routes).
+// enumeration of every source it merges), any cached device missing from
+// routes entirely is evicted: gone, not merely busy (busy still appears
+// in routes). complete must be false whenever ANY merged source's own
+// enumeration failed, not just the one that failed: a device this cache
+// still holds evidence for may belong to the source that did not fail.
 func (c *routeEvidenceCache) update(routes []audio.RouteEvidence, complete bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -191,8 +214,16 @@ var audioSessionCapabilityIDs = []capability.ID{
 // ClockDomainProvenance are the coordinator's own operator-declared
 // audio.node configuration (ADR-039), not anything this agent reports.
 func detectAudioCapabilities(ctx context.Context) capability.Set {
-	d := audioDiscoverer(ctx, audioEnumerator)
-	lastKnownGoodRoutes.update(d.Routes, d.HardwareEnumerated && !d.Truncated)
+	d := discoverAudio(ctx)
+	// d.Routes is the ALSA+PipeWire merge, so eviction (a device genuinely
+	// gone, not merely busy) requires BOTH halves to have enumerated
+	// cleanly: a transient pw-dump failure with healthy ALSA must not
+	// evict a bound route's cached evidence, the same way an ALSA failure
+	// already does not (re-review finding 7, PR #454). PipeWireEnumerated
+	// false with an empty reason is a clean "no PipeWire here" absence,
+	// not a failure, and does not block eviction.
+	pipeWireFailed := !d.PipeWireEnumerated && d.PipeWireEnumeratedReason != ""
+	lastKnownGoodRoutes.update(d.Routes, d.HardwareEnumerated && !d.Truncated && !pipeWireFailed)
 	if !d.EngineUsable {
 		return nil
 	}

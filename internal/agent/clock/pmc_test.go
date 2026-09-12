@@ -1,9 +1,256 @@
 package clock
 
 import (
+	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// fakePMC writes a shell script standing in for pmcBinary that dumps its
+// own argv to argsOut, then exits 0 with empty stdout (this test only
+// cares what runPMC invoked pmc WITH, not pmc's own response parsing).
+func fakePMC(t *testing.T, argsOut string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "fake-pmc.sh")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > " + argsOut + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake pmc: %v", err)
+	}
+	return script
+}
+
+// TestRunPMCUsesWritableLocalSocket covers the bug this fix closes: pmc
+// with no -i hardcodes /var/run/pmc.$pid, unwritable to a non-root agent,
+// so every GET failed with "uds: bind failed: Permission denied" even
+// against a perfectly healthy ptp4l. runPMC must pass -i with a path this
+// process can certainly write (never under /var/run or /run), and must
+// remove it once the call returns.
+func TestRunPMCUsesWritableLocalSocket(t *testing.T) {
+	argsOut := filepath.Join(t.TempDir(), "args.txt")
+	orig := pmcBinary
+	pmcBinary = fakePMC(t, argsOut)
+	defer func() { pmcBinary = orig }()
+
+	if _, err := runPMC(context.Background(), "/var/run/ptp/ptp4lro", 0, "PORT_DATA_SET", ""); err != nil {
+		t.Fatalf("runPMC: %v", err)
+	}
+
+	raw, err := os.ReadFile(argsOut)
+	if err != nil {
+		t.Fatalf("read recorded args: %v", err)
+	}
+	args := strings.Fields(string(raw))
+	i := -1
+	for n, a := range args {
+		if a == "-i" {
+			i = n
+			break
+		}
+	}
+	if i == -1 || i+1 >= len(args) {
+		t.Fatalf("pmc invocation carried no -i argument: %q", string(raw))
+	}
+	sock := args[i+1]
+	if strings.HasPrefix(sock, "/var/run") || strings.HasPrefix(sock, "/run") {
+		t.Fatalf("-i socket %q sits under a root-owned directory, reintroducing the bind failure", sock)
+	}
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Fatalf("-i socket %q was not cleaned up after the call: stat err = %v", sock, err)
+	}
+}
+
+// TestRunPMCLocalSocketsAreUnique covers two concurrent reads never
+// colliding on the same -i path.
+func TestRunPMCLocalSocketsAreUnique(t *testing.T) {
+	a, err := pmcLocalSocket("")
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	b, err := pmcLocalSocket("")
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if a == b {
+		t.Fatalf("pmcLocalSocket returned the same path twice: %q", a)
+	}
+}
+
+// shortTempDir makes a directory directly under the OS temp root with a
+// short, fixed-length name, cleaned up when t ends. t.TempDir() itself
+// embeds the full test name in the path (e.g.
+// ".../TestPMCLocalSocketPrefersRuntimeDirectory2959333898/001"), long
+// enough on macOS's own already-deep TMPDIR that it can by itself trip
+// [pmcSocketMaxPathLen] and mask what a test is actually checking.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "pmctd")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("cleanup: remove %s: %v", dir, err)
+		}
+	})
+	return dir
+}
+
+// clearPMCDirEnv clears RUNTIME_DIRECTORY and STATE_DIRECTORY to "" for
+// the duration of a test (os.Getenv reads "" identically for empty and
+// absent, and t.Setenv restores each on cleanup), so a test exercising
+// one fallback candidate is not accidentally satisfied by another one
+// still set from the real environment.
+func clearPMCDirEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("RUNTIME_DIRECTORY", "")
+	t.Setenv("STATE_DIRECTORY", "")
+}
+
+// TestPMCLocalSocketPrefersRuntimeDirectory covers candidate 1 of the
+// fallback order: RUNTIME_DIRECTORY wins over everything else, including
+// a hint the caller supplied.
+func TestPMCLocalSocketPrefersRuntimeDirectory(t *testing.T) {
+	clearPMCDirEnv(t)
+	runtimeDir := shortTempDir(t)
+	stateDir := shortTempDir(t)
+	hintDir := shortTempDir(t)
+	t.Setenv("RUNTIME_DIRECTORY", runtimeDir)
+	t.Setenv("STATE_DIRECTORY", stateDir)
+
+	path, err := pmcLocalSocket(hintDir)
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if filepath.Dir(path) != runtimeDir {
+		t.Fatalf("pmcLocalSocket = %q, want a path under RUNTIME_DIRECTORY %q", path, runtimeDir)
+	}
+}
+
+// TestPMCLocalSocketFallsBackToStateDirectory covers candidate 2: no
+// RUNTIME_DIRECTORY set, STATE_DIRECTORY wins over the hint.
+func TestPMCLocalSocketFallsBackToStateDirectory(t *testing.T) {
+	clearPMCDirEnv(t)
+	stateDir := shortTempDir(t)
+	hintDir := shortTempDir(t)
+	t.Setenv("STATE_DIRECTORY", stateDir)
+
+	path, err := pmcLocalSocket(hintDir)
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if filepath.Dir(path) != stateDir {
+		t.Fatalf("pmcLocalSocket = %q, want a path under STATE_DIRECTORY %q", path, stateDir)
+	}
+}
+
+// TestPMCLocalSocketFallsBackToHint covers candidate 3: no systemd
+// directories set, the caller's own known-writable hint wins over the OS
+// temp directory.
+func TestPMCLocalSocketFallsBackToHint(t *testing.T) {
+	clearPMCDirEnv(t)
+	hintDir := shortTempDir(t)
+
+	path, err := pmcLocalSocket(hintDir)
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if filepath.Dir(path) != hintDir {
+		t.Fatalf("pmcLocalSocket = %q, want a path under the hint directory %q", path, hintDir)
+	}
+}
+
+// TestPMCLocalSocketFallsBackToTempDir covers candidate 4: nothing else
+// set or supplied, os.TempDir() is still tried rather than failing
+// outright, matching a bare non-systemd run.
+func TestPMCLocalSocketFallsBackToTempDir(t *testing.T) {
+	clearPMCDirEnv(t)
+
+	path, err := pmcLocalSocket("")
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if filepath.Dir(path) != filepath.Clean(os.TempDir()) {
+		t.Fatalf("pmcLocalSocket = %q, want a path under os.TempDir() %q", path, os.TempDir())
+	}
+}
+
+// TestPMCLocalSocketSkipsUnwritableCandidate covers a candidate directory
+// that cannot be written (matching /tmp under the shipped agent unit's
+// ProtectSystem=strict): pmcLocalSocket must move on to the next
+// candidate rather than failing outright.
+//
+// The blocked candidate is a path under a regular file, not a directory
+// whose permission bits were stripped: CI runs this suite as root, and
+// root ignores permission bits entirely, so a chmod-0500 directory stayed
+// writable there and the candidate was never actually skipped. A regular
+// file in a path's directory position fails os.CreateTemp with ENOTDIR
+// for every uid, root included, so the skip is exercised on the only
+// machine this gate matters on.
+func TestPMCLocalSocketSkipsUnwritableCandidate(t *testing.T) {
+	clearPMCDirEnv(t)
+	base := shortTempDir(t)
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	unwritable := filepath.Join(blocker, "sock-dir")
+	t.Setenv("RUNTIME_DIRECTORY", unwritable)
+	hintDir := shortTempDir(t)
+
+	path, err := pmcLocalSocket(hintDir)
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if filepath.Dir(path) != hintDir {
+		t.Fatalf("pmcLocalSocket = %q, want it to skip the unusable RUNTIME_DIRECTORY and land in the hint %q", path, hintDir)
+	}
+}
+
+// TestPMCLocalSocketSkipsTooLongCandidate covers the Unix socket path
+// length limit: a candidate directory long enough that the reserved
+// path would exceed 107 bytes must be skipped in favor of the next
+// candidate, never returned as-is for pmc's bind() to reject later.
+func TestPMCLocalSocketSkipsTooLongCandidate(t *testing.T) {
+	clearPMCDirEnv(t)
+	base := shortTempDir(t)
+	// "pmc.XXXXXXXXXX.sock" (pmc.*.sock's expanded random suffix) is at
+	// most ~20 bytes, so padding the directory itself past
+	// pmcSocketMaxPathLen guarantees the joined path is too long.
+	longDir := filepath.Join(base, strings.Repeat("a", pmcSocketMaxPathLen))
+	if err := os.MkdirAll(longDir, 0o755); err != nil {
+		t.Fatalf("mkdir long dir: %v", err)
+	}
+	t.Setenv("RUNTIME_DIRECTORY", longDir)
+	hintDir := shortTempDir(t)
+
+	path, err := pmcLocalSocket(hintDir)
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if filepath.Dir(path) != hintDir {
+		t.Fatalf("pmcLocalSocket = %q, want it to skip the too-long RUNTIME_DIRECTORY and land in the hint %q", path, hintDir)
+	}
+	if len(path) > pmcSocketMaxPathLen {
+		t.Fatalf("pmcLocalSocket returned a path over the Unix socket limit: %q (%d bytes)", path, len(path))
+	}
+}
+
+// TestPMCLocalSocketAllCandidatesFail covers every candidate being
+// unwritable: pmcLocalSocket must report an error, not a path pmc's own
+// bind() would then fail on anyway.
+func TestPMCLocalSocketAllCandidatesFail(t *testing.T) {
+	clearPMCDirEnv(t)
+	missing := filepath.Join(shortTempDir(t), "does-not-exist")
+	t.Setenv("RUNTIME_DIRECTORY", missing)
+	t.Setenv("STATE_DIRECTORY", missing)
+	t.Setenv("TMPDIR", missing)
+
+	if _, err := pmcLocalSocket(missing); err == nil {
+		t.Fatalf("pmcLocalSocket: want an error when every candidate directory is unusable")
+	}
+}
 
 // readFixture loads a captured pmc output file from testdata/pmc — see
 // that directory's README.md for provenance (real captures vs. hand-edited

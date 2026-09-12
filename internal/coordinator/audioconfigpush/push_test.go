@@ -282,6 +282,74 @@ func TestToNodeOmitsOutputLatencyWhenUnmeasured(t *testing.T) {
 	}
 }
 
+// TestToNodePushesPipeWireSinkBackend proves a stored pipewiresink
+// binding, including its target node, reaches the wire: this is the
+// only way the agent ever learns to build against PipeWire instead of
+// alsasink, so a push that drops it makes the feature inert end to end.
+func TestToNodePushesPipeWireSinkBackend(t *testing.T) {
+	cs := newFakeConfigStore()
+	targetNode := "alsa_output.usb-MOTU_M4_M4MA0302TY-00.pro-output-0"
+	payload := config.AudioNodePayload{
+		ProgramRoute:    "hw:CARD=X,DEV=0",
+		ProgramChannels: []int{1, 2},
+		ClockDomain:     "one-interface", ClockDomainProvenance: "single card",
+		SinkBackend:        config.AudioNodeSinkBackendPipeWire,
+		PipewireTargetNode: &targetNode,
+	}
+	raw, err := config.EncodeAudioNodePayload(payload)
+	if err != nil {
+		t.Fatalf("EncodeAudioNodePayload: %v", err)
+	}
+	cs.put(config.AudioNodeConfigKind, "node-1", 1, raw)
+
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	params, ok := pub.actionParams("audio.node.configure")
+	if !ok {
+		t.Fatal("no audio.node.configure command was published")
+	}
+	if params["sinkBackend"] != config.AudioNodeSinkBackendPipeWire {
+		t.Errorf("sinkBackend = %v, want %q", params["sinkBackend"], config.AudioNodeSinkBackendPipeWire)
+	}
+	if params["pipewireTargetNode"] != targetNode {
+		t.Errorf("pipewireTargetNode = %v, want %q", params["pipewireTargetNode"], targetNode)
+	}
+}
+
+// TestToNodeOmitsSinkBackendWhenDefault proves the common case pushes
+// no sinkBackend or pipewireTargetNode key at all, rather than always
+// pushing the agent's own default explicitly.
+func TestToNodeOmitsSinkBackendWhenDefault(t *testing.T) {
+	cs := newFakeConfigStore()
+	payload := config.AudioNodePayload{
+		ProgramRoute:    "hw:CARD=X,DEV=0",
+		ProgramChannels: []int{1, 2},
+		ClockDomain:     "one-interface", ClockDomainProvenance: "single card",
+	}
+	raw, err := config.EncodeAudioNodePayload(payload)
+	if err != nil {
+		t.Fatalf("EncodeAudioNodePayload: %v", err)
+	}
+	cs.put(config.AudioNodeConfigKind, "node-1", 1, raw)
+
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	params, ok := pub.actionParams("audio.node.configure")
+	if !ok {
+		t.Fatal("no audio.node.configure command was published")
+	}
+	if _, present := params["sinkBackend"]; present {
+		t.Errorf("params carries sinkBackend = %v for a default-backend node; the key must be absent", params["sinkBackend"])
+	}
+	if _, present := params["pipewireTargetNode"]; present {
+		t.Errorf("params carries pipewireTargetNode = %v for a default-backend node; the key must be absent", params["pipewireTargetNode"])
+	}
+}
+
 // TestToNodeSkipsUnconfiguredAudioNode proves a node with no audio.node
 // object ever written gets no audio.node.configure push — never an
 // error, and never a push carrying a fabricated binding.

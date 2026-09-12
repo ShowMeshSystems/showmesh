@@ -46,6 +46,12 @@ done
 
 PTP_RO_SOCKET=/var/run/ptp/ptp4lro
 PTP4L_CONF=/etc/showmesh/ptp4l.conf
+PIPEWIRE_SOCKET=/run/pipewire/pipewire-0
+# The account install-ptp-audio.sh runs both the agent and the headless
+# PipeWire graph as (see that script's own SERVICE_USER comment). Not
+# sourced from install-ptp-audio.sh: this script has no dependency on it
+# beyond the shared ptp-audio/ptp-group.conf constant.
+AGENT_USER=showmesh
 
 # pmc's requests carry a domain number (default 0) that must match the
 # target ptp4l's own domainNumber, or ptp4l silently drops the request --
@@ -113,7 +119,283 @@ else
 fi
 echo ""
 
-# --- 2. PipeWire: does the ALSA node's driver election actually land on
+# --- 2. Exactly one writer per clock ---
+#
+# A grandmaster reporting MASTER, a follower reporting SLAVE, a driver
+# elected, and no alsasink skew lines are all true of a node whose clock is
+# actually being destroyed by two processes writing the same device at
+# once -- MEASURED on node-01: a stray hand-run phc2sys alongside
+# phc2sys-showmesh.service fought the same PHC, and every check above
+# stayed green throughout. RES-019 requires exactly one component own each
+# clock; this check proves that against the live process table rather than
+# assuming the installed units are the only things running.
+echo "--- Clock writer uniqueness ---"
+# resolve_clock_target canonicalizes a phc2sys -c value to the actual clock
+# device it names, so two writers spelled differently (an interface name
+# and its own /dev/ptpN, or a device reached through a symlink) still key
+# to the same group instead of hiding a second writer under a different
+# string (re-review finding H, PR #454). CLOCK_REALTIME and an unresolvable
+# token are returned as given: this narrows the spelling gap, it does not
+# close every one (see PTP-AUDIO.md).
+resolve_clock_target() {
+  local raw="$1"
+  if [ "$raw" = "CLOCK_REALTIME" ]; then
+    echo "CLOCK_REALTIME"
+    return
+  fi
+  if [ -e "$raw" ]; then
+    realpath "$raw" 2>/dev/null || echo "$raw"
+    return
+  fi
+  local ptp_link
+  ptp_link="$(command ls "/sys/class/net/$raw/device/ptp/" 2>/dev/null | head -n1)"
+  if [ -n "$ptp_link" ]; then
+    realpath "/dev/$ptp_link" 2>/dev/null || echo "/dev/$ptp_link"
+    return
+  fi
+  echo "$raw"
+}
+if ! command -v pgrep >/dev/null 2>&1; then
+  err "pgrep not found (part of procps); cannot check for duplicate phc2sys/ptp4l writers"
+else
+  declare -A PHC2SYS_TARGETS
+  PHC2SYS_PIDS="$(pgrep -x phc2sys 2>/dev/null || true)"
+  # A count kept as a plain integer, not "${#PHC2SYS_TARGETS[@]}": under
+  # set -u, bash's own length expansion on an associative array that never
+  # received a single key throws "unbound variable" (confirmed against a
+  # real bash 5.1 bullseye run), which is exactly the state a PHC-less node
+  # is in for this array and took out this whole section including the
+  # ptp4l half below.
+  PHC2SYS_PID_COUNT=$(echo "$PHC2SYS_PIDS" | wc -w)
+  for pid in $PHC2SYS_PIDS; do
+    CMDLINE="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    RAW_TARGET="$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++) if ($i=="-c") {print $(i+1); found=1} } END{if(!found) print "CLOCK_REALTIME"}')"
+    [ -n "$RAW_TARGET" ] || RAW_TARGET="(cmdline unreadable)"
+    if [ "$RAW_TARGET" = "(cmdline unreadable)" ]; then
+      TARGET="$RAW_TARGET"
+    else
+      TARGET="$(resolve_clock_target "$RAW_TARGET")"
+    fi
+    PHC2SYS_TARGETS["$TARGET"]="${PHC2SYS_TARGETS[$TARGET]:-}${PHC2SYS_TARGETS[$TARGET]:+ }$pid"
+  done
+  PHC2SYS_DUP=0
+  for target in "${!PHC2SYS_TARGETS[@]}"; do
+    pids="${PHC2SYS_TARGETS[$target]}"
+    count=$(echo "$pids" | wc -w)
+    if [ "$count" -gt 1 ]; then
+      bad "$count phc2sys processes target $target at once (pids:$pids) -- kill all but one, it does not matter which"
+      PHC2SYS_DUP=1
+    fi
+  done
+  if [ "$PHC2SYS_PID_COUNT" -eq 0 ]; then
+    info "no phc2sys process running (expected on a follower, or a grandmaster with no PHC)"
+  elif [ "$PHC2SYS_DUP" -eq 0 ]; then
+    ok "exactly one phc2sys process per target clock (${!PHC2SYS_TARGETS[*]})"
+  fi
+
+  declare -A PTP4L_IFACES
+  PTP4L_PIDS="$(pgrep -x ptp4l 2>/dev/null || true)"
+  PTP4L_PID_COUNT=$(echo "$PTP4L_PIDS" | wc -w)
+  for pid in $PTP4L_PIDS; do
+    CMDLINE="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    IFACE_ARG="$(echo "$CMDLINE" | awk '{for(i=1;i<=NF;i++) if ($i=="-i") {print $(i+1); found=1} } END{if(!found) print "(no -i)"}')"
+    [ -n "$IFACE_ARG" ] || IFACE_ARG="(cmdline unreadable)"
+    PTP4L_IFACES["$IFACE_ARG"]="${PTP4L_IFACES[$IFACE_ARG]:-}${PTP4L_IFACES[$IFACE_ARG]:+ }$pid"
+  done
+  PTP4L_DUP=0
+  for iface in "${!PTP4L_IFACES[@]}"; do
+    pids="${PTP4L_IFACES[$iface]}"
+    count=$(echo "$pids" | wc -w)
+    if [ "$count" -gt 1 ]; then
+      bad "$count ptp4l processes run on interface $iface at once (pids:$pids) -- kill all but one, it does not matter which"
+      PTP4L_DUP=1
+    fi
+  done
+  if [ "$PTP4L_PID_COUNT" -eq 0 ]; then
+    bad "no ptp4l process running -- this script only makes sense on a node running one, unlike phc2sys which is legitimately absent on a PHC-less node"
+  elif [ "$PTP4L_DUP" -eq 0 ]; then
+    ok "exactly one ptp4l process per interface (${!PTP4L_IFACES[*]})"
+  fi
+fi
+echo ""
+
+# --- 3. Servo health, not just port state ---
+#
+# MASTER/SLAVE, a driver election, and no skew lines only say the pieces
+# are wired to each other. MEASURED on node-01 during the same incident as
+# check 2 above: phc2sys logged "sys offset -288646357 s2 freq -900000000
+# delay 0" then "sys offset 55730027 s0 freq -900000000 delay 0" one
+# second apart -- freq pinned at linuxptp's own max_frequency clamp
+# (900000000 ppb, 900,000 ppm) and the servo state flapping s2/s0 -- while
+# every check above kept passing. The follower on the other end saw the
+# consequence: offsets swinging +/-80ms and a NEGATIVE path delay, which is
+# never physically possible. This reads several seconds of the actual
+# servo output for the role this node has (phc2sys on a grandmaster with a
+# PHC, ptp4l on a follower) and prints every sample, not just whether it
+# ran.
+#
+# Thresholds (see deploy/node/PTP-AUDIO.md for the reasoning):
+#   - |offset| >= 1000000ns (1ms) -- the one number that most directly says
+#     whether the clock is right, not just whether the servo looks settled.
+#   - |freq| >= 100000000 ppb (100,000 ppm) -- a clamp detector, not a
+#     health bound: it fires only within an order of magnitude of
+#     linuxptp's own 900,000,000 ppb clamp.
+#   - more than one distinct servo state across the sample window -- a
+#     converged servo holds one state (s2) for the whole window.
+#   - any negative path delay/offset-source delay -- never physical.
+echo "--- Servo health (the reading none of the other checks can see) ---"
+SERVO_HEALTH_PY="$SCRIPT_DIR/ptp-audio/servo-health.py"
+OFFSET_BOUND_NS=1000000
+SATURATED_FREQ_PPB=100000000
+SAMPLE_WINDOW=8
+if ! command -v python3 >/dev/null 2>&1; then
+  err "python3 not found; cannot parse servo log output"
+elif [ ! -r "$SERVO_HEALTH_PY" ]; then
+  err "servo health parser not found at $SERVO_HEALTH_PY; cannot check servo health"
+elif ! command -v journalctl >/dev/null 2>&1; then
+  err "journalctl not found; cannot read recent servo output from ptp4l-showmesh.service/phc2sys-showmesh.service"
+else
+  SERVO_UNIT=""
+  SERVO_LABEL=""
+  if systemctl is-active --quiet phc2sys-showmesh.service 2>/dev/null; then
+    SERVO_UNIT=phc2sys-showmesh.service
+    SERVO_LABEL="phc2sys (this node's own PHC disciplined from its system clock)"
+  elif [ "${PORT_STATE:-}" = "SLAVE" ]; then
+    SERVO_UNIT=ptp4l-showmesh.service
+    SERVO_LABEL="ptp4l (this node's own sync to the domain's grandmaster)"
+  fi
+
+  if [ -z "$SERVO_UNIT" ]; then
+    info "nothing to sample: no phc2sys running and ptp4l is not in SLAVE (this node has no local servo of its own to check, or check 1 above already explains why)"
+  else
+    # journalctl and python3 run as two separate commands, not one pipeline,
+    # so each one's own exit code is checked: $? after a pipeline inside a
+    # command substitution reports only the last command's (python3's, which
+    # exits 0 on empty input), leaving a journalctl failure invisible.
+    JOURNAL_OUTPUT="$(journalctl -u "$SERVO_UNIT" -n 500 --no-pager -o cat 2>&1)"
+    JOURNALCTL_RC=$?
+    if [ "$JOURNALCTL_RC" -ne 0 ]; then
+      err "journalctl failed to read $SERVO_UNIT's recent log (exit $JOURNALCTL_RC): $(echo "$JOURNAL_OUTPUT" | tr '\n' ' ')"
+    else
+      READING="$(printf '%s' "$JOURNAL_OUTPUT" | python3 "$SERVO_HEALTH_PY")"
+      RC=$?
+      if [ "$RC" -ne 0 ]; then
+        err "the servo health parser failed to run against $SERVO_UNIT's log (exit $RC)"
+      else
+        SAMPLE_COUNT="$(echo "$READING" | awk -F= '/^SAMPLE_COUNT=/{print $2; exit}')"
+        if [ "${SAMPLE_COUNT:-0}" -eq 0 ]; then
+          # No parseable line is not automatically a fresh restart: a user
+          # outside systemd-journal/adm gets an empty, zero-exit journalctl
+          # read, which is this check's own instrument failing to run, not a
+          # confirmed negative -- see the header's exit-2 contract.
+          err "no parseable servo sample lines in $SERVO_UNIT's recent log ($SERVO_LABEL); this may mean the unit just (re)started, or that this account cannot read its journal (needs systemd-journal/adm group membership) -- re-run as a privileged reader before trusting a clean result next to this"
+        else
+          SAMPLES="$(echo "$READING" | awk -F= '/^SAMPLE=/{print $2}' | tail -n "$SAMPLE_WINDOW")"
+          STATES=""
+          MIN_DELAY=""
+          MAX_ABS_FREQ=0
+          MAX_ABS_OFFSET=0
+          ACTUAL_SAMPLES=0
+          while IFS='|' read -r offset state freq delay; do
+            [ -n "$offset" ] || continue
+            info "$SERVO_LABEL sample: offset=${offset}ns state=s${state} freq=${freq}ppb delay=${delay}ns"
+            STATES="$STATES s$state"
+            ACTUAL_SAMPLES=$((ACTUAL_SAMPLES + 1))
+            if [ -z "$MIN_DELAY" ] || [ "$delay" -lt "$MIN_DELAY" ]; then
+              MIN_DELAY="$delay"
+            fi
+            ABS_FREQ=${freq#-}
+            if [ "$ABS_FREQ" -gt "$MAX_ABS_FREQ" ]; then
+              MAX_ABS_FREQ="$ABS_FREQ"
+            fi
+            ABS_OFFSET=${offset#-}
+            if [ "$ABS_OFFSET" -gt "$MAX_ABS_OFFSET" ]; then
+              MAX_ABS_OFFSET="$ABS_OFFSET"
+            fi
+          done <<< "$SAMPLES"
+
+          DISTINCT_STATES="$(echo "$STATES" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')"
+          DISTINCT_COUNT=$(echo "$DISTINCT_STATES" | wc -w)
+
+          SERVO_BAD=0
+          if [ "$MAX_ABS_OFFSET" -ge "$OFFSET_BOUND_NS" ]; then
+            bad "$SERVO_LABEL offset reached ${MAX_ABS_OFFSET}ns over the last $ACTUAL_SAMPLES sample(s) -- past the ${OFFSET_BOUND_NS}ns (1ms) bound, three orders of magnitude past a locked node's own tens-of-microseconds offset"
+            SERVO_BAD=1
+          fi
+          if [ "$MAX_ABS_FREQ" -ge "$SATURATED_FREQ_PPB" ]; then
+            bad "$SERVO_LABEL frequency adjustment reached ${MAX_ABS_FREQ}ppb over the last $ACTUAL_SAMPLES sample(s) -- at or near linuxptp's own 900000000ppb clamp, not ordinary crystal drift"
+            SERVO_BAD=1
+          fi
+          if [ "$DISTINCT_COUNT" -gt 1 ]; then
+            bad "$SERVO_LABEL servo state is flapping ($DISTINCT_STATES) over the last $ACTUAL_SAMPLES sample(s) instead of holding steady"
+            SERVO_BAD=1
+          fi
+          if [ -n "$MIN_DELAY" ] && [ "$MIN_DELAY" -lt 0 ]; then
+            bad "$SERVO_LABEL reported a negative delay (${MIN_DELAY}ns) -- never physically possible, this is the clearest sign the clock is being fought over"
+            SERVO_BAD=1
+          fi
+          if [ "$SERVO_BAD" -eq 0 ]; then
+            ok "$SERVO_LABEL servo settled over the last $ACTUAL_SAMPLES sample(s): state held at ${DISTINCT_STATES}, max |offset|=${MAX_ABS_OFFSET}ns, max |freq|=${MAX_ABS_FREQ}ppb, min delay=${MIN_DELAY}ns"
+          fi
+        fi
+      fi
+    fi
+  fi
+fi
+echo ""
+
+# --- 4. Can the ShowMesh agent's own account actually reach the socket ---
+#
+# The load-bearing distinction this check exists for: connect() to a Unix
+# socket needs the WRITE bit, not read+execute, and a check run as root
+# (or as the graph's own user) never exercises that gate at all -- root
+# bypasses file permissions outright, and the graph's own user owns the
+# socket it created. MEASURED on node-01: pipewire-showmesh.service's
+# RuntimeDirectory created /run/pipewire/pipewire-0 mode 0755, and every
+# ShowMesh-agent client got EACCES before PipeWire's own access module was
+# ever consulted -- a verify pass run as root reported clean the entire
+# time. install-ptp-audio.sh now runs the graph as the SAME user
+# ($AGENT_USER) the agent runs as, which removes the whole problem, but
+# this check proves that against the actually-running socket rather than
+# trusting the install path's own intent.
+echo "--- Agent socket reachability (as $AGENT_USER, not root, not the graph's own user) ---"
+if ! id "$AGENT_USER" >/dev/null 2>&1; then
+  err "user $AGENT_USER does not exist on this host; cannot check socket reachability as the agent's own account"
+elif [ ! -S "$PIPEWIRE_SOCKET" ]; then
+  bad "$PIPEWIRE_SOCKET does not exist (pipewire-showmesh.service may not be running)"
+elif ! command -v python3 >/dev/null 2>&1; then
+  err "python3 not found; cannot check socket reachability"
+else
+  CONNECT_SCRIPT='import socket,sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect(sys.argv[1])
+except OSError as e:
+    print("CONNECT_FAIL:" + str(e))
+    sys.exit(1)
+print("CONNECT_OK")'
+  CURRENT_USER="$(id -un)"
+  if [ "$CURRENT_USER" = "$AGENT_USER" ]; then
+    CONNECT_OUT="$(python3 -c "$CONNECT_SCRIPT" "$PIPEWIRE_SOCKET" 2>&1)"
+    CONNECT_RC=$?
+  elif [ "$(id -u)" -eq 0 ] && command -v runuser >/dev/null 2>&1; then
+    CONNECT_OUT="$(runuser -u "$AGENT_USER" -- python3 -c "$CONNECT_SCRIPT" "$PIPEWIRE_SOCKET" 2>&1)"
+    CONNECT_RC=$?
+  else
+    CONNECT_OUT=""
+    CONNECT_RC=2
+  fi
+  if [ "$CONNECT_RC" -eq 2 ] && [ -z "$CONNECT_OUT" ]; then
+    err "must run this script as root or as $AGENT_USER to check socket reachability as $AGENT_USER (currently running as $CURRENT_USER, and runuser is unavailable to drop to it)"
+  elif [ "$CONNECT_RC" -eq 0 ] && echo "$CONNECT_OUT" | grep -q '^CONNECT_OK$'; then
+    ok "user $AGENT_USER can connect() to $PIPEWIRE_SOCKET -- the same socket the agent's own pw-dump/pipewiresink calls open"
+  else
+    bad "user $AGENT_USER cannot connect() to $PIPEWIRE_SOCKET ($CONNECT_OUT); check the socket's own mode and this user's group membership, not just whether the service is active"
+  fi
+fi
+echo ""
+
+# --- 5. PipeWire: does the ALSA node's driver election actually land on
 #    the PTP driver, not just "is this node capable of driving" ---
 #
 # A node's own node.driver property (true for a node that CAN act as a
@@ -196,7 +478,7 @@ else
 fi
 echo ""
 
-# --- 2b. xrun count, best-effort via pw-top (not exposed through pw-dump) ---
+# --- 6. xrun count, best-effort via pw-top (not exposed through pw-dump) ---
 echo "--- ALSA sink xrun count ---"
 if ! command -v pw-top >/dev/null 2>&1; then
   info "pw-top not found; xrun count unavailable (part of the pipewire package)"
@@ -221,7 +503,7 @@ else
 fi
 echo ""
 
-# --- 3. The load-bearing reading: does alsasink ever slave-skew ---
+# --- 7. The load-bearing reading: does alsasink ever slave-skew ---
 echo "--- Sink slaving behavior (the reading that actually matters) ---"
 if [ "$PLAY_SECONDS" -le 0 ]; then
   info "skipped (--play 0 or default overridden); this is the check that actually proves the rate lock is doing anything, run it before trusting the graph-driver checks above"

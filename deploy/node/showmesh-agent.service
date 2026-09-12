@@ -30,6 +30,8 @@ ExecStart=/usr/local/bin/showmesh-agent-native
 WorkingDirectory=/var/lib/showmesh
 StateDirectory=showmesh
 StateDirectoryMode=0750
+RuntimeDirectory=showmesh
+RuntimeDirectoryMode=0750
 Restart=on-failure
 RestartSec=2s
 

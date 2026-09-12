@@ -56,13 +56,18 @@ type clockNodeConfig struct {
 type clockBinding struct {
 	mgr *clock.Manager
 
+	// localSocketDir is this agent's own configured asset directory,
+	// passed through to clock.Config.LocalSocketDir as pmc's local-socket
+	// fallback candidate (see [clock.ExternalConfig.LocalSocketDir]).
+	localSocketDir string
+
 	haveConfig bool
 	revision   int64
 	cfg        clockNodeConfig
 }
 
-func newClockBinding(mgr *clock.Manager) *clockBinding {
-	return &clockBinding{mgr: mgr}
+func newClockBinding(mgr *clock.Manager, localSocketDir string) *clockBinding {
+	return &clockBinding{mgr: mgr, localSocketDir: localSocketDir}
 }
 
 // applyConfig refuses p.Revision older than the currently held one, is a
@@ -93,6 +98,7 @@ func (b *clockBinding) applyConfig(ctx context.Context, p clockNodeConfig) error
 		HardwareTimestamping: p.HardwareTimestamping,
 		ExternalUDSAddress:   p.ExternalUDSAddress,
 		FPPBaseURL:           p.FPPBaseURL,
+		LocalSocketDir:       b.localSocketDir,
 	}
 	if err := b.mgr.SetConfig(ctx, cfg); err != nil {
 		return fmt.Errorf("node.clock.configure: %w", err)
@@ -106,6 +112,19 @@ func (b *clockBinding) applyConfig(ctx context.Context, p clockNodeConfig) error
 
 func (b *clockBinding) currentRevision() (revision int64, have bool) {
 	return b.revision, b.haveConfig
+}
+
+// currentInterface reports the network interface this node's currently
+// accepted node.clock configuration names, or ok=false when no
+// node.clock.configure has ever been accepted, read by
+// [audioEngineRebuilder.buildPipelineClockLocked] (audioengine.go) to
+// open this node's audio pipeline clock off the SAME interface
+// node.clock.ptp.* already reports evidence for. Unguarded, matching
+// [clockBinding.currentRevision]'s identical convention: every command
+// this package handles runs one at a time off a single MQTT dispatch
+// goroutine.
+func (b *clockBinding) currentInterface() (iface string, ok bool) {
+	return b.cfg.Interface, b.haveConfig
 }
 
 var clockConfigureKnownKeys = map[string]bool{

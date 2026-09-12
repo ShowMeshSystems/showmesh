@@ -26,6 +26,15 @@ type ExternalConfig struct {
 	// UDSAddress is the read-only management socket to query. Defaults
 	// to [DefaultExternalUDSAddress] when empty.
 	UDSAddress string
+
+	// LocalSocketDir is a directory this provider is already known to be
+	// able to write, offered to pmc's own -i client socket as a fallback
+	// candidate (see [pmcLocalSocketDirs]) behind systemd's
+	// RuntimeDirectory/StateDirectory and ahead of the OS temp directory.
+	// Optional: this provider owns no directory of its own, so it is
+	// only as good as whatever the caller already knows, e.g. the
+	// agent's configured asset directory.
+	LocalSocketDir string
 }
 
 // ExternalProvider observes an externally-owned ptp4l instance's
@@ -96,16 +105,28 @@ func (p *ExternalProvider) Poll(ctx context.Context) RawStatus {
 	if _, err := os.Stat(p.cfg.UDSAddress); err != nil {
 		return RawStatus{Reachable: false, Reason: fmt.Sprintf("read-only management socket %s: %v", p.cfg.UDSAddress, err)}
 	}
-	return pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)")
+	return pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)", p.cfg.LocalSocketDir)
 }
 
 // pollViaUDS is [ExternalProvider.Poll]'s and [ManagedProvider.Poll]'s
 // shared implementation: both read the SAME three management sets off a
 // UDS socket via pmc, differing only in which socket, whether they also
-// supervise the process behind it, and what they report as Owner.
-func pollViaUDS(ctx context.Context, uds string, domain int, owner string) RawStatus {
-	portOut, portErr := runPMC(ctx, uds, domain, "PORT_DATA_SET")
+// supervise the process behind it, what they report as Owner, and which
+// directory (if any) they can already vouch for as writable for pmc's own
+// local socket (socketDirHint, see [pmcLocalSocketDirs]).
+func pollViaUDS(ctx context.Context, uds string, domain int, owner string, socketDirHint string) RawStatus {
+	portOut, portErr := runPMC(ctx, uds, domain, "PORT_DATA_SET", socketDirHint)
 	if portErr != nil {
+		if pmcUnavailable(portErr) {
+			// pmc itself never reached ptp4l (its own client-side setup
+			// failed) — not RES-019 section 9's "interface or link loss"
+			// or "ptp4l gone", so this must not read as StateFailed. Report
+			// no lock evidence instead: Tracker settles into acquiring (or
+			// holdover, if previously locked) exactly as it does for any
+			// other reading with no proof of sync yet.
+			return RawStatus{Reachable: true, Timescale: TimescaleUnknown, Owner: owner,
+				Reason: fmt.Sprintf("clock state unknown: %v (this node's own pmc tooling failed, not evidence ptp4l is down)", portErr)}
+		}
 		return RawStatus{Reachable: false, Reason: portErr.Error()}
 	}
 	port := parsePortDataSet(portOut)
@@ -113,13 +134,13 @@ func pollViaUDS(ctx context.Context, uds string, domain int, owner string) RawSt
 		return RawStatus{Reachable: false, Reason: "no response from ptp4l's management socket (wrong domain, or ptp4l is not actually running behind this socket)"}
 	}
 
-	tsOut, _ := runPMC(ctx, uds, domain, "TIME_STATUS_NP")
+	tsOut, _ := runPMC(ctx, uds, domain, "TIME_STATUS_NP", socketDirHint)
 	ts := parseTimeStatusNP(tsOut)
 
-	propsOut, _ := runPMC(ctx, uds, domain, "TIME_PROPERTIES_DATA_SET")
+	propsOut, _ := runPMC(ctx, uds, domain, "TIME_PROPERTIES_DATA_SET", socketDirHint)
 	props := parseTimePropertiesDataSet(propsOut)
 
-	defOut, _ := runPMC(ctx, uds, domain, "DEFAULT_DATA_SET")
+	defOut, _ := runPMC(ctx, uds, domain, "DEFAULT_DATA_SET", socketDirHint)
 	def := parseDefaultDataSet(defOut)
 
 	raw := RawStatus{

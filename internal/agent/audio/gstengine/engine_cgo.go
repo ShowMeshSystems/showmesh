@@ -15,6 +15,7 @@ import (
 	glib "github.com/go-gst/go-glib/pkg/glib/v2"
 	gobject "github.com/go-gst/go-glib/pkg/gobject/v2"
 	"github.com/go-gst/go-gst/pkg/gst"
+	"github.com/go-gst/go-gst/pkg/gstaudio"
 
 	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -126,6 +127,25 @@ type Engine struct {
 	// when Close's own SetState(NULL) attempt was abandoned or deferred
 	// rather than confirmed.
 	pipelineStateAtClose gst.State
+
+	// clockStatus is [Engine.ClockSource]'s own evidence: which clock
+	// this pipeline actually runs on, and why. Set by installClock
+	// before the pipeline's first state change, and updated again by
+	// phcClockGetTime the moment a PHC read fails, so a clock that goes
+	// unreadable after install stops claiming [clockSourcePHC] on the
+	// wire. An atomic.Pointer, not plain fields: phcClockGetTime writes
+	// from GStreamer's own scheduling thread while ClockSource reads
+	// from a report goroutine, and backend/reason must always be read
+	// together as the pair that was true at the same instant.
+	clockStatus atomic.Pointer[clockStatus]
+
+	// clockLastNanos caches the most recent successful cfg.Clock.Now()
+	// reading in nanoseconds, so a transient read failure returns the
+	// last known value instead of blocking or erroring out of a callback
+	// GStreamer's own scheduling thread invokes. Seeded by installClock
+	// from its own successful read, so a failure on the very first
+	// callback reports that reading rather than the Unix epoch.
+	clockLastNanos atomic.Int64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -381,6 +401,11 @@ func (e *Engine) Close() error {
 			}
 			e.ltc.closeEncoder()
 		}
+		if e.cfg.Clock != nil {
+			if err := e.cfg.Clock.Close(); err != nil {
+				slog.Warn("gstengine: failed to close the pipeline clock's PHC device", "error", err)
+			}
+		}
 
 		if e.anyTeardownIncomplete.Load() {
 			e.closeErr = errCloseIncomplete
@@ -556,10 +581,170 @@ func (e *Engine) buildPipeline() error {
 		e.ltc.bindPipeline(pipeline)
 	}
 
+	// Before the first state change, never after: measurements proved a
+	// clock set once a pipeline is already PLAYING
+	// does not reach an already-playing sink.
+	e.installClock(pipeline)
+
 	if pipeline.SetState(gst.StatePlaying) == gst.StateChangeFailure {
-		return errors.New("output pipeline refused to reach PLAYING")
+		return fmt.Errorf("output pipeline refused to reach PLAYING: %s", firstBusErrorText(pipeline))
 	}
 	return nil
+}
+
+// firstBusErrorText drains pipeline's own bus for the GStreamer element
+// error behind a synchronous SetState(PLAYING) failure. MEASURED on
+// node-01: a PipeWire socket permission denial and a channel-count
+// mismatch both surfaced as the identical "refused to reach PLAYING",
+// sending an hour of investigation at the wrong cause. Returns a stated
+// absence rather than fabricating a diagnosis when no message arrives
+// within the short window a synchronous failure's own message needs to
+// land.
+func firstBusErrorText(pipeline gst.Pipeline) string {
+	bus := pipeline.GetBus()
+	defer releaseBus(bus)
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return "no GStreamer error message arrived on the bus"
+		}
+		msg := bus.TimedPop(gst.ClockTime(remaining))
+		if msg == nil {
+			return "no GStreamer error message arrived on the bus"
+		}
+		msgType := msg.Type()
+		var text string
+		if msgType == gst.MessageError {
+			text, _ = msg.ParseError()
+		}
+		gst.UnsafeMessageUnref(msg)
+		if msgType == gst.MessageError {
+			return text
+		}
+	}
+}
+
+// clockSourcePHC, clockSourceRealtime and clockSourceDefault are
+// [Engine.ClockSource]'s own closed vocabulary
+// (docs/build/IDENTIFIER-REGISTER.md's node.audio.engine.clock_source
+// reservation). clockSourcePHC and clockSourceRealtime are aliases of
+// [ClockKindPHC] and [ClockKindRealtime]: the reported source is always
+// exactly the kind of clock actually installed.
+const (
+	clockSourcePHC      = ClockKindPHC
+	clockSourceRealtime = ClockKindRealtime
+	clockSourceDefault  = "default"
+)
+
+// phcClockName is the [gstaudio.NewAudioClock] instance name this
+// package's pipeline clock reports under GStreamer's own debug logging;
+// it has no other meaning.
+const phcClockName = "showmesh-phc-clock"
+
+// clockStatus is [Engine.clockStatus]'s payload: backend is always one
+// of [clockSourcePHC] or [clockSourceDefault]; reason is empty exactly
+// when backend is [clockSourcePHC], or when it is [clockSourceDefault]
+// because no PHC clock was configured for this node at all.
+type clockStatus struct {
+	backend string
+	reason  string
+}
+
+// installClock configures pipeline's own running clock from cfg.Clock,
+// or leaves it on GStreamer's default (system) clock, recording which
+// one it chose, and why, in e.clockStatus for [Engine.ClockSource].
+// Called from buildPipeline before the pipeline's first state change;
+// see that call site's own comment for why this ordering is load-bearing.
+//
+// cfg.Clock is read exactly once here, to confirm it is genuinely
+// readable before handing GStreamer a clock that might not be: a PHC
+// device that fails this first read is not fatal (RES-019 section 7.2:
+// "the provider must report that failure honestly rather than silently
+// falling back to anything else"; the engine reports it and falls back
+// to the default clock, matching a node with no clock configuration).
+func (e *Engine) installClock(pipeline gst.Pipeline) {
+	if e.cfg.Clock == nil {
+		e.clockStatus.Store(&clockStatus{backend: clockSourceDefault, reason: e.cfg.ClockUnavailableReason})
+		return
+	}
+	now, err := e.cfg.Clock.Now()
+	if err != nil {
+		e.clockStatus.Store(&clockStatus{backend: clockSourceDefault, reason: fmt.Sprintf("configured pipeline clock is unreadable: %v", err)})
+		slog.Warn("gstengine: configured pipeline clock is unreadable; the output pipeline runs on the default clock instead", "error", err)
+		return
+	}
+	e.clockLastNanos.Store(now.UnixNano())
+	pipeline.UseClock(gstaudio.NewAudioClock(phcClockName, e.phcClockGetTime))
+	e.clockStatus.Store(&clockStatus{backend: e.cfg.clockKind()})
+}
+
+// phcClockGetTime is this pipeline's [gstaudio.AudioClockGetTimeFunc]:
+// called from GStreamer's own scheduling, so it must be cheap and must
+// never block. cfg.Clock is already open (kept for the engine's whole
+// life, see cfg.Clock's own doc comment), so the only cost per call is
+// the clock_gettime syscall itself, no open/close pair. A transient read
+// failure returns the last known-good reading (clockLastNanos) instead
+// of blocking or erroring out of a callback with no error return.
+func (e *Engine) phcClockGetTime(gst.Clock) gst.ClockTime {
+	t, err := e.cfg.Clock.Now()
+	if err != nil {
+		e.clockStatus.Store(&clockStatus{backend: clockSourceDefault, reason: fmt.Sprintf("configured pipeline clock became unreadable: %v", err)})
+		return gst.ClockTime(e.clockLastNanos.Load())
+	}
+	nanos := t.UnixNano()
+	e.clockLastNanos.Store(nanos)
+	// A prior call may have reported clockSourceDefault after a transient
+	// read failure; this read succeeded, so the pipeline is in fact still
+	// running on the installed clock (UseClock is never undone) and the
+	// report must say so again rather than staying pinned to the one
+	// failure forever.
+	if status := e.clockStatus.Load(); status == nil || status.backend != e.cfg.clockKind() {
+		e.clockStatus.Store(&clockStatus{backend: e.cfg.clockKind()})
+	}
+	return gst.ClockTime(nanos)
+}
+
+// SinkBackend reports the GStreamer element factory name this engine's
+// output pipeline was built (or attempted) against:
+// docs/build/IDENTIFIER-REGISTER.md's node.audio.engine.sink_backend
+// reservation. Empty for an [NewUnavailable] engine, which was never
+// handed a cfg at all.
+func (e *Engine) SinkBackend() string {
+	return e.cfg.SinkFactory
+}
+
+// SinkTarget reports the PipeWire node name this engine's pipewiresink
+// was configured to target: docs/build/IDENTIFIER-REGISTER.md's
+// node.audio.engine.sink_target reservation. Empty when SinkBackend is
+// not "pipewiresink", when no target-object property was set (the
+// binding named none, so pipewiresink plays to PipeWire's own default
+// sink), or for an [NewUnavailable] engine.
+//
+// This reports what the pipeline was CONFIGURED to target, not confirmed
+// evidence that PipeWire actually resolved and linked to a node by that
+// name: pipewiresink accepts an unrecognized target-object value without
+// raising a GStreamer bus error, so an invalid name is not distinguishable
+// from a valid one by anything this engine observes. See this field's own
+// IDENTIFIER-REGISTER.md entry.
+func (e *Engine) SinkTarget() string {
+	v, _ := e.cfg.SinkProperties["target-object"].(string)
+	return v
+}
+
+// ClockSource reports which clock this engine's pipeline actually runs
+// on: [clockSourcePHC], [clockSourceRealtime], or [clockSourceDefault]
+// once buildPipeline has run, or "" for an [NewUnavailable] engine that
+// never attempted a pipeline at all. reason is non-empty whenever source
+// is [clockSourceDefault] because a configured clock could not be used;
+// empty when nothing was configured, or when a clock was successfully
+// installed.
+func (e *Engine) ClockSource() (source, reason string) {
+	status := e.clockStatus.Load()
+	if status == nil {
+		return "", ""
+	}
+	return status.backend, status.reason
 }
 
 // buildSettleWindow is how long [New] watches the freshly started

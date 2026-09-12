@@ -105,6 +105,20 @@ func pushNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() tim
 		params["ltcRoute"] = payload.LTCRoute
 		params["ltcChannel"] = payload.LTCChannel
 	}
+	// Omitted rather than always pushed: the agent's own default
+	// ("alsasink") matches every audio.node written before this field
+	// existed, and the agent refuses an unrecognized value rather than
+	// silently ignoring it, so there is no reason to push the default
+	// explicitly.
+	if payload.SinkBackend != "" && payload.SinkBackend != config.AudioNodeSinkBackendDefault {
+		params["sinkBackend"] = payload.SinkBackend
+	}
+	// Refused by DecodeAudioNodePayload unless SinkBackend is
+	// pipewiresink, so a non-nil value here always accompanies the
+	// "sinkBackend" key set just above.
+	if payload.PipewireTargetNode != nil {
+		params["pipewireTargetNode"] = *payload.PipewireTargetNode
+	}
 	// The agent only reads valueUs and method (effectiveOutputLatencyUs);
 	// omit the key entirely for "unmeasured" rather than push an
 	// always-zero object for the common case.

@@ -672,6 +672,35 @@ func TestPollOutputsEnumeratedAndTruncatedReported(t *testing.T) {
 	}
 }
 
+// TestPollOutputsPipeWireEnumeratedReported proves re-review finding 6 (PR
+// #454) reaches this layer: a PipeWire enumeration failure is reported
+// regardless of whether ALSA (HardwareEnumerated) succeeded separately.
+func TestPollOutputsPipeWireEnumeratedReported(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.PipeWireEnumerated = false
+	payload.PipeWireEnumeratedReason = "pw-dump: connect: permission denied"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	pwEnumerated := findObs(t, obs, SignalOutputsPipeWireEnumerated)
+	if v, ok := pwEnumerated.Value.(bool); !ok || v {
+		t.Errorf("pipewire enumerated = %v, want false", pwEnumerated.Value)
+	}
+	pwReason := findObs(t, obs, SignalOutputsPipeWireEnumeratedReason)
+	if v, ok := pwReason.Value.(string); !ok || v != payload.PipeWireEnumeratedReason {
+		t.Errorf("pipewire enumerated reason = %v, want %q", pwReason.Value, payload.PipeWireEnumeratedReason)
+	}
+	// samplePayload's own HardwareEnumerated/OutputsCount must report
+	// normally: an ALSA success must not be hidden by the PipeWire failure.
+	device := findObs(t, obs, SignalDeviceState)
+	if device.Value != StateUsable {
+		t.Errorf("device state = %v, want %q (ALSA enumeration succeeded independently of PipeWire)", device.Value, StateUsable)
+	}
+}
+
 func TestPollOutputsCountReported(t *testing.T) {
 	st := NewStore()
 	st.Put("audio-01", samplePayload(), time.Now())
@@ -848,6 +877,82 @@ func TestPollEngineRestoreIdleReportsStateNeverExhaustedOrEmpty(t *testing.T) {
 	}
 }
 
+// TestPollEngineBackendReportsPipewiresinkTargetAndClock proves an agent
+// that built a pipewiresink engine reaches all four
+// node.audio.engine.sink_backend/sink_target/clock_source/clock_reason
+// signals with the payload's own values -- the "did this node's pipeline
+// actually get the PHC, or did it silently fall back" question this
+// whole seam exists to answer for an operator, previously visible only
+// by subscribing to raw MQTT.
+func TestPollEngineBackendReportsPipewiresinkTargetAndClock(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.EngineSinkBackend = "pipewiresink"
+	payload.EngineSinkTarget = "alsa_output.usb-MOTU_M4"
+	payload.EngineClockSource = "phc"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	if v := findObs(t, obs, SignalEngineSinkBackend).Value; v != "pipewiresink" {
+		t.Errorf("engine sink backend = %v, want %q", v, "pipewiresink")
+	}
+	if v := findObs(t, obs, SignalEngineSinkTarget).Value; v != "alsa_output.usb-MOTU_M4" {
+		t.Errorf("engine sink target = %v, want %q", v, "alsa_output.usb-MOTU_M4")
+	}
+	if v := findObs(t, obs, SignalEngineClockSource).Value; v != "phc" {
+		t.Errorf("engine clock source = %v, want %q", v, "phc")
+	}
+	reason := findObs(t, obs, SignalEngineClockReason)
+	if reason.Absence == observation.StateNotCollected {
+		t.Errorf("engine clock reason absence = %q, want a collected (possibly empty) value", reason.Absence)
+	}
+}
+
+// TestPollEngineBackendAlsasinkReportsNoTarget proves an alsasink
+// engine's sink_target reports not_collected rather than an empty
+// string: an alsasink node has no PipeWire target at all, which reads
+// differently from a pipewiresink node with no target configured.
+func TestPollEngineBackendAlsasinkReportsNoTarget(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	payload.EngineSinkBackend = "alsasink"
+	payload.EngineClockSource = "default"
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	if v := findObs(t, obs, SignalEngineSinkBackend).Value; v != "alsasink" {
+		t.Errorf("engine sink backend = %v, want %q", v, "alsasink")
+	}
+	target := findObs(t, obs, SignalEngineSinkTarget)
+	if target.Absence != observation.StateNotCollected {
+		t.Errorf("engine sink target absence for alsasink = %q, want %q", target.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestPollEngineBackendUnbuiltReportsNotCollected proves a node with no
+// engine ever built (or an agent that predates these fields) reports all
+// four signals not_collected, never a fabricated backend or clock.
+func TestPollEngineBackendUnbuiltReportsNotCollected(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayload(), time.Now()) // EngineSinkBackend defaults ""
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalEngineSinkBackend, SignalEngineSinkTarget, SignalEngineClockSource, SignalEngineClockReason,
+	} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s absence on a node with no engine built = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+	}
+}
+
 // TestPollSettingsSubstitutedNamesFieldAndReason proves the property this
 // whole issue is about at the observation surface: a substituted revision
 // reports state "substituted", names the refused field, and states why --
@@ -987,8 +1092,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 35 {
-		t.Errorf("AllSignalIDs has %d entries, want 35", len(AllSignalIDs))
+	if len(AllSignalIDs) != 41 {
+		t.Errorf("AllSignalIDs has %d entries, want 41", len(AllSignalIDs))
 	}
 }
 

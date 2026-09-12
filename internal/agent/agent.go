@@ -406,11 +406,17 @@ func Run() int {
 	// report tick, matching what a node with no clock provider reported
 	// before this seam existed.
 	clockMgr := clock.NewManager(time.Now, logger)
-	clockBind := newClockBinding(clockMgr)
+	clockBind := newClockBinding(clockMgr, cfg.AssetDir)
 	// Seam I2: the audio session layer reads the same media clock, for a
 	// scheduled start's T0 and for its timeline. Read-only; the audio
 	// Manager never configures or steps it.
 	audioMgr.SetClockSource(clockMgr)
+	// RES-019 section 7.2 candidate A (ADR-046): the output pipeline's
+	// own running clock is the node's PHC, read off the SAME interface
+	// node.clock.ptp.* already evaluates. Wired here, after clockBind
+	// exists, matching SetAvailabilityChangeCallback's own
+	// post-construction convention above.
+	audioRebuilder.SetPHCInterfaceSource(clockBind.currentInterface)
 
 	// audioRestoreRetryDone: this node's own bounded, backed-off retry of
 	// every deferred audio restore, re-probing the device on its own

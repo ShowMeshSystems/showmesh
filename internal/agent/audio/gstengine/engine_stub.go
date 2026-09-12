@@ -29,6 +29,12 @@ func New(cfg Config) (*Engine, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	// This build never uses cfg.Clock (no pipeline is ever built to set
+	// it on), so it is released immediately rather than left open for
+	// this Engine's unused lifetime.
+	if cfg.Clock != nil {
+		_ = cfg.Clock.Close()
+	}
 	return &Engine{}, nil
 }
 
@@ -125,6 +131,18 @@ func (e *Engine) PresentedElapsed(_ context.Context) (time.Duration, bool, strin
 func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
 	return agentaudio.GlitchCounts{}, false
 }
+
+// SinkBackend always reports "": this build never built a pipeline
+// against any sink factory.
+func (e *Engine) SinkBackend() string { return "" }
+
+// SinkTarget always reports "": this build never built a pipeline
+// against any sink factory, so no target-object was ever set.
+func (e *Engine) SinkTarget() string { return "" }
+
+// ClockSource always reports "", "": this build never attempted a
+// pipeline clock at all.
+func (e *Engine) ClockSource() (source, reason string) { return "", "" }
 
 var _ agentaudio.AlignmentObserver = (*Engine)(nil)
 

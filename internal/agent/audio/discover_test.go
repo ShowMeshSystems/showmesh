@@ -264,3 +264,102 @@ func TestDiscoverLTCChannelsComesFromASeparateConstrainedProbe(t *testing.T) {
 		t.Errorf("route.LTCChannels = %d, want 4 (the separate, explicitly-constrained probe's achieved count)", route.LTCChannels)
 	}
 }
+
+type fakePipeWireEnumerator struct {
+	nodes    []PipeWireNode
+	present  bool
+	nodesErr error
+}
+
+func (f fakePipeWireEnumerator) Nodes(ctx context.Context) ([]PipeWireNode, bool, error) {
+	return f.nodes, f.present, f.nodesErr
+}
+
+// TestDiscoverPipeWireAdvertisesTheGraphsRealChannelCount proves finding
+// 1: a 4-channel PipeWire sink is reported as a route with 4 channels and
+// its real sample rate, FromGraph true, and LTC-capable because 4 meets
+// [MinLTCChannels].
+func TestDiscoverPipeWireAdvertisesTheGraphsRealChannelCount(t *testing.T) {
+	enum := fakePipeWireEnumerator{present: true, nodes: []PipeWireNode{
+		{Name: "alsa_output.usb-MOTU_M4-00.analog-surround-4", Channels: 4, Rate: 48000},
+	}}
+	pw := DiscoverPipeWire(context.Background(), enum)
+
+	if !pw.Enumerated {
+		t.Fatal("PipeWireDiscovery.Enumerated = false, want true")
+	}
+	if len(pw.Routes) != 1 {
+		t.Fatalf("PipeWireDiscovery.Routes has %d entries, want 1", len(pw.Routes))
+	}
+	r := pw.Routes[0]
+	if !r.FromGraph {
+		t.Error("route.FromGraph = false, want true")
+	}
+	if !r.Available || r.Channels != 4 || r.Rate != 48000 {
+		t.Errorf("route = %+v, want Available with Channels=4 Rate=48000", r)
+	}
+	if r.LTCChannels != 4 {
+		t.Errorf("route.LTCChannels = %d, want 4 (the graph's own channel count meets MinLTCChannels)", r.LTCChannels)
+	}
+}
+
+// TestDiscoverPipeWireNoPipeWireLeavesTheAlsaAdvertisementUnchanged proves
+// finding 2: a host with no PipeWire at all (present=false, no error) gets
+// a clean PipeWireDiscovery with no routes and no failure reason, so
+// merging it via WithPipeWireRoutes changes nothing about an ALSA-only
+// node's existing advertisement.
+func TestDiscoverPipeWireNoPipeWireLeavesTheAlsaAdvertisementUnchanged(t *testing.T) {
+	enum := fakePipeWireEnumerator{present: false}
+	pw := DiscoverPipeWire(context.Background(), enum)
+
+	if pw.Enumerated {
+		t.Error("PipeWireDiscovery.Enumerated = true, want false: no PipeWire on this host")
+	}
+	if pw.EnumeratedReason != "" {
+		t.Errorf("PipeWireDiscovery.EnumeratedReason = %q, want empty: absence is not a failure", pw.EnumeratedReason)
+	}
+	if len(pw.Routes) != 0 {
+		t.Errorf("PipeWireDiscovery.Routes = %v, want none", pw.Routes)
+	}
+
+	alsa := Discovery{HardwareEnumerated: true, Routes: []RouteEvidence{
+		{Device: "hw:CARD=PCH,DEV=0", ProbeResult: ProbeResult{Available: true, Channels: 2, Rate: 44100}},
+	}}
+	merged := alsa.WithPipeWireRoutes(pw)
+	if len(merged.Routes) != 1 || merged.Routes[0] != alsa.Routes[0] {
+		t.Errorf("WithPipeWireRoutes with no PipeWire present = %+v, want the ALSA routes untouched", merged.Routes)
+	}
+}
+
+// TestDiscoverPipeWireGarbageIsReportedAsAFailure proves finding 3: a
+// pw-dump that ran but returned unparseable output is a genuine
+// enumeration failure with its reason carried through, never a silent
+// zero-routes result indistinguishable from "no PipeWire".
+func TestDiscoverPipeWireGarbageIsReportedAsAFailure(t *testing.T) {
+	enum := fakePipeWireEnumerator{present: true, nodesErr: errBoom}
+	pw := DiscoverPipeWire(context.Background(), enum)
+
+	if pw.Enumerated {
+		t.Error("PipeWireDiscovery.Enumerated = true, want false")
+	}
+	if pw.EnumeratedReason == "" || !strings.Contains(pw.EnumeratedReason, "boom") {
+		t.Errorf("PipeWireDiscovery.EnumeratedReason = %q, want the underlying error text carried through", pw.EnumeratedReason)
+	}
+	if len(pw.Routes) != 0 {
+		t.Errorf("PipeWireDiscovery.Routes = %v, want none", pw.Routes)
+	}
+}
+
+// TestDiscoverPipeWireTruncatesAtMaxProbedDevices proves the PipeWire
+// enumeration shares [maxProbedDevices]'s budget with ALSA rather than
+// being able to fill an advertisement on its own with no cap at all.
+func TestDiscoverPipeWireTruncatesAtMaxProbedDevices(t *testing.T) {
+	var nodes []PipeWireNode
+	for i := 0; i < maxProbedDevices+2; i++ {
+		nodes = append(nodes, PipeWireNode{Name: "node" + itoa(i), Channels: 2, Rate: 48000})
+	}
+	pw := DiscoverPipeWire(context.Background(), fakePipeWireEnumerator{present: true, nodes: nodes})
+	if len(pw.Routes) != maxProbedDevices {
+		t.Errorf("PipeWireDiscovery.Routes has %d entries, want exactly maxProbedDevices=%d", len(pw.Routes), maxProbedDevices)
+	}
+}
