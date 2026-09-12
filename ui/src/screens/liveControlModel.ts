@@ -132,6 +132,25 @@ export function fppPlaylistNames(definitions: readonly FPPPlaylistDefinitionMeta
   return Array.from(names).sort((a, b) => a.localeCompare(b))
 }
 
+export type FPPPosition = { elapsedSeconds: number; totalSeconds: number }
+
+/**
+ * `fpp.position.seconds` is FPP's own `seconds_played`, not a duration -
+ * on the very first playing poll it equals elapsed, which is why total
+ * must be built as elapsed + `fpp.position.remaining.seconds`
+ * (`seconds_remaining`) instead. Null whenever either reading is absent
+ * or not current, so a stale pair never renders a frozen position.
+ */
+export function fppPosition(observations: readonly Evidence[]): FPPPosition | null {
+  const elapsed = findSignal(observations, 'fpp.position.elapsed.seconds')
+  const remaining = findSignal(observations, 'fpp.position.remaining.seconds')
+  if (elapsed === undefined || remaining === undefined || typeof elapsed.value !== 'number' || typeof remaining.value !== 'number') {
+    return null
+  }
+  if (elapsed.state !== 'current' || remaining.state !== 'current') return null
+  return { elapsedSeconds: elapsed.value, totalSeconds: elapsed.value + remaining.value }
+}
+
 export function transportState(instance: FPPInstance): TransportState {
   const obs = instance.observations
   return {
@@ -141,26 +160,20 @@ export function transportState(instance: FPPInstance): TransportState {
     media: stringValue(obs, 'fpp.media.filename') ?? stringValue(obs, 'fpp.sequence.name'),
     playerState: stringValue(obs, 'fpp.status.player_state'),
     elapsedSeconds: numberValue(obs, 'fpp.position.elapsed.seconds'),
-    totalSeconds: numberValue(obs, 'fpp.position.seconds'),
+    totalSeconds: fppPosition(obs)?.totalSeconds ?? null,
     volume: numberValue(obs, 'fpp.volume'),
   }
 }
 
 /**
- * The fraction of the current FPP item elapsed, or null when either
- * reading is absent or not current. Mirrors `nextTransition`'s own
- * staleness gate (showNightModel.ts) so the two never disagree about
- * whether the position is fresh enough to draw from.
+ * The fraction of the current FPP item elapsed, or null when the
+ * position (see [fppPosition]) is absent or not current.
  */
 export function fppElapsedFraction(instance: FPPInstance | undefined): number | null {
   if (instance === undefined) return null
-  const elapsed = findSignal(instance.observations, 'fpp.position.elapsed.seconds')
-  const total = findSignal(instance.observations, 'fpp.position.seconds')
-  if (elapsed === undefined || total === undefined || typeof elapsed.value !== 'number' || typeof total.value !== 'number') {
-    return null
-  }
-  if (elapsed.state !== 'current' || total.state !== 'current' || total.value <= 0) return null
-  return Math.min(1, Math.max(0, elapsed.value / total.value))
+  const position = fppPosition(instance.observations)
+  if (position === null || position.totalSeconds <= 0) return null
+  return Math.min(1, Math.max(0, position.elapsedSeconds / position.totalSeconds))
 }
 
 /**
