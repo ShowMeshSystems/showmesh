@@ -639,6 +639,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/audio/alignment-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * List a node's audio alignment runs, newest first
+         * @description Behind `observation:read`.
+         */
+        get: operations["listAudioAlignmentRuns"];
+        put?: never;
+        /**
+         * Start a long-run program-to-LTC drift recording on a node
+         * @description Behind `audio:command`. Coordinator-side only: records the samples the node's own `node.audio.clock.alignment` reports already carry (`alignmentMeasured`/`alignmentOffsetMs`/ `alignmentSampledAt`) while the run is active. No agent command and no MQTT topic. At most one active run per node; starting a second is refused with `409`.
+         */
+        post: operations["startAudioAlignmentRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/alignment-runs/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One audio alignment run, its samples, and its summary
+         * @description Behind `observation:read`. Samples are in ascending `sampledAt` order. `summary.driftRateMsPerHour` is the least-squares linear regression slope of `offsetMs` against elapsed hours since the first sample, fitted against the node's own sample clock, over the whole series; with fewer than two samples it is `null` and `driftRateUnavailableReason` states why, never `0`. `summary.maxExcursionOffsetMs`/`maxExcursionSampledAt` name the sample with the largest absolute offset. A sample whose `sampledAt` collides with an earlier sample already recorded for this run is dropped, not overwritten.
+         */
+        get: operations["getAudioAlignmentRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/nodes/{nodeId}/audio/alignment-runs/{runId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a node's active audio alignment run
+         * @description Behind `audio:command`. Stopping an already-stopped or unknown run is a `404`: "no active audio alignment run with that id exists for this node; it is unknown or already stopped."
+         */
+        post: operations["stopAudioAlignmentRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fpp/{instanceId}/commands": {
         parameters: {
             query?: never;
@@ -3011,9 +3077,9 @@ export interface paths {
          * Ask this node for a fresh inventory report and repair against it
          * @description Behind `asset:write`, the same write-authority scope as `POST .../assets/remove`. Asks nodeId for a fresh asset inventory report now, stamped with the authenticated caller as issuer, and records that this node has an outstanding re-sync intent. Neither of those waits for the node. The repair itself (the existing asset-sync service's gap-driven dispatch, the same mechanism `POST /assets` upload already nudges) runs later, triggered by the node's own next live asset inventory report once that report is fresher than this intent - never on a wall-clock timer, and never against a report already on hand when this request was accepted.
          *
-         *     Answers `202`, never `200`: accepted, and never confirmed by anything downstream at this layer - this route holds no confirmation loop of its own. Whether anything was actually missing, and whether a dispatched `asset.fetch` succeeded, is never claimed here; that evidence surfaces later, from the node's own next asset report, on `GET /nodes/{nodeId}/assets`. A node that never answers simply leaves the intent outstanding.
+         *     Answers `202`, never `200`: accepted, and never confirmed by anything downstream at this layer - this route holds no confirmation loop of its own. Whether anything was actually missing, and whether a dispatched `asset.fetch` succeeded, is never claimed here; that evidence surfaces later, from the node's own next asset report, on `GET /nodes/{nodeId}/assets`. A node that never answers is timed out and resolved `failed` after 30 seconds by a periodic sweep; a fresh report received before that resolves the same commands row `confirmed`.
          *
-         *     `400` when `assets.settings`' `contentBaseUrl` is not set: with sync disabled, dispatching an `asset.fetch` command would be accepted but never actually deliver anything, so this route refuses before accepting rather than promising a re-sync it cannot perform. `404` when `nodeId` does not name a declared node.
+         *     `400` when `assets.settings`' `contentBaseUrl` is not set: with sync disabled, dispatching an `asset.fetch` command would be accepted but never actually deliver anything, so this route refuses before accepting rather than promising a re-sync it cannot perform. `404` when `nodeId` does not name a declared node. `503` when the `asset.inventory.request` publish itself never reached the wire: a failed publish is a failure to the caller, never a `202` for a request nothing was actually asked to act on. The commands row this route always writes is still recorded `failed` in that case, and its id is named in the `503`'s `detail`.
          */
         post: operations["resyncNodeAssets"];
         delete?: never;
@@ -3818,6 +3884,75 @@ export interface components {
             resolvedAt: string | null;
             /** @description True when this command's dispatch could not write its audit entry atomically with the command and proceeded anyway under the `audio.session.stop`/`audio.session.clear`/ `audio.output.mute` safety-class exemption (ADR-024 decision 11), with a degraded, stderr-only attribution record. */
             attributionDegraded: boolean;
+        };
+        /** @description One long-run program-to-LTC drift recording. */
+        AudioAlignmentRun: {
+            id: string;
+            nodeId: string;
+            /** Format: date-time */
+            startedAt: string;
+            /**
+             * Format: date-time
+             * @description Null while the run is active.
+             */
+            stoppedAt: string | null;
+            /** @description The starting principal's display name. */
+            startedBy: string;
+            /** @description The starting principal's id. */
+            startedByPrincipalId: string;
+            /** @description The stopping principal's display name. */
+            stoppedBy: string | null;
+            /** @description The stopping principal's id. */
+            stoppedByPrincipalId: string | null;
+            stopReason: string | null;
+        };
+        /** @description One recorded sample: the node's own alignmentSampledAt/ alignmentOffsetMs, appended while its run was active. Positive offsetMs means LTC was ahead of program audio, matching node.audio.clock.alignment's own sign convention. */
+        AudioAlignmentSample: {
+            /** Format: date-time */
+            sampledAt: string;
+            offsetMs: number;
+            sessionId: string;
+        };
+        /** @description Computed from a run's own samples, never stored. See GET /nodes/{nodeId}/audio/alignment-runs/{runId}'s own description for the drift-rate method. */
+        AudioAlignmentRunSummary: {
+            sampleCount: number;
+            /** Format: date-time */
+            firstSampleAt: string | null;
+            /** Format: date-time */
+            lastSampleAt: string | null;
+            maxExcursionOffsetMs: number | null;
+            /** Format: date-time */
+            maxExcursionSampledAt: string | null;
+            driftRateMsPerHour: number | null;
+            /** @description Set only when driftRateMsPerHour is null. */
+            driftRateUnavailableReason?: string;
+        };
+        /** @description The optional body of POST .../alignment-runs/{runId}/stop. */
+        AudioAlignmentRunStopRequest: {
+            reason?: string;
+        };
+        /** @description The body of a successful response from starting or stopping an audio alignment run. */
+        AudioAlignmentRunResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            run: components["schemas"]["AudioAlignmentRun"];
+        };
+        /** @description The body of a successful response from GET /nodes/{nodeId}/audio/alignment-runs. */
+        AudioAlignmentRunListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            runs: components["schemas"]["AudioAlignmentRun"][];
+        };
+        /** @description The body of a successful response from GET /nodes/{nodeId}/audio/alignment-runs/{runId}. */
+        AudioAlignmentRunDetailResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            run: components["schemas"]["AudioAlignmentRun"];
+            /** @description The first `limit` samples in ascending sampledAt order. See `truncated` for whether the run holds more than that. */
+            samples: components["schemas"]["AudioAlignmentSample"][];
+            /** @description True when the run holds more samples than `limit` returned, so `samples` is a prefix of the full series. `summary` is unaffected: it is always computed over the full series. */
+            truncated: boolean;
+            summary: components["schemas"]["AudioAlignmentRunSummary"];
         };
         /** @description The body of POST /nodes/{nodeId}/audio/silence. audio.node.silence takes no params of its own, so idempotencyKey is the only field - unlike AudioSessionNoParamsRequest, there is no revision here. */
         AudioNodeSilenceRequest: {
@@ -5005,7 +5140,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed";
             title: string;
             status: number;
             detail: string;
@@ -6213,6 +6348,7 @@ export interface components {
          * @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed.
          *     It also checks every FPP and Resolume instance the ACTIVE show selects as taking part (`participation:fpp:<instanceId>`, `participation:resolume:<instanceId>`): a selected instance that is not configured on this coordinator at all fails, and a selected instance that is configured carries its own derived health. An instance the active show does not select produces no check, so an unhealthy host no active show uses cannot redden tonight. A show whose selection was never recorded counts every configured instance, which is what stops this from going green on upgrade. When `show.active` names a different show from this session's own, the whole family reports one `not_configured` check named `participation`.
          *     When `resting.backgroundAudio` is configured, this also checks the configured output's declared capabilities (`resting:background-audio-output-capabilities:<node>`) and its requested item-transition ability (`resting:background-audio-item-transition`). Both can report `not_verifiable` for an output that has never published a capability advertisement at all (an agent built before that signal existed makes no claim either way), `failed` for a currently-confirmed output whose advertisement genuinely omits what is needed, and `healthy` once it declares everything needed. Both also report `unknown` for an output this coordinator cannot currently confirm is online. Only `resting:background-audio-output-capabilities:<node>` additionally reports `unknown`, rather than `failed`, for an output that is online but has not finished reporting since it connected: it cross-checks a second, independent signal (`node.audio.engine.state`) before concluding a missing capability is genuinely absent rather than merely not yet advertised, since post-connect capability detection can take up to two minutes. `resting:background-audio-item-transition` has no second signal to cross-check against, so once an output is online, a missing item-transition capability reads `failed` immediately, even during that same post-connect window.
+         *     It also checks every configured `audio.node` object's measured program-to-LTC alignment against `audio.settings`' `driftIgnoreThresholdMs` (`audio:alignment:<nodeId>`): `degraded` (never `failed`) once the measured offset exceeds the threshold, naming both numbers in `reason`, `healthy` once it is within the threshold, and `not_verifiable` whenever this coordinator holds no current measurement for that node. A drifting show still runs; this is a warning, never a reason `outcome` blocks `start-night`.
          */
         NightReadinessCheck: {
             name: string;
@@ -6448,7 +6584,7 @@ export interface components {
             /** @description Required, and must name a declared node, when targetKind is "node". */
             target?: string;
         };
-        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. verdicts is additive (D-016 item 2): a client that predates it keeps working unchanged reading every other field exactly as before. */
+        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. verdicts is additive (D-016 item 2): a client that predates it keeps working unchanged reading every other field exactly as before. resyncRequest is additive too, and populated only on `GET /nodes/{nodeId}/assets` (never on `GET /assets/manifest`'s fleet-wide listing): this node's most recently issued "Re-sync all" request, absent when this node has never had one. */
         NodeAssetManifest: {
             node: string;
             /** @enum {string} */
@@ -6461,6 +6597,18 @@ export interface components {
             observedAt: string | null;
             /** @description One entry per asset this node was expected to hold, naming what its own reported inventory says about that asset's bytes. Absent, or an empty array, whenever no fresh inventory report exists for this node - the identical condition extra is populated under, for the identical reason: a stale report is not evidence of what a node currently holds. When present, this array has exactly one entry per asset the node was expected to hold, keyed by assetId - never by runtimeFilename, which Asset's own description already says is not identity. state is "held" (the node's inventory holds this asset's own content hash), "superseded" (the node does not hold that hash, but holds the content hash of a row that used to be current for this exact asset's (show, sequence, targetKind, target) identity before being superseded), or "absent" (the node holds nothing recognizable for this identity at all). */
             verdicts?: components["schemas"]["AssetSyncVerdict"][];
+            resyncRequest?: components["schemas"]["ResyncRequestStatus"];
+        };
+        /** @description One asset.inventory.request commands row, rendered for an operator reading `GET /nodes/{nodeId}/assets` rather than the commands table directly. state is "dispatched" while still waiting on the node, "resolved" once a fresh report confirmed it, or "failed" on a publish failure or a 30-second reconciliation timeout. outcomeReason is null while state is "dispatched" and set for both "resolved" and "failed". resolvedAt is null until state leaves "dispatched". */
+        ResyncRequestStatus: {
+            commandId: string;
+            /** @enum {string} */
+            state: "pending" | "dispatched" | "resolved" | "failed";
+            outcomeReason: string | null;
+            /** Format: date-time */
+            issuedAt: string;
+            /** Format: date-time */
+            resolvedAt: string | null;
         };
         /** @description One expected asset a manifest found the node does not currently hold. */
         MissingAsset: {
@@ -8143,6 +8291,139 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAudioAlignmentRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunListResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    startAudioAlignmentRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description This node already has an active audio alignment run. */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAudioAlignmentRun: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of samples to return, in ascending sampledAt order. Defaults to 5000, maximum 50000. `summary` always covers the run's full series regardless of this limit; see `truncated` on the response. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                nodeId: string;
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunDetailResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    stopAudioAlignmentRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nodeId: string;
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AudioAlignmentRunStopRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAlignmentRunResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -12990,6 +13271,16 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
+            /** @description The request was valid and the node is declared, but the `asset.inventory.request` publish itself never reached the node. `type` is `https://showmesh.dev/problems/asset-resync-publish-failed` and `detail` names the publish error and the commands row id that was still recorded `failed` for it. */
+            503: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     listFallbackPrograms: {

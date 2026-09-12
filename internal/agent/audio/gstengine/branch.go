@@ -424,16 +424,26 @@ func (b *branch) onEOS() {
 // pendingStateChanges stays incremented until it actually finishes,
 // letting teardown (see awaitNoElementRace) tell whether one of these
 // may still be touching this branch's elements before it starts
-// touching them itself.
+// touching them itself. When done and ctx.Done() are both ready, ctx.Err()
+// wins so an expired deadline is never reported as success.
 func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
 	b.pendingStateChanges.Add(1)
 	done := make(chan error, 1)
 	go func() {
 		done <- setElementsStateNow(b, state)
 	}()
+	return b.awaitElementsState(ctx, done)
+}
+
+// awaitElementsState resolves the race between done and ctx.Done(),
+// decrementing pendingStateChanges exactly once on every path.
+func (b *branch) awaitElementsState(ctx context.Context, done chan error) error {
 	select {
 	case err := <-done:
 		b.pendingStateChanges.Add(-1)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	case <-ctx.Done():
 		go func() {

@@ -151,6 +151,40 @@ function ManifestEmptyRow({ manifest, fact }: { manifest: NodeAssetManifest; fac
   return <RuledStrip absence="empty" label="None" fact={fact} />
 }
 
+const RESYNC_REQUEST_TONE: Record<NonNullable<NodeAssetManifest['resyncRequest']>['state'], Tone> = {
+  pending: 'pending',
+  dispatched: 'pending',
+  resolved: 'good',
+  failed: 'bad',
+}
+const RESYNC_REQUEST_LABEL: Record<NonNullable<NodeAssetManifest['resyncRequest']>['state'], string> = {
+  pending: 'Waiting for the node',
+  dispatched: 'Waiting for the node',
+  resolved: 'Confirmed',
+  failed: 'Failed',
+}
+
+/**
+ * The real state of this node's most recent "Re-sync all" request,
+ * replacing a fixed post-press note with what the node's own asset data
+ * now says: still waiting, confirmed (with the reason the coordinator
+ * recorded once a fresh report answered it), or failed (with the reason
+ * a publish failure or the 30-second reconciliation timeout recorded).
+ * Absent entirely when this node has never had a re-sync request.
+ */
+function ResyncRequestStatusNote({ request }: { request: NodeAssetManifest['resyncRequest'] }) {
+  if (request === undefined) return null
+  const detail =
+    request.state === 'resolved' || request.state === 'failed'
+      ? (request.outcomeReason ?? '')
+      : `Asked at ${formatClock(request.issuedAt) ?? 'an unrecorded time'}.`
+  return (
+    <p className="sm-section__footnote">
+      <StatusPair tone={RESYNC_REQUEST_TONE[request.state]} label={RESYNC_REQUEST_LABEL[request.state]} /> {detail}
+    </p>
+  )
+}
+
 type RenderOutcome = { tone: Tone; label: string; detail: string }
 
 function renderOutcome(result: RenderCommandResult): RenderOutcome {
@@ -254,7 +288,6 @@ export function NodeDetail() {
 
   const [resyncing, setResyncing] = useState(false)
   const [resyncError, setResyncError] = useState<string | null>(null)
-  const [resyncNote, setResyncNote] = useState<string | null>(null)
 
   if (node === undefined) {
     return (
@@ -335,12 +368,8 @@ export function NodeDetail() {
   const resync = () => {
     setResyncing(true)
     setResyncError(null)
-    setResyncNote(null)
     resyncNodeAssets(node.nodeId)
-      .then(() => {
-        setResyncNote('Re-sync accepted. This node’s manifest reflects the result once it reports back in.')
-        reloadManifest()
-      })
+      .then(() => reloadManifest())
       .catch((err: unknown) => setResyncError(describeApiError(err)))
       .finally(() => setResyncing(false))
   }
@@ -722,7 +751,7 @@ export function NodeDetail() {
               <p className="sm-section__footnote">Sync cannot run while the node is offline.</p>
             )}
             {resyncError !== null && <RuledStrip absence="failed" label="Refused" fact={resyncError} />}
-            {resyncNote !== null && <p className="sm-section__footnote">{resyncNote}</p>}
+            <ResyncRequestStatusNote request={manifestData.resyncRequest} />
             <ButtonRow>
               <Button
                 disabled={!assetWriteGate.allowed || resyncing || node.controlPlane.state === 'offline'}

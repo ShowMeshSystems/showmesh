@@ -603,6 +603,18 @@ func discoveryRunConflictProblem() v1.Problem {
 	}
 }
 
+// alignmentRunAlreadyActiveProblem is the audio alignment run's refusal for a second
+// concurrent audio alignment run on the same node: at most one active run
+// per node.
+func alignmentRunAlreadyActiveProblem(activeRunID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Audio alignment run already active",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf("this node already has an active audio alignment run (id %q); stop it before starting another", activeRunID),
+	}
+}
+
 // fppCommandReplayConflictProblem is Step 7 seam C review defect 6's own
 // refusal: an idempotency key is scoped to the exact (action, target) it
 // was first used against — schemaV6's UNIQUE constraint on

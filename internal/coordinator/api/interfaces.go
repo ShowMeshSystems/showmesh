@@ -797,6 +797,25 @@ type DeclarationStore interface {
 	RecordNodeDiscoverySeen(ctx context.Context, nodeID, runID string, seenAt time.Time) error
 }
 
+// AlignmentRunStore is what this package needs from the long-run drift
+// recording's tables outside the ADR-024 decision 11 write path, satisfied
+// directly by *store.Store, matching [DeclarationStore]'s "the real
+// dependency already has this method" pattern. Starting and stopping a run
+// are coordinator-local state changes whose audit entry must land in the
+// same transaction (decision 11), so those go through
+// [identity.Service.AuditedWrite] and the concrete [store.Tx] it hands the
+// caller (see handleStartAlignmentRun/handleStopAlignmentRun,
+// audioalignmentruns.go) instead of through this interface.
+type AlignmentRunStore interface {
+	// GetAlignmentRun returns one run, up to limit of its samples in
+	// ascending sampled_at order, whether that page was truncated, and a
+	// summary computed over the run's full series, or
+	// [store.ErrAlignmentRunNotFound].
+	GetAlignmentRun(ctx context.Context, id string, limit int) (store.AlignmentRunRecord, []store.AlignmentSampleRecord, bool, store.AlignmentRunSummary, error)
+	// ListAlignmentRuns returns nodeID's runs, newest first.
+	ListAlignmentRuns(ctx context.Context, nodeID string) ([]store.AlignmentRunRecord, error)
+}
+
 // AssetStore is Track E seam E3/E4's asset metadata store, as this package
 // needs it (ADR-028): looking up one asset by id and listing by filter.
 // Satisfied directly by *store.Store (its GetAsset/ListAssets methods),

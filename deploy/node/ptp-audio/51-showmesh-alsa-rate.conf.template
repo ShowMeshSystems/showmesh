@@ -1,0 +1,82 @@
+# WirePlumber conf.d drop-in: pins the sound card's ALSA sink node to
+# 48 kHz (the rate showmesh-ptp-clock.conf sets as the graph's
+# default.clock.rate), puts it in the same node.group as
+# showmesh-ptp-driver so that driver's priority.driver actually gets
+# considered for it, and stops WirePlumber from suspending it. Installed
+# by install-ptp-audio.sh to /etc/wireplumber/wireplumber.conf.d/,
+# templated on @CARD_MATCH@ (the install script's audio-card-match
+# argument, default "M4") and @NODE_GROUP@
+# (deploy/node/ptp-audio/ptp-group.conf, shared with
+# 10-showmesh-ptp-clock.conf.template so the two can never name different
+# groups).
+#
+# A suspended ALSA node is not a driver's follower at all until it wakes
+# back up, which would silently defeat the rate lock between cues; this
+# node exists purely to play a show, so there is no idle-power reason to
+# ever suspend it.
+#
+# device.profile = "pro-audio" and api.acp.auto-profile = false: proven on
+# real node hardware (showmesh-node-01, RES-019 Track I) that this is
+# required, not optional. WirePlumber's default UCM profile for a
+# multichannel USB audio interface splits it into plain stereo ALSA
+# sinks/sources; the four-channel node ShowMesh's rate lock needs never
+# exists under that profile, and a `wpctl set-profile` applied by hand
+# does not survive a WirePlumber restart -- only a persisted rule does.
+# This is not specific to the M4: any card WirePlumber's UCM logic splits
+# by profile has the identical problem, so the rule is written generically
+# against device.name rather than assuming one vendor string.
+#
+# @CARD_MATCH@ stays a per-card match rather than one pattern meant to
+# catch every card on the host: a pattern broad enough to match "any
+# multichannel card" would also match a card this node was never asked to
+# force onto pro-audio (a laptop's own built-in audio during bring-up, for
+# instance), silently changing a device this script has no business
+# touching. install-ptp-audio.sh's audio-card-match argument keeps the
+# match scoped to the specific interface this node actually plays through,
+# without hardcoding that name into this file.
+#
+# The capture (input) node is deliberately left OUT of @NODE_GROUP@: this
+# seam's proven use case is playback (the engine plays show media through
+# the ALSA sink), and RES-019's sections here describe no capture path
+# that needs PTP-locked timing. Grouping the input node would only add an
+# unused follower to the driver with no consumer benefiting from it. If a
+# capture use case is added later, evaluate its own rate-lock need before
+# deciding whether it belongs in this group.
+#
+# NOT exercised against a real M4 by this repository's own verification:
+# bench/ptp-node has no ALSA hardware, so this file is syntax-checked
+# (wireplumber -n starts cleanly with it present) but its match rules,
+# profile pin, and rate pin are unverified until run on the real node. See
+# deploy/node/PTP-AUDIO.md.
+wireplumber.settings = {
+    node.restore-props = false
+}
+
+monitor.alsa.rules = [
+    {
+        matches = [
+            { device.name = "~alsa_card.*@CARD_MATCH@.*" }
+        ]
+        actions = {
+            update-props = {
+                device.profile                   = "pro-audio"
+                api.acp.auto-profile             = false
+                api.alsa.period-size             = 256
+                session.suspend-timeout-seconds  = 0
+            }
+        }
+    }
+    {
+        matches = [
+            { node.name = "~alsa_output.*@CARD_MATCH@.*" }
+        ]
+        actions = {
+            update-props = {
+                audio.rate      = 48000
+                node.rate       = "1/48000"
+                node.group      = "@NODE_GROUP@"
+                session.suspend-timeout-seconds = 0
+            }
+        }
+    }
+]

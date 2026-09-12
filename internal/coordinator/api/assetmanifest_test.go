@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -91,15 +92,24 @@ type v1AssetSyncVerdictForTest struct {
 	State       string `json:"state"`
 }
 
+type v1ResyncRequestStatusForTest struct {
+	CommandID     string  `json:"commandId"`
+	State         string  `json:"state"`
+	OutcomeReason *string `json:"outcomeReason"`
+	IssuedAt      string  `json:"issuedAt"`
+	ResolvedAt    *string `json:"resolvedAt"`
+}
+
 type v1NodeAssetManifestForTest struct {
-	Node       string                      `json:"node"`
-	State      string                      `json:"state"`
-	Reason     *string                     `json:"reason"`
-	Missing    []v1MissingAssetForTest     `json:"missing"`
-	Gaps       []v1AssetGapForTest         `json:"gaps"`
-	Extra      []v1ExtraAssetForTest       `json:"extra"`
-	ObservedAt *string                     `json:"observedAt"`
-	Verdicts   []v1AssetSyncVerdictForTest `json:"verdicts"`
+	Node          string                        `json:"node"`
+	State         string                        `json:"state"`
+	Reason        *string                       `json:"reason"`
+	Missing       []v1MissingAssetForTest       `json:"missing"`
+	Gaps          []v1AssetGapForTest           `json:"gaps"`
+	Extra         []v1ExtraAssetForTest         `json:"extra"`
+	ObservedAt    *string                       `json:"observedAt"`
+	Verdicts      []v1AssetSyncVerdictForTest   `json:"verdicts"`
+	ResyncRequest *v1ResyncRequestStatusForTest `json:"resyncRequest"`
 }
 
 type v1NodeAssetManifestResponseForTest struct {
@@ -802,5 +812,123 @@ func TestAssetManifestUnwiredStoreRendersUnknownNotPanic(t *testing.T) {
 	}
 	if list.Nodes[0].Reason == nil || *list.Nodes[0].Reason == "" {
 		t.Error("nodes[0].reason is nil/empty with no AssetManifests store wired — an unanswerable question must say so, never render as nothing wrong")
+	}
+}
+
+// --- resyncRequest: additive field on GET /nodes/{nodeId}/assets ---
+
+// TestNodeAssetManifestOmitsResyncRequestWhenNeverIssued proves the
+// absent case: a node that has never had a "Re-sync all" request renders
+// no resyncRequest field at all, never a placeholder.
+func TestNodeAssetManifestOmitsResyncRequestWhenNeverIssued(t *testing.T) {
+	api, _, auth := assetManifestAdminAPI(t)
+
+	resp, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if decoded.Manifest.ResyncRequest != nil {
+		t.Fatalf("resyncRequest = %+v, want nil for a node that has never had a re-sync request", decoded.Manifest.ResyncRequest)
+	}
+	if containsAll(string(body), `"resyncRequest"`) {
+		t.Errorf("body carries a resyncRequest key at all, want it omitted entirely; body: %s", body)
+	}
+}
+
+// TestNodeAssetManifestStatesTheOutstandingResyncRequest proves the
+// present case: a node with a dispatched, not-yet-answered
+// asset.inventory.request row renders it, naming the command id, its
+// lifecycle state, and when it was issued.
+func TestNodeAssetManifestStatesTheOutstandingResyncRequest(t *testing.T) {
+	api, st, auth := assetManifestAdminAPI(t)
+
+	issuedAt := testNow
+	rec, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "resync-cmd-1", IdempotencyKey: "resync-cmd-1", Action: assetsync.ResyncCommandAction,
+		TargetKind: assetsync.ResyncCommandTargetKind, TargetID: "render-01",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("insert resync command: %v", err)
+	}
+	dispatchedState := "dispatched"
+	if err := st.UpdateCommandOutcome(context.Background(), rec.ID, store.CommandOutcomeUpdate{
+		DispatchedAt: &issuedAt, State: &dispatchedState,
+	}); err != nil {
+		t.Fatalf("mark resync command dispatched: %v", err)
+	}
+
+	resp, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if decoded.Manifest.ResyncRequest == nil {
+		t.Fatalf("resyncRequest is nil, want the outstanding request; body: %s", body)
+	}
+	if decoded.Manifest.ResyncRequest.CommandID != "resync-cmd-1" {
+		t.Errorf("resyncRequest.commandId = %q, want %q", decoded.Manifest.ResyncRequest.CommandID, "resync-cmd-1")
+	}
+	if decoded.Manifest.ResyncRequest.State != "dispatched" {
+		t.Errorf("resyncRequest.state = %q, want %q", decoded.Manifest.ResyncRequest.State, "dispatched")
+	}
+	if decoded.Manifest.ResyncRequest.OutcomeReason != nil {
+		t.Errorf("resyncRequest.outcomeReason = %q, want nil while still dispatched", *decoded.Manifest.ResyncRequest.OutcomeReason)
+	}
+	if decoded.Manifest.ResyncRequest.ResolvedAt != nil {
+		t.Errorf("resyncRequest.resolvedAt = %q, want nil while still dispatched", *decoded.Manifest.ResyncRequest.ResolvedAt)
+	}
+	if decoded.Manifest.ResyncRequest.IssuedAt == "" {
+		t.Error("resyncRequest.issuedAt is empty")
+	}
+
+	// GET /assets/manifest (fleet-wide) never carries this field, even for
+	// the same node.
+	listResp, listBody := doRequest(t, api.Handler, "GET", "/api/v1/assets/manifest", auth)
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list: status = %d, want 200; body: %s", listResp.StatusCode, listBody)
+	}
+	if containsAll(string(listBody), `"resyncRequest"`) {
+		t.Errorf("fleet-wide listing carries a resyncRequest key, want it populated only by GET /nodes/{nodeId}/assets; body: %s", listBody)
+	}
+}
+
+// TestNodeAssetManifestStatesAResolvedResyncRequest proves a resolved row
+// (confirmed by a fresh report, or failed by the reconciliation sweep)
+// renders its outcome reason and resolvedAt.
+func TestNodeAssetManifestStatesAResolvedResyncRequest(t *testing.T) {
+	api, st, auth := assetManifestAdminAPI(t)
+
+	issuedAt := testNow
+	rec, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "resync-cmd-2", IdempotencyKey: "resync-cmd-2", Action: assetsync.ResyncCommandAction,
+		TargetKind: assetsync.ResyncCommandTargetKind, TargetID: "render-01",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("insert resync command: %v", err)
+	}
+	resolvedAt := issuedAt.Add(time.Second)
+	resolvedState := "resolved"
+	if err := st.UpdateCommandOutcome(context.Background(), rec.ID, store.CommandOutcomeUpdate{
+		DispatchedAt: &issuedAt, ResolvedAt: &resolvedAt, State: &resolvedState,
+		OutcomeState: strPtr("confirmed"), OutcomeReason: strPtr("a fresh inventory report was received"),
+	}); err != nil {
+		t.Fatalf("resolve resync command: %v", err)
+	}
+
+	_, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if decoded.Manifest.ResyncRequest == nil {
+		t.Fatalf("resyncRequest is nil, want the resolved request; body: %s", body)
+	}
+	if decoded.Manifest.ResyncRequest.State != "resolved" {
+		t.Errorf("resyncRequest.state = %q, want %q", decoded.Manifest.ResyncRequest.State, "resolved")
+	}
+	if decoded.Manifest.ResyncRequest.OutcomeReason == nil || *decoded.Manifest.ResyncRequest.OutcomeReason != "a fresh inventory report was received" {
+		t.Errorf("resyncRequest.outcomeReason = %v, want the stated reason", decoded.Manifest.ResyncRequest.OutcomeReason)
+	}
+	if decoded.Manifest.ResyncRequest.ResolvedAt == nil {
+		t.Error("resyncRequest.resolvedAt is nil, want it set once resolved")
 	}
 }

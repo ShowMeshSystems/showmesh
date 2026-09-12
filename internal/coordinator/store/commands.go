@@ -498,3 +498,44 @@ func (s *Store) ListUnresolvedCommands(ctx context.Context) ([]CommandRecord, er
 func (t *Tx) ListUnresolvedCommands(ctx context.Context) ([]CommandRecord, error) {
 	return listUnresolvedCommands(ctx, t.tx)
 }
+
+func listUnresolvedCommandsByTargetAction(ctx context.Context, q querier, targetKind, targetID, action string) ([]CommandRecord, error) {
+	rows, err := q.QueryContext(ctx, `SELECT`+commandColumns+`FROM commands WHERE target_kind = ? AND target_id = ? AND action = ? AND resolved_at IS NULL ORDER BY created_at ASC`,
+		targetKind, targetID, action)
+	if err != nil {
+		return nil, fmt.Errorf("store: list unresolved commands by target/action: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []CommandRecord
+	for rows.Next() {
+		rec, err := scanCommand(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: list unresolved commands by target/action: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list unresolved commands by target/action: %w", err)
+	}
+	return out, nil
+}
+
+// ListUnresolvedCommandsByTargetAction is [Store.ListUnresolvedCommands]
+// narrowed to one (targetKind, targetID, action), oldest first. Used to
+// resolve every outstanding command a given action family has open
+// against one target without resolving another target's unrelated rows —
+// see internal/coordinator/assetsync's TriggerIfResyncIntentPrecedes,
+// which resolves every outstanding asset.inventory.request row for a node
+// once a fresh report proves that node's current state, including the
+// case where two operator presses each opened their own row before either
+// was answered.
+func (s *Store) ListUnresolvedCommandsByTargetAction(ctx context.Context, targetKind, targetID, action string) ([]CommandRecord, error) {
+	guardNotInTx(ctx, "Store.ListUnresolvedCommandsByTargetAction")
+	return listUnresolvedCommandsByTargetAction(ctx, s.db, targetKind, targetID, action)
+}
+
+// ListUnresolvedCommandsByTargetAction is [Store.ListUnresolvedCommandsByTargetAction]'s [Tx] form.
+func (t *Tx) ListUnresolvedCommandsByTargetAction(ctx context.Context, targetKind, targetID, action string) ([]CommandRecord, error) {
+	return listUnresolvedCommandsByTargetAction(ctx, t.tx, targetKind, targetID, action)
+}
