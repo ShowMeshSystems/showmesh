@@ -1075,6 +1075,55 @@ func TestAudioEngineSinkFactoryAndPropsEnvOverrideWinsOverPipeWire(t *testing.T)
 	}
 }
 
+// TestRebuildInstallsNoClockForAlsasink proves a real rebuild against an
+// alsasink node never opens a PHC reader and hands the engine a nil
+// Config.Clock, even with a PHC interface source that would otherwise
+// succeed: alsasink keeps letting the card provide the pipeline clock,
+// per ADR-046, and forcing one onto it re-introduces the skew-stepping
+// this backend exists to remove.
+func TestRebuildInstallsNoClockForAlsasink(t *testing.T) {
+	origNewEngine := newGstEngine
+	origLookup := phcIndexForInterface
+	origReader := newPHCReader
+	t.Cleanup(func() {
+		newGstEngine = origNewEngine
+		phcIndexForInterface = origLookup
+		newPHCReader = origReader
+	})
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+	withAudioDiscoverer(t, audio.Discovery{
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 48000}},
+		},
+	})
+
+	phcLookupCalled := false
+	phcIndexForInterface = func(iface string) (int, bool, error) { phcLookupCalled = true; return 3, true, nil }
+	newPHCReader = func(index int) (gstengine.ClockReader, error) { return &closingClockReaderStub{}, nil }
+
+	var gotCfg gstengine.Config
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		gotCfg = cfg
+		return audio.NewFakeEngine(time.Now), nil
+	}
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
+
+	node := audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, SinkBackend: realAudioSinkFactory, Revision: 1}
+	r.rebuild(node)
+
+	if phcLookupCalled {
+		t.Error("a PHC interface lookup ran for an alsasink node; alsasink must never get an installed pipeline clock")
+	}
+	if gotCfg.Clock != nil {
+		t.Error("Config.Clock is non-nil for an alsasink node; alsasink must build with no pipeline clock installed")
+	}
+}
+
 // TestBuildPipelineClockLockedNoSourceWired proves a rebuilder with no
 // [audioEngineRebuilder.SetPHCInterfaceSource] call ever made attempts
 // nothing at all: the engine must build exactly as it did before this

@@ -14,7 +14,7 @@ import (
 // fixture files.
 type AssetResolver func(media pkgaudio.MediaRef) (string, error)
 
-// ClockReader is the pipeline clock source [Config.Clock] wraps —
+// ClockReader is the pipeline clock source [Config.Clock] wraps:
 // internal/agent/clock.PHCReader in production, opened once by the
 // caller and handed here already open, so the GStreamer clock callback
 // never itself opens or closes a device file (RES-019 section 7.2
@@ -69,27 +69,26 @@ type Config struct {
 	// comes from a live GStreamer query.
 	Now func() time.Time
 
-	// Clock, when non-nil, is this pipeline's own running clock — the
+	// Clock, when non-nil, is this pipeline's own running clock: the
 	// node's PTP hardware clock (PHC) or, for a node with no PHC
-	// hardware, its CLOCK_REALTIME (see [ClockKind]) — already open, per
-	// RES-019 section 7.2 candidate A (ADR-046): the output pipeline runs
-	// on the same timebase as the card it plays through, so alsasink
-	// never needs to step the playout pointer to correct for a
-	// system/card clock drift, and pipewiresink never waits forever for a
+	// hardware, its CLOCK_REALTIME (see [ClockKind]), already open, per
+	// RES-019 section 7.2 candidate A (ADR-046). Production sets this
+	// only for a pipewiresink pipeline, so it never waits forever for a
 	// graph timebase its own pipeline clock does not share (proven on a
 	// Raspberry Pi with no PHC: GStreamer's own default clock never
-	// presented a sample; CLOCK_REALTIME played correctly). [Engine]
-	// reads it once at construction, before the pipeline's first state
-	// change (a clock installed afterward is proven not to reach an
-	// already-playing sink), to confirm it is actually readable; a
-	// failed read there is not fatal — the engine falls back to
-	// GStreamer's own default clock exactly as it did before this field
-	// existed. nil means no clock at all was configured for this node,
-	// which is likewise not a failure.
+	// presented a sample; CLOCK_REALTIME played correctly); an alsasink
+	// pipeline is left on nil so the card keeps providing its own clock
+	// with no slaving, exactly as it did before this field existed.
+	// [Engine] reads it once at construction, before the pipeline's
+	// first state change (a clock installed afterward is proven not to
+	// reach an already-playing sink), to confirm it is actually
+	// readable; a failed read there is not fatal, and the engine falls
+	// back to GStreamer's own default clock. nil means no clock at all was
+	// configured for this node, which is likewise not a failure.
 	Clock ClockReader
 
-	// ClockKind is which kind of clock Clock actually is — [ClockKindPHC]
-	// or [ClockKindRealtime] — reported verbatim by [Engine.ClockSource]
+	// ClockKind is which kind of clock Clock actually is: [ClockKindPHC]
+	// or [ClockKindRealtime], reported verbatim by [Engine.ClockSource]
 	// once Clock is confirmed readable and installed. Meaningless when
 	// Clock is nil. Defaults to [ClockKindPHC] when left empty, matching
 	// this field's only value before [ClockKindRealtime] existed.
@@ -97,8 +96,8 @@ type Config struct {
 
 	// ClockUnavailableReason is set by the caller instead of Clock when
 	// a pipeline clock was configured for this node but could not even
-	// be opened (a named interface with a PHC that could not be opened)
-	// — carried through so [Engine.ClockSource] reports the same class
+	// be opened (a named interface with a PHC that could not be opened),
+	// carried through so [Engine.ClockSource] reports the same class
 	// of reason whether the failure happened before or after this
 	// package ever saw a reader. Left empty when Clock is nil because
 	// nothing was configured at all; ignored when Clock is non-nil.
@@ -110,7 +109,7 @@ type Config struct {
 // node.audio.engine.clock_source values.
 const (
 	// ClockKindPHC is Clock's kind when it reads the node's PTP hardware
-	// clock — RES-019 section 7.2 candidate A.
+	// clock, per RES-019 section 7.2 candidate A.
 	ClockKindPHC = "phc"
 
 	// ClockKindRealtime is Clock's kind when it reads CLOCK_REALTIME as
@@ -120,8 +119,8 @@ const (
 	ClockKindRealtime = "realtime"
 )
 
-// clockKind reports c.ClockKind, defaulting to [ClockKindPHC] when unset
-// — this field's only value before [ClockKindRealtime] existed.
+// clockKind reports c.ClockKind, defaulting to [ClockKindPHC] when unset:
+// this field's only value before [ClockKindRealtime] existed.
 func (c Config) clockKind() string {
 	if c.ClockKind == "" {
 		return ClockKindPHC

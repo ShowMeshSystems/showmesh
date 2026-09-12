@@ -85,7 +85,7 @@ const (
 // route: [pipewireNoProbeSampleRateSource]/[pipewireNoProbeChannelCountSource]
 // when this node's PipeWire graph simply does not (yet) name this route,
 // or a reason naming the actual read failure when d.PipeWireEnumeratedReason
-// shows pw-dump ran but could not be parsed — an operator reading either
+// shows pw-dump ran but could not be parsed: an operator reading either
 // value must be able to tell "not found" from "could not be read" apart.
 func pipewireFallbackSampleRateSource(d audio.Discovery) string {
 	if d.PipeWireEnumeratedReason != "" {
@@ -242,7 +242,7 @@ type audioEngineRebuilder struct {
 	// node's currently accepted node.clock configuration names (RES-019
 	// section 7.2 candidate A, ADR-046: the audio pipeline clock is the
 	// SAME PHC node.clock.ptp.* already evaluates, read independently of
-	// whatever lock state that provider reports — rate-locking to the
+	// whatever lock state that provider reports: rate-locking to the
 	// card's own oscillator needs no grandmaster at all). ok is false
 	// when no node.clock.configure has ever been accepted. nil (a node
 	// started with no clock manager wired, or a test that never calls
@@ -251,7 +251,7 @@ type audioEngineRebuilder struct {
 	// this field existed. Set via [audioEngineRebuilder.
 	// SetPHCInterfaceSource], matching onAvailabilityChange's identical
 	// post-construction wiring convention (clockBind is built after this
-	// rebuilder — see agent.go).
+	// rebuilder, see agent.go).
 	phcInterfaceSource func() (iface string, ok bool)
 
 	mu            sync.Mutex
@@ -493,7 +493,12 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 		r.haveBuilt = true
 		return audioRebuildOutcome{Attempted: true, Available: false, Reason: reason}
 	}
-	cfg.Clock, cfg.ClockKind, cfg.ClockUnavailableReason = r.buildPipelineClockLocked()
+	// PHC pipeline clock only for pipewiresink (ADR-046): alsasink
+	// already lets the card provide the clock with no slaving, and an
+	// external clock would put GstAudioBaseSink into skew stepping.
+	if node.SinkBackend == pipewireAudioSinkFactory {
+		cfg.Clock, cfg.ClockKind, cfg.ClockUnavailableReason = r.buildPipelineClockLocked()
+	}
 	engine, err := newGstEngine(cfg)
 	if err != nil {
 		// See newGstEngine's doc comment: production never reaches this
@@ -548,7 +553,7 @@ func (r *audioEngineRebuilder) HeldNode() (node audioNodeConfig, ok bool) {
 	return r.heldNode, r.heldNodeOK
 }
 
-// newPHCReader opens index as a [gstengine.ClockReader] — a package var,
+// newPHCReader opens index as a [gstengine.ClockReader]: a package var,
 // matching this file's own newGstEngine injection convention, so a test
 // can exercise [audioEngineRebuilder.buildPipelineClockLocked] without a
 // real PHC device.
@@ -557,7 +562,7 @@ var newPHCReader = func(index int) (gstengine.ClockReader, error) {
 }
 
 // newRealtimeReader opens this host's own CLOCK_REALTIME as a
-// [gstengine.ClockReader] — a package var, matching newPHCReader's own
+// [gstengine.ClockReader]: a package var, matching newPHCReader's own
 // injection convention, so a test can exercise
 // [audioEngineRebuilder.buildPipelineClockLocked]'s no-PHC branch without
 // depending on this test host's real network interfaces.
@@ -565,12 +570,12 @@ var newRealtimeReader = func() gstengine.ClockReader {
 	return clock.NewRealtimeReader()
 }
 
-// phcIndexForInterface reports iface's PHC index — a package var over
+// phcIndexForInterface reports iface's PHC index: a package var over
 // [clock.PHCIndexForInterface], matching newPHCReader's identical
 // injection convention, so a test can exercise
 // [audioEngineRebuilder.buildPipelineClockLocked]'s branches without
 // depending on this test host's real network interfaces (this platform
-// may not even support PHC lookups at all — see clock/phc_other.go).
+// may not even support PHC lookups at all, see clock/phc_other.go).
 var phcIndexForInterface = clock.PHCIndexForInterface
 
 // buildPipelineClockLocked attempts to open this node's pipeline clock
@@ -581,14 +586,14 @@ var phcIndexForInterface = clock.PHCIndexForInterface
 // reader is nil with no reason at all in the ordinary, unconfigured
 // case: r.phcInterfaceSource is nil (no clock manager wired), or it
 // reports ok=false (no node.clock.configure ever accepted) or an empty
-// interface. That is not a failure — it is exactly what this node
+// interface. That is not a failure: it is exactly what this node
 // reported before this seam existed, so [Config.ClockUnavailableReason]
 // is left empty rather than manufacturing a reason for nothing having
 // been configured.
 //
 // A named interface with genuinely no associated PHC (found == false, no
 // error) is likewise not a failure: [clock.NewRealtimeReader] is
-// returned instead, kind [gstengine.ClockKindRealtime] — proven by hand
+// returned instead, kind [gstengine.ClockKindRealtime], proven by hand
 // on a Raspberry Pi 3B+ node whose interface has no PHC hardware at all,
 // where GStreamer's own default clock left the output pipeline prerolled
 // forever and CLOCK_REALTIME played correctly. reader is nil WITH a

@@ -12,7 +12,7 @@ import (
 
 // This suite proves RES-019 section 7.2 candidate A's pipeline-clock and
 // sink-backend reporting against a real GStreamer pipeline (fakesink, not
-// a test double for this package's own logic) — matching
+// a test double for this package's own logic), matching
 // engine_real_integration_test.go's own "real pipeline, real elements"
 // convention.
 
@@ -165,9 +165,45 @@ func TestClockSourceFallsBackToDefaultWhenTheConfiguredClockIsUnreadable(t *test
 	}
 }
 
+// TestClockSourceReportsUnreadableAfterInstall proves a clock that reads
+// fine at install time and later fails no longer reports [clockSourcePHC]:
+// the case neither of the two suites above cover, and the one a real PHC
+// failure (a NIC reset, a removed interface) actually produces.
+func TestClockSourceReportsUnreadableAfterInstall(t *testing.T) {
+	reader := &fakeClockReader{base: time.Now(), failAfter: -1}
+	cfg := testConfig(resolveByRuntimeFilename)
+	cfg.Clock = reader
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	if ok, reason := e.Available(); !ok {
+		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	if source, _ := e.ClockSource(); source != clockSourcePHC {
+		t.Fatalf("precondition: ClockSource() = %q, want %q before the reader ever fails", source, clockSourcePHC)
+	}
+
+	reader.failAfter = reader.reads
+	e.phcClockGetTime(gst.Clock(nil))
+
+	source, reason := e.ClockSource()
+	if source == clockSourcePHC {
+		t.Fatalf("ClockSource() still reports %q after the configured clock became unreadable", clockSourcePHC)
+	}
+	if source != clockSourceDefault {
+		t.Fatalf("ClockSource() source = %q, want %q", source, clockSourceDefault)
+	}
+	if reason == "" {
+		t.Fatalf("ClockSource() reason is empty; a clock that stopped being readable must state why")
+	}
+}
+
 // TestPhcClockGetTimeCallCost measures phcClockGetTime's own per-call
 // cost against an already-open [fakeClockReader] (in-memory, no real
-// syscall) — the callback's own overhead, isolated from clock_gettime's
+// syscall): the callback's own overhead, isolated from clock_gettime's
 // real cost, which a caller cannot measure portably without a live PHC
 // device (see internal/agent/clock's own TestReadPHCCallCost, skipped
 // off real hardware). GStreamer's own scheduling calls this on a hot
@@ -193,7 +229,7 @@ func TestPhcClockGetTimeCallCost(t *testing.T) {
 
 // TestPipewiresinkPipelineReachesPlaying builds a real pipeline against
 // "pipewiresink" itself, skipped with its own reason when that plugin is
-// not registered on this host — this development machine and most CI
+// not registered on this host: this development machine and most CI
 // runners have no PipeWire daemon at all, matching this package's other
 // environment-gated real-integration tests (newTestEngine's own doc
 // comment).
@@ -221,7 +257,7 @@ func TestPipewiresinkPipelineReachesPlaying(t *testing.T) {
 // pipewireAudioSinkFactoryForTest names the GStreamer element factory
 // this test builds against directly. Not [internal/agent's own
 // pipewireAudioSinkFactory] constant (that lives one package over, and
-// this package must not import internal/agent — it is the other
+// this package must not import internal/agent; it is the other
 // direction of this codebase's dependency graph), but the identical
 // string, "pipewiresink".
 const pipewireAudioSinkFactoryForTest = "pipewiresink"
