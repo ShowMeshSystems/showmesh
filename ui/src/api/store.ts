@@ -123,6 +123,13 @@ type SchemaAudioSettingsConfigResponse = components['schemas']['AudioSettingsCon
 type SchemaConfigAudioSettingsPayload = components['schemas']['ConfigAudioSettingsPayload']
 type SchemaAudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
 type SchemaConfigAudioNode = components['schemas']['ConfigAudioNode']
+// Long-run program-to-LTC drift recordings: coordinator-recorded observation
+// history, not a config kind. Started/stopped behind audio:command, read
+// behind observation:read.
+type SchemaAudioAlignmentRunListResponse = components['schemas']['AudioAlignmentRunListResponse']
+type SchemaAudioAlignmentRunDetailResponse = components['schemas']['AudioAlignmentRunDetailResponse']
+type SchemaAudioAlignmentRunResponse = components['schemas']['AudioAlignmentRunResponse']
+type SchemaAudioAlignmentRunStopRequest = components['schemas']['AudioAlignmentRunStopRequest']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
@@ -1214,6 +1221,74 @@ export class ApiStore {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         `/config/audio.node/${encodeURIComponent(id)}/revisions`,
         controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /nodes/{nodeId}/audio/alignment-runs`. Requires observation:read. Newest first. */
+  async listAudioAlignmentRuns(nodeId: string): Promise<SchemaAudioAlignmentRunListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAudioAlignmentRunListResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/audio/alignment-runs`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /nodes/{nodeId}/audio/alignment-runs`. Requires audio:command. At
+   * most one active run per node; starting a second is refused with `409`.
+   */
+  async startAudioAlignmentRun(nodeId: string): Promise<SchemaAudioAlignmentRunResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaAudioAlignmentRunResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/audio/alignment-runs`,
+        undefined,
+        controller.signal,
+        AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /nodes/{nodeId}/audio/alignment-runs/{runId}`. Requires
+   * observation:read. `summary` always covers the run's full series
+   * regardless of `limit`; see `truncated` on the response.
+   */
+  async getAudioAlignmentRun(nodeId: string, runId: string, limit?: number): Promise<SchemaAudioAlignmentRunDetailResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const query = limit !== undefined ? `?limit=${limit}` : ''
+      return await this.client.getJson<SchemaAudioAlignmentRunDetailResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/audio/alignment-runs/${encodeURIComponent(runId)}${query}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /nodes/{nodeId}/audio/alignment-runs/{runId}/stop`. Requires
+   * audio:command. Stopping an already-stopped or unknown run is a `404`.
+   */
+  async stopAudioAlignmentRun(nodeId: string, runId: string, reason?: string): Promise<SchemaAudioAlignmentRunResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaAudioAlignmentRunStopRequest = reason !== undefined ? { reason } : {}
+      return await this.client.postJson<SchemaAudioAlignmentRunResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/audio/alignment-runs/${encodeURIComponent(runId)}/stop`,
+        body,
+        controller.signal,
+        AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
       )
     } finally {
       this.endSideCall(controller)

@@ -231,6 +231,16 @@ export type AudioNodeConfigResponse = components['schemas']['AudioNodeConfigResp
 export type AudioNodeSummary = components['schemas']['AudioNodeSummary']
 export type AudioNodeListResponse = components['schemas']['AudioNodeListResponse']
 
+// Long-run program-to-LTC drift recordings (audio alignment runs), aliased
+// for the identical reason as every type above. Not a config kind: these
+// are coordinator-recorded observation history, started/stopped behind
+// audio:command, read behind observation:read.
+export type AudioAlignmentRun = components['schemas']['AudioAlignmentRun']
+export type AudioAlignmentRunSummary = components['schemas']['AudioAlignmentRunSummary']
+export type AudioAlignmentRunListResponse = components['schemas']['AudioAlignmentRunListResponse']
+export type AudioAlignmentRunDetailResponse = components['schemas']['AudioAlignmentRunDetailResponse']
+export type AudioAlignmentRunResponse = components['schemas']['AudioAlignmentRunResponse']
+
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring. Aliased for the identical reason as every type above
 // (ADR-015).

@@ -17,6 +17,10 @@ const stubs = vi.hoisted(() => ({
   restartRenderPipeline: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   probeRenderTransport: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   resyncNodeAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  listAudioAlignmentRuns: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  startAudioAlignmentRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAudioAlignmentRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  stopAudioAlignmentRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -34,6 +38,10 @@ vi.mock('../api', async () => {
     restartRenderPipeline: (...args: never[]) => stubs.restartRenderPipeline(...args),
     probeRenderTransport: (...args: never[]) => stubs.probeRenderTransport(...args),
     resyncNodeAssets: (...args: never[]) => stubs.resyncNodeAssets(...args),
+    listAudioAlignmentRuns: (...args: never[]) => stubs.listAudioAlignmentRuns(...args),
+    startAudioAlignmentRun: (...args: never[]) => stubs.startAudioAlignmentRun(...args),
+    getAudioAlignmentRun: (...args: never[]) => stubs.getAudioAlignmentRun(...args),
+    stopAudioAlignmentRun: (...args: never[]) => stubs.stopAudioAlignmentRun(...args),
   }
 })
 
@@ -167,6 +175,10 @@ describe('Node detail', () => {
     stubs.restartRenderPipeline = () => new Promise(() => {})
     stubs.probeRenderTransport = () => new Promise(() => {})
     stubs.resyncNodeAssets = () => new Promise(() => {})
+    stubs.listAudioAlignmentRuns = () => new Promise(() => {})
+    stubs.startAudioAlignmentRun = () => new Promise(() => {})
+    stubs.getAudioAlignmentRun = () => new Promise(() => {})
+    stubs.stopAudioAlignmentRun = () => new Promise(() => {})
   })
 
   it('renders the drawer title and the mock’s section labels in order', () => {
@@ -176,6 +188,7 @@ describe('Node detail', () => {
       'Garage bay projector host',
       'Identity',
       'Signals',
+      'Drift recording',
       'Capabilities',
       'Surfaces on this node',
       'Assets held locally',
@@ -495,6 +508,142 @@ describe('Node detail', () => {
     renderScreen([])
     expect(screen.getAllByText(/media-garage/).length).toBeGreaterThan(0)
     expect(screen.getByText(/no record of this node/i)).toBeInTheDocument()
+  })
+})
+
+describe('Node detail · Drift recording', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    stubs.listShowSurfacesForNode = () => new Promise(() => {})
+    stubs.getShowSurface = () => new Promise(() => {})
+    stubs.getNodeAssetManifest = () => new Promise(() => {})
+    stubs.listAudioAlignmentRuns = () => new Promise(() => {})
+    stubs.startAudioAlignmentRun = () => new Promise(() => {})
+    stubs.getAudioAlignmentRun = () => new Promise(() => {})
+    stubs.stopAudioAlignmentRun = () => new Promise(() => {})
+  })
+
+  function run(overrides: Partial<{ id: string; stoppedAt: string | null; stoppedBy: string | null; stoppedByPrincipalId: string | null }> = {}) {
+    return {
+      id: overrides.id ?? 'run-1',
+      nodeId: 'media-garage',
+      startedAt: '2026-08-30T20:00:00Z',
+      stoppedAt: overrides.stoppedAt !== undefined ? overrides.stoppedAt : '2026-08-30T21:00:00Z',
+      startedBy: 'erbartos',
+      startedByPrincipalId: 'p1',
+      stoppedBy: overrides.stoppedBy !== undefined ? overrides.stoppedBy : 'erbartos',
+      stoppedByPrincipalId: overrides.stoppedByPrincipalId !== undefined ? overrides.stoppedByPrincipalId : 'p1',
+      stopReason: null,
+    }
+  }
+
+  function detail(runOverrides: Parameters<typeof run>[0] = {}, summaryOverrides: Partial<{
+    sampleCount: number
+    maxExcursionOffsetMs: number | null
+    maxExcursionSampledAt: string | null
+    driftRateMsPerHour: number | null
+    driftRateUnavailableReason: string
+  }> = {}) {
+    return {
+      serverTime: '2026-08-30T21:07:00Z',
+      run: run(runOverrides),
+      samples: [],
+      truncated: false,
+      summary: {
+        sampleCount: summaryOverrides.sampleCount ?? 120,
+        firstSampleAt: '2026-08-30T20:00:00Z',
+        lastSampleAt: '2026-08-30T21:00:00Z',
+        maxExcursionOffsetMs: summaryOverrides.maxExcursionOffsetMs !== undefined ? summaryOverrides.maxExcursionOffsetMs : 4.2,
+        maxExcursionSampledAt: summaryOverrides.maxExcursionSampledAt !== undefined ? summaryOverrides.maxExcursionSampledAt : '2026-08-30T20:45:00Z',
+        driftRateMsPerHour: summaryOverrides.driftRateMsPerHour !== undefined ? summaryOverrides.driftRateMsPerHour : 0.8,
+        ...(summaryOverrides.driftRateUnavailableReason !== undefined ? { driftRateUnavailableReason: summaryOverrides.driftRateUnavailableReason } : {}),
+      },
+    }
+  }
+
+  it('renders with no runs', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [] })
+
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Drift recording' })).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Start drift recording' })).toBeInTheDocument()
+    expect(screen.getByText('No completed drift recording exists for this node.')).toBeInTheDocument()
+  })
+
+  it('start dispatches and the new run appears', async () => {
+    let listCalls = 0
+    stubs.listAudioAlignmentRuns = () => {
+      listCalls += 1
+      return Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        runs: listCalls === 1 ? [] : [run({ id: 'run-2', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null })],
+      })
+    }
+    let started = false
+    stubs.startAudioAlignmentRun = () => {
+      started = true
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', run: run({ id: 'run-2', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null }) })
+    }
+
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start drift recording' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Start drift recording' }))
+
+    await waitFor(() => expect(started).toBe(true))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
+    expect(screen.getByText(/Started/)).toBeInTheDocument()
+  })
+
+  it('stop dispatches against the active run', async () => {
+    let listCalls = 0
+    stubs.listAudioAlignmentRuns = () => {
+      listCalls += 1
+      return Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        runs: listCalls === 1 ? [run({ id: 'run-2', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null })] : [run({ id: 'run-2' })],
+      })
+    }
+    let stoppedRunId: string | null = null
+    stubs.stopAudioAlignmentRun = (_nodeId: string, runId: string) => {
+      stoppedRunId = runId
+      return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', run: run({ id: 'run-2' }) })
+    }
+    stubs.getAudioAlignmentRun = () => Promise.resolve(detail({ id: 'run-2' }))
+
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+
+    await waitFor(() => expect(stoppedRunId).toBe('run-2'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start drift recording' })).toBeInTheDocument())
+  })
+
+  it('renders a null drift rate with its reason, never a zero', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [run()] })
+    stubs.getAudioAlignmentRun = () =>
+      Promise.resolve(detail({}, { sampleCount: 1, maxExcursionOffsetMs: null, maxExcursionSampledAt: null, driftRateMsPerHour: null, driftRateUnavailableReason: 'fewer than two samples' }))
+
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByText(/drift rate unavailable/)).toBeInTheDocument())
+    expect(screen.getByText(/fewer than two samples/)).toBeInTheDocument()
+    expect(screen.getByText(/1 sample/)).toBeInTheDocument()
+    expect(screen.queryByText(/max excursion/)).not.toBeInTheDocument()
+  })
+
+  it('renders sample count and both summary numbers when the API returns them', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [run()] })
+    stubs.getAudioAlignmentRun = () => Promise.resolve(detail())
+
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByText(/120 samples/)).toBeInTheDocument())
+    expect(screen.getByText(/max excursion 4.2 ms/)).toBeInTheDocument()
+    expect(screen.getByText(/drift 0.8 ms\/hour/)).toBeInTheDocument()
   })
 })
 
