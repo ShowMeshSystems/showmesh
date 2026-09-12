@@ -1,20 +1,25 @@
 import { useEffect, useState } from 'react'
 import {
+  ApiError,
   getAudioNode,
   getAudioNodeConfigRevisions,
+  getNodeClock,
+  getNodeClockConfigRevisions,
   listConfigObjects,
   putAudioNode,
+  putNodeClock,
   type AudioNodeConfigResponse,
   type AudioNodeSummary,
+  type NodeClockConfigResponse,
 } from '../api'
-import { Button, ButtonRow, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
-import type { ConfigAudioNode, ConfigAudioOutputLatency } from '../api'
+import { Button, ButtonRow, Choice, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
+import type { ConfigAudioNode, ConfigAudioOutputLatency, ConfigNodeClock } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
 import { formatClock } from '../domain/time'
-import { guardedSave, type SaveOutcome } from '../domain/save'
+import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
-import { advertisedRoutes, audioNodeVerdict, hasAudioCapability } from './settingsModel'
+import { advertisedRoutes, audioNodeVerdict, hasAudioCapability, nodeClockVerdict, type NodeClockProvider } from './settingsModel'
 
 type AudioNodeRole = NonNullable<ConfigAudioNode['role']>
 const DEFAULT_ROLE: AudioNodeRole = 'program+ltc'
@@ -39,6 +44,14 @@ const OUTPUT_LATENCY_METHOD_OPTIONS: readonly { value: OutputLatencyMethod; labe
   { value: 'acoustic', label: 'Acoustic' },
   { value: 'declared', label: 'Declared' },
 ]
+
+const DEFAULT_PROVIDER: NodeClockProvider = 'managed'
+const PROVIDER_OPTIONS: readonly { value: NodeClockProvider; label: string }[] = [
+  { value: 'managed', label: 'Managed' },
+  { value: 'external', label: 'External' },
+  { value: 'fpp', label: 'FPP' },
+]
+const DEFAULT_HOLDOVER_LIMIT_SECONDS = 60
 
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 type NodeState =
@@ -527,6 +540,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         </div>
       </Section>
 
+      <NodeClockSection nodeId={nodeId} saveGate={saveGate} />
+
       <Section id="st-output-latency" title="Output latency">
         <p className="sm-small sm-muted">
           This node's calibrated static output-chain delay (RES-019 section 8), subtracted from a scheduled start so
@@ -668,5 +683,353 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
 
       <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} mode="list" />
     </>
+  )
+}
+
+type NodeClockState =
+  | { kind: 'loading' }
+  | { kind: 'notfound' }
+  | { kind: 'loaded'; response: NodeClockConfigResponse }
+  | { kind: 'failed'; reason: string }
+
+function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: ScopeGateResult }) {
+  const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<NodeClockState>({ kind: 'loading' })
+
+  const [provider, setProvider] = useState<NodeClockProvider>(DEFAULT_PROVIDER)
+  const [interfaceName, setInterfaceName] = useState('')
+  const [domainText, setDomainText] = useState('')
+  const [clientOnly, setClientOnly] = useState(false)
+  const [holdoverLimitSecondsText, setHoldoverLimitSecondsText] = useState(String(DEFAULT_HOLDOVER_LIMIT_SECONDS))
+  const [priority1Text, setPriority1Text] = useState('')
+  const [hardwareTimestamping, setHardwareTimestamping] = useState(false)
+  const [externalUdsAddress, setExternalUdsAddress] = useState('')
+  const [fppBaseUrl, setFppBaseUrl] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<NodeClockConfigResponse>, { kind: 'stale' }> | null>(null)
+
+  const loadFrom = (payload: ConfigNodeClock) => {
+    setProvider(payload.provider)
+    setInterfaceName(payload.interface)
+    setDomainText(String(payload.domain))
+    setClientOnly(payload.clientOnly ?? false)
+    setHoldoverLimitSecondsText(String(payload.holdoverLimitSeconds ?? DEFAULT_HOLDOVER_LIMIT_SECONDS))
+    setPriority1Text(payload.priority1 !== undefined ? String(payload.priority1) : '')
+    setHardwareTimestamping(payload.hardwareTimestamping ?? false)
+    setExternalUdsAddress(payload.externalUdsAddress ?? '')
+    setFppBaseUrl(payload.fppBaseUrl ?? '')
+    setDirty(false)
+  }
+
+  const resetToDefaults = () => {
+    setProvider(DEFAULT_PROVIDER)
+    setInterfaceName('')
+    setDomainText('')
+    setClientOnly(false)
+    setHoldoverLimitSecondsText(String(DEFAULT_HOLDOVER_LIMIT_SECONDS))
+    setPriority1Text('')
+    setHardwareTimestamping(false)
+    setExternalUdsAddress('')
+    setFppBaseUrl('')
+    setDirty(false)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    getNodeClock(nodeId)
+      .then((response) => {
+        if (cancelled) return
+        setState({ kind: 'loaded', response })
+        loadFrom(response.payload)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setState({ kind: 'notfound' })
+          resetToDefaults()
+          return
+        }
+        setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [nodeId, attempt])
+
+  const verdict = nodeClockVerdict({ provider, interfaceName, domainText, fppBaseUrl })
+  const canSave = verdict.ok
+
+  const buildPayload = (base: ConfigNodeClock): ConfigNodeClock => {
+    const payload: ConfigNodeClock = {
+      ...base,
+      provider,
+      interface: interfaceName,
+      domain: Number(domainText),
+    }
+    if (holdoverLimitSecondsText.trim() !== '') payload.holdoverLimitSeconds = Number(holdoverLimitSecondsText)
+    else delete payload.holdoverLimitSeconds
+    if (provider === 'managed') {
+      payload.clientOnly = clientOnly
+      payload.hardwareTimestamping = hardwareTimestamping
+      if (priority1Text.trim() !== '') payload.priority1 = Number(priority1Text)
+      else delete payload.priority1
+      delete payload.externalUdsAddress
+      delete payload.fppBaseUrl
+    } else if (provider === 'external') {
+      if (externalUdsAddress.trim() !== '') payload.externalUdsAddress = externalUdsAddress
+      else delete payload.externalUdsAddress
+      delete payload.clientOnly
+      delete payload.priority1
+      delete payload.hardwareTimestamping
+      delete payload.fppBaseUrl
+    } else {
+      payload.fppBaseUrl = fppBaseUrl
+      delete payload.clientOnly
+      delete payload.priority1
+      delete payload.hardwareTimestamping
+      delete payload.externalUdsAddress
+    }
+    return payload
+  }
+
+  const discard = () => {
+    if (state.kind !== 'loaded') return
+    loadFrom(state.response.payload)
+    setSaveError(null)
+  }
+
+  const create = () => {
+    setSaving(true)
+    setSaveError(null)
+    guardedCreate({
+      read: () => getNodeClock(nodeId),
+      write: () => putNodeClock(nodeId, buildPayload({} as ConfigNodeClock)),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'created') {
+          setState({ kind: 'loaded', response: outcome.response })
+          loadFrom(outcome.response.payload)
+          setAttempt((n) => n + 1)
+          return
+        }
+        if (outcome.kind === 'taken') {
+          setAttempt((n) => n + 1)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  const save = () => {
+    if (state.kind !== 'loaded' || !canSave) return
+    setSaving(true)
+    setSaveError(null)
+    setStale(null)
+    guardedSave({
+      loaded: state.response,
+      read: () => getNodeClock(nodeId),
+      write: () => putNodeClock(nodeId, buildPayload(state.response.payload)),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          setState({ kind: 'loaded', response: outcome.response })
+          setDirty(false)
+          setAttempt((n) => n + 1)
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  if (state.kind === 'loading') {
+    return (
+      <Section id="st-node-clock" title="PTP clock">
+        <RuledStrip absence="loading" label="Reading" fact={`Asking the coordinator for ${nodeId}'s clock configuration.`} />
+      </Section>
+    )
+  }
+  if (state.kind === 'failed') {
+    return (
+      <Section id="st-node-clock" title="PTP clock">
+        <RuledStrip absence="failed" label="Read failed" fact={state.reason} />
+      </Section>
+    )
+  }
+
+  const fields = (
+    <>
+      <div className="sm-grid sm-form-column">
+        <Segmented
+          label="Provider"
+          value={provider}
+          options={PROVIDER_OPTIONS}
+          onChange={(v) => {
+            setProvider(v)
+            setDirty(true)
+          }}
+        />
+        <Field label="Interface" help="The network interface this node's PTP clock runs on.">
+          {(props) => (
+            <Input
+              {...props}
+              value={interfaceName}
+              onChange={(e) => {
+                setInterfaceName(e.target.value)
+                setDirty(true)
+              }}
+            />
+          )}
+        </Field>
+        <Field label="PTP domain" help="The declared PTP domain number, 0 to 255.">
+          {(props) => (
+            <Input
+              {...props}
+              value={domainText}
+              onChange={(e) => {
+                setDomainText(e.target.value)
+                setDirty(true)
+              }}
+            />
+          )}
+        </Field>
+        <Field label="Holdover limit (seconds)" help="How long a lost lock is reported as holdover before this node gives up and reports unsynchronized. Defaults to 60 when left blank.">
+          {(props) => (
+            <Input
+              {...props}
+              value={holdoverLimitSecondsText}
+              onChange={(e) => {
+                setHoldoverLimitSecondsText(e.target.value)
+                setDirty(true)
+              }}
+            />
+          )}
+        </Field>
+        {provider === 'managed' && (
+          <>
+            <Choice
+              type="checkbox"
+              checked={clientOnly}
+              onChange={(e) => {
+                setClientOnly(e.target.checked)
+                setDirty(true)
+              }}
+              label="Client only (this node never attempts to become the domain's grandmaster)"
+            />
+            <Choice
+              type="checkbox"
+              checked={hardwareTimestamping}
+              onChange={(e) => {
+                setHardwareTimestamping(e.target.checked)
+                setDirty(true)
+              }}
+              label="Hardware timestamping"
+            />
+            <Field label="Priority1 · optional" help="0 to 255. Applies to managed only.">
+              {(props) => (
+                <Input
+                  {...props}
+                  value={priority1Text}
+                  onChange={(e) => {
+                    setPriority1Text(e.target.value)
+                    setDirty(true)
+                  }}
+                />
+              )}
+            </Field>
+          </>
+        )}
+        {provider === 'external' && (
+          <Field label="External UDS address · optional" help="Defaults to linuxptp's own /var/run/ptp/ptp4lro when left blank.">
+            {(props) => (
+              <Input
+                {...props}
+                value={externalUdsAddress}
+                onChange={(e) => {
+                  setExternalUdsAddress(e.target.value)
+                  setDirty(true)
+                }}
+              />
+            )}
+          </Field>
+        )}
+        {provider === 'fpp' && (
+          <Field label="FPP base URL" help="Required when the provider is fpp.">
+            {(props) => (
+              <Input
+                {...props}
+                value={fppBaseUrl}
+                onChange={(e) => {
+                  setFppBaseUrl(e.target.value)
+                  setDirty(true)
+                }}
+              />
+            )}
+          </Field>
+        )}
+      </div>
+      <div className="sm-panel sm-stack-4">
+        <StatusPair tone={verdict.ok ? 'good' : 'bad'} label={verdict.ok ? 'Will be accepted' : 'Will be refused'} />
+        {!verdict.ok && <p className="sm-small sm-muted">{verdict.reason}</p>}
+      </div>
+    </>
+  )
+
+  if (state.kind === 'notfound') {
+    return (
+      <Section id="st-node-clock" title="PTP clock">
+        <RuledStrip
+          absence="empty"
+          label="Not configured"
+          fact={`No node.clock object exists for ${nodeId}. It reports unsynchronized and behaves as it did before this seam existed.`}
+        />
+        {fields}
+        <ButtonRow>
+          <Button variant="primary" onClick={create} disabled={saving || !canSave || !saveGate.allowed} title={!saveGate.allowed ? saveGate.reason : !canSave ? verdict.reason : undefined}>
+            {saving ? 'Creating…' : 'Create clock config'}
+          </Button>
+        </ButtonRow>
+        {saveError !== null && <RuledStrip absence="failed" label="Create failed" fact={saveError} />}
+      </Section>
+    )
+  }
+
+  return (
+    <Section id="st-node-clock" title="PTP clock">
+      {fields}
+      <ButtonRow>
+        <Button variant="primary" onClick={save} disabled={!dirty || saving || !canSave || !saveGate.allowed} title={!saveGate.allowed ? saveGate.reason : !canSave ? verdict.reason : undefined}>
+          {saving ? 'Saving…' : 'Save clock config'}
+        </Button>
+        <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
+          Discard changes
+        </Button>
+        <span className="sm-small sm-muted sm-push-end">
+          Active revision <span className="sm-data">{state.response.revision}</span>
+        </span>
+      </ButtonRow>
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            setAttempt((n) => n + 1)
+          }}
+        />
+      )}
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+
+      <RevisionHistory fetch={() => getNodeClockConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} mode="list" id="st-node-clock-rev" />
+    </Section>
   )
 }

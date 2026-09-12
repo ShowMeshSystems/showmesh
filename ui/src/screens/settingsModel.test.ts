@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { audioNodeVerdict, hasAudioCapability, hostRowsToMap, hostsMapToRows, liveCycle } from './settingsModel'
+import { audioNodeVerdict, hasAudioCapability, hostRowsToMap, hostsMapToRows, liveCycle, nodeClockVerdict } from './settingsModel'
 import type { Node, NightSessionState } from '../api'
 
 describe('audioNodeVerdict', () => {
@@ -31,6 +31,38 @@ describe('audioNodeVerdict', () => {
   it('refuses an LTC route given without a channel', () => {
     const verdict = audioNodeVerdict({ ...base, ltcRoute: base.programRoute, ltcChannel: '' })
     expect(verdict.ok).toBe(false)
+  })
+})
+
+describe('nodeClockVerdict', () => {
+  const base = { provider: 'managed' as const, interfaceName: 'eth0', domainText: '0', fppBaseUrl: '' }
+
+  it('accepts a managed provider with an interface and a domain', () => {
+    expect(nodeClockVerdict(base)).toEqual({ ok: true })
+  })
+
+  it('refuses a blank interface', () => {
+    expect(nodeClockVerdict({ ...base, interfaceName: '' }).ok).toBe(false)
+  })
+
+  it('refuses a non-integer domain', () => {
+    expect(nodeClockVerdict({ ...base, domainText: 'not-a-number' }).ok).toBe(false)
+  })
+
+  it('refuses a domain outside 0-255', () => {
+    expect(nodeClockVerdict({ ...base, domainText: '256' }).ok).toBe(false)
+  })
+
+  it('accepts an external provider with no fppBaseUrl', () => {
+    expect(nodeClockVerdict({ ...base, provider: 'external' })).toEqual({ ok: true })
+  })
+
+  it('refuses an fpp provider with no fppBaseUrl', () => {
+    expect(nodeClockVerdict({ ...base, provider: 'fpp', fppBaseUrl: '' }).ok).toBe(false)
+  })
+
+  it('accepts an fpp provider with an fppBaseUrl', () => {
+    expect(nodeClockVerdict({ ...base, provider: 'fpp', fppBaseUrl: 'http://fpp.local' })).toEqual({ ok: true })
   })
 })
 

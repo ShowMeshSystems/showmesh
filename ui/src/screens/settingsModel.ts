@@ -107,6 +107,34 @@ export function audioNodeVerdict(payload: {
   return { ok: true }
 }
 
+export type NodeClockProvider = 'managed' | 'external' | 'fpp'
+
+export type NodeClockVerdict = { ok: true } | { ok: false; reason: string }
+
+/**
+ * The refusals `PUT /config/node.clock/{id}` names (api/openapi.yaml's
+ * ConfigNodeClock: provider/interface/domain always required, fppBaseUrl
+ * required exactly when provider is fpp).
+ */
+export function nodeClockVerdict(payload: {
+  provider: NodeClockProvider
+  interfaceName: string
+  domainText: string
+  fppBaseUrl: string
+}): NodeClockVerdict {
+  if (payload.interfaceName.trim() === '') {
+    return { ok: false, reason: 'Interface is required.' }
+  }
+  const domain = Number(payload.domainText)
+  if (payload.domainText.trim() === '' || !Number.isInteger(domain) || domain < 0 || domain > 255) {
+    return { ok: false, reason: 'Domain must be a whole number from 0 to 255.' }
+  }
+  if (payload.provider === 'fpp' && payload.fppBaseUrl.trim() === '') {
+    return { ok: false, reason: 'FPP base URL is required when the provider is fpp.' }
+  }
+  return { ok: true }
+}
+
 /** The session's currently live cycle, or null when no session reports one. Mode's in-progress warning renders only for this case. */
 export function liveCycle(nightSession: NightSessionState | null): { cycle: number } | null {
   if (nightSession === null || nightSession.state !== 'live') return null

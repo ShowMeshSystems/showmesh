@@ -32,6 +32,9 @@ const stubs = vi.hoisted(() => ({
   getAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioNodeConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getNodeClock: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putNodeClock: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getNodeClockConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getServiceDescriptor: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getCurrentNightSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
@@ -66,6 +69,9 @@ vi.mock('../api', async () => {
     getAudioNode: (...args: never[]) => stubs.getAudioNode(...args),
     putAudioNode: (...args: never[]) => stubs.putAudioNode(...args),
     getAudioNodeConfigRevisions: (...args: never[]) => stubs.getAudioNodeConfigRevisions(...args),
+    getNodeClock: (...args: never[]) => stubs.getNodeClock(...args),
+    putNodeClock: (...args: never[]) => stubs.putNodeClock(...args),
+    getNodeClockConfigRevisions: (...args: never[]) => stubs.getNodeClockConfigRevisions(...args),
     getServiceDescriptor: (...args: never[]) => stubs.getServiceDescriptor(...args),
     getCurrentNightSession: (...args: never[]) => stubs.getCurrentNightSession(...args),
   }
@@ -862,6 +868,171 @@ describe('Settings › Node routing', () => {
         configuration: 'PipeWire quantum 1024, 48000 Hz',
       },
     })
+  })
+})
+
+describe('Settings › Node routing › PTP clock', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  function nodeConfig() {
+    return {
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'audio.node',
+      id: 'audio-node-01',
+      revision: 4,
+      payload: {
+        programRoute: 'hw:CARD=USB,DEV=0',
+        programChannels: [1, 2],
+        clockDomain: 'usb-audio-0',
+        clockDomainProvenance: 'single interface',
+        outputLatency: { method: 'unmeasured' },
+      },
+      updatedAt: '2026-08-30T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    }
+  }
+
+  function nodeClockConfig(
+    overrides: Partial<{
+      provider: 'managed' | 'external' | 'fpp'
+      interface: string
+      domain: number
+      clientOnly: boolean
+      holdoverLimitSeconds: number
+      priority1: number
+      hardwareTimestamping: boolean
+      externalUdsAddress: string
+      fppBaseUrl: string
+      revision: number
+    }> = {},
+  ) {
+    const payload: Record<string, unknown> = {
+      provider: overrides.provider ?? 'managed',
+      interface: overrides.interface ?? 'eth0',
+      domain: overrides.domain ?? 0,
+    }
+    if (overrides.clientOnly !== undefined) payload.clientOnly = overrides.clientOnly
+    if (overrides.holdoverLimitSeconds !== undefined) payload.holdoverLimitSeconds = overrides.holdoverLimitSeconds
+    if (overrides.priority1 !== undefined) payload.priority1 = overrides.priority1
+    if (overrides.hardwareTimestamping !== undefined) payload.hardwareTimestamping = overrides.hardwareTimestamping
+    if (overrides.externalUdsAddress !== undefined) payload.externalUdsAddress = overrides.externalUdsAddress
+    if (overrides.fppBaseUrl !== undefined) payload.fppBaseUrl = overrides.fppBaseUrl
+    return {
+      serverTime: '2026-09-12T21:00:00Z',
+      kind: 'node.clock',
+      id: 'audio-node-01',
+      revision: overrides.revision ?? 1,
+      payload,
+      updatedAt: '2026-09-12T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    }
+  }
+
+  function setUpNodeRouting() {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () => Promise.resolve(nodeConfig())
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+  }
+
+  it('renders provider-specific fields for managed and hides external/fpp fields', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'managed', hardwareTimestamping: true, priority1: 128 }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
+    expect(screen.getByLabelText('Priority1 · optional')).toHaveValue('128')
+    expect(screen.getByLabelText('Hardware timestamping')).toBeChecked()
+    expect(screen.queryByLabelText('FPP base URL')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('External UDS address · optional')).not.toBeInTheDocument()
+  })
+
+  it('switching provider hides fields for the inapplicable provider and shows the new one', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'managed' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
+    expect(screen.queryByLabelText('Priority1 · optional')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('FPP base URL')).toBeInTheDocument()
+  })
+
+  it('shows a create flow when no node.clock object exists, then saves the full payload', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => notConfigured('no node.clock object has ever been configured for audio-node-01')
+    let sentPayload: unknown = null
+    stubs.putNodeClock = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeClockConfig({ interface: 'eth1', domain: 3 }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
+    fireEvent.change(screen.getByLabelText('PTP domain'), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ provider: 'managed', interface: 'eth1', domain: 3 })
+  })
+
+  it('sends the full replacement payload on save', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'external', externalUdsAddress: '/var/run/ptp/ptp4lro' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putNodeClock = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeClockConfig({ provider: 'external', interface: 'eth2' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ provider: 'external', interface: 'eth2', externalUdsAddress: '/var/run/ptp/ptp4lro' })
+  })
+
+  it('refuses a stale save and writes nothing', async () => {
+    setUpNodeRouting()
+    const loaded = nodeClockConfig({ revision: 1 })
+    const current = nodeClockConfig({ revision: 2, interface: 'eth9' })
+    let reads = 0
+    stubs.getNodeClock = () => {
+      reads += 1
+      return Promise.resolve(reads === 1 ? loaded : current)
+    }
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+    let putCalled = false
+    stubs.putNodeClock = () => {
+      putCalled = true
+      return Promise.resolve(current)
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save clock config' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
+
+    expect(await screen.findByText('Stale write')).toBeInTheDocument()
+    expect(putCalled).toBe(false)
   })
 })
 
