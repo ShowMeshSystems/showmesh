@@ -105,6 +105,18 @@ func pushNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() tim
 		params["ltcRoute"] = payload.LTCRoute
 		params["ltcChannel"] = payload.LTCChannel
 	}
+	// The agent only reads valueUs and method (effectiveOutputLatencyUs);
+	// omit the key entirely for "unmeasured" rather than push an
+	// always-zero object for the common case.
+	if payload.OutputLatency.Method != config.OutputLatencyMethodUnmeasured {
+		params["outputLatency"] = map[string]any{
+			"valueUs":       payload.OutputLatency.ValueUs,
+			"method":        payload.OutputLatency.Method,
+			"reference":     payload.OutputLatency.Reference,
+			"confidence":    payload.OutputLatency.Confidence,
+			"configuration": payload.OutputLatency.Configuration,
+		}
+	}
 	idempotencyKey := fmt.Sprintf("audio.node.configure/%s/rev-%d", nodeID, obj.CurrentRevision)
 	return publish(ctx, pub, now, nodeID, "audio.node.configure", idempotencyKey, params)
 }
