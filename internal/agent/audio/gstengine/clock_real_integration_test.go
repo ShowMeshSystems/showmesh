@@ -4,6 +4,7 @@ package gstengine
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +22,14 @@ import (
 // failAfter never fails. failCount, when non-zero, bounds the failure to
 // that many reads before Now() starts succeeding again, for a transient
 // (rather than permanent) failure.
+//
+// GStreamer invokes phcClockGetTime, and so Now(), from its own
+// scheduling threads, concurrently with the test goroutine that reads
+// reads/closed or arms a failure: mu guards every field so the race
+// detector sees what production's atomics already guarantee for the
+// engine's own state.
 type fakeClockReader struct {
+	mu        sync.Mutex
 	base      time.Time
 	failAfter int
 	failCount int
@@ -30,6 +38,8 @@ type fakeClockReader struct {
 }
 
 func (r *fakeClockReader) Now() (time.Time, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.reads++
 	if r.failAfter >= 0 && r.reads > r.failAfter && (r.failCount == 0 || r.reads <= r.failAfter+r.failCount) {
 		return time.Time{}, errors.New("fake PHC read failure")
@@ -38,8 +48,32 @@ func (r *fakeClockReader) Now() (time.Time, error) {
 }
 
 func (r *fakeClockReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.closed = true
 	return nil
+}
+
+func (r *fakeClockReader) Reads() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reads
+}
+
+func (r *fakeClockReader) Closed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
+}
+
+// failNextRead arms a failure starting with the next Now() call, for
+// exactly count reads (0 means permanent, matching failCount's own
+// zero-means-unbounded meaning).
+func (r *fakeClockReader) failNextRead(count int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failAfter = r.reads
+	r.failCount = count
 }
 
 func TestSinkBackendReportsTheConfiguredFactory(t *testing.T) {
@@ -95,7 +129,7 @@ func TestClockSourcePHCWhenTheConfiguredClockIsReadable(t *testing.T) {
 	if source != clockSourcePHC || reason != "" {
 		t.Fatalf("ClockSource() = (%q, %q), want (%q, \"\")", source, reason, clockSourcePHC)
 	}
-	if reader.reads == 0 {
+	if reader.Reads() == 0 {
 		t.Fatalf("the configured clock reader was never read; installClock must validate it before UseClock")
 	}
 	if e.pipeline.GetClock() == nil {
@@ -105,7 +139,7 @@ func TestClockSourcePHCWhenTheConfiguredClockIsReadable(t *testing.T) {
 	if err := e.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !reader.closed {
+	if !reader.Closed() {
 		t.Fatalf("Close did not release the pipeline clock's own reader")
 	}
 }
@@ -163,7 +197,7 @@ func TestClockSourceFallsBackToDefaultWhenTheConfiguredClockIsUnreadable(t *test
 	if err := e.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !reader.closed {
+	if !reader.Closed() {
 		t.Fatalf("Close did not release the pipeline clock's own reader even though it was never installed")
 	}
 }
@@ -189,7 +223,7 @@ func TestClockSourceReportsUnreadableAfterInstall(t *testing.T) {
 		t.Fatalf("precondition: ClockSource() = %q, want %q before the reader ever fails", source, clockSourcePHC)
 	}
 
-	reader.failAfter = reader.reads
+	reader.failNextRead(0)
 	e.phcClockGetTime(gst.Clock(nil))
 
 	source, reason := e.ClockSource()
@@ -222,8 +256,7 @@ func TestClockSourceRestoresPHCAfterTransientFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = e.Close() })
 
-	reader.failAfter = reader.reads
-	reader.failCount = 1
+	reader.failNextRead(1)
 	e.phcClockGetTime(gst.Clock(nil))
 	if source, _ := e.ClockSource(); source != clockSourceDefault {
 		t.Fatalf("precondition: ClockSource() = %q, want %q right after the transient failure", source, clockSourceDefault)

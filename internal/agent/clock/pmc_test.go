@@ -177,20 +177,25 @@ func TestPMCLocalSocketFallsBackToTempDir(t *testing.T) {
 }
 
 // TestPMCLocalSocketSkipsUnwritableCandidate covers a candidate directory
-// that exists but cannot be written (matching /tmp under the shipped
-// agent unit's ProtectSystem=strict): pmcLocalSocket must move on to the
-// next candidate rather than failing outright.
+// that cannot be written (matching /tmp under the shipped agent unit's
+// ProtectSystem=strict): pmcLocalSocket must move on to the next
+// candidate rather than failing outright.
+//
+// The blocked candidate is a path under a regular file, not a directory
+// whose permission bits were stripped: CI runs this suite as root, and
+// root ignores permission bits entirely, so a chmod-0500 directory stayed
+// writable there and the candidate was never actually skipped. A regular
+// file in a path's directory position fails os.CreateTemp with ENOTDIR
+// for every uid, root included, so the skip is exercised on the only
+// machine this gate matters on.
 func TestPMCLocalSocketSkipsUnwritableCandidate(t *testing.T) {
 	clearPMCDirEnv(t)
-	unwritable := shortTempDir(t)
-	if err := os.Chmod(unwritable, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
+	base := shortTempDir(t)
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatalf("write blocker file: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := os.Chmod(unwritable, 0o700); err != nil {
-			t.Errorf("cleanup: chmod %s: %v", unwritable, err)
-		}
-	})
+	unwritable := filepath.Join(blocker, "sock-dir")
 	t.Setenv("RUNTIME_DIRECTORY", unwritable)
 	hintDir := shortTempDir(t)
 
@@ -199,7 +204,7 @@ func TestPMCLocalSocketSkipsUnwritableCandidate(t *testing.T) {
 		t.Fatalf("pmcLocalSocket: %v", err)
 	}
 	if filepath.Dir(path) != hintDir {
-		t.Fatalf("pmcLocalSocket = %q, want it to skip the unwritable RUNTIME_DIRECTORY and land in the hint %q", path, hintDir)
+		t.Fatalf("pmcLocalSocket = %q, want it to skip the unusable RUNTIME_DIRECTORY and land in the hint %q", path, hintDir)
 	}
 }
 
