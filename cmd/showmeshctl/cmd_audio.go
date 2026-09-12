@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -67,6 +68,24 @@ type configAudioNode struct {
 	ClockDomainProvenance string  `json:"clockDomainProvenance"`
 	Role                  string  `json:"role,omitempty"`
 	Zone                  *string `json:"zone,omitempty"`
+
+	// OutputLatency mirrors v1.ConfigAudioOutputLatency. This is a
+	// full-replacement PUT; "audio node set" itself reads the node's
+	// current value forward when no --output-latency-* flag is given, so
+	// nil here never reaches the wire as a silent reset.
+	OutputLatency *configAudioOutputLatency `json:"outputLatency,omitempty"`
+}
+
+// configAudioOutputLatency mirrors v1.ConfigAudioOutputLatency. ValueUs is
+// a pointer for the same reason: a stored measured value of exactly 0
+// must round-trip through a GET and back out a carry-forward PUT.
+type configAudioOutputLatency struct {
+	ValueUs       *int    `json:"valueUs,omitempty"`
+	Method        string  `json:"method,omitempty"`
+	MeasuredAt    *string `json:"measuredAt,omitempty"`
+	Reference     string  `json:"reference,omitempty"`
+	Confidence    string  `json:"confidence,omitempty"`
+	Configuration string  `json:"configuration,omitempty"`
 }
 
 // audioNodeSummary mirrors v1.AudioNodeSummary: one element of an audio.node
@@ -594,13 +613,21 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
 	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone (ADR-045); omitted, defaults to program+ltc")
 	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
+	var outputLatencyUs int
+	var outputLatencyMethod, outputLatencyMeasuredAt, outputLatencyReference, outputLatencyConfidence, outputLatencyConfiguration string
+	fs.IntVar(&outputLatencyUs, "output-latency-us", 0, "calibrated output offset in signed microseconds (RES-019 section 8); required with a measured --output-latency-method")
+	fs.StringVar(&outputLatencyMethod, "output-latency-method", "", "one of unmeasured, loopback, acoustic, declared; required with the other four --output-latency-* flags for a measured method, or given alone as unmeasured to clear a stored calibration")
+	fs.StringVar(&outputLatencyMeasuredAt, "output-latency-measured-at", "", "RFC 3339 timestamp when --output-latency-us was measured; required with a measured method")
+	fs.StringVar(&outputLatencyReference, "output-latency-reference", "", "what --output-latency-us was measured against; required with a measured method")
+	fs.StringVar(&outputLatencyConfidence, "output-latency-confidence", "", "free-text judgment of how much to trust --output-latency-us; required with a measured method")
+	fs.StringVar(&outputLatencyConfiguration, "output-latency-configuration", "", "the buffer/quantum/sample-rate configuration --output-latency-us was measured under; required with a measured method")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only.")
-		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: this command never reads the node's current")
-		_, _ = fmt.Fprintln(stderr, "definition first. Refused unless the node has already advertised the")
+		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: every declared field replaces the node's")
+		_, _ = fmt.Fprintln(stderr, "stored definition. Refused unless the node has already advertised the")
 		_, _ = fmt.Fprintln(stderr, "routes in its own capability report — never accepted on the operator's")
 		_, _ = fmt.Fprintln(stderr, "claim alone. --program-route and --ltc-route must name the same route.")
 		_, _ = fmt.Fprintln(stderr, "\n--ltc-route and --ltc-channel are the one OPTIONAL pair, and they are")
@@ -608,6 +635,11 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
 		_, _ = fmt.Fprintln(stderr, "has no channel to spare for a discrete LTC signal. Passing one without")
 		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
+		_, _ = fmt.Fprintln(stderr, "\n--output-latency-* (RES-019 section 8) is this node's calibrated static")
+		_, _ = fmt.Fprintln(stderr, "output-chain delay. Every field is required together with a measured")
+		_, _ = fmt.Fprintln(stderr, "--output-latency-method (loopback, acoustic, or declared). Omitting every")
+		_, _ = fmt.Fprintln(stderr, "--output-latency-* flag carries this node's currently stored value forward")
+		_, _ = fmt.Fprintln(stderr, "unchanged, read from the node just before this write.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this node), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
 		fs.PrintDefaults()
@@ -630,13 +662,16 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	// the authority on rejecting, mirroring assets settings set's
 	// identical fs.Visit-over-zero-value pattern) is sent through rather
 	// than refused here as if it had been omitted.
-	ltcChannelSet, zoneSet := false, false
+	ltcChannelSet, zoneSet, outputLatencySet := false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "ltc-channel":
 			ltcChannelSet = true
 		case "zone":
 			zoneSet = true
+		case "output-latency-us", "output-latency-method", "output-latency-measured-at",
+			"output-latency-reference", "output-latency-confidence", "output-latency-configuration":
+			outputLatencySet = true
 		}
 	})
 	if programRoute == "" || programChannels == "" || clockDomain == "" || clockDomainProvenance == "" {
@@ -670,6 +705,27 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
+	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
+
+	// A full-replacement PUT with no --output-latency-* flag would
+	// otherwise reset a stored calibration to unmeasured on any unrelated
+	// edit, and this command's own help text used to instruct operators
+	// to repeat it on every "set", which nobody reliably does. Read the
+	// node's current value forward instead, the same carry-forward the
+	// UI already performs on save. current is also reused below to avoid
+	// a second GET for If-Match resolution.
+	var current *audioNodeConfigResponse
+	fetchCurrent := func() (*audioNodeConfigResponse, error) {
+		if current != nil {
+			return current, nil
+		}
+		var r audioNodeConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return nil, err
+		}
+		current = &r
+		return current, nil
+	}
 
 	body := configAudioNode{
 		ProgramRoute:    programRoute,
@@ -683,14 +739,41 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	if zoneSet {
 		body.Zone = &zone
 	}
-	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
+	if outputLatencySet {
+		ol := &configAudioOutputLatency{
+			Method:    outputLatencyMethod,
+			Reference: outputLatencyReference, Confidence: outputLatencyConfidence,
+			Configuration: outputLatencyConfiguration,
+		}
+		if outputLatencyMethod != "" && outputLatencyMethod != "unmeasured" {
+			v := outputLatencyUs
+			ol.ValueUs = &v
+		}
+		if outputLatencyMeasuredAt != "" {
+			ol.MeasuredAt = &outputLatencyMeasuredAt
+		}
+		body.OutputLatency = ol
+	} else if !forceFlag() {
+		// --force must not gain a GET dependency: it exists to write
+		// when the read path is degraded, so it sends no outputLatency
+		// instead of carrying one forward.
+		cur, err := fetchCurrent()
+		if err != nil {
+			var ce *cliError
+			if !errors.As(err, &ce) || ce.code != exitNotFound {
+				return reportError(stderr, "audio node set", err)
+			}
+		} else if cur.Payload.OutputLatency != nil && cur.Payload.OutputLatency.Method != "" && cur.Payload.OutputLatency.Method != "unmeasured" {
+			body.OutputLatency = cur.Payload.OutputLatency
+		}
+	}
 	ifMatchRevision, ifMatchSet := ifMatchFlag()
 	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
-		var r audioNodeConfigResponse
-		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+		cur, err := fetchCurrent()
+		if err != nil {
 			return 0, err
 		}
-		return r.Revision, nil
+		return cur.Revision, nil
 	})
 	if err != nil {
 		return reportError(stderr, "audio node set", err)
@@ -873,6 +956,22 @@ func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 	_, _ = fmt.Fprintf(w, "Role:                   %s\n", role)
 	if p.Zone != nil {
 		_, _ = fmt.Fprintf(w, "Zone:                   %s\n", *p.Zone)
+	}
+	if p.OutputLatency == nil || p.OutputLatency.Method == "" || p.OutputLatency.Method == "unmeasured" {
+		_, _ = fmt.Fprintln(w, "Output latency:         unmeasured (applies zero)")
+	} else {
+		ol := p.OutputLatency
+		var valueUs int
+		if ol.ValueUs != nil {
+			valueUs = *ol.ValueUs
+		}
+		_, _ = fmt.Fprintf(w, "Output latency:         %d us (%s)\n", valueUs, ol.Method)
+		if ol.MeasuredAt != nil {
+			_, _ = fmt.Fprintf(w, "  measured at:          %s\n", *ol.MeasuredAt)
+		}
+		_, _ = fmt.Fprintf(w, "  reference:            %s\n", ol.Reference)
+		_, _ = fmt.Fprintf(w, "  confidence:           %s\n", ol.Confidence)
+		_, _ = fmt.Fprintf(w, "  configuration:        %s\n", ol.Configuration)
 	}
 	_, _ = fmt.Fprintf(w, "Revision:               %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:                %s\n", resp.UpdatedAt.Format(time.RFC3339))

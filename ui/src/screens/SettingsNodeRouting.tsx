@@ -8,7 +8,7 @@ import {
   type AudioNodeSummary,
 } from '../api'
 import { Button, ButtonRow, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
-import type { ConfigAudioNode } from '../api'
+import type { ConfigAudioNode, ConfigAudioOutputLatency } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -24,6 +24,15 @@ const ROLE_OPTIONS: readonly { value: AudioNodeRole; label: string }[] = [
   { value: 'zone', label: 'Zone' },
 ]
 
+type OutputLatencyMethod = NonNullable<ConfigAudioOutputLatency['method']>
+const DEFAULT_OUTPUT_LATENCY_METHOD: OutputLatencyMethod = 'unmeasured'
+const OUTPUT_LATENCY_METHOD_OPTIONS: readonly { value: OutputLatencyMethod; label: string }[] = [
+  { value: 'unmeasured', label: 'Unmeasured' },
+  { value: 'loopback', label: 'Loopback' },
+  { value: 'acoustic', label: 'Acoustic' },
+  { value: 'declared', label: 'Declared' },
+]
+
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
 type NodeState =
   | { kind: 'loading' }
@@ -36,6 +45,12 @@ function parseChannels(raw: string): number[] {
     .map((s) => s.trim())
     .filter((s) => s !== '')
     .map((s) => Number(s))
+}
+
+// isRfc3339 catches an obvious typo before submit; the server's own
+// decode is the actual RFC 3339 authority.
+function isRfc3339(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s) && !Number.isNaN(Date.parse(s))
 }
 
 export function SettingsNodeRouting() {
@@ -123,6 +138,12 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const [clockDomainProvenance, setClockDomainProvenance] = useState('')
   const [role, setRole] = useState<AudioNodeRole>(DEFAULT_ROLE)
   const [zone, setZone] = useState('')
+  const [outputLatencyMethod, setOutputLatencyMethod] = useState<OutputLatencyMethod>(DEFAULT_OUTPUT_LATENCY_METHOD)
+  const [outputLatencyValueUsText, setOutputLatencyValueUsText] = useState('')
+  const [outputLatencyMeasuredAt, setOutputLatencyMeasuredAt] = useState('')
+  const [outputLatencyReference, setOutputLatencyReference] = useState('')
+  const [outputLatencyConfidence, setOutputLatencyConfidence] = useState('')
+  const [outputLatencyConfiguration, setOutputLatencyConfiguration] = useState('')
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -143,6 +164,13 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         setClockDomainProvenance(response.payload.clockDomainProvenance)
         setRole(response.payload.role ?? DEFAULT_ROLE)
         setZone(response.payload.zone ?? '')
+        const ol = response.payload.outputLatency
+        setOutputLatencyMethod(ol?.method ?? DEFAULT_OUTPUT_LATENCY_METHOD)
+        setOutputLatencyValueUsText(ol?.valueUs !== undefined ? String(ol.valueUs) : '')
+        setOutputLatencyMeasuredAt(ol?.measuredAt ?? '')
+        setOutputLatencyReference(ol?.reference ?? '')
+        setOutputLatencyConfidence(ol?.confidence ?? '')
+        setOutputLatencyConfiguration(ol?.configuration ?? '')
         setDirty(false)
       })
       .catch((err: unknown) => {
@@ -163,7 +191,24 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
   const channelsValid = programChannels.every((n) => Number.isInteger(n) && n >= 1) && programChannels.length > 0
   const ltcChannelValid = !ltcOn || (Number.isInteger(Number(ltcChannelText)) && ltcChannelText.trim() !== '')
   const zoneValid = role !== 'zone' || zone.trim() !== ''
-  const canSave = verdict.ok && channelsValid && ltcChannelValid && zoneValid && clockDomain.trim() !== '' && clockDomainProvenance.trim() !== ''
+  const outputLatencyValueUsValid =
+    outputLatencyMethod === 'unmeasured' ||
+    (outputLatencyValueUsText.trim() !== '' && Number.isInteger(Number(outputLatencyValueUsText)))
+  const outputLatencyProvenanceValid =
+    outputLatencyMethod === 'unmeasured' ||
+    (isRfc3339(outputLatencyMeasuredAt.trim()) &&
+      outputLatencyReference.trim() !== '' &&
+      outputLatencyConfidence.trim() !== '' &&
+      outputLatencyConfiguration.trim() !== '')
+  const canSave =
+    verdict.ok &&
+    channelsValid &&
+    ltcChannelValid &&
+    zoneValid &&
+    clockDomain.trim() !== '' &&
+    clockDomainProvenance.trim() !== '' &&
+    outputLatencyValueUsValid &&
+    outputLatencyProvenanceValid
 
   const discard = () => {
     if (state.kind !== 'loaded') return
@@ -175,6 +220,13 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
     setClockDomainProvenance(state.response.payload.clockDomainProvenance)
     setRole(state.response.payload.role ?? DEFAULT_ROLE)
     setZone(state.response.payload.zone ?? '')
+    const ol = state.response.payload.outputLatency
+    setOutputLatencyMethod(ol?.method ?? DEFAULT_OUTPUT_LATENCY_METHOD)
+    setOutputLatencyValueUsText(ol?.valueUs !== undefined ? String(ol.valueUs) : '')
+    setOutputLatencyMeasuredAt(ol?.measuredAt ?? '')
+    setOutputLatencyReference(ol?.reference ?? '')
+    setOutputLatencyConfidence(ol?.confidence ?? '')
+    setOutputLatencyConfiguration(ol?.configuration ?? '')
     setDirty(false)
     setSaveError(null)
   }
@@ -196,6 +248,18 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
           role,
           ...(ltcOn ? { ltcRoute: programRoute, ltcChannel: Number(ltcChannelText) } : {}),
           ...(role === 'zone' ? { zone } : {}),
+          ...(outputLatencyMethod === 'unmeasured'
+            ? {}
+            : {
+                outputLatency: {
+                  valueUs: Number(outputLatencyValueUsText),
+                  method: outputLatencyMethod,
+                  measuredAt: outputLatencyMeasuredAt,
+                  reference: outputLatencyReference,
+                  confidence: outputLatencyConfidence,
+                  configuration: outputLatencyConfiguration,
+                },
+              }),
         }),
     })
       .then((outcome) => {
@@ -409,6 +473,93 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         </div>
       </Section>
 
+      <Section id="st-output-latency" title="Output latency">
+        <p className="sm-small sm-muted">
+          This node's calibrated static output-chain delay (RES-019 section 8), subtracted from a scheduled start so
+          the sample reaches the air at the intended instant. Unmeasured applies zero. A measured value is only valid
+          for the buffer/quantum/sample-rate configuration it was recorded under, and moves between engine restarts,
+          so its configuration is recorded and shown here rather than hidden.
+        </p>
+        <div className="sm-grid sm-form-column">
+          <Segmented
+            label="Method"
+            value={outputLatencyMethod}
+            options={OUTPUT_LATENCY_METHOD_OPTIONS}
+            onChange={(v) => {
+              setOutputLatencyMethod(v)
+              setDirty(true)
+            }}
+          />
+          {outputLatencyMethod !== 'unmeasured' && (
+            <div className="sm-grid sm-stack-4">
+              <Field label="Value (microseconds)" help="Signed offset subtracted from the scheduled start instant.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={outputLatencyValueUsText}
+                    onChange={(e) => {
+                      setOutputLatencyValueUsText(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Measured at" help="When this value was measured, RFC 3339.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={outputLatencyMeasuredAt}
+                    onChange={(e) => {
+                      setOutputLatencyMeasuredAt(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Reference" help="What this was measured against: a loopback/acoustic capture, or a datasheet section.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={outputLatencyReference}
+                    onChange={(e) => {
+                      setOutputLatencyReference(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Confidence" help="Your own judgment of how much to trust this value.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={outputLatencyConfidence}
+                    onChange={(e) => {
+                      setOutputLatencyConfidence(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Configuration"
+                help="The buffer/quantum/sample-rate configuration this was measured under. A configuration change makes this value stale; re-measure rather than trust it unchanged."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    value={outputLatencyConfiguration}
+                    onChange={(e) => {
+                      setOutputLatencyConfiguration(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+            </div>
+          )}
+        </div>
+      </Section>
+
       <div className="sm-panel sm-stack-4">
         <div className="sm-inline-row">
           <StatusPair tone={verdict.ok ? 'good' : 'bad'} label={verdict.ok ? 'Will be accepted' : 'Will be refused'} />
@@ -429,7 +580,15 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
             !saveGate.allowed
               ? saveGate.reason
               : !canSave
-                ? (!verdict.ok ? verdict.reason : !zoneValid ? 'A zone name is required when the role is zone.' : undefined)
+                ? (!verdict.ok
+                    ? verdict.reason
+                    : !zoneValid
+                      ? 'A zone name is required when the role is zone.'
+                      : !outputLatencyValueUsValid
+                        ? 'Output latency value must be a whole number of microseconds.'
+                        : !outputLatencyProvenanceValid
+                          ? 'Measured at, reference, confidence, and configuration are all required for a measured output latency method.'
+                          : undefined)
                 : undefined
           }
         >

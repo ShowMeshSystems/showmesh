@@ -193,6 +193,174 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 	}
 }
 
+// TestCmdAudioNodeSetSendsOutputLatencyFlags proves every
+// --output-latency-* flag reaches the PUT body together and is displayed
+// in the printed detail.
+func TestCmdAudioNodeSetSendsOutputLatencyFlags(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"outputLatency":{"valueUs":55997,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z","reference":"MOTU M4 loopback capture","confidence":"high","configuration":"PipeWire quantum 1024, 48000 Hz"}},
+			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "3",
+		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
+		"--output-latency-us", "55997", "--output-latency-method", "loopback",
+		"--output-latency-measured-at", "2026-09-11T02:00:00Z",
+		"--output-latency-reference", "MOTU M4 loopback capture",
+		"--output-latency-confidence", "high",
+		"--output-latency-configuration", "PipeWire quantum 1024, 48000 Hz",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{
+		`"valueUs":55997`, `"method":"loopback"`, `"measuredAt":"2026-09-11T02:00:00Z"`,
+		`"reference":"MOTU M4 loopback capture"`, `"confidence":"high"`,
+		`"configuration":"PipeWire quantum 1024, 48000 Hz"`,
+	} {
+		if !strings.Contains(string(gotBody), want) {
+			t.Errorf("PUT body missing %q; body: %s", want, gotBody)
+		}
+	}
+	if !strings.Contains(stdout.String(), "Output latency:         55997 us (loopback)") {
+		t.Errorf("printed detail missing output latency value:\n%s", stdout.String())
+	}
+}
+
+// TestCmdAudioNodeSetOmitsOutputLatencyWhenNoFlagGiven proves omitting
+// every --output-latency-* flag against a node whose stored outputLatency
+// is already "unmeasured" sends no outputLatency key at all, rather than
+// a zero-value object.
+func TestCmdAudioNodeSetOmitsOutputLatencyWhenNoFlagGiven(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"outputLatency":{"method":"unmeasured"}},
+			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "3",
+		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(string(gotBody), "outputLatency") {
+		t.Errorf("PUT body must not send outputLatency when no --output-latency-* flag was given; body: %s", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "Output latency:         unmeasured (applies zero)") {
+		t.Errorf("printed detail did not report unmeasured:\n%s", stdout.String())
+	}
+}
+
+// TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven proves an
+// ordinary edit that touches no --output-latency-* flag does not wipe a
+// stored hardware calibration: the command reads the node's current value
+// forward, matching the UI's own save behavior.
+func TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			gotBody, _ = io.ReadAll(r.Body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"outputLatency":{"valueUs":55997,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z","reference":"MOTU M4 loopback capture","confidence":"high","configuration":"PipeWire quantum 1024, 48000 Hz"}},
+			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "4",
+		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{
+		`"valueUs":55997`, `"method":"loopback"`, `"measuredAt":"2026-09-11T02:00:00Z"`,
+		`"reference":"MOTU M4 loopback capture"`, `"confidence":"high"`,
+		`"configuration":"PipeWire quantum 1024, 48000 Hz"`,
+	} {
+		if !strings.Contains(string(gotBody), want) {
+			t.Errorf("PUT body missing %q, want the stored output latency carried forward; body: %s", want, gotBody)
+		}
+	}
+}
+
+// TestCmdAudioNodeSetForceSkipsReadWhenNoOutputLatencyFlagGiven proves
+// --force never grows a GET dependency: it exists to write when the read
+// path is degraded, so the carry-forward must not call it under --force.
+func TestCmdAudioNodeSetForceSkipsReadWhenNoOutputLatencyFlagGiven(t *testing.T) {
+	var gotBody []byte
+	var getSeen bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			getSeen = true
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"outputLatency":{"method":"unmeasured"}},
+			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set", "--force",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "3",
+		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if getSeen {
+		t.Error("--force must not perform a GET: it exists for a degraded read path")
+	}
+	if strings.Contains(string(gotBody), "outputLatency") {
+		t.Errorf("PUT body must not send outputLatency when --force skipped the read; body: %s", gotBody)
+	}
+}
+
 // TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel proves the two
 // new flags are required exactly like the four original ones: a missing
 // --program-channels or --ltc-channel is refused locally, before any

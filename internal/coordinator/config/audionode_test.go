@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validAudioNodePayloadJSON() string {
@@ -29,7 +30,8 @@ func TestDecodeAudioNodePayloadAccepts(t *testing.T) {
 		ProgramRoute: "hw:0,0", LTCRoute: "hw:0,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
 		ClockDomain: "single-interface", ClockDomainProvenance: "one physical interface, both routes on it",
-		Role: AudioNodeRoleProgramLTC,
+		Role:          AudioNodeRoleProgramLTC,
+		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("payload = %+v, want %+v", p, want)
@@ -55,7 +57,8 @@ func TestEncodeDecodeAudioNodePayloadRoundTrips(t *testing.T) {
 		ProgramRoute: "hw:1,0", LTCRoute: "hw:1,0",
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
 		ClockDomain: "domain-a", ClockDomainProvenance: "datasheet",
-		Role: AudioNodeRoleProgram,
+		Role:          AudioNodeRoleProgram,
+		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	raw, err := EncodeAudioNodePayload(want)
 	if err != nil {
@@ -79,6 +82,7 @@ func TestEncodeDecodeAudioNodePayloadRoundTripsZone(t *testing.T) {
 		ProgramChannels: []int{1}, LTCChannel: 2,
 		ClockDomain: "domain-b", ClockDomainProvenance: "datasheet",
 		Role: AudioNodeRoleZone, Zone: &zone,
+		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	raw, err := EncodeAudioNodePayload(want)
 	if err != nil {
@@ -232,6 +236,7 @@ func TestEncodeDecodeProgramOnlyRoundTrips(t *testing.T) {
 	want := AudioNodePayload{
 		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
 		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+		OutputLatency: OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured},
 	}
 	encoded, err := EncodeAudioNodePayload(want)
 	if err != nil {
@@ -552,5 +557,153 @@ func TestValidateAudioNodePlacementRejectsProgramOnlyRouteAsLTC(t *testing.T) {
 	err := ValidateAudioNodePlacement(p, []string{"hw:0,0"}, nil)
 	if err == nil {
 		t.Fatal("expected error: hw:0,0 was never evidenced as LTC-capable")
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyDefaultsUnmeasured proves an
+// audio.node payload with no "outputLatency" key decodes to the zero
+// OutputLatencyPayload, method "unmeasured": the pre-I5 wire shape every
+// existing stored revision matches.
+func TestDecodeAudioNodeOutputLatencyDefaultsUnmeasured(t *testing.T) {
+	p, verr := DecodeAudioNodePayload(validAudioNodePayloadJSON())
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	want := OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured}
+	if !reflect.DeepEqual(p.OutputLatency, want) {
+		t.Errorf("outputLatency = %+v, want %+v", p.OutputLatency, want)
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyAcceptsMeasured proves a fully
+// provenanced loopback measurement decodes intact.
+func TestDecodeAudioNodeOutputLatencyAcceptsMeasured(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"valueUs":56000,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
+		`"reference":"MOTU M4 loopback capture","confidence":"high: three runs agreed within 50us",` +
+		`"configuration":"PipeWire quantum 1024, 48000 Hz"}}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.OutputLatency.ValueUs != 56000 || p.OutputLatency.Method != OutputLatencyMethodLoopback {
+		t.Errorf("outputLatency = %+v", p.OutputLatency)
+	}
+	if p.OutputLatency.MeasuredAt == nil || p.OutputLatency.MeasuredAt.IsZero() {
+		t.Errorf("measuredAt not decoded: %+v", p.OutputLatency)
+	}
+	if p.OutputLatency.Reference == "" || p.OutputLatency.Confidence == "" || p.OutputLatency.Configuration == "" {
+		t.Errorf("provenance field decoded empty: %+v", p.OutputLatency)
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyRejectsProvenanceOnUnmeasured proves a
+// value beside the default method is refused rather than silently
+// applied: RES-019 section 8 forbids a fabricated measurement.
+func TestDecodeAudioNodeOutputLatencyRejectsProvenanceOnUnmeasured(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"method":"unmeasured","valueUs":56000}}`
+	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
+		t.Fatal("expected error: valueUs beside method \"unmeasured\" must be refused")
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyRequiresProvenanceOnMeasured proves a
+// measured method with a missing provenance field is refused rather than
+// silently accepted with an empty string.
+func TestDecodeAudioNodeOutputLatencyRequiresProvenanceOnMeasured(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"valueUs":56000,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
+		`"reference":"MOTU M4 loopback capture","confidence":"high"}}`
+	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
+		t.Fatal("expected error: configuration is required for a measured method")
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyRejectsOutOfBoundValue proves a
+// clearly-mistaken magnitude (e.g. milliseconds entered where
+// microseconds were asked for) is refused rather than silently applied.
+func TestDecodeAudioNodeOutputLatencyRejectsOutOfBoundValue(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"valueUs":56000000000,"method":"declared","measuredAt":"2026-09-11T02:00:00Z",` +
+		`"reference":"datasheet","confidence":"low","configuration":"n/a"}}`
+	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
+		t.Fatal("expected error: valueUs far outside a plausible output delay must be refused")
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyRejectsZeroValue proves a measured
+// method with valueUs 0 is refused: no real output chain has zero delay,
+// and a stored zero cannot be told apart from an operator who tabbed past
+// an empty field.
+func TestDecodeAudioNodeOutputLatencyRejectsZeroValue(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"valueUs":0,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
+		`"reference":"MOTU M4 loopback capture","confidence":"high","configuration":"n/a"}}`
+	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
+		t.Fatal("expected error: valueUs 0 for a measured method must be refused")
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyAbsentMethodReadsAsUnmeasured proves an
+// outputLatency object with no method decodes as "unmeasured" rather than
+// erroring: a row written before this normalization existed stored
+// "outputLatency":{} with no method, and it must stay readable.
+func TestDecodeAudioNodeOutputLatencyAbsentMethodReadsAsUnmeasured(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{}}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.OutputLatency.Method != OutputLatencyMethodUnmeasured {
+		t.Errorf("Method = %q, want %q", p.OutputLatency.Method, OutputLatencyMethodUnmeasured)
+	}
+}
+
+// TestDecodeAudioNodeOutputLatencyAbsentMethodStillRejectsMeasuredFields
+// proves the leniency above does not weaken the contract for a client
+// that actually sends measurement fields: those still require method.
+func TestDecodeAudioNodeOutputLatencyAbsentMethodStillRejectsMeasuredFields(t *testing.T) {
+	raw := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one interface",` +
+		`"outputLatency":{"valueUs":56000}}`
+	if _, verr := DecodeAudioNodePayload(raw); verr == nil {
+		t.Fatal("expected error: valueUs beside an absent (unmeasured) method must be refused")
+	}
+}
+
+// TestEncodeDecodeAudioNodePayloadRoundTripsOutputLatency proves a fully
+// provenanced value round-trips through Encode/Decode unchanged, the same
+// guarantee every other field on this payload carries.
+func TestEncodeDecodeAudioNodePayloadRoundTripsOutputLatency(t *testing.T) {
+	measuredAt := time.Date(2026, 9, 11, 2, 0, 0, 0, time.UTC)
+	want := AudioNodePayload{
+		ProgramRoute: "hw:1,0", LTCRoute: "hw:1,0",
+		ProgramChannels: []int{1, 2}, LTCChannel: 3,
+		ClockDomain: "domain-a", ClockDomainProvenance: "datasheet",
+		Role: AudioNodeRoleProgram,
+		OutputLatency: OutputLatencyPayload{
+			ValueUs: 55997, Method: OutputLatencyMethodLoopback, MeasuredAt: &measuredAt,
+			Reference: "MOTU M4 loopback capture", Confidence: "high",
+			Configuration: "PipeWire quantum 1024, 48000 Hz",
+		},
+	}
+	raw, err := EncodeAudioNodePayload(want)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("decode: %v", verr)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("round trip = %+v, want %+v", got, want)
 	}
 }

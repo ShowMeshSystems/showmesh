@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // This file is the per-node kind (ADR-039, IDENTIFIER-REGISTER.md's
@@ -42,6 +43,31 @@ var audioNodeRoles = map[string]bool{
 	AudioNodeRoleZone:       true,
 }
 
+// The four members of outputLatency.method (RES-019 section 8).
+// "unmeasured" is the default and the only member that must carry no
+// other outputLatency field: see [decodeAudioNodeOutputLatency].
+const (
+	OutputLatencyMethodUnmeasured = "unmeasured"
+	OutputLatencyMethodLoopback   = "loopback"
+	OutputLatencyMethodAcoustic   = "acoustic"
+	OutputLatencyMethodDeclared   = "declared"
+)
+
+var outputLatencyMethods = map[string]bool{
+	OutputLatencyMethodUnmeasured: true,
+	OutputLatencyMethodLoopback:   true,
+	OutputLatencyMethodAcoustic:   true,
+	OutputLatencyMethodDeclared:   true,
+}
+
+// outputLatencyBoundUs sanity-bounds outputLatency.valueUs against a typo:
+// RES-019 section 8's own measurement moved from about 53 ms to about
+// 81 ms across a 4x buffer-quantum change, so a bound of one full second
+// comfortably covers any plausible output chain while still catching a
+// units mistake, such as milliseconds entered where microseconds were
+// asked for.
+const outputLatencyBoundUs = 1_000_000
+
 // ValidateAudioNodeObjectID validates an audio.node object id against the
 // same syntax a node id must satisfy — reusing [ValidateShowObjectID]'s own
 // reuse of [mqttproto.ValidateNodeID] rather than a second copy of the
@@ -56,6 +82,12 @@ var audioNodeTopLevelKeys = map[string]bool{
 	"programChannels": true, "ltcChannel": true,
 	"clockDomain": true, "clockDomainProvenance": true,
 	"role": true, "zone": true,
+	"outputLatency": true,
+}
+
+var outputLatencyTopLevelKeys = map[string]bool{
+	"valueUs": true, "measuredAt": true, "method": true,
+	"reference": true, "confidence": true, "configuration": true,
 }
 
 // AudioNodePayload is config_revisions.payload_json's decoded, VALIDATED
@@ -130,12 +162,58 @@ type AudioNodePayload struct {
 	// at decode time, matching show.cue's outputs.announcement.duckGainDb
 	// precedent: an ignored field would read as an applied one.
 	Zone *string `json:"zone,omitempty"`
+
+	// OutputLatency is this node's calibrated static output-chain delay
+	// (RES-019 section 8). Optional on the wire: absent decodes to
+	// [OutputLatencyPayload]'s zero value, method "unmeasured".
+	OutputLatency OutputLatencyPayload `json:"outputLatency"`
+}
+
+// OutputLatencyPayload is audio.node.outputLatency (RES-019 section 8): a
+// signed per-output offset, in microseconds, subtracted from that node's
+// scheduled start instant. See [decodeAudioNodeOutputLatency] for the
+// validation this shape is held to.
+type OutputLatencyPayload struct {
+	// ValueUs is the offset itself, in signed microseconds. Meaningless,
+	// and never set on the wire, when Method is
+	// [OutputLatencyMethodUnmeasured].
+	ValueUs int `json:"valueUs,omitempty"`
+
+	// Method is one of [OutputLatencyMethodUnmeasured] (the default),
+	// [OutputLatencyMethodLoopback], [OutputLatencyMethodAcoustic], or
+	// [OutputLatencyMethodDeclared]. See [decodeAudioNodeOutputLatency].
+	Method string `json:"method,omitempty"`
+
+	// MeasuredAt is when ValueUs was taken. RES-019 section 8.2 covers
+	// re-measurement.
+	MeasuredAt *time.Time `json:"measuredAt,omitempty"`
+
+	// Reference names what ValueUs was measured against: the other
+	// node/signal in a loopback or acoustic capture, or the datasheet
+	// section for a declared value.
+	Reference string `json:"reference,omitempty"`
+
+	// Confidence is the operator's own free-text judgment of how much to
+	// trust ValueUs. Free text, not a closed vocabulary, matching
+	// ClockDomainProvenance's own precedent.
+	Confidence string `json:"confidence,omitempty"`
+
+	// Configuration records the buffer/quantum/sample-rate configuration
+	// ValueUs was measured under: RES-019 section 8.4 explains why a
+	// value is only valid for the configuration it was measured under.
+	Configuration string `json:"configuration,omitempty"`
 }
 
 // EncodeAudioNodePayload marshals p into config_revisions.payload_json's
 // column shape. p is assumed already valid (the product of
-// DecodeAudioNodePayload); this function does not re-validate.
+// DecodeAudioNodePayload); this function does not re-validate. A
+// zero-value p.OutputLatency (a caller that never set it) is normalized
+// to method "unmeasured" so it re-decodes, matching what an absent
+// "outputLatency" key already decodes to.
 func EncodeAudioNodePayload(p AudioNodePayload) (string, error) {
+	if p.OutputLatency.Method == "" {
+		p.OutputLatency.Method = OutputLatencyMethodUnmeasured
+	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", fmt.Errorf("config: encode audio.node payload: %w", err)
@@ -218,12 +296,112 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		zone = &s
 	}
 
+	outputLatency, verr := decodeAudioNodeOutputLatency(top)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
+
 	return AudioNodePayload{
 		ProgramRoute: programRoute, LTCRoute: ltcRoute,
 		ProgramChannels: programChannels, LTCChannel: ltcChannel,
 		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
 		Role: role, Zone: zone,
+		OutputLatency: outputLatency,
 	}, nil
+}
+
+// decodeAudioNodeOutputLatency decodes the optional "outputLatency"
+// object (RES-019 section 8). Absent decodes to the zero
+// [OutputLatencyPayload], method "unmeasured".
+func decodeAudioNodeOutputLatency(top map[string]json.RawMessage) (OutputLatencyPayload, *ValidationError) {
+	raw, present := top["outputLatency"]
+	if !present {
+		return OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured}, nil
+	}
+	fields, verr := decodeRequiredObjectFromRaw(raw, "outputLatency")
+	if verr != nil {
+		return OutputLatencyPayload{}, verr
+	}
+	if verr := rejectUnknownTopLevelKeys(fields, outputLatencyTopLevelKeys); verr != nil {
+		return OutputLatencyPayload{}, verr
+	}
+
+	// An absent method reads as unmeasured rather than a decode error: a
+	// row written before this normalization existed stored
+	// "outputLatency":{} with no method, and this keeps that row
+	// readable without weakening what a client is required to send.
+	method := OutputLatencyMethodUnmeasured
+	if _, present := fields["method"]; present {
+		var verr *ValidationError
+		method, verr = decodeRequiredEnum(fields, "method", "outputLatency.method", outputLatencyMethods)
+		if verr != nil {
+			return OutputLatencyPayload{}, verr
+		}
+	}
+
+	if method == OutputLatencyMethodUnmeasured {
+		for _, key := range []string{"valueUs", "measuredAt", "reference", "confidence", "configuration"} {
+			if _, present := fields[key]; present {
+				return OutputLatencyPayload{}, &ValidationError{
+					Code: ValidationCodeFieldInvalid, Field: "outputLatency." + key,
+					Detail: fmt.Sprintf("outputLatency.%s must be absent when method is %q; a value beside the default method would be a fabricated measurement", key, OutputLatencyMethodUnmeasured),
+				}
+			}
+		}
+		return OutputLatencyPayload{Method: OutputLatencyMethodUnmeasured}, nil
+	}
+
+	valueUs, verr := decodeRequiredInt(fields, "valueUs", "outputLatency.valueUs")
+	if verr != nil {
+		return OutputLatencyPayload{}, verr
+	}
+	if valueUs < -outputLatencyBoundUs || valueUs > outputLatencyBoundUs {
+		return OutputLatencyPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "outputLatency.valueUs",
+			Detail: fmt.Sprintf("outputLatency.valueUs must be within +/-%d microseconds of a plausible output delay", outputLatencyBoundUs),
+		}
+	}
+	if valueUs == 0 {
+		return OutputLatencyPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "outputLatency.valueUs",
+			Detail: "outputLatency.valueUs must not be zero for a measured method; no real output chain has zero delay",
+		}
+	}
+	measuredAt, verr := decodeRequiredTime(fields, "measuredAt", "outputLatency.measuredAt")
+	if verr != nil {
+		return OutputLatencyPayload{}, verr
+	}
+	reference, verr := decodeRequiredString(fields, "reference", "outputLatency.reference")
+	if verr != nil {
+		return OutputLatencyPayload{}, verr
+	}
+	confidence, verr := decodeRequiredString(fields, "confidence", "outputLatency.confidence")
+	if verr != nil {
+		return OutputLatencyPayload{}, verr
+	}
+	configuration, verr := decodeRequiredString(fields, "configuration", "outputLatency.configuration")
+	if verr != nil {
+		return OutputLatencyPayload{}, verr
+	}
+	return OutputLatencyPayload{
+		ValueUs: valueUs, Method: method, MeasuredAt: &measuredAt,
+		Reference: reference, Confidence: confidence, Configuration: configuration,
+	}, nil
+}
+
+// decodeRequiredTime reads key from top as a required, non-null,
+// non-empty RFC 3339 timestamp: the one timestamp field this package
+// decodes, so it gets its own helper rather than a generic one.
+func decodeRequiredTime(top map[string]json.RawMessage, key, field string) (time.Time, *ValidationError) {
+	s, verr := decodeRequiredString(top, key, field)
+	if verr != nil {
+		return time.Time{}, verr
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be an RFC 3339 timestamp", field)}
+	}
+	return t, nil
 }
 
 // decodeAudioNodeProgramChannels decodes and validates the required
