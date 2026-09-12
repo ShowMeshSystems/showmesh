@@ -10,6 +10,7 @@ import {
   putNodeClock,
   type AudioNodeConfigResponse,
   type AudioNodeSummary,
+  type ConfigObjectSummary,
   type NodeClockConfigResponse,
 } from '../api'
 import { Button, ButtonRow, Choice, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair } from '../kit'
@@ -54,6 +55,7 @@ const PROVIDER_OPTIONS: readonly { value: NodeClockProvider; label: string }[] =
 const DEFAULT_HOLDOVER_LIMIT_SECONDS = 60
 
 type NodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
+type NodeClockObjectsState = { kind: 'loading' } | { kind: 'loaded'; objects: ConfigObjectSummary[] } | { kind: 'failed'; reason: string }
 type NodeState =
   | { kind: 'loading' }
   | { kind: 'loaded'; response: AudioNodeConfigResponse }
@@ -81,9 +83,14 @@ export function SettingsNodeRouting() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // node.clock is a separate config kind from audio.node (RES-019, ADR-039):
   // a node can carry a PTP clock configuration without ever advertising audio
-  // routing, so its own node id is entered independently of the audio.node
+  // routing, so its own node id is chosen independently of the audio.node
   // picker above rather than reused from `selectedId`.
+  const [nodeClockObjectsState, setNodeClockObjectsState] = useState<NodeClockObjectsState>({ kind: 'loading' })
   const [clockNodeId, setClockNodeId] = useState('')
+  // Only committed to `clockNodeId` on blur/Enter: a GET fired per keystroke
+  // would fire once per character typed, and a partial id that fails the id
+  // syntax check would flash a read-failed strip mid-typing.
+  const [newClockNodeIdDraft, setNewClockNodeIdDraft] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -100,6 +107,27 @@ export function SettingsNodeRouting() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    listConfigObjects('node.clock')
+      .then((response) => {
+        if (cancelled) return
+        setNodeClockObjectsState({ kind: 'loaded', objects: response.objects })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setNodeClockObjectsState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const commitNewClockNodeId = () => {
+    const trimmed = newClockNodeIdDraft.trim()
+    if (trimmed === '') return
+    setClockNodeId(trimmed)
+  }
 
   return (
     <>
@@ -140,15 +168,52 @@ export function SettingsNodeRouting() {
         )}
       </Section>
 
-      {selectedId !== null && <NodeRoutingForm key={selectedId} nodeId={selectedId} saveGate={gate} />}
+      {selectedId !== null && <NodeRoutingForm key={`audio:${selectedId}`} nodeId={selectedId} saveGate={gate} />}
 
       <Section id="st-node-clock-select" title="PTP clock node">
-        <Field label="Node id" help="Any node id. Independent of the audio node picker above: node.clock is its own config kind.">
-          {(props) => <Input {...props} value={clockNodeId} onChange={(e) => setClockNodeId(e.target.value)} />}
+        {nodeClockObjectsState.kind === 'loading' ? (
+          <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for configured node.clock objects." />
+        ) : nodeClockObjectsState.kind === 'failed' ? (
+          <RuledStrip absence="failed" label="Read failed" fact={nodeClockObjectsState.reason} />
+        ) : (
+          nodeClockObjectsState.objects.length > 0 && (
+            <Field label="Existing node" help="Nodes that already carry a node.clock object. Independent of the audio node picker above: node.clock is its own config kind.">
+              {(props) => (
+                <Select
+                  {...props}
+                  value={nodeClockObjectsState.objects.some((o) => o.id === clockNodeId) ? clockNodeId : ''}
+                  onChange={(e) => setClockNodeId(e.target.value)}
+                >
+                  <option value="">Select a node…</option>
+                  {nodeClockObjectsState.objects.map((summary) => (
+                    <option key={summary.id} value={summary.id}>
+                      {summary.id}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          )
+        )}
+        <Field label="New node id" help="Type a node id and press Enter, or move on to another field, to open its PTP clock section, whether or not it has a node.clock object yet.">
+          {(props) => (
+            <Input
+              {...props}
+              value={newClockNodeIdDraft}
+              onChange={(e) => setNewClockNodeIdDraft(e.target.value)}
+              onBlur={commitNewClockNodeId}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  commitNewClockNodeId()
+                }
+              }}
+            />
+          )}
         </Field>
       </Section>
 
-      {clockNodeId.trim() !== '' && <NodeClockSection key={clockNodeId.trim()} nodeId={clockNodeId.trim()} saveGate={gate} />}
+      {clockNodeId.trim() !== '' && <NodeClockSection key={`clock:${clockNodeId.trim()}`} nodeId={clockNodeId.trim()} saveGate={gate} />}
     </>
   )
 }
@@ -720,6 +785,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<NodeClockConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [taken, setTaken] = useState(false)
 
   const loadFrom = (payload: ConfigNodeClock) => {
     setProvider(payload.provider)
@@ -770,7 +836,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
     }
   }, [nodeId, attempt])
 
-  const verdict = nodeClockVerdict({ provider, interfaceName, domainText, fppBaseUrl })
+  const verdict = nodeClockVerdict({ provider, interfaceName, domainText, fppBaseUrl, holdoverLimitSecondsText, priority1Text })
   const canSave = verdict.ok
 
   const buildPayload = (base: ConfigNodeClock): ConfigNodeClock => {
@@ -815,6 +881,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
   const create = () => {
     setSaving(true)
     setSaveError(null)
+    setTaken(false)
     guardedCreate({
       read: () => getNodeClock(nodeId),
       write: () => putNodeClock(nodeId, buildPayload({} as ConfigNodeClock)),
@@ -827,7 +894,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
           return
         }
         if (outcome.kind === 'taken') {
-          setAttempt((n) => n + 1)
+          setTaken(true)
           return
         }
         setSaveError(outcome.reason)
@@ -902,7 +969,10 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
             />
           )}
         </Field>
-        <Field label="PTP domain" help="The declared PTP domain number, 0 to 255.">
+        <Field
+          label="PTP domain number"
+          help="The ptp4l domain number, 0 to 255. Distinct from the clock domain declared in the Clock domain section above, which is this node's manual audio-sync declaration, not a PTP protocol value."
+        >
           {(props) => (
             <Input
               {...props}
@@ -1010,6 +1080,28 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
             {saving ? 'Creating…' : 'Create clock config'}
           </Button>
         </ButtonRow>
+        {taken && (
+          <RuledStrip
+            absence="failed"
+            label="Already exists"
+            fact={
+              <>
+                A node.clock object for <span className="sm-data">{nodeId}</span> was created by someone else while you were
+                editing. Your typed values are kept here.{' '}
+                <button
+                  type="button"
+                  className="sm-linkbutton"
+                  onClick={() => {
+                    setTaken(false)
+                    setAttempt((n) => n + 1)
+                  }}
+                >
+                  Reload it
+                </button>
+              </>
+            }
+          />
+        )}
         {saveError !== null && <RuledStrip absence="failed" label="Create failed" fact={saveError} />}
       </Section>
     )

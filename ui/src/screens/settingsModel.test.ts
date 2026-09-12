@@ -35,7 +35,14 @@ describe('audioNodeVerdict', () => {
 })
 
 describe('nodeClockVerdict', () => {
-  const base = { provider: 'managed' as const, interfaceName: 'eth0', domainText: '0', fppBaseUrl: '' }
+  const base = {
+    provider: 'managed' as const,
+    interfaceName: 'eth0',
+    domainText: '0',
+    fppBaseUrl: '',
+    holdoverLimitSecondsText: '',
+    priority1Text: '',
+  }
 
   it('accepts a managed provider with an interface and a domain', () => {
     expect(nodeClockVerdict(base)).toEqual({ ok: true })
@@ -63,6 +70,30 @@ describe('nodeClockVerdict', () => {
 
   it('accepts an fpp provider with an fppBaseUrl', () => {
     expect(nodeClockVerdict({ ...base, provider: 'fpp', fppBaseUrl: 'http://fpp.local' })).toEqual({ ok: true })
+  })
+
+  it('refuses a non-integer holdover limit', () => {
+    expect(nodeClockVerdict({ ...base, holdoverLimitSecondsText: 'abc' }).ok).toBe(false)
+  })
+
+  it('refuses a holdover limit of zero', () => {
+    expect(nodeClockVerdict({ ...base, holdoverLimitSecondsText: '0' }).ok).toBe(false)
+  })
+
+  it('accepts a positive holdover limit', () => {
+    expect(nodeClockVerdict({ ...base, holdoverLimitSecondsText: '90' })).toEqual({ ok: true })
+  })
+
+  it('refuses a priority1 outside 0-255', () => {
+    expect(nodeClockVerdict({ ...base, priority1Text: '300' }).ok).toBe(false)
+  })
+
+  it('refuses a non-integer priority1', () => {
+    expect(nodeClockVerdict({ ...base, priority1Text: 'abc' }).ok).toBe(false)
+  })
+
+  it('accepts priority1 within 0-255', () => {
+    expect(nodeClockVerdict({ ...base, priority1Text: '128' })).toEqual({ ok: true })
   })
 })
 

@@ -626,7 +626,16 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'media.playlist' | 'night.session',
+  kind:
+    | 'show.action'
+    | 'show.macro'
+    | 'show'
+    | 'show.surface'
+    | 'show.cue'
+    | 'show.playlist'
+    | 'media.playlist'
+    | 'night.session'
+    | 'node.clock',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse>
 // audio.node's list carries channel placement, a shape
@@ -643,6 +652,7 @@ export function listConfigObjects(
     | 'show.playlist'
     | 'media.playlist'
     | 'night.session'
+    | 'node.clock'
     | 'audio.node',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse | SchemaAudioNodeListResponse> {

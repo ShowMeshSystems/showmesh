@@ -936,10 +936,18 @@ describe('Settings › Node routing › PTP clock', () => {
   }
 
   function setUpNodeRouting() {
-    stubs.listConfigObjects = () =>
-      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', objects: [] })
+        : Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
     stubs.getAudioNode = () => Promise.resolve(nodeConfig())
     stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+  }
+
+  function commitNewClockNodeId(id: string) {
+    const input = screen.getByLabelText('New node id')
+    fireEvent.change(input, { target: { value: id } })
+    fireEvent.blur(input)
   }
 
   it('renders provider-specific fields for managed and hides external/fpp fields', async () => {
@@ -948,7 +956,7 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
     renderAt('/settings/node-routing', { nodes: [] })
-    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
+    commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
     expect(screen.getByLabelText('Priority1 · optional')).toHaveValue('128')
@@ -963,12 +971,52 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
     renderAt('/settings/node-routing', { nodes: [] })
-    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
+    commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
     expect(screen.queryByLabelText('Priority1 · optional')).not.toBeInTheDocument()
     expect(screen.getByLabelText('FPP base URL')).toBeInTheDocument()
+  })
+
+  it('does not read the node.clock object until the new node id is committed on blur, not on every keystroke', async () => {
+    setUpNodeRouting()
+    let getCalls = 0
+    stubs.getNodeClock = () => {
+      getCalls += 1
+      return Promise.resolve(nodeClockConfig())
+    }
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    await waitFor(() => expect(screen.getByLabelText('New node id')).toBeInTheDocument())
+
+    const input = screen.getByLabelText('New node id')
+    const target = 'audio-node-01'
+    for (let i = 1; i <= target.length; i += 1) {
+      fireEvent.change(input, { target: { value: target.slice(0, i) } })
+    }
+    expect(getCalls).toBe(0)
+
+    fireEvent.change(input, { target: { value: 'audio-node-01' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(getCalls).toBeGreaterThan(0))
+  })
+
+  it('lists and selects an existing node.clock object through listConfigObjects', async () => {
+    stubs.listConfigObjects = (kind: string) =>
+      kind === 'node.clock'
+        ? Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', objects: [{ id: 'ptp-node-01', label: 'managed', show: '', currentRevision: 1, updatedAt: '2026-09-12T18:00:00Z' }] })
+        : Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [] })
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ interface: 'eth7' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    const select = await screen.findByLabelText('Existing node')
+    fireEvent.change(select, { target: { value: 'ptp-node-01' } })
+
+    await waitFor(() => expect(screen.getByLabelText('Interface')).toHaveValue('eth7'))
   })
 
   it('shows a create flow when no node.clock object exists, then saves the full payload', async () => {
@@ -981,15 +1029,36 @@ describe('Settings › Node routing › PTP clock', () => {
     }
 
     renderAt('/settings/node-routing', { nodes: [] })
-    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
+    commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
-    fireEvent.change(screen.getByLabelText('PTP domain'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
     expect(sentPayload).toMatchObject({ provider: 'managed', interface: 'eth1', domain: 3 })
+  })
+
+  it('surfaces a lost create race rather than silently discarding typed values', async () => {
+    setUpNodeRouting()
+    let reads = 0
+    stubs.getNodeClock = () => {
+      reads += 1
+      return reads === 1 ? notConfigured('no node.clock object has ever been configured for audio-node-01') : Promise.resolve(nodeClockConfig())
+    }
+    stubs.putNodeClock = () => Promise.reject(new Error('should not be called: the id was already taken'))
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
+    fireEvent.change(screen.getByLabelText('PTP domain number'), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create clock config' }))
+
+    expect(await screen.findByText('Already exists')).toBeInTheDocument()
+    expect(screen.getByLabelText('Interface')).toHaveValue('eth1')
   })
 
   it('sends the full replacement payload on save', async () => {
@@ -1003,7 +1072,7 @@ describe('Settings › Node routing › PTP clock', () => {
     }
 
     renderAt('/settings/node-routing', { nodes: [] })
-    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
+    commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth2' } })
@@ -1011,6 +1080,28 @@ describe('Settings › Node routing › PTP clock', () => {
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
     expect(sentPayload).toMatchObject({ provider: 'external', interface: 'eth2', externalUdsAddress: '/var/run/ptp/ptp4lro' })
+  })
+
+  it('refuses save when holdover limit or priority1 fails the server rule, even though provider/interface/domain are valid', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig())
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save clock config' })).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Holdover limit (seconds)'), { target: { value: 'abc' } })
+    expect(screen.getByText(/Will be refused/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save clock config' })).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Holdover limit (seconds)'), { target: { value: '0' } })
+    expect(screen.getByText(/Will be refused/)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Holdover limit (seconds)'), { target: { value: '60' } })
+    fireEvent.change(screen.getByLabelText('Priority1 · optional'), { target: { value: '300' } })
+    expect(screen.getByText(/Will be refused/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save clock config' })).toBeDisabled()
   })
 
   it('refuses a stale save and writes nothing', async () => {
@@ -1030,7 +1121,7 @@ describe('Settings › Node routing › PTP clock', () => {
     }
 
     renderAt('/settings/node-routing', { nodes: [] })
-    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
+    commitNewClockNodeId('audio-node-01')
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save clock config' })).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth5' } })
