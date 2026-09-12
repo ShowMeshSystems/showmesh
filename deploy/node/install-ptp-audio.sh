@@ -180,6 +180,39 @@ else
   echo "install-ptp-audio.sh: no PHC found for $IFACE (no $PHC_SYSFS_DIR, or it has no ptpN entry); ptp4l will use software timestamping. This is expected on a Raspberry Pi 3B+ (LAN7515 USB NIC, RES-019 section 4.6) and on any virtual/container interface. Software timestamping disciplines CLOCK_REALTIME (there is no PHC to discipline instead, RES-019 section 5.1), so PipeWire's node.driver is pointed at clock.id=realtime rather than a PHC device (see the PipeWire config section below): this node is still PTP-disciplined end to end, just through the system clock instead of a hardware clock."
 fi
 
+# --- PHC-less node: exactly one writer on CLOCK_REALTIME ---
+# ptp4l in software-timestamping mode disciplines CLOCK_REALTIME directly
+# (there is no PHC to discipline instead). An NTP client left running on
+# the same node also disciplines CLOCK_REALTIME, and neither daemon knows
+# the other exists: measured on a real Raspberry Pi 3B+, systemd-timesyncd
+# and ptp4l fought over the same clock at the same time. A node WITH a PHC
+# does not have this problem and keeps its NTP client running: there,
+# ptp4l only ever touches the PHC, and NTP keeps the system clock (which
+# phc2sys reads from, below) honest.
+if [ -z "$PHC_DEV" ]; then
+  NTP_DISABLED=""
+  for svc in systemd-timesyncd chrony chronyd ntp ntpd; do
+    if systemctl is-active --quiet "$svc.service" 2>/dev/null; then
+      echo "install-ptp-audio.sh: $svc.service is disciplining CLOCK_REALTIME on a PHC-less node; ptp4l is about to do the same. Turning $svc.service off so exactly one thing owns this node's system clock."
+      if [ "$svc" = "systemd-timesyncd" ]; then
+        timedatectl set-ntp false 2>/dev/null || true
+      else
+        systemctl disable --now "$svc.service" >/dev/null 2>&1 || true
+      fi
+      if systemctl is-active --quiet "$svc.service" 2>/dev/null; then
+        echo "install-ptp-audio.sh: could not stop $svc.service; refusing to leave two writers on CLOCK_REALTIME (ptp4l and $svc.service). Stop it by hand and re-run this script." >&2
+        exit 1
+      fi
+      NTP_DISABLED="$NTP_DISABLED $svc.service"
+    fi
+  done
+  if [ -n "$NTP_DISABLED" ]; then
+    echo "install-ptp-audio.sh: stopped and disabled$NTP_DISABLED; ptp4l now owns this node's system clock (CLOCK_REALTIME). See deploy/node/PTP-AUDIO.md to put NTP back."
+  else
+    echo "install-ptp-audio.sh: no active NTP client found on this PHC-less node; ptp4l will be the only thing disciplining CLOCK_REALTIME"
+  fi
+fi
+
 # --- ptp4l config and systemd unit ---
 mkdir -p "$(dirname "$PTP4L_CONF")"
 {
@@ -204,6 +237,60 @@ sed -e "s|@IFACE@|$IFACE|g" -e "s|@CONF@|$PTP4L_CONF|g" \
   "$TEMPLATE_DIR/ptp4l-showmesh.service.template" > "$PTP4L_UNIT_DEST"
 chmod 0644 "$PTP4L_UNIT_DEST"
 echo "install-ptp-audio.sh: wrote $PTP4L_CONF and $PTP4L_UNIT_DEST"
+
+# --- phc2sys: grandmaster-role node disciplines its own PHC from the
+#     system clock, so it never announces an arbitrary free-run epoch ---
+#
+# Only for role=grandmaster, and only when this node has a PHC. A
+# follower-role node's PHC belongs to the domain -- it must never run
+# phc2sys in this direction. A PHC-less node has nothing for phc2sys to
+# discipline here; its own CLOCK_REALTIME is already the thing ptp4l
+# disciplines (see the NTP-ownership check above).
+#
+# Measured on showmesh-node-01: an undisciplined PHC read 17.7 seconds
+# behind the host's own NTP-disciplined system clock, and a PHC-less
+# follower on the same domain slewed its own wall clock 54.7 seconds away
+# from real time following it (the class of failure FPP removed phc2sys
+# for). Reported here, before phc2sys is enabled, so an operator sees the
+# size of the correction before it happens: correcting an 18-second PHC
+# error while a show is already running would be an 18-second clock step
+# mid-show, which is exactly why the generated unit is ordered Before=
+# ptp4l-showmesh.service rather than left to converge on its own.
+PHC2SYS_UNIT_DEST=/etc/systemd/system/phc2sys-showmesh.service
+if [ "$ROLE" = "grandmaster" ] && [ -n "$PHC_DEV" ]; then
+  if command -v phc_ctl >/dev/null 2>&1; then
+    PHC_GET="$(phc_ctl "$PHC_DEV" get 2>&1 || true)"
+    PHC_EPOCH="$(echo "$PHC_GET" | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+    SYS_EPOCH="$(date +%s.%N)"
+    if [ -n "$PHC_EPOCH" ]; then
+      PHC_OFFSET="$(awk -v a="$PHC_EPOCH" -v b="$SYS_EPOCH" 'BEGIN{printf "%.3f", (a-b)}')"
+      echo "install-ptp-audio.sh: $PHC_DEV reads ${PHC_OFFSET}s relative to this host's system clock before phc2sys corrects it (phc_ctl output: $PHC_GET)"
+    else
+      echo "install-ptp-audio.sh: could not parse a timestamp out of 'phc_ctl $PHC_DEV get' output; the PHC-to-system offset before correction is unknown, not zero (raw output: $PHC_GET)"
+    fi
+  else
+    echo "install-ptp-audio.sh: phc_ctl not found (part of linuxptp); the PHC-to-system offset before phc2sys corrects it is unknown, not zero"
+  fi
+
+  sed -e "s|@PHC_DEV@|$PHC_DEV|g" \
+    "$TEMPLATE_DIR/phc2sys-showmesh.service.template" > "$PHC2SYS_UNIT_DEST"
+  chmod 0644 "$PHC2SYS_UNIT_DEST"
+  # ptp4l-showmesh.service's own template has no phc2sys dependency (a
+  # follower-role or PHC-less node must never pull this unit in), so the
+  # ordering is added here, only for the case that needs it.
+  if ! grep -q phc2sys-showmesh.service "$PTP4L_UNIT_DEST"; then
+    awk '/^Wants=network-online.target$/ { print; print "After=phc2sys-showmesh.service"; print "Wants=phc2sys-showmesh.service"; next } { print }' \
+      "$PTP4L_UNIT_DEST" > "$PTP4L_UNIT_DEST.tmp" && mv "$PTP4L_UNIT_DEST.tmp" "$PTP4L_UNIT_DEST"
+  fi
+  echo "install-ptp-audio.sh: wrote $PHC2SYS_UNIT_DEST (phc2sys -s CLOCK_REALTIME -c $PHC_DEV -O 0), ordered before $PTP4L_UNIT_DEST"
+elif [ -e "$PHC2SYS_UNIT_DEST" ]; then
+  # Re-running with a different role or a different interface: a leftover
+  # phc2sys unit from a previous grandmaster-role run must not keep
+  # disciplining a PHC this run no longer owns in that direction.
+  systemctl disable --now phc2sys-showmesh.service >/dev/null 2>&1 || true
+  rm -f "$PHC2SYS_UNIT_DEST"
+  echo "install-ptp-audio.sh: removed stale $PHC2SYS_UNIT_DEST (this run is role=$ROLE${PHC_DEV:+, phc=$PHC_DEV}, not grandmaster+PHC)"
+fi
 
 # --- udev rule: showmesh group gets read access to any PHC ---
 # Generic on subsystem "ptp" rather than naming ptp0 specifically, so it
@@ -297,6 +384,9 @@ if ! systemctl daemon-reload 2>/tmp/showmesh-ptp-install-systemctl-err; then
 fi
 
 if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
+  if [ -e "$PHC2SYS_UNIT_DEST" ]; then
+    systemctl enable --now phc2sys-showmesh.service >/dev/null
+  fi
   systemctl enable --now ptp4l-showmesh.service >/dev/null
   systemctl enable --now pipewire-showmesh.service >/dev/null
   systemctl enable --now wireplumber-showmesh.service >/dev/null
@@ -327,6 +417,13 @@ if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
     echo "  ptp4l-showmesh.service: NOT active (systemctl status ptp4l-showmesh.service for why)."
   fi
   echo "  PipeWire graph clock: $([ -n "$PHC_DEV" ] && echo "configured for $PHC_DEV" || echo "configured for clock.id=realtime (no PHC on $IFACE)"), node.group=$PTP_NODE_GROUP, audio-card-match=$AUDIO_CARD_MATCH. Run verify-ptp-audio.sh to confirm the running graph actually elected this driver for the card, not just that both exist."
+  if [ -e "$PHC2SYS_UNIT_DEST" ]; then
+    if systemctl is-active --quiet phc2sys-showmesh.service; then
+      echo "  phc2sys-showmesh.service: active, disciplining $PHC_DEV from this host's system clock (role=grandmaster)."
+    else
+      echo "  phc2sys-showmesh.service: NOT active (systemctl status phc2sys-showmesh.service for why); this PHC is not being corrected."
+    fi
+  fi
 else
   echo "  Services installed but not started (no systemd PID 1 on this host). Run 'systemctl daemon-reload && systemctl enable --now ptp4l-showmesh.service pipewire-showmesh.service wireplumber-showmesh.service' once this host boots under systemd."
 fi

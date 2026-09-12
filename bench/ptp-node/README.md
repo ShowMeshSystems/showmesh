@@ -46,7 +46,22 @@ with a PHC:
   a real ALSA node, and the same mechanism that was silently broken on
   real node hardware before this node.group entry existed (a sound card's
   ALSA node sat in its own per-device group and drove itself, regardless
-  of `showmesh-ptp-driver`'s `priority.driver`).
+  of `showmesh-ptp-driver`'s `priority.driver`);
+- the exact `driver-election.py` parser `verify-ptp-audio.sh` uses, fed
+  pw-dump output padded past this host's own `ARG_MAX` on stdin, still
+  finds the driver -- and that the same oversized payload does fail past
+  `ARG_MAX` when passed as an argument/environment variable instead,
+  confirming the fix (a real node's `pw-dump` output can exceed `ARG_MAX`
+  outright; a container's own small graph never does, so this bench cannot
+  otherwise exercise the failure this fixed);
+- **the two negative cases of clock ownership this bench can reach without
+  real hardware**: `phc2sys-showmesh.service` is never written on this
+  bench's PHC-less containers, for either role (only a `grandmaster`-role
+  node with a real PHC gets it, which this bench cannot produce), and the
+  NTP-detection branch runs and reports honestly that no NTP client is
+  active here (this bench never installs or runs one, so it cannot prove
+  the branch actually stops a real NTP client -- the orchestrator proved
+  that by hand on the Raspberry Pi 3B+, see `PTP-AUDIO.md`).
 
 **Cannot prove, and does not claim to**:
 
@@ -69,7 +84,15 @@ with a PHC:
 - the `GST_DEBUG=audiobasesink:6` skew-slaving check `verify-ptp-audio.sh`
   runs on a real node: `alsasink` is never in this bench's own pipeline
   (there is no ALSA sink to put it in front of), so there is nothing here
-  that could produce a slaving line either way.
+  that could produce a slaving line either way;
+- `phc2sys-showmesh.service` actually disciplining a real PHC from a real
+  system clock, or the NTP-detection branch actually stopping a real,
+  running NTP client -- no PHC and no NTP client in this bench's own
+  containers. Both were proven by hand on real hardware
+  (`showmesh-node-01` and a Raspberry Pi 3B+, see `PTP-AUDIO.md`); this
+  bench proves only that the role/PHC-conditional generation logic takes
+  the correct negative branch and that the NTP-detection code path runs
+  without error and reports honestly.
 
 ## What this bench actually found
 

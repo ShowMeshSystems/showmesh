@@ -77,7 +77,39 @@ operator-edited state that a re-run must avoid touching.
    timestamping instead, which disciplines `CLOCK_REALTIME`. Either way
    the node ends up PTP-disciplined; only the clock source differs, and
    the script says plainly which one applies.
-3. **Writes `/etc/showmesh/ptp4l.conf`** and a systemd unit
+3. **Makes this node the only writer of its own system clock when it has
+   no PHC.** Software timestamping disciplines `CLOCK_REALTIME` directly
+   (there is no PHC to discipline instead); an NTP client left running on
+   the same node disciplines the same clock, and neither daemon knows the
+   other exists. Measured on a real Raspberry Pi 3B+: `systemd-timesyncd`
+   and `ptp4l` fought over `CLOCK_REALTIME` at the same time. On a PHC-less
+   node, the script checks `systemd-timesyncd`, `chrony`, and `ntp` for an
+   active instance, stops and disables whichever it finds (`timedatectl
+   set-ntp false` for `systemd-timesyncd`, `systemctl disable --now` for
+   the others), and **fails loudly** if it cannot -- it will not leave two
+   things disciplining one clock. A node **with** a PHC keeps its NTP
+   client running: there, `ptp4l` only ever touches the PHC, and NTP keeps
+   the system clock honest for step 4 below.
+4. **Disciplines a `grandmaster`-role node's own PHC from its system
+   clock**, when that node has one. A PHC free-runs from whatever it held
+   at boot until something disciplines it; left alone, a `grandmaster`-role
+   node's `ptp4l` announces that arbitrary epoch as the domain's time to
+   every follower on the wire. Measured on `showmesh-node-01`: an
+   undisciplined PHC read **17.7 seconds** behind the host's own
+   NTP-disciplined system clock, and a PHC-less follower on the same
+   domain slewed its own wall clock **54.7 seconds** away from real time
+   following it -- the class of failure FPP removed `phc2sys` over. The
+   script installs and enables `phc2sys-showmesh.service`
+   (`phc2sys -s CLOCK_REALTIME -c /dev/ptpN -O 0`), ordered
+   `Before=ptp4l-showmesh.service` so the correction is underway before
+   `ptp4l` starts announcing this PHC's time (correcting an 18-second PHC
+   error while a show is already running would be an 18-second clock step
+   mid-show), and reports the PHC-to-system offset it found via `phc_ctl`
+   *before* installing the unit, so an operator sees the size of the
+   correction about to happen. `follower`-role nodes never get this unit:
+   their PHC belongs to the domain, not to their own system clock. A stale
+   unit from a previous run with a different role or interface is removed.
+5. **Writes `/etc/showmesh/ptp4l.conf`** and a systemd unit
    (`ptp4l-showmesh.service`) that runs it, `clientOnly`/`priority1` set
    by the requested role:
 
@@ -93,12 +125,12 @@ operator-edited state that a re-run must avoid touching.
    state recommended in slave only mode" instead of ever reaching SLAVE
    -- measured in this repository's own `bench/ptp-node`, not assumed.
 
-4. **Installs a udev rule** (`/etc/udev/rules.d/99-showmesh-ptp.rules`)
+6. **Installs a udev rule** (`/etc/udev/rules.d/99-showmesh-ptp.rules`)
    granting the `showmesh` group read access to any `/dev/ptpN`: the
    agent's external clock provider reads the PHC directly, and PipeWire's
    node.driver opens it too (the `pipewire` system user this script
    creates is added to the `showmesh` group for exactly this reason).
-5. **Creates a dedicated `pipewire` system user** and installs
+7. **Creates a dedicated `pipewire` system user** and installs
    `pipewire-showmesh.service` and `wireplumber-showmesh.service`,
    running both as ordinary headless system services sharing one runtime
    directory (`/run/pipewire`). This is necessary, not cosmetic: Debian's
@@ -108,7 +140,7 @@ operator-edited state that a re-run must avoid touching.
    needs a lingering login this node is never going to have. A PipeWire
    that only exists inside a user session is a node that goes silent
    after every reboot.
-6. **Installs the PipeWire clock config**
+8. **Installs the PipeWire clock config**
    (`/etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf`): a
    `support.node.driver` named `showmesh-ptp-driver`, `priority.driver
    210000` (above the stock config's own highest entry, 190000, so it
@@ -129,7 +161,7 @@ operator-edited state that a re-run must avoid touching.
    sat unused in a group of one while the card drove itself. Putting the
    driver and the card's ALSA output node in the same group is what makes
    `priority.driver` the comparison that actually happens.
-7. **Installs a WirePlumber rate rule**
+9. **Installs a WirePlumber rate rule**
    (`/etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf`,
    generated from `51-showmesh-alsa-rate.conf.template`) that:
    - pins the sound card (matched by `audio-card-match`, default `M4`)
@@ -165,10 +197,10 @@ operator-edited state that a re-run must avoid touching.
    here -- see "What this repository's own verification proved" below for
    exactly what that covered and what still needs a re-run of this
    script.
-8. **Enables and starts everything**, or -- on a host with no systemd PID
+10. **Enables and starts everything**, or -- on a host with no systemd PID
    1 (a plain container) -- installs every file and says exactly what it
    could not do and why, the same pattern `deploy/node/install.sh` uses.
-9. **Prints a summary**: installed package versions, the PTP role/mode/
+11. **Prints a summary**: installed package versions, the PTP role/mode/
    PHC it configured, the live port state read back from `pmc` (SLAVE
    with a grandmaster, MASTER if this node is currently the domain's
    active clock, or an honest "not yet available" if `ptp4l` is still
@@ -182,6 +214,24 @@ deploy/node/verify-ptp-audio.sh [--play <seconds>] [--alsa-match <pattern>]
 
 Read-only; never installs, starts, stops, or reconfigures anything. In
 one pass:
+
+Exit status distinguishes three outcomes, not two: `0` if every check ran
+and passed, `1` if every check ran but at least one found a real negative,
+and `2` if at least one check could not run its own instrument at all (a
+missing tool, a crashed parser) and so produced no answer either way.
+`2` is not a stronger `1`: it means part of this report is unreliable, and
+an operator should fix whatever kept that check from running before
+trusting a `1` or a `0` next to it. This mattered in practice: the
+driver-election check used to hand a real node's `pw-dump` output to
+`python3` as a command-line argument, which fails with "Argument list too
+long" once a real sound card is in the graph (a container's smaller graph
+never hit this); the failed check then read as a specific, confident,
+*wrong* answer -- "no PipeWire node named showmesh-ptp-driver found" --
+when the driver was in fact present and driving the card. `pw-dump`'s
+output is now always fed to its parser
+(`deploy/node/ptp-audio/driver-election.py`) on stdin, and any check whose
+own tool is missing or fails to run is reported as unable to run, not as
+a negative result.
 
 1. **Is `ptp4l` locked, and to whom** -- `pmc GET PORT_DATA_SET` for port
    state, `pmc GET TIME_STATUS_NP` for `gmIdentity` and `master_offset`.
@@ -267,9 +317,11 @@ evidence.
 
 ```sh
 sudo systemctl disable --now ptp4l-showmesh.service pipewire-showmesh.service wireplumber-showmesh.service
+sudo systemctl disable --now phc2sys-showmesh.service   # only present on a grandmaster-role node that had a PHC
 sudo rm -f /etc/systemd/system/ptp4l-showmesh.service \
            /etc/systemd/system/pipewire-showmesh.service \
-           /etc/systemd/system/wireplumber-showmesh.service
+           /etc/systemd/system/wireplumber-showmesh.service \
+           /etc/systemd/system/phc2sys-showmesh.service
 sudo systemctl daemon-reload
 sudo rm -f /etc/showmesh/ptp4l.conf
 sudo rm -f /etc/udev/rules.d/99-showmesh-ptp.rules
@@ -287,3 +339,12 @@ If the agent's `node.clock` was set to `provider=external` for this
 node, revert it (or remove the node's clock config entirely) before or
 alongside this teardown -- otherwise the agent keeps polling a socket
 that no longer exists and reports `unsynchronized`.
+
+If `install-ptp-audio.sh` disabled an NTP client on this node (only on a
+PHC-less node -- see step 3 above), put it back once `ptp4l` is gone,
+or this node's system clock is disciplined by nothing at all:
+
+```sh
+sudo timedatectl set-ntp true                 # systemd-timesyncd
+sudo systemctl enable --now chrony            # or: chronyd, ntp
+```

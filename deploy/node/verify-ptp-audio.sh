@@ -20,6 +20,13 @@
 #                      sound card's ALSA output node (default: alsa_output,
 #                      matching any ALSA sink; narrow it only if this node
 #                      has more than one).
+#
+# Exit status: 0 if every check ran and passed; 1 if every check ran but at
+# least one found a real negative; 2 if at least one check could not run its
+# own instrument at all (a missing tool, a crashed parser, an instrument
+# that errored out) and so produced no answer either way -- distinct from a
+# confirmed negative, and reported that way regardless of what any other
+# check found.
 
 set -u
 
@@ -56,8 +63,16 @@ fi
 
 PASS=0
 FAIL=0
+ERR=0
 ok()   { echo "OK: $1"; PASS=$((PASS + 1)); }
 bad()  { echo "FAIL: $1" >&2; FAIL=$((FAIL + 1)); }
+# err() is for a check that never got to produce a real answer: its own
+# instrument (a missing binary, a parser that crashed or could not run) is
+# what failed, not the thing being checked. Never call err() for a real
+# negative result -- that is bad()'s job -- and never let a caller of err()
+# fall through into ok()/bad() using data the failed instrument could not
+# have produced.
+err()  { echo "ERROR: $1 -- check did not run, this is not a negative result" >&2; ERR=$((ERR + 1)); }
 info() { echo "INFO: $1"; }
 
 echo "verify-ptp-audio.sh: checking the PTP-disciplined PipeWire audio path"
@@ -68,7 +83,7 @@ echo "--- ptp4l ---"
 if ! systemctl is-active --quiet ptp4l-showmesh.service 2>/dev/null; then
   bad "ptp4l-showmesh.service is not active (systemctl status ptp4l-showmesh.service)"
 elif ! command -v pmc >/dev/null 2>&1; then
-  bad "pmc not found (part of the linuxptp package; install-ptp-audio.sh should have installed it)"
+  err "pmc not found (part of the linuxptp package; install-ptp-audio.sh should have installed it)"
 elif [ ! -S "$PTP_RO_SOCKET" ]; then
   bad "ptp4l-showmesh.service is active but its management socket $PTP_RO_SOCKET does not exist"
 else
@@ -118,53 +133,36 @@ echo ""
 echo "--- PipeWire driver election ---"
 export PIPEWIRE_RUNTIME_DIR=/run/pipewire
 export XDG_RUNTIME_DIR=/run/pipewire
+DRIVER_ELECTION_PY="$SCRIPT_DIR/ptp-audio/driver-election.py"
 if ! systemctl is-active --quiet pipewire-showmesh.service 2>/dev/null; then
   bad "pipewire-showmesh.service is not active"
 elif ! command -v pw-dump >/dev/null 2>&1; then
-  bad "pw-dump not found (part of the pipewire package)"
+  err "pw-dump not found (part of the pipewire package); cannot determine driver election"
+elif ! command -v python3 >/dev/null 2>&1; then
+  err "python3 not found; cannot parse pw-dump output to determine driver election"
+elif [ ! -r "$DRIVER_ELECTION_PY" ]; then
+  err "driver election parser not found at $DRIVER_ELECTION_PY; cannot determine driver election"
 else
-  DUMP="$(pw-dump 2>/dev/null)"
-  if [ -z "$DUMP" ]; then
+  DUMP="$(pw-dump 2>&1)"
+  PWDUMP_RC=$?
+  if [ "$PWDUMP_RC" -ne 0 ]; then
+    err "pw-dump failed to run (exit $PWDUMP_RC): $(echo "$DUMP" | tr '\n' ' ')"
+  elif [ -z "$DUMP" ]; then
     bad "pw-dump returned nothing; PipeWire may not have finished starting, or this shell cannot reach /run/pipewire (check the socket's permissions against the user running this check)"
   else
-    READING="$(PW_DUMP_JSON="$DUMP" python3 - "$ALSA_MATCH" <<'PYEOF'
-import json, os, re, sys
-
-alsa_re = re.compile(sys.argv[1])
-try:
-    objs = json.loads(os.environ["PW_DUMP_JSON"])
-except Exception:
-    print("PARSE_ERROR=1")
-    sys.exit(0)
-
-driver_id = None
-driver_props = None
-alsa_nodes = []
-for o in objs:
-    props = o.get("info", {}).get("props", {}) or {}
-    name = props.get("node.name") or ""
-    if name == "showmesh-ptp-driver":
-        driver_id = o.get("id")
-        driver_props = props
-    if alsa_re.search(name):
-        alsa_nodes.append((o.get("id"), props))
-
-if driver_id is None:
-    print("DRIVER_FOUND=0")
-else:
-    print("DRIVER_FOUND=1")
-    print(f"DRIVER_ID={driver_id}")
-    print(f"DRIVER_GROUP={driver_props.get('node.group', '')}")
-    print(f"DRIVER_CLOCK={driver_props.get('clock.device', driver_props.get('clock.id', 'unknown-clock'))}")
-
-print(f"ALSA_COUNT={len(alsa_nodes)}")
-for node_id, props in alsa_nodes:
-    name = props.get("node.name", "")
-    driven_by = props.get("node.driver-id")
-    group = props.get("node.group", "")
-    print(f"ALSA_NODE={name}|{driven_by}|{group}")
-PYEOF
-)"
+    # pw-dump's output is fed on stdin, never as an argument or environment
+    # variable to python3: a real node's pw-dump output can exceed the
+    # process argument/environment size limit (ARG_MAX), which fails
+    # execve with E2BIG before python even starts -- confirmed on
+    # showmesh-node-01, where this used to fail the whole check with
+    # "Argument list too long" and then, uncaught, this check reported the
+    # specific and wrong diagnosis that the driver was missing from the
+    # graph, when it was in fact present and driving the card.
+    READING="$(printf '%s' "$DUMP" | python3 "$DRIVER_ELECTION_PY" "$ALSA_MATCH" 2>&1)"
+    PY_RC=$?
+    if [ "$PY_RC" -ne 0 ]; then
+      err "the pw-dump driver-election parser failed to run (exit $PY_RC): $(echo "$READING" | tr '\n' ' ')"
+    else
     DRIVER_FOUND="$(echo "$READING" | awk -F= '/^DRIVER_FOUND=/{print $2; exit}')"
     if [ "$DRIVER_FOUND" != "1" ]; then
       bad "no PipeWire node named showmesh-ptp-driver found in the graph (10-showmesh-ptp-clock.conf may not be loaded -- check /etc/pipewire/pipewire.conf.d/)"
@@ -192,6 +190,7 @@ PYEOF
           bad "no ALSA node's node.driver-id points at showmesh-ptp-driver's id ($DRIVER_ID) -- the card is being driven by something else (itself, or another node in a different group). Check the ALSA node's node.group above against 51-showmesh-alsa-rate.conf's node.name match and node.group."
         fi
       fi
+    fi
     fi
   fi
 fi
@@ -227,7 +226,7 @@ echo "--- Sink slaving behavior (the reading that actually matters) ---"
 if [ "$PLAY_SECONDS" -le 0 ]; then
   info "skipped (--play 0 or default overridden); this is the check that actually proves the rate lock is doing anything, run it before trusting the graph-driver checks above"
 elif ! command -v gst-launch-1.0 >/dev/null 2>&1; then
-  bad "gst-launch-1.0 not found (part of gstreamer1.0-tools)"
+  err "gst-launch-1.0 not found (part of gstreamer1.0-tools); cannot run the sink-slaving check"
 else
   LOG="$(mktemp)"
   GST_DEBUG=audiobasesink:6 timeout "$((PLAY_SECONDS + 2))" \
@@ -235,17 +234,28 @@ else
     > "$LOG" 2>&1
   RC=$?
   if [ "$RC" -ne 0 ] && [ "$RC" -ne 124 ]; then
-    bad "gst-launch-1.0 through pipewiresink exited $RC; see $LOG"
-  fi
-  SLEW_LINES="$(grep -c -E 'slave|skew|resync' "$LOG" || true)"
-  if [ "$SLEW_LINES" -eq 0 ]; then
-    ok "no alsasink skew/slaving lines in ${PLAY_SECONDS}s of GST_DEBUG=audiobasesink:6 output through pipewiresink -- consistent with alsasink no longer being in the signal path (pipewiresink is) and the ALSA sink being rate-matched by PipeWire's own DLL instead of alsasink's slave-method"
+    # The pipeline itself never ran to completion, so grepping $LOG below
+    # for skew/slaving lines would read whatever error text is in there
+    # instead -- almost certainly zero matches, which used to print the
+    # confident, wrong "OK: no skew lines" even though this check never
+    # actually exercised the signal path it claims to have exercised.
+    err "gst-launch-1.0 through pipewiresink exited $RC before completing; the sink-slaving reading below did not run, see $LOG"
   else
-    bad "$SLEW_LINES skew/slaving line(s) found in GST_DEBUG output ($LOG) -- alsasink's own slaving should not be active when the pipeline plays through pipewiresink; this usually means the pipeline under test is not actually the one described in this repository's PR (a raw alsasink pipeline, or a fallback path)"
+    SLEW_LINES="$(grep -c -E 'slave|skew|resync' "$LOG" || true)"
+    if [ "$SLEW_LINES" -eq 0 ]; then
+      ok "no alsasink skew/slaving lines in ${PLAY_SECONDS}s of GST_DEBUG=audiobasesink:6 output through pipewiresink -- consistent with alsasink no longer being in the signal path (pipewiresink is) and the ALSA sink being rate-matched by PipeWire's own DLL instead of alsasink's slave-method"
+    else
+      bad "$SLEW_LINES skew/slaving line(s) found in GST_DEBUG output ($LOG) -- alsasink's own slaving should not be active when the pipeline plays through pipewiresink; this usually means the pipeline under test is not actually the one described in this repository's PR (a raw alsasink pipeline, or a fallback path)"
+    fi
   fi
   info "full debug log: $LOG"
 fi
 echo ""
 
-echo "verify-ptp-audio.sh: $PASS check(s) passed, $FAIL check(s) failed"
-[ "$FAIL" -eq 0 ]
+echo "verify-ptp-audio.sh: $PASS check(s) passed, $FAIL check(s) failed, $ERR check(s) could not run"
+if [ "$ERR" -gt 0 ]; then
+  exit 2
+elif [ "$FAIL" -gt 0 ]; then
+  exit 1
+fi
+exit 0

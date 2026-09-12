@@ -61,7 +61,7 @@ fi
 echo "=== in-container-proof.sh: role=$ROLE domain=$DOMAIN iface=$IFACE ==="
 
 echo "--- step 1: install-ptp-audio.sh ---"
-/repo/deploy/node/install-ptp-audio.sh "$IFACE" "$DOMAIN" "$ROLE"
+/repo/deploy/node/install-ptp-audio.sh "$IFACE" "$DOMAIN" "$ROLE" 2>&1 | tee /tmp/install-ptp-audio.log
 
 echo ""
 echo "--- step 2: confirm the no-PHC / no-systemd reporting is honest ---"
@@ -85,6 +85,31 @@ case "$ROLE" in
     fi
     ;;
 esac
+
+echo ""
+echo "--- step 2b: role-conditional phc2sys unit generation and the NTP-detection branch ---"
+# This container has no PHC at all (no /dev/ptpN), which install-ptp-audio.sh
+# detects itself in step 1: phc2sys-showmesh.service disciplines a PHC from
+# the system clock, and there is no PHC here for either role to discipline,
+# so the unit must never be written -- proving the negative case of the
+# role-conditional generation for both roles, not just that a grandmaster
+# with a PHC gets it (this bench has no PHC to prove that positive case;
+# the orchestrator proved it by hand on showmesh-node-01).
+if [ -e /etc/systemd/system/phc2sys-showmesh.service ]; then
+  echo "FAIL: phc2sys-showmesh.service was written on a PHC-less container (role=$ROLE); it must only exist for role=grandmaster with a real PHC"
+  exit 1
+else
+  echo "OK: phc2sys-showmesh.service correctly not written (role=$ROLE, no PHC in this container)"
+fi
+# Same PHC-less container also exercises the NTP-detection branch: no NTP
+# client is installed or running here, so it must report that honestly
+# rather than claiming to have disabled something it never touched.
+if grep -q 'no active NTP client found' /tmp/install-ptp-audio.log; then
+  echo "OK: NTP-detection branch ran and correctly reported no active NTP client in this container"
+else
+  echo "FAIL: expected install-ptp-audio.sh to report no active NTP client on a PHC-less container with none running"
+  exit 1
+fi
 
 echo ""
 echo "--- step 3: start ptp4l manually (this container has no systemd PID 1) ---"
@@ -240,6 +265,52 @@ if echo "$GROUP_READING" | grep -q "ELECTION_OK"; then
 else
   echo "FAIL: node.group election did not land on showmesh-ptp-driver for a synthetic sink placed in its group"
   exit 1
+fi
+
+echo ""
+echo "--- step 7: driver-election.py against a pw-dump padded past ARG_MAX ---"
+# verify-ptp-audio.sh used to pass pw-dump's own output to python3 as a
+# command-line argument (by way of an environment variable, which shares
+# the same OS exec size limit): fine in this container's small graph, but
+# a real node with a real sound card produces pw-dump output large enough
+# to exceed ARG_MAX outright (confirmed on showmesh-node-01: "Argument
+# list too long"). This container has no sound card, so there is nothing
+# here that naturally produces output that large; pad a real capture from
+# this container's own graph with synthetic filler objects until it does,
+# and feed it to the exact parser verify-ptp-audio.sh now runs -- on
+# stdin, never as an argument or environment variable -- to prove the
+# fix, not just the mechanism the fix replaced.
+REAL_DUMP="$(sudo -u pipewire PIPEWIRE_RUNTIME_DIR=/run/pipewire XDG_RUNTIME_DIR=/run/pipewire pw-dump 2>/dev/null)"
+ARG_MAX_BYTES="$(getconf ARG_MAX)"
+PADDED_DUMP="$(python3 -c "
+import json, sys
+objs = json.loads(sys.argv[1])
+i = 0
+while len(json.dumps(objs)) < int(sys.argv[2]):
+    objs.append({'id': 100000 + i, 'info': {'props': {'node.name': f'bench-padding-node-{i}', 'node.description': 'x' * 400}}})
+    i += 1
+print(json.dumps(objs))
+" "$REAL_DUMP" "$((ARG_MAX_BYTES + 200000))")"
+echo "padded pw-dump size: $(echo -n "$PADDED_DUMP" | wc -c) bytes, ARG_MAX=$ARG_MAX_BYTES bytes"
+
+PADDED_READING="$(printf '%s' "$PADDED_DUMP" | python3 /repo/deploy/node/ptp-audio/driver-election.py "alsa_output")"
+if echo "$PADDED_READING" | grep -q "^DRIVER_FOUND=1$"; then
+  echo "OK: driver-election.py correctly found showmesh-ptp-driver in a pw-dump padded past this host's ARG_MAX, fed on stdin"
+else
+  echo "FAIL: driver-election.py did not find showmesh-ptp-driver in the padded pw-dump"
+  echo "$PADDED_READING"
+  exit 1
+fi
+
+# The old failure mode, confirmed here rather than only asserted: passing
+# that same oversized payload as an environment variable (the same OS exec
+# size limit an argument shares) to a real command fails with E2BIG before
+# the command even starts.
+if PW_DUMP_JSON="$PADDED_DUMP" env true 2>/tmp/showmesh-argmax-check.log; then
+  echo "FAIL: expected the old argument/environment-passing approach to fail past ARG_MAX on this padded payload, but it succeeded -- the padding is not large enough to prove this fix on this host"
+  exit 1
+else
+  echo "OK: confirmed the old argument/environment-passing approach does fail past ARG_MAX on this padded payload ($(cat /tmp/showmesh-argmax-check.log))"
 fi
 
 echo ""
