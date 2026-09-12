@@ -283,6 +283,9 @@ func TestScheduledStartOutputLatencyCanPushT0IntoThePast(t *testing.T) {
 	if !containsString(out.Reason, pkgaudio.ReasonScheduledStartInPast) {
 		t.Fatalf("refusal reason = %q, want it to carry %q", out.Reason, pkgaudio.ReasonScheduledStartInPast)
 	}
+	if !containsString(out.Reason, "2000000us") {
+		t.Fatalf("refusal reason = %q, want it to name the calibrated output latency that caused the refusal", out.Reason)
+	}
 }
 
 // TestScheduledStartIgnoredWhenProviderIsNotLocked pins the other half:

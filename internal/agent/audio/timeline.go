@@ -361,7 +361,7 @@ func (m *Manager) clockSourceSnapshot() ClockSource {
 // subsequent scheduled start until the next audio.node.configure
 // delivery replaces it (internal/agent/audioengine.go's rebuildLocked is
 // the one caller, resolving the wire method to zero before calling this
-// when it is "unmeasured" — see outputLatencyConfig.effectiveOutputLatencyUs).
+// when it is "unmeasured": see outputLatencyConfig.effectiveOutputLatencyUs).
 func (m *Manager) SetOutputLatency(latencyUs int) {
 	m.outputLatencyUs.Store(int64(latencyUs))
 }
@@ -464,14 +464,19 @@ func (m *Manager) resolveScheduleLocked(ctx context.Context, scheduledAtNs *int6
 	// air at the requested instant. Zero (unmeasured, or no
 	// audio.node.configure delivery yet) leaves T0 unadjusted, exactly
 	// today's behavior.
-	if latencyUs := m.outputLatencyUsSnapshot(); latencyUs != 0 {
+	latencyUs := m.outputLatencyUsSnapshot()
+	if latencyUs != 0 {
 		t0 = t0.Add(-time.Duration(latencyUs) * time.Microsecond)
 	}
 	if !t0.After(mediaNow.Time) {
+		latencyNote := ""
+		if latencyUs != 0 {
+			latencyNote = fmt.Sprintf(" (adjusted from the requested %d by this node's calibrated output latency of %dus)", *scheduledAtNs, latencyUs)
+		}
 		return nil, "", &pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeRefused,
-			Reason: fmt.Sprintf("%s: the requested start instant %d is %s behind this node's media clock, which already reads %d; this node refuses rather than starting late",
-				pkgaudio.ReasonScheduledStartInPast, *scheduledAtNs, mediaNow.Time.Sub(t0), mediaNow.Time.UnixNano()),
+			Reason: fmt.Sprintf("%s: the adjusted start instant %d%s is %s behind this node's media clock, which already reads %d; this node refuses rather than starting late",
+				pkgaudio.ReasonScheduledStartInPast, t0.UnixNano(), latencyNote, mediaNow.Time.Sub(t0), mediaNow.Time.UnixNano()),
 		}
 	}
 	if lead := t0.Sub(mediaNow.Time); lead > maxScheduledStartLead {
