@@ -432,4 +432,107 @@ else
 fi
 
 echo ""
+echo "--- step 8: verify-ptp-audio.sh's duplicate-writer check, against real processes on this host ---"
+# The actual node-01 incident: a stray hand-run phc2sys alongside the
+# installed unit fought the same PHC, and every other check verify-ptp-audio.sh
+# runs stayed green throughout. This step proves the fix -- that check
+# reads the live process table, not the installed units -- with inert
+# fake binaries (no real ptp4l/phc2sys protocol run here, only comm/argv),
+# so it needs no PHC and cannot collide with the real ptp4l already running
+# from step 3 above except by DESIGN in the ptp4l case below, which mirrors
+# the incident's own shape: one legitimate process plus a stray one.
+FAKEBIN=/tmp/showmesh-bench-fakebin
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/phc2sys" <<'EOF'
+#!/bin/bash
+trap 'exit 0' TERM
+sleep 60
+EOF
+cat > "$FAKEBIN/ptp4l" <<'EOF'
+#!/bin/bash
+trap 'exit 0' TERM
+sleep 60
+EOF
+chmod +x "$FAKEBIN/phc2sys" "$FAKEBIN/ptp4l"
+
+"$FAKEBIN/phc2sys" -s CLOCK_REALTIME -c /dev/ptp0 -O 0 &
+FAKE_PHC2SYS_1=$!
+"$FAKEBIN/phc2sys" -s CLOCK_REALTIME -c /dev/ptp0 -O 0 &
+FAKE_PHC2SYS_2=$!
+# A second target clock, not shared with the pair above: proves this
+# check groups by target device rather than flagging every phc2sys process
+# on the host as a duplicate.
+"$FAKEBIN/phc2sys" -s CLOCK_REALTIME -c /dev/ptp1 -O 0 &
+FAKE_PHC2SYS_3=$!
+# The real ptp4l from step 3 is still running on $IFACE; this one extra
+# fake process on the same interface reproduces the actual incident shape
+# (one legitimate writer, one stray one) rather than two synthetic ones.
+"$FAKEBIN/ptp4l" -f /etc/showmesh/ptp4l.conf -i "$IFACE" -m &
+FAKE_PTP4L_1=$!
+sleep 1
+
+VERIFY_OUT="$(/repo/deploy/node/verify-ptp-audio.sh --play 0 2>&1 || true)"
+echo "$VERIFY_OUT"
+
+kill "$FAKE_PHC2SYS_1" "$FAKE_PHC2SYS_2" "$FAKE_PHC2SYS_3" "$FAKE_PTP4L_1" 2>/dev/null || true
+wait "$FAKE_PHC2SYS_1" "$FAKE_PHC2SYS_2" "$FAKE_PHC2SYS_3" "$FAKE_PTP4L_1" 2>/dev/null || true
+
+if echo "$VERIFY_OUT" | grep -qE "FAIL: 2 phc2sys processes target /dev/ptp0 at once \(pids:[0-9 ]+\)"; then
+  echo "OK: verify-ptp-audio.sh flagged the two phc2sys processes sharing /dev/ptp0"
+else
+  echo "FAIL: expected a FAIL line naming 2 phc2sys processes on /dev/ptp0"
+  exit 1
+fi
+if echo "$VERIFY_OUT" | grep -q "/dev/ptp1"; then
+  echo "FAIL: the lone phc2sys process on /dev/ptp1 must never be reported as a duplicate"
+  exit 1
+else
+  echo "OK: the lone phc2sys process on /dev/ptp1 was correctly not flagged"
+fi
+if echo "$VERIFY_OUT" | grep -qE "FAIL: 2 ptp4l processes run on interface $IFACE at once \(pids:[0-9 ]+\)"; then
+  echo "OK: verify-ptp-audio.sh flagged the real ptp4l plus the one stray process sharing $IFACE"
+else
+  echo "FAIL: expected a FAIL line naming 2 ptp4l processes on $IFACE (the real one from step 3 plus the stray one started here)"
+  exit 1
+fi
+
+echo ""
+echo "--- step 9: servo-health.py against the actual node-01 saturated/flapping/negative-delay log lines ---"
+# The exact phc2sys log lines from the node-01 incident (see PTP-AUDIO.md):
+# freq pinned at linuxptp's own 900000000ppb clamp, state flapping s2/s0.
+# Fed directly to the parser, on stdin, the same convention driver-election.py
+# already uses and for the same reason: this bench has no PHC and no real
+# ptp4l/phc2sys servo to sample, so the regression guard is the parser
+# itself, not the systemctl/journalctl-gated check that calls it (never run
+# by this bench, same as every other systemd-gated check -- see README).
+SATURATED_READING="$(printf '%s\n' \
+  '/dev/ptp0 sys offset -288646357 s2 freq -900000000 delay 0' \
+  '/dev/ptp0 sys offset   55730027 s0 freq -900000000 delay 0' \
+  | python3 /repo/deploy/node/ptp-audio/servo-health.py)"
+echo "$SATURATED_READING"
+if echo "$SATURATED_READING" | grep -q '^SAMPLE=-288646357|2|-900000000|0$' \
+   && echo "$SATURATED_READING" | grep -q '^SAMPLE=55730027|0|-900000000|0$' \
+   && echo "$SATURATED_READING" | grep -q '^SAMPLE_COUNT=2$'; then
+  echo "OK: servo-health.py correctly extracted the saturated-freq, flapping-state samples from the actual node-01 log lines"
+else
+  echo "FAIL: servo-health.py did not extract the expected samples from the node-01 fixture lines"
+  exit 1
+fi
+
+# A follower's own ptp4l lines use different label words ("master offset",
+# "path delay") for the same four fields; the negative path delay the
+# node-01 follower actually saw is the clearest single tell this check
+# exists to catch.
+NEGATIVE_DELAY_READING="$(printf '%s\n' \
+  'ptp4l[1234.5]: master offset 80123456 s0 freq 45000 path delay -60123' \
+  | python3 /repo/deploy/node/ptp-audio/servo-health.py)"
+echo "$NEGATIVE_DELAY_READING"
+if echo "$NEGATIVE_DELAY_READING" | grep -q '^SAMPLE=80123456|0|45000|-60123$'; then
+  echo "OK: servo-health.py correctly extracted a negative path delay from a follower's ptp4l log line"
+else
+  echo "FAIL: servo-health.py did not extract the negative-path-delay sample"
+  exit 1
+fi
+
+echo ""
 echo "=== in-container-proof.sh: all checks passed for role=$ROLE ==="

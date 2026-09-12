@@ -54,6 +54,18 @@ with a PHC:
   confirming the fix (a real node's `pw-dump` output can exceed `ARG_MAX`
   outright; a container's own small graph never does, so this bench cannot
   otherwise exercise the failure this fixed);
+- **`verify-ptp-audio.sh`'s duplicate-writer check, against real processes
+  on the container's own process table**: two inert processes named
+  `phc2sys` sharing the same target device (`-c /dev/ptp0`) are correctly
+  flagged with both pids, a third on a different device (`/dev/ptp1`) is
+  correctly left alone, and one inert process named `ptp4l` sharing the
+  real `ptp4l` from this bench's own interface is correctly flagged
+  alongside it -- the actual node-01 incident's shape (one legitimate
+  writer, one stray one), not two synthetic ones;
+- **`servo-health.py`** (the parser `verify-ptp-audio.sh`'s servo-health
+  check reads), fed the exact node-01 `phc2sys` log lines (saturated
+  frequency, flapping state) and a follower's negative-path-delay `ptp4l`
+  line, on stdin;
 - **the two negative cases of clock ownership this bench can reach without
   real hardware**: `phc2sys-showmesh.service` is never written on this
   bench's PHC-less containers, for either role (only a `grandmaster`-role
@@ -93,8 +105,14 @@ with a PHC:
   from the exact config `install-ptp-audio.sh` writes, because a plain
   `docker run` container does not run systemd as PID 1 (`bench/node-install`
   makes the identical point about `deploy/node/install.sh`'s unit).
-  `verify-ptp-audio.sh` itself is not run by this bench for the same
-  reason: every one of its checks starts with `systemctl is-active`.
+  `verify-ptp-audio.sh` itself IS run by this bench now, but most of its
+  checks still cannot pass here for the same reason as the negatives
+  above: they start with `systemctl is-active` and there is no systemd in
+  a plain container. Only the duplicate-writer check (reads the process
+  table directly) and the servo-health check's own parser (fed fixtures
+  directly, see below) are actually proven; the servo-health check's
+  `journalctl`-reading half is not, for the same reason `journalctl`
+  itself does not exist in this container.
 - the `GST_DEBUG=audiobasesink:6` skew-slaving check `verify-ptp-audio.sh`
   runs on a real node: `alsasink` is never in this bench's own pipeline
   (there is no ALSA sink to put it in front of), so there is nothing here
