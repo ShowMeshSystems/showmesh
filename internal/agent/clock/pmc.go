@@ -3,7 +3,9 @@ package clock
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -22,25 +24,102 @@ var pmcBinary = "/usr/sbin/pmc"
 // pmcTimeout bounds one pmc invocation.
 const pmcTimeout = 3 * time.Second
 
+// errPMCUnavailable marks an error as pmc never having reached the target
+// ptp4l instance at all: pmc's own client-side setup (starting the
+// process, or binding the local -i socket [runPMC] gives it) failed
+// before any request went out. Never evidence about the OBSERVED ptp4l's
+// health — callers must not fold this into [RawStatus.Reachable]=false,
+// which RES-019 section 9 reserves for interface/link loss and the owning
+// ptp4l process being gone.
+type errPMCUnavailable struct{ err error }
+
+func (e *errPMCUnavailable) Error() string { return e.err.Error() }
+func (e *errPMCUnavailable) Unwrap() error { return e.err }
+
+// pmcUnavailable reports whether err came from pmc itself, i.e. this
+// package's own tooling, rather than from ptp4l declining or ignoring the
+// request.
+func pmcUnavailable(err error) bool {
+	var u *errPMCUnavailable
+	return errors.As(err, &u)
+}
+
+// pmcLocalSocketMarkers are pmc's own diagnostic strings for a failure
+// setting up its local client-side transport (the -i socket, or the
+// broader "pmc" process itself), captured verbatim from a real failure
+// against a non-writable default path: "pmc: uds: bind failed: Permission
+// denied" / "pmc: failed to open transport" / "failed to create pmc".
+var pmcLocalSocketMarkers = []string{"bind failed", "failed to open transport", "failed to create pmc"}
+
 // runPMC shells out to pmc against uds, targeting domain (a management
 // message whose domainNumber does not match the target ptp4l instance's
 // own configured domain is silently dropped — discovered running the real
 // binary against this seam's own bench, not documented anywhere pmc -h
 // prints), and returns its raw stdout. managementID is one of pmc's
 // management set names, e.g. "TIME_STATUS_NP".
+//
+// pmc binds its OWN client socket locally and, given no -i, hardcodes
+// /var/run/pmc.$pid — unwritable to a non-root agent (/var/run is
+// root:root 0755), so every GET fails with "uds: bind failed: Permission
+// denied" no matter how healthy the observed ptp4l is. [pmcLocalSocket]
+// gives pmc a path this process can certainly write, unique per
+// invocation so concurrent reads cannot collide, removed here even when
+// the read fails.
 func runPMC(ctx context.Context, uds string, domain int, managementID string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, pmcTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, pmcBinary, "-u", "-b", "0", "-d", strconv.Itoa(domain), "-s", uds, "GET "+managementID)
+	localSocket, err := pmcLocalSocket()
+	if err != nil {
+		return "", &errPMCUnavailable{fmt.Errorf("cannot allocate pmc's own local socket path: %w", err)}
+	}
+	defer func() { _ = os.Remove(localSocket) }()
+
+	cmd := exec.CommandContext(ctx, pmcBinary, "-u", "-b", "0", "-i", localSocket, "-d", strconv.Itoa(domain), "-s", uds, "GET "+managementID)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("pmc GET %s against %s: %w: %s", managementID, uds, err, strings.TrimSpace(string(exitErr.Stderr)))
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			wrapped := fmt.Errorf("pmc GET %s against %s: %w: %s", managementID, uds, err, stderr)
+			if pmcStderrIsLocalFailure(stderr) {
+				return "", &errPMCUnavailable{wrapped}
+			}
+			return "", wrapped
 		}
-		return "", fmt.Errorf("pmc GET %s against %s: %w", managementID, uds, err)
+		// cmd.Output failed to even start pmc (binary missing, not
+		// executable): certainly this package's own tooling, never
+		// evidence about the observed ptp4l.
+		return "", &errPMCUnavailable{fmt.Errorf("pmc GET %s against %s: %w", managementID, uds, err)}
 	}
 	return string(out), nil
+}
+
+// pmcLocalSocket reserves a unique path under the OS temp directory
+// (world-writable, unlike /var/run) for pmc's own -i client socket, then
+// removes the reservation so pmc can bind fresh: bind() fails if a
+// filesystem entry already exists at the path.
+func pmcLocalSocket() (string, error) {
+	f, err := os.CreateTemp("", "pmc.*.sock")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func pmcStderrIsLocalFailure(stderr string) bool {
+	for _, marker := range pmcLocalSocketMarkers {
+		if strings.Contains(stderr, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // pmcFields parses one pmc RESPONSE MANAGEMENT block's body into a

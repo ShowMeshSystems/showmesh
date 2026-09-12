@@ -106,6 +106,16 @@ func (p *ExternalProvider) Poll(ctx context.Context) RawStatus {
 func pollViaUDS(ctx context.Context, uds string, domain int, owner string) RawStatus {
 	portOut, portErr := runPMC(ctx, uds, domain, "PORT_DATA_SET")
 	if portErr != nil {
+		if pmcUnavailable(portErr) {
+			// pmc itself never reached ptp4l (its own client-side setup
+			// failed) — not RES-019 section 9's "interface or link loss"
+			// or "ptp4l gone", so this must not read as StateFailed. Report
+			// no lock evidence instead: Tracker settles into acquiring (or
+			// holdover, if previously locked) exactly as it does for any
+			// other reading with no proof of sync yet.
+			return RawStatus{Reachable: true, Timescale: TimescaleUnknown, Owner: owner,
+				Reason: fmt.Sprintf("clock state unknown: %v (this node's own pmc tooling failed, not evidence ptp4l is down)", portErr)}
+		}
 		return RawStatus{Reachable: false, Reason: portErr.Error()}
 	}
 	port := parsePortDataSet(portOut)

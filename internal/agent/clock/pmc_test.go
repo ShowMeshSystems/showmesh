@@ -1,9 +1,81 @@
 package clock
 
 import (
+	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// fakePMC writes a shell script standing in for pmcBinary that dumps its
+// own argv to argsOut, then exits 0 with empty stdout (this test only
+// cares what runPMC invoked pmc WITH, not pmc's own response parsing).
+func fakePMC(t *testing.T, argsOut string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "fake-pmc.sh")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" > " + argsOut + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake pmc: %v", err)
+	}
+	return script
+}
+
+// TestRunPMCUsesWritableLocalSocket covers the bug this fix closes: pmc
+// with no -i hardcodes /var/run/pmc.$pid, unwritable to a non-root agent,
+// so every GET failed with "uds: bind failed: Permission denied" even
+// against a perfectly healthy ptp4l. runPMC must pass -i with a path this
+// process can certainly write (never under /var/run or /run), and must
+// remove it once the call returns.
+func TestRunPMCUsesWritableLocalSocket(t *testing.T) {
+	argsOut := filepath.Join(t.TempDir(), "args.txt")
+	orig := pmcBinary
+	pmcBinary = fakePMC(t, argsOut)
+	defer func() { pmcBinary = orig }()
+
+	if _, err := runPMC(context.Background(), "/var/run/ptp/ptp4lro", 0, "PORT_DATA_SET"); err != nil {
+		t.Fatalf("runPMC: %v", err)
+	}
+
+	raw, err := os.ReadFile(argsOut)
+	if err != nil {
+		t.Fatalf("read recorded args: %v", err)
+	}
+	args := strings.Fields(string(raw))
+	i := -1
+	for n, a := range args {
+		if a == "-i" {
+			i = n
+			break
+		}
+	}
+	if i == -1 || i+1 >= len(args) {
+		t.Fatalf("pmc invocation carried no -i argument: %q", string(raw))
+	}
+	sock := args[i+1]
+	if strings.HasPrefix(sock, "/var/run") || strings.HasPrefix(sock, "/run") {
+		t.Fatalf("-i socket %q sits under a root-owned directory, reintroducing the bind failure", sock)
+	}
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Fatalf("-i socket %q was not cleaned up after the call: stat err = %v", sock, err)
+	}
+}
+
+// TestRunPMCLocalSocketsAreUnique covers two concurrent reads never
+// colliding on the same -i path.
+func TestRunPMCLocalSocketsAreUnique(t *testing.T) {
+	a, err := pmcLocalSocket()
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	b, err := pmcLocalSocket()
+	if err != nil {
+		t.Fatalf("pmcLocalSocket: %v", err)
+	}
+	if a == b {
+		t.Fatalf("pmcLocalSocket returned the same path twice: %q", a)
+	}
+}
 
 // readFixture loads a captured pmc output file from testdata/pmc — see
 // that directory's README.md for provenance (real captures vs. hand-edited
