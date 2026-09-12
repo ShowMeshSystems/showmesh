@@ -59,6 +59,9 @@ export type {
   ConfigAudioOutputLatency,
   AudioNodeSummary,
   AudioNodeListResponse,
+  // Track I seam I1, RES-019, ADR-039: node.clock per-node PTP configuration.
+  ConfigNodeClock,
+  NodeClockConfigResponse,
   FPPInstance,
   // The pending-instanceUuid-change acknowledgement.
   FPPInstanceUUIDChange,
@@ -313,6 +316,9 @@ export {
   getAudioNode,
   putAudioNode,
   getAudioNodeConfigRevisions,
+  getNodeClock,
+  putNodeClock,
+  getNodeClockConfigRevisions,
   stopFPPPlaylist,
   startFPPPlaylist,
   stopFPPPlaylistGracefully,
