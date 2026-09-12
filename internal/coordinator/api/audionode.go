@@ -383,6 +383,12 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 			ProgramChannels: p.ProgramChannels, LTCChannel: p.LTCChannel,
 			ClockDomain: p.ClockDomain, ClockDomainProvenance: p.ClockDomainProvenance,
 			Role: p.Role, Zone: p.Zone,
+			OutputLatency: v1.ConfigAudioOutputLatency{
+				ValueUs: p.OutputLatency.ValueUs, Method: p.OutputLatency.Method,
+				MeasuredAt: formatTimePtr(p.OutputLatency.MeasuredAt),
+				Reference:  p.OutputLatency.Reference, Confidence: p.OutputLatency.Confidence,
+				Configuration: p.OutputLatency.Configuration,
+			},
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),

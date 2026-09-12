@@ -356,6 +356,24 @@ func (m *Manager) clockSourceSnapshot() ClockSource {
 	return m.clockSource
 }
 
+// SetOutputLatency stores this node's currently bound calibrated output
+// latency (RES-019 section 8), signed microseconds, read by every
+// subsequent scheduled start until the next audio.node.configure
+// delivery replaces it (internal/agent/audioengine.go's rebuildLocked is
+// the one caller, resolving the wire method to zero before calling this
+// when it is "unmeasured" — see outputLatencyConfig.effectiveOutputLatencyUs).
+func (m *Manager) SetOutputLatency(latencyUs int) {
+	m.outputLatencyUs.Store(int64(latencyUs))
+}
+
+// outputLatencyUsSnapshot returns the currently bound output latency, in
+// signed microseconds. Zero (the default before any audio.node.configure
+// has ever delivered a measured value) applies no adjustment to a
+// scheduled start.
+func (m *Manager) outputLatencyUsSnapshot() int64 {
+	return m.outputLatencyUs.Load()
+}
+
 // maxScheduledStartLead bounds how far into the future a start instant
 // may sit before this node refuses it. A scheduled start holds its
 // session's lock until T0 arrives, so an instant days away would wedge
@@ -439,6 +457,16 @@ func (m *Manager) resolveScheduleLocked(ctx context.Context, scheduledAtNs *int6
 	}
 
 	t0 := time.Unix(0, *scheduledAtNs)
+	// RES-019 section 8: this node's output chain (USB isochronous depth,
+	// ALSA period/buffer, PipeWire quantum, DAC group delay) delays a
+	// sample between engine start and the air by a calibrated amount, so
+	// the engine must start that much EARLIER for the sample to reach the
+	// air at the requested instant. Zero (unmeasured, or no
+	// audio.node.configure delivery yet) leaves T0 unadjusted, exactly
+	// today's behavior.
+	if latencyUs := m.outputLatencyUsSnapshot(); latencyUs != 0 {
+		t0 = t0.Add(-time.Duration(latencyUs) * time.Microsecond)
+	}
 	if !t0.After(mediaNow.Time) {
 		return nil, "", &pkgaudio.OutcomeResult{
 			Outcome: pkgaudio.OutcomeRefused,

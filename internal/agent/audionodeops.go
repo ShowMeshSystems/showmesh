@@ -37,6 +37,42 @@ type audioNodeConfig struct {
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
 	Revision              int64  `json:"revision"`
+
+	// OutputLatency is RES-019 section 8's calibrated static output
+	// delay, absent/zero-value ("unmeasured") on a node the operator has
+	// never measured. See [effectiveOutputLatencyUs].
+	OutputLatency outputLatencyConfig `json:"outputLatency,omitempty"`
+}
+
+// outputLatencyConfig mirrors config.OutputLatencyPayload's JSON tags —
+// independently reproduced, matching audioNodeConfig's own convention.
+// This package only ever reads ValueUs and Method (see
+// [effectiveOutputLatencyUs]): MeasuredAt/Reference/Confidence/
+// Configuration are provenance for a human reading the API/showmeshctl/
+// node page, never consulted by playback.
+type outputLatencyConfig struct {
+	ValueUs       int     `json:"valueUs,omitempty"`
+	Method        string  `json:"method,omitempty"`
+	MeasuredAt    *string `json:"measuredAt,omitempty"`
+	Reference     string  `json:"reference,omitempty"`
+	Confidence    string  `json:"confidence,omitempty"`
+	Configuration string  `json:"configuration,omitempty"`
+}
+
+// effectiveOutputLatencyUs is the microsecond offset a scheduled start
+// actually applies: zero whenever Method is not a measured one, so a
+// zero-value outputLatencyConfig (the default on every payload that
+// predates this seam, and every payload where the operator never
+// measured) applies zero exactly as RES-019 section 8 requires, without
+// this package needing its own copy of config.OutputLatencyMethod*'s
+// closed vocabulary — anything other than "unmeasured" is treated as a
+// real value, and an unrecognized method was already refused at the
+// coordinator's decode step before it ever reached this node.
+func (c outputLatencyConfig) effectiveOutputLatencyUs() int {
+	if c.Method == "" || c.Method == "unmeasured" {
+		return 0
+	}
+	return c.ValueUs
 }
 
 // audioSettingsConfig is "audio.settings.configure"'s params shape,
@@ -187,7 +223,7 @@ func (b *audioBinding) currentSettingsRevision() (revision int64, have bool) {
 var audioNodeConfigureKnownKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true, "programChannels": true,
 	"ltcChannel": true, "clockDomain": true, "clockDomainProvenance": true,
-	"revision": true,
+	"revision": true, "outputLatency": true,
 }
 
 // decodeAudioNodeConfig validates params' shape against

@@ -98,6 +98,67 @@ func TestOpenAPIAudioNodeConfigResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revBody)
 }
 
+// TestOpenAPIAudioNodeOutputLatencyRoundTrips proves a fully provenanced
+// outputLatency PUT is accepted, round-trips through GET, and both
+// responses match api/openapi.yaml's ConfigAudioOutputLatency schema.
+func TestOpenAPIAudioNodeOutputLatencyRoundTrips(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("render-01", []string{"hw:0,0"}, []string{"hw:0,0"}),
+	})
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	authHeader := map[string]string{"Authorization": "Bearer " + token}
+
+	body := `{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,` +
+		`"clockDomain":"single-interface","clockDomainProvenance":"one physical interface, both routes on it",` +
+		`"outputLatency":{"valueUs":55997,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z",` +
+		`"reference":"MOTU M4 loopback capture","confidence":"high: three runs agreed within 50us",` +
+		`"configuration":"PipeWire quantum 1024, 48000 Hz"}}`
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/audio.node/render-01", body, authHeader)
+	putResp, putBody := doRawRequest(t, api.Handler, putReq)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+	}
+	assertMatchesSchema(t, c, "AudioNodeConfigResponse", putBody)
+	if !containsAll(string(putBody), `"valueUs":55997`) || !containsAll(string(putBody), `"method":"loopback"`) {
+		t.Fatalf("PUT response missing outputLatency provenance; body: %s", putBody)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.node/render-01", authHeader)
+	assertMatchesSchema(t, c, "AudioNodeConfigResponse", getBody)
+	if !containsAll(string(getBody), `"valueUs":55997`) || !containsAll(string(getBody), `"configuration":"PipeWire quantum 1024, 48000 Hz"`) {
+		t.Fatalf("GET response missing outputLatency provenance; body: %s", getBody)
+	}
+}
+
+// TestOpenAPIAudioNodeOutputLatencyDefaultsUnmeasuredInResponse proves a
+// PUT with no "outputLatency" key still reports one back — method
+// "unmeasured", never omitted — matching api/openapi.yaml's schema.
+func TestOpenAPIAudioNodeOutputLatencyDefaultsUnmeasuredInResponse(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showConfigTestDeps(svc, st)
+	deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithAudioCapabilities("render-01", []string{"hw:0,0"}, []string{"hw:0,0"}),
+	})
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	status, body := mustPutAudioNode(t, api, token, "render-01", validAudioNodeBody)
+	if status != http.StatusOK {
+		t.Fatalf("PUT: status = %d, want 200; body: %s", status, body)
+	}
+	assertMatchesSchema(t, c, "AudioNodeConfigResponse", []byte(body))
+	if !containsAll(body, `"outputLatency":{"method":"unmeasured"}`) {
+		t.Fatalf("response did not default outputLatency to unmeasured; body: %s", body)
+	}
+}
+
 // TestOpenAPIAudioNodePlacementRefusalMatchesProblemSchema covers the
 // placement-refusal 400 body against the shared Problem schema.
 func TestOpenAPIAudioNodePlacementRefusalMatchesProblemSchema(t *testing.T) {

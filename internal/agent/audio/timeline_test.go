@@ -233,6 +233,58 @@ func TestScheduledStartInThePastIsRefused(t *testing.T) {
 	}
 }
 
+// TestScheduledStartAppliesOutputLatency proves RES-019 section 8's
+// adjustment: a bound calibrated output latency shifts the engine's own
+// start instant earlier by exactly that amount, so the timeline's own
+// ScheduledAtNs (what the engine actually targets) reflects the
+// requested T0 minus the latency, not the requested T0 itself.
+func TestScheduledStartAppliesOutputLatency(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	const latencyUs = 56_000
+	f.m.SetOutputLatency(latencyUs)
+
+	out := f.startScheduled(t, 2*time.Second)
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("scheduled StartAt = %q (%s), want started", out.Outcome, out.Reason)
+	}
+	snap := f.timeline(t)
+	if !snap.Scheduled {
+		t.Fatalf("timeline reports not scheduled: %+v", snap)
+	}
+	// startScheduled requested T0 = (media instant at call time) + lead,
+	// and has already advanced the media clock by that same lead, so the
+	// requested T0 equals the CURRENT media instant. The engine's own
+	// ScheduledAtNs (RES-019 section 8's adjustment) must read latencyUs
+	// microseconds earlier than that.
+	nowNs := f.media.Now(context.Background()).Time.UnixNano()
+	wantNs := nowNs - int64(latencyUs)*int64(time.Microsecond)
+	if snap.ScheduledAtNs != wantNs {
+		t.Fatalf("ScheduledAtNs = %d, want %d (requested T0 minus %d us of output latency)", snap.ScheduledAtNs, wantNs, latencyUs)
+	}
+}
+
+// TestScheduledStartOutputLatencyCanPushT0IntoThePast proves the
+// adjustment is applied BEFORE the past/lead checks: a start instant
+// that is comfortably in the future on its own is refused once the
+// bound output latency is subtracted and the ADJUSTED instant is no
+// longer after the media clock.
+func TestScheduledStartOutputLatencyCanPushT0IntoThePast(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	// 2 seconds of latency against a 1 second lead: the adjusted T0 is
+	// 1 second BEHIND the media clock by the time it is evaluated.
+	f.m.SetOutputLatency(2_000_000)
+	ctx := context.Background()
+
+	t0 := f.media.Now(ctx).Time.Add(1 * time.Second)
+	out := f.m.StartAt(ctx, f.id, "inv-start", 2, t0.UnixNano())
+	if out.Outcome != pkgaudio.OutcomeRefused {
+		t.Fatalf("StartAt outcome = %q (%s), want refused once output latency is subtracted", out.Outcome, out.Reason)
+	}
+	if !containsString(out.Reason, pkgaudio.ReasonScheduledStartInPast) {
+		t.Fatalf("refusal reason = %q, want it to carry %q", out.Reason, pkgaudio.ReasonScheduledStartInPast)
+	}
+}
+
 // TestScheduledStartIgnoredWhenProviderIsNotLocked pins the other half:
 // a node whose clock is not locked keeps today's start-on-arrival
 // behaviour exactly, and says so rather than silently discarding the

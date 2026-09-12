@@ -5060,6 +5060,8 @@ export interface components {
          *     `ltcRoute` and `ltcChannel` are the one optional pair, and they are optional TOGETHER: omitting both declares a program-only node that emits no LTC at all, and giving one without the other is refused rather than half-honoured. A program-only declaration is the only way to place a two-output interface, whose LTC-capable route list is correctly empty because ADR-018 requires LTC on a channel discrete from the program pair. Every LTC refusal is unchanged for a declaration that DOES name an LTC route, including the check that the route is one the node advertised as LTC-capable. ADR-042 section 5 already treats losing LTC as costing timecode and never the audience's program audio.
          *
          *     `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the routes run on, never inferred, and are required on a program-only node too. `role` (ADR-045) is one of `program`, `program+ltc`, or `zone`; optional on the wire, and absent decodes to `program+ltc` - the role every pre-ADR-045 audio.node object already implicitly held, since an installation had exactly one and it always carried both program and LTC. At most one audio.node across the installation may carry `program+ltc` at a time (ADR-018's one clock domain, one LTC emitter); a second is refused, naming both node ids. `zone` is the operator's own name for the independent speaker zone this node drives, present only when `role` is `zone` - refused on any other role, since an ignored field would read as an applied one.
+         *
+         *     `outputLatency` (RES-019 section 8) is this node's calibrated static output-chain delay, subtracted from a scheduled start's start instant so the sample reaches the air at the intended time. Optional on the wire; absent decodes to method "unmeasured", which applies zero. A GET response always includes it (never omitted, so its provenance, or the "unmeasured" default, is never silently dropped).
          */
         ConfigAudioNode: {
             programRoute: string;
@@ -5075,6 +5077,25 @@ export interface components {
             role?: "program" | "program+ltc" | "zone";
             /** @description The operator's own name for this node's independent speaker zone. Present only when role is "zone". */
             zone?: string;
+            outputLatency?: components["schemas"]["ConfigAudioOutputLatency"];
+        };
+        /** @description "audio.node.outputLatency" (RES-019 section 8): a signed per-output offset, in microseconds, subtracted from that node's scheduled start instant so playback reaches the air at the intended instant instead of one output-chain delay late. `method` "unmeasured" is the default, applies zero, and every other field MUST be absent alongside it - a value beside it would be a fabricated measurement (RES-019 section 8: "no value is asserted... a fabricated number would be worse than zero"). Every other method (`loopback`, `acoustic`, `declared`) requires `valueUs`, `measuredAt`, `reference`, `confidence`, and `configuration` together. `configuration` records the buffer/quantum/sample-rate configuration the value was measured under: RES-019 section 8 found the offset moves with PipeWire's graph quantum, so a value is only valid for the configuration it was measured under, and this field is how that is recorded and shown next to the number rather than silently going stale. */
+        ConfigAudioOutputLatency: {
+            /** @description The offset in signed microseconds. Absent/zero whenever method is "unmeasured". */
+            valueUs?: number;
+            /** @enum {string} */
+            method: "unmeasured" | "loopback" | "acoustic" | "declared";
+            /**
+             * Format: date-time
+             * @description When valueUs was measured.
+             */
+            measuredAt?: string;
+            /** @description What valueUs was measured against: the other node/signal in a loopback or acoustic capture, or the datasheet section for a declared value. */
+            reference?: string;
+            /** @description The operator's own free-text judgment of how much to trust valueUs. */
+            confidence?: string;
+            /** @description The buffer/quantum/sample-rate configuration valueUs was measured under. */
+            configuration?: string;
         };
         /** @description The body of GET and PUT /config/audio.node/{id}. */
         AudioNodeConfigResponse: {
