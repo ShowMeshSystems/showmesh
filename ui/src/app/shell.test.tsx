@@ -144,6 +144,26 @@ describe('app shell', () => {
     }
   }
 
+  it('fills the chrome position bar from the FPP instance elapsed position, not a permanent empty track', () => {
+    getShowModeConfigMock.mockReturnValue(new Promise(() => {}))
+    const instance = {
+      instanceId: 'main',
+      observations: [
+        { signal: 'fpp.position.elapsed.seconds', value: 42, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.seconds', value: 84, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+      ],
+    } as never
+    renderShell({ session: authenticatedSession(), fpp: [instance] })
+    const bar = screen.getByRole('progressbar', { name: 'Position of the current item' })
+    expect(bar.getAttribute('aria-valuenow')).toBe('50')
+  })
+
+  it('leaves the chrome position bar empty, never invented, when no FPP instance reports a position', () => {
+    getShowModeConfigMock.mockReturnValue(new Promise(() => {}))
+    renderShell({ session: authenticatedSession(), fpp: [] })
+    expect(screen.queryByRole('progressbar', { name: 'Position of the current item' })).not.toBeInTheDocument()
+  })
+
   it('shows the mode badge with no pin note when the cue activation pin is not pinned', async () => {
     getShowModeConfigMock.mockResolvedValue(showModeConfig({ pinned: false }))
     renderShell({ session: authenticatedSession() })

@@ -147,6 +147,23 @@ export function transportState(instance: FPPInstance): TransportState {
 }
 
 /**
+ * The fraction of the current FPP item elapsed, or null when either
+ * reading is absent or not current. Mirrors `nextTransition`'s own
+ * staleness gate (showNightModel.ts) so the two never disagree about
+ * whether the position is fresh enough to draw from.
+ */
+export function fppElapsedFraction(instance: FPPInstance | undefined): number | null {
+  if (instance === undefined) return null
+  const elapsed = findSignal(instance.observations, 'fpp.position.elapsed.seconds')
+  const total = findSignal(instance.observations, 'fpp.position.seconds')
+  if (elapsed === undefined || total === undefined || typeof elapsed.value !== 'number' || typeof total.value !== 'number') {
+    return null
+  }
+  if (elapsed.state !== 'current' || total.state !== 'current' || total.value <= 0) return null
+  return Math.min(1, Math.max(0, elapsed.value / total.value))
+}
+
+/**
  * A command is not successful because it was sent. `outcome` is the
  * coordinator's own confirmation from observed evidence; `unconfirmed`
  * means it was dispatched and nothing has yet proved it took effect.

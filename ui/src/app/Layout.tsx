@@ -38,6 +38,7 @@ import { describeApiError, describeSignInState, evaluateScope, type SignInState 
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from '../screens/StaleWrite'
 import { liveCycle } from '../screens/settingsModel'
+import { fppElapsedFraction } from '../screens/liveControlModel'
 import { useModelContext } from './ModelContext'
 import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
@@ -600,7 +601,7 @@ export function Layout() {
           </>
         }
       />
-      <ChromeProgress value={null} label="Position of the current item" />
+      <ChromeProgress value={fppElapsedFraction(model.fpp[0])} label="Position of the current item" />
       {model.clockSkewMs !== null && Math.abs(model.clockSkewMs) >= CLOCK_SKEW_WARNING_THRESHOLD_MS && (
         <ClockSkewStrip>
           This browser&rsquo;s clock is {model.clockSkewMs > 0 ? 'behind' : 'ahead of'} the coordinator&rsquo;s, the
