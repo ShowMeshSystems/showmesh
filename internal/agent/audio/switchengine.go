@@ -276,6 +276,62 @@ func (e *SwitchableEngine) GlitchCounts() (GlitchCounts, bool) {
 	return ObserveEngineGlitches(cur)
 }
 
+// BackendInfoObserver is implemented by an [Engine] that reports what it
+// actually built its output pipeline against: [gstengine.Engine] does,
+// matching [GlitchObserver]'s identical optional-interface shape, so a
+// bound engine that does not implement it (a test fake) reports every
+// field blank rather than a fabricated value.
+type BackendInfoObserver interface {
+	SinkBackend() string
+	SinkTarget() string
+	ClockSource() (source, reason string)
+}
+
+// SinkBackend forwards to whatever engine is currently bound, mirroring
+// [SwitchableEngine.GlitchCounts]. A never-bound engine, or a bound one
+// that does not implement [BackendInfoObserver], reports "".
+func (e *SwitchableEngine) SinkBackend() string {
+	cur, ok := e.get()
+	if !ok {
+		return ""
+	}
+	b, ok := cur.(BackendInfoObserver)
+	if !ok {
+		return ""
+	}
+	return b.SinkBackend()
+}
+
+// SinkTarget forwards to whatever engine is currently bound, matching
+// [SwitchableEngine.SinkBackend]'s identical unbound and unsupported
+// cases.
+func (e *SwitchableEngine) SinkTarget() string {
+	cur, ok := e.get()
+	if !ok {
+		return ""
+	}
+	b, ok := cur.(BackendInfoObserver)
+	if !ok {
+		return ""
+	}
+	return b.SinkTarget()
+}
+
+// ClockSource forwards to whatever engine is currently bound, matching
+// [SwitchableEngine.SinkBackend]'s identical unbound and unsupported
+// cases.
+func (e *SwitchableEngine) ClockSource() (source, reason string) {
+	cur, ok := e.get()
+	if !ok {
+		return "", ""
+	}
+	b, ok := cur.(BackendInfoObserver)
+	if !ok {
+		return "", ""
+	}
+	return b.ClockSource()
+}
+
 var _ AlignmentObserver = (*SwitchableEngine)(nil)
 
 // Alignment forwards to whatever engine is currently bound, mirroring

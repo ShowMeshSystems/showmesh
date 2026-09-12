@@ -588,10 +588,14 @@ func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCoun
 			continue
 		}
 		if r.FromGraph {
-			if r.Channels > bindingCount {
+			switch {
+			case r.Channels > bindingCount:
 				return r.Channels, pipeWireGraphEvidenceSource
+			case r.Channels == bindingCount:
+				return bindingCount, "bindings: highest program or LTC channel index, matching this route's graph-reported width"
+			default:
+				return bindingCount, "bindings: highest program or LTC channel index, exceeding this route's graph-reported width"
 			}
-			return bindingCount, "bindings: highest program or LTC channel index, exceeding this route's graph-reported width"
 		}
 		if pipewireBacked {
 			continue

@@ -187,6 +187,68 @@ func TestSwitchableEngineGlitchCountsForwardsOrReportsUnknown(t *testing.T) {
 	}
 }
 
+// backendInfoFakeEngine is a [FakeEngine] that also implements
+// [BackendInfoObserver] with fixed, distinguishable values, matching
+// glitchCountingFakeEngine's identical shape.
+type backendInfoFakeEngine struct {
+	*FakeEngine
+	sinkBackend string
+	sinkTarget  string
+	clockSource string
+	clockReason string
+}
+
+func (b *backendInfoFakeEngine) SinkBackend() string { return b.sinkBackend }
+func (b *backendInfoFakeEngine) SinkTarget() string  { return b.sinkTarget }
+func (b *backendInfoFakeEngine) ClockSource() (string, string) {
+	return b.clockSource, b.clockReason
+}
+
+// TestSwitchableEngineBackendInfoForwardsOrReportsBlank proves
+// SwitchableEngine.SinkBackend/SinkTarget/ClockSource (a) report blank
+// while unbound; (b) report blank for a bound engine that does not
+// implement [BackendInfoObserver] ([FakeEngine] does not); and (c)
+// forward the bound engine's own distinguishable values verbatim once one
+// that does implement it is set. This is the exact wrapper the agent
+// actually reports through (SwitchableEngine, not a fake that implements
+// the optional interface directly): a fix that only satisfies a direct
+// fake, without this forwarding, would leave sink_backend/sink_target/
+// clock_source/clock_reason empty on every real node.
+func TestSwitchableEngineBackendInfoForwardsOrReportsBlank(t *testing.T) {
+	e := NewSwitchableEngine()
+
+	if got := e.SinkBackend(); got != "" {
+		t.Errorf("SinkBackend() on an unbound SwitchableEngine = %q, want \"\"", got)
+	}
+	if got := e.SinkTarget(); got != "" {
+		t.Errorf("SinkTarget() on an unbound SwitchableEngine = %q, want \"\"", got)
+	}
+	if source, reason := e.ClockSource(); source != "" || reason != "" {
+		t.Errorf("ClockSource() on an unbound SwitchableEngine = (%q, %q), want (\"\", \"\")", source, reason)
+	}
+
+	e.Set(NewFakeEngine(time.Now))
+	if got := e.SinkBackend(); got != "" {
+		t.Errorf("SinkBackend() with a FakeEngine bound (does not implement BackendInfoObserver) = %q, want \"\"", got)
+	}
+
+	e.Set(&backendInfoFakeEngine{
+		FakeEngine:  NewFakeEngine(time.Now),
+		sinkBackend: "pipewiresink",
+		sinkTarget:  "showmesh-pw-target",
+		clockSource: "phc",
+	})
+	if got := e.SinkBackend(); got != "pipewiresink" {
+		t.Errorf("SinkBackend() = %q, want %q (the bound engine's own value, forwarded verbatim)", got, "pipewiresink")
+	}
+	if got := e.SinkTarget(); got != "showmesh-pw-target" {
+		t.Errorf("SinkTarget() = %q, want %q", got, "showmesh-pw-target")
+	}
+	if source, reason := e.ClockSource(); source != "phc" || reason != "" {
+		t.Errorf("ClockSource() = (%q, %q), want (%q, \"\")", source, reason, "phc")
+	}
+}
+
 // TestSwitchableEngineAlignmentForwardsOrReportsUnbound proves
 // SwitchableEngine.Alignment reports not known with
 // [SwitchableEngineNoBindingReason] while unbound, rather than a

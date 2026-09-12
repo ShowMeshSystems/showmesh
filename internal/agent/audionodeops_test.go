@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -208,6 +209,59 @@ func TestResolveNodeChannelCount(t *testing.T) {
 			}
 			if source == "" {
 				t.Error("source is empty, want a stated reason")
+			}
+		})
+	}
+}
+
+// TestResolveNodeChannelCountFromGraphSourceWording proves the
+// graph-backed branch states wider, equal, and narrower bindings
+// distinctly instead of collapsing equal into "exceeding": a binding
+// exactly as wide as the graph-reported route is not exceeding it.
+func TestResolveNodeChannelCountFromGraphSourceWording(t *testing.T) {
+	const route = "hw:1,0"
+
+	cases := []struct {
+		name         string
+		graphChannel int
+		bindingCount int
+		wantCount    int
+		wantContains string
+	}{
+		{
+			name:         "graph width wider than the binding",
+			graphChannel: 4,
+			bindingCount: 2,
+			wantCount:    4,
+			wantContains: pipeWireGraphEvidenceSource,
+		},
+		{
+			name:         "graph width equal to the binding",
+			graphChannel: 4,
+			bindingCount: 4,
+			wantCount:    4,
+			wantContains: "matching",
+		},
+		{
+			name:         "graph width narrower than the binding",
+			graphChannel: 2,
+			bindingCount: 4,
+			wantCount:    4,
+			wantContains: "exceeding",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := audio.Discovery{Routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: tc.graphChannel}, FromGraph: true},
+			}}
+			got, source := resolveNodeChannelCount(d, route, tc.bindingCount, true)
+			if got != tc.wantCount {
+				t.Errorf("resolveNodeChannelCount() = %d, want %d", got, tc.wantCount)
+			}
+			if !strings.Contains(source, tc.wantContains) {
+				t.Errorf("source = %q, want it to contain %q", source, tc.wantContains)
 			}
 		})
 	}

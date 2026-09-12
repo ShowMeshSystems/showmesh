@@ -1644,6 +1644,56 @@ func TestApplyEngineBackendInfoReportsAFallbackClockReason(t *testing.T) {
 	}
 }
 
+// stubGstEngineBackendInfo is a [audio.FakeEngine] that also implements
+// [audio.BackendInfoObserver], standing in for [gstengine.Engine] without
+// this package importing it. Bound into a real [audio.SwitchableEngine]
+// (never asserted against directly), it proves applyEngineBackendInfo
+// reaches a real engine's values through the exact wrapper agent.go hands
+// it in production, catching the bug where SwitchableEngine forwarded
+// GlitchCounts and Alignment but not these three methods, so the
+// assertion against engineBackendInfo always failed and every field
+// stayed blank even on a node with a built, playing engine.
+type stubGstEngineBackendInfo struct {
+	*audio.FakeEngine
+	sinkBackend string
+	sinkTarget  string
+	clockSource string
+	clockReason string
+}
+
+func (s *stubGstEngineBackendInfo) SinkBackend() string { return s.sinkBackend }
+func (s *stubGstEngineBackendInfo) SinkTarget() string  { return s.sinkTarget }
+func (s *stubGstEngineBackendInfo) ClockSource() (string, string) {
+	return s.clockSource, s.clockReason
+}
+
+// TestApplyEngineBackendInfoThroughSwitchableEngineReachesTheBoundEngine
+// proves applyEngineBackendInfo works when handed the real
+// [audio.SwitchableEngine] wrapper (as agent.go's runAudioReport call
+// always is), not only a fake implementing [engineBackendInfo] directly.
+func TestApplyEngineBackendInfoThroughSwitchableEngineReachesTheBoundEngine(t *testing.T) {
+	switchable := audio.NewSwitchableEngine()
+	switchable.Set(&stubGstEngineBackendInfo{
+		FakeEngine:  audio.NewFakeEngine(time.Now),
+		sinkBackend: "pipewiresink",
+		sinkTarget:  "showmesh-pw-target",
+		clockSource: "phc",
+	})
+
+	var payload mqttproto.AudioPayload
+	applyEngineBackendInfo(&payload, switchable)
+
+	if payload.EngineSinkBackend != "pipewiresink" {
+		t.Errorf("EngineSinkBackend = %q, want %q (via SwitchableEngine)", payload.EngineSinkBackend, "pipewiresink")
+	}
+	if payload.EngineSinkTarget != "showmesh-pw-target" {
+		t.Errorf("EngineSinkTarget = %q, want %q (via SwitchableEngine)", payload.EngineSinkTarget, "showmesh-pw-target")
+	}
+	if payload.EngineClockSource != "phc" {
+		t.Errorf("EngineClockSource = %q, want %q (via SwitchableEngine)", payload.EngineClockSource, "phc")
+	}
+}
+
 // TestApplyAlignmentWritesTheFields proves applyAlignment carries a
 // measured snapshot's fields onto the payload's Alignment* fields
 // exactly, including a non-nil AlignmentSampledAt.

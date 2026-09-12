@@ -476,18 +476,19 @@ func engineGlitchObservations(nodeID string, p mqttproto.AudioPayload, observedA
 
 // engineBackendObservations renders the four node.audio.engine.sink_backend/
 // sink_target/clock_source/clock_reason signals (see signals.go).
-// EngineSinkBackend empty means no engine has ever been built on this
-// node (or its agent predates these fields), matching
-// [engineGlitchObservations]' identical "known=false reports not_collected
-// on every one" rule, since sink_target/clock_source/clock_reason are
-// meaningless without a built engine to have chosen them. SinkTarget is
+// EngineSinkBackend empty is an absent value, not a claimed cause: it
+// covers a node with no engine built, an agent that predates these
+// fields, and any other reason the agent's own report left it blank,
+// matching [engineGlitchObservations]'s identical "known=false reports
+// not_collected on every one" rule, since sink_target/clock_source/
+// clock_reason are meaningless without a reported backend. SinkTarget is
 // reported not_collected on its own, narrower gate: it only ever applies
 // to a pipewiresink backend.
 func engineBackendObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
 	if p.EngineSinkBackend == "" {
-		reason := "no audio engine has been built on this node, or this agent predates this evidence"
+		reason := "this node's report did not include an engine sink backend"
 		return []observation.Observation{
 			notCollected(res, SignalEngineSinkBackend, source, reason, rep.receivedAt),
 			notCollected(res, SignalEngineSinkTarget, source, reason, rep.receivedAt),
