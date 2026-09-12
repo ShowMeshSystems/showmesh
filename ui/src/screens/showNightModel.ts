@@ -203,14 +203,14 @@ export function pinnedCeilingFact(audio: NightBackgroundAudio): string {
  * reason carries what happened. So the label states the evidence state and
  * the tone never reads as a health verdict.
  */
-const PHASE_TONE: Record<string, Tone> = {
+export const PHASE_TONE: Record<string, Tone> = {
   recorded: 'pending',
   unknown: 'unknown',
   not_configured: 'pending',
   not_available: 'unknown',
 }
 
-function phaseLabel(name: string, state: string): string {
+export function phaseLabel(name: string, state: string): string {
   return `${name} ${state.replace('_', ' ')}`
 }
 

@@ -222,7 +222,7 @@ describe('Show Night', () => {
     if (!next.known) expect(next.reason).toContain('unknown rather than assumed')
   })
 
-  it('reports the boundary armed from session.transition, not from an empty cue list', () => {
+  it('reports the transition from session.transition, not from an empty cue list', () => {
     const instance = {
       instanceId: 'main',
       observations: [
@@ -237,9 +237,31 @@ describe('Show Night', () => {
       }),
       fpp: [instance],
     })
-    const boundary = screen.getByText('Boundary armed').closest('.sm-nownext__boundary') as HTMLElement
+    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText('Transition recorded')).toBeInTheDocument()
     expect(within(boundary).getByText('boundary armed for 2026-08-28T21:10:00Z')).toBeInTheDocument()
     expect(screen.queryByText('No Transition Step is armed')).not.toBeInTheDocument()
+  })
+
+  it('never says "armed" when session.transition reports recorded but no boundary is configured', () => {
+    const instance = {
+      instanceId: 'main',
+      observations: [
+        { signal: 'fpp.position.elapsed.seconds', value: 102, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.seconds', value: 168, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+      ],
+    } as unknown as FPPInstance
+    renderScreen({
+      nightSession: session({
+        transition: { state: 'recorded', reason: 'playback confirmed; this purpose carries no show-transition boundary' },
+        cues: { state: 'recorded', reason: '', cues: [] },
+      }),
+      fpp: [instance],
+    })
+    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText('Transition recorded')).toBeInTheDocument()
+    expect(within(boundary).getByText('playback confirmed; this purpose carries no show-transition boundary')).toBeInTheDocument()
+    expect(within(boundary).queryByText(/armed/i)).not.toBeInTheDocument()
   })
 
   it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {

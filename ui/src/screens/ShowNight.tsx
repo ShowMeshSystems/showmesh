@@ -65,6 +65,8 @@ import {
   nextTransition,
   nightRail,
   nowPlaying,
+  phaseLabel,
+  PHASE_TONE,
   pinnedCeilingFact,
   readinessChecks,
   runOfShow,
@@ -317,9 +319,10 @@ export function ShowNight() {
               <p className="sm-nownext__title">{formatPosition(next.remainingSeconds)}</p>
               <p className="sm-small sm-muted">until the sequence ends and the boundary begins.</p>
               <div className="sm-nownext__boundary">
-                <p>{session.transition.state === 'recorded' ? 'Boundary armed' : 'No boundary armed'}</p>
+                <StatusPair tone={PHASE_TONE[session.transition.state] ?? 'unknown'} label={phaseLabel('Transition', session.transition.state)} />
                 <p className="sm-small sm-muted">
                   {session.transition.reason !== '' ? session.transition.reason : 'Nothing recorded for this transition.'}
+                  {armed > 0 ? ` · ${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle` : ''}
                 </p>
               </div>
               <p className="sm-small sm-faint sm-nownext__derivation">
