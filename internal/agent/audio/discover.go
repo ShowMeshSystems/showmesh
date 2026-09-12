@@ -5,10 +5,13 @@ import (
 	"fmt"
 )
 
-// maxProbedDevices bounds how many enumerated candidate devices [Discover]
-// probes and how many routes enter an advertisement or report, so a node
-// with an unusually large device list cannot consume this node's entire
-// advertisement budget.
+// maxProbedDevices bounds how many candidate devices [Discover] and
+// [DiscoverPipeWire] each probe on their own enumeration source, so an
+// unusually large device list on either source alone cannot consume this
+// node's whole advertisement budget. It no longer bounds the COMBINED
+// route count once [Discovery.WithPipeWireRoutes] merges both sources: a
+// node with both a large ALSA list and a large PipeWire graph can
+// advertise up to twice this many routes.
 const maxProbedDevices = 4
 
 // MinLTCChannels is the channel count ADR-018 requires to carry a discrete
@@ -50,7 +53,7 @@ type RouteEvidence struct {
 	// PipeWire graph node rather than an ALSA device probe. Channels and
 	// Rate are still real evidence in that case (PipeWire's own
 	// negotiated values for the node), but callers that word evidence
-	// for an operator must not describe it as a probe result — see
+	// for an operator must not describe it as a probe result; see
 	// resolveNodeSampleRate/resolveNodeChannelCount in
 	// internal/agent/audionodeops.go.
 	FromGraph bool
@@ -98,14 +101,14 @@ type Discovery struct {
 	// [Discovery.WithPipeWireRoutes] (FromGraph true). A route reporting
 	// Channels>=1 here is a graph-level property only: this package
 	// cannot detect an interface that mirrors one physical pair from
-	// another downstream of anything ALSA or PipeWire exposes — the
+	// another downstream of anything ALSA or PipeWire exposes; the
 	// physical check is C0b, outstanding on the punch list.
 	Routes []RouteEvidence
 
 	// PipeWireEnumerated and PipeWireEnumeratedReason mirror
 	// HardwareEnumerated/HardwareEnumeratedReason for this node's
-	// PipeWire graph. [Discover] never sets these — it enumerates ALSA
-	// only — a caller sets them via [Discovery.WithPipeWireRoutes]. False
+	// PipeWire graph. [Discover] never sets these: it enumerates ALSA
+	// only, and a caller sets them via [Discovery.WithPipeWireRoutes]. False
 	// with an empty reason means no PipeWire is present on this host at
 	// all (a clean absence, not a failure); false with a reason means
 	// pw-dump ran but its output could not be parsed.
@@ -133,7 +136,7 @@ func (d Discovery) WithPipeWireRoutes(pw PipeWireDiscovery) Discovery {
 // outcomes can be reported and tested independently.
 type PipeWireDiscovery struct {
 	// Enumerated is true only when pw-dump ran and its output parsed
-	// cleanly (whether or not it named any Audio/Sink node) — the same
+	// cleanly (whether or not it named any Audio/Sink node): the same
 	// true-only-when-clean contract as [Discovery.HardwareEnumerated].
 	Enumerated bool
 	// EnumeratedReason is set only when pw-dump genuinely ran but its
@@ -143,7 +146,7 @@ type PipeWireDiscovery struct {
 	// Routes is every Audio/Sink node pw-dump reported, each with
 	// FromGraph true, Available true when the graph reported at least
 	// one channel for it, and LTCChannels set directly from Channels
-	// when it meets [MinLTCChannels] — there is no second, constrained
+	// when it meets [MinLTCChannels]: there is no second, constrained
 	// probe to run against a graph node the way [Discover] runs one
 	// against an ALSA device.
 	Routes []RouteEvidence
