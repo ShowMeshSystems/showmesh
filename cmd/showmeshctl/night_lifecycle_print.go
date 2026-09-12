@@ -87,6 +87,11 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 
 	_, _ = fmt.Fprintf(w, "\nPower phase: %s (%s)\n", s.PowerPhase.State, s.PowerPhase.Reason)
 	_, _ = fmt.Fprintf(w, "Transition:  %s (%s)\n", s.Transition.State, s.Transition.Reason)
+	if s.Boundary.ExpectedAt != nil {
+		_, _ = fmt.Fprintf(w, "Boundary:    %s, expected %s (%s)\n", s.Boundary.State, *s.Boundary.ExpectedAt, s.Boundary.Reason)
+	} else {
+		_, _ = fmt.Fprintf(w, "Boundary:    %s (%s)\n", s.Boundary.State, s.Boundary.Reason)
+	}
 
 	if s.Cues.State != "recorded" {
 		_, _ = fmt.Fprintf(w, "\nCues:        %s (%s)\n", s.Cues.State, s.Cues.Reason)

@@ -64,6 +64,9 @@ var getResponseTypeOverrides = map[string]string{
 	"GET /fpp/{instanceId}":                "fppInstanceResponse",
 	"GET /resolume/instances/{instanceId}": "resolumeInstanceResponse",
 	"GET /config/resolume/composition":     "resolumeCompositionResponse",
+	"GET /night/session":                   "nightSessionLifecycleResponse",
+	"GET /nodes":                           "nodesResponse",
+	"GET /resolume/recovery":               "resolumeRecoveryResponse",
 }
 
 // getResponseFieldExemptions is exemptWritePaths' convention mirrored for
@@ -312,7 +315,7 @@ type cliGetCall struct {
 	typeName string
 }
 
-var getCallFuncNames = map[string]bool{"getJSON": true, "getRaw": true}
+var getCallFuncNames = map[string]bool{"getJSON": true, "getRaw": true, "getJSONKeepingRaw": true}
 
 // collectCLIGetPathShapes parses every non-test .go file in this package's
 // directory (the same universe collectCLIWritePathShapes scans) and

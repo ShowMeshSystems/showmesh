@@ -28,6 +28,16 @@ type nightPhaseEvidenceWire struct {
 	Reason string `json:"reason"`
 }
 
+// nightBoundaryWire is NightSessionState.boundary: distinct from
+// nightPhaseEvidenceWire above, this states specifically whether a
+// content-anchor boundary is armed, "none" when the current purpose
+// carries no boundary at all.
+type nightBoundaryWire struct {
+	State      string  `json:"state"`
+	ExpectedAt *string `json:"expectedAt"`
+	Reason     string  `json:"reason"`
+}
+
 type nightCueWire struct {
 	Name           string  `json:"name"`
 	Phase          string  `json:"phase"`
@@ -103,6 +113,7 @@ type nightSessionStateWire struct {
 
 	PowerPhase nightPhaseEvidenceWire `json:"powerPhase"`
 	Transition nightPhaseEvidenceWire `json:"transition"`
+	Boundary   nightBoundaryWire      `json:"boundary"`
 
 	Cues nightCuesWire `json:"cues"`
 

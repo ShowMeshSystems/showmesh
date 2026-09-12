@@ -51,11 +51,9 @@ type NightPhaseEvidence struct {
 	Reason string             `json:"reason"`
 }
 
-// NightBoundaryState is distinct from [NightEvidenceState]: it states
-// specifically whether a content-anchor boundary is armed, never
-// whether evidence merely exists for this purpose (that is `transition`'s
-// own job, and a purpose can read "recorded" there with no boundary at
-// all - a live show, for one).
+// NightBoundaryState states specifically whether a content-anchor
+// boundary is armed, distinct from `transition`, which can read
+// "recorded" for a purpose that carries no boundary at all.
 type NightBoundaryState string
 
 const (

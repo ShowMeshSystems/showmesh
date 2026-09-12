@@ -316,7 +316,7 @@ func (h *handlers) nightAdvancePreshow(ctx context.Context, now time.Time, rec s
 		return
 	}
 	if ready {
-		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: "pre-show resting has no show-transition deadline; start-night ends it"})
+		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateNone, Reason: "pre-show resting has no show-transition deadline; start-night ends it"})
 		return
 	}
 	h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateUnknown, Reason: anchor.Source})
@@ -822,7 +822,7 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 			cur.State = nightStateEndOfNightResting
 			cur.StateEnteredAt = now
 			cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
-			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateUnknown, Reason: "end-of-night resting has no show-transition deadline"})
+			cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateNone, Reason: "end-of-night resting has no show-transition deadline"})
 			return cur
 		})
 		return

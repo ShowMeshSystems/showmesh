@@ -352,6 +352,26 @@ func TestMapNightBoundary_NoneWhenNoBoundaryRecord(t *testing.T) {
 	}
 }
 
+// TestMapNightBoundary_NonePersistedForAPurposeWithNoDeadline: pre-show
+// and end-of-night resting persist a real "none" boundary, distinct from
+// TestMapNightBoundary_NoneWhenNoBoundaryRecord's no-record-at-all case
+// and never inferred by parsing the reason string.
+func TestMapNightBoundary_NonePersistedForAPurposeWithNoDeadline(t *testing.T) {
+	rec := store.NightSessionRecord{
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateNone, Reason: "pre-show resting has no show-transition deadline; start-night ends it"}),
+	}
+	got := mapNightBoundary(rec)
+	if got.State != v1.NightBoundaryNone {
+		t.Fatalf("State = %q, want %q", got.State, v1.NightBoundaryNone)
+	}
+	if got.ExpectedAt != nil {
+		t.Fatalf("ExpectedAt = %v, want nil", got.ExpectedAt)
+	}
+	if got.Reason != "pre-show resting has no show-transition deadline; start-night ends it" {
+		t.Fatalf("Reason = %q, want the persisted reason", got.Reason)
+	}
+}
+
 // TestMapNightBoundary_UnknownWhenUnreadable: a BoundaryJSON value that
 // exists but cannot be decoded is told apart from "no record at all".
 func TestMapNightBoundary_UnknownWhenUnreadable(t *testing.T) {

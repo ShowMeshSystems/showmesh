@@ -277,6 +277,23 @@ describe('Show Night', () => {
     expect(within(boundary).getByText('2 cues armed this cycle')).toBeInTheDocument()
   })
 
+  it('still shows the armed boundary when the FPP position is stale, not hidden behind Unknown', () => {
+    const staleInstance = {
+      instanceId: 'main',
+      observations: [{ signal: 'fpp.position.remaining.seconds', value: 111, state: 'stale', resource: { kind: 'fpp', id: 'main' } }],
+    } as unknown as FPPInstance
+    renderScreen({
+      nightSession: session({
+        boundary: { state: 'armed', expectedAt: '2026-08-28T21:10:00Z', reason: 'derived from millisecond-precision position' },
+        cues: { state: 'recorded', reason: '', cues: [] },
+      }),
+      fpp: [staleInstance],
+    })
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+    const boundary = document.querySelector('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText(/^Boundary armed for \d{2}:\d{2}$/)).toBeInTheDocument()
+  })
+
   it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {
     const rail = nightRail(session({ cycle: 3, state: 'live' }))
     const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))

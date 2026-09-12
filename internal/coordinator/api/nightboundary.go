@@ -96,6 +96,11 @@ const (
 	nightBoundaryStateArmed   = "armed"
 	nightBoundaryStateInvalid = "invalid"
 	nightBoundaryStateUnknown = "unknown"
+	// nightBoundaryStateNone marks a purpose that carries no
+	// show-transition deadline at all (pre-show and end-of-night
+	// resting), distinct from nightBoundaryStateUnknown: this is a
+	// stated fact, never missing evidence.
+	nightBoundaryStateNone = "none"
 )
 
 const (
@@ -508,9 +513,8 @@ func mapNightTransition(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 }
 
 // mapNightBoundary is the wire form of the current state's own
-// content-anchor boundary alone, distinct from mapNightTransition:
-// unlike `transition`, this never reads "recorded"/"armed"-shaped for a
-// purpose that carries no boundary at all - that case reports "none".
+// content-anchor boundary, distinct from mapNightTransition: a purpose
+// with no boundary at all reports "none" here, never "armed".
 func mapNightBoundary(rec store.NightSessionRecord) v1.NightBoundary {
 	if rec.BoundaryJSON == "" {
 		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: "no boundary is armed for the current state"}
@@ -531,6 +535,8 @@ func mapNightBoundary(rec store.NightSessionRecord) v1.NightBoundary {
 		}
 	case nightBoundaryStateInvalid:
 		return v1.NightBoundary{State: v1.NightBoundaryInvalid, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+	case nightBoundaryStateNone:
+		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: nightBoundaryReasonOrFallback(boundary, "this purpose carries no show-transition boundary")}
 	default:
 		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
 	}

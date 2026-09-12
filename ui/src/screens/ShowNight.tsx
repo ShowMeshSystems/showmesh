@@ -317,13 +317,6 @@ export function ShowNight() {
             <>
               <p className="sm-nownext__title">{formatPosition(next.remainingSeconds)}</p>
               <p className="sm-small sm-muted">until the sequence ends and the boundary begins.</p>
-              <div className="sm-nownext__boundary">
-                <p>{boundaryHeadline(session.boundary)}</p>
-                <p className="sm-small sm-muted">
-                  {session.boundary.reason !== '' ? session.boundary.reason : 'Nothing recorded for this boundary.'}
-                </p>
-                {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle`}</p>}
-              </div>
               <p className="sm-small sm-faint sm-nownext__derivation">
                 Derived from observed playback, not a clock. If the position goes stale the boundary becomes unknown rather than assumed.
               </p>
@@ -331,6 +324,13 @@ export function ShowNight() {
           ) : (
             <RuledStrip absence="unavailable" label="Unknown" fact={next.reason} detail="Derived from observed playback, not a clock." />
           )}
+          <div className="sm-nownext__boundary">
+            <p>{boundaryHeadline(session.boundary)}</p>
+            <p className="sm-small sm-muted">
+              {session.boundary.reason !== '' ? session.boundary.reason : 'Nothing recorded for this boundary.'}
+            </p>
+            {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle`}</p>}
+          </div>
         </section>
       </div>
 

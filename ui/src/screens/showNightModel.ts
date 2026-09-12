@@ -122,10 +122,8 @@ export type NextTransition =
 export function nextTransition(model: Model): NextTransition {
   const instance = model.fpp[0]
   if (instance === undefined) return { known: false, reason: 'No FPP instance is reporting a position.' }
-  // fpp.position.seconds is FPP's own seconds_played, not a duration - it
-  // equals elapsed on the very first playing poll, so subtracting elapsed
-  // from it always read zero remaining. fpp.position.remaining.seconds is
-  // FPP's own countdown and is read directly, never derived.
+  // fpp.position.seconds is FPP's seconds_played, not a duration, so
+  // remaining is read directly rather than derived from it.
   const remaining = findSignal(instance.observations, 'fpp.position.remaining.seconds')
   if (remaining === undefined || typeof remaining.value !== 'number') {
     return { known: false, reason: 'The playhead position has not been observed.' }
@@ -218,10 +216,8 @@ function phaseLabel(name: string, state: string): string {
 }
 
 /**
- * The next-transition box's own headline, one sentence per
- * `session.boundary.state`. Never derived from `transition`'s reason
- * string: that field can read "recorded" for a purpose that carries no
- * boundary at all, which is exactly the "none" case here.
+ * The next-transition box's own headline, keyed on `session.boundary.state`
+ * directly, never inferred from `transition`'s reason string.
  */
 export function boundaryHeadline(boundary: NightSessionState['boundary']): string {
   switch (boundary.state) {
