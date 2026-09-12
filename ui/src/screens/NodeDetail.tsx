@@ -264,8 +264,13 @@ function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType
 type RunsState = { kind: 'loading' } | { kind: 'loaded'; runs: AudioAlignmentRun[] } | { kind: 'failed'; reason: string }
 type RunDetailState = { kind: 'loading' } | { kind: 'loaded'; summary: AudioAlignmentRunSummary } | { kind: 'failed'; reason: string }
 
-/** The node's own alignmentSampledAt/alignmentOffsetMs while a run is active; never a series plot, only a count and the two summary numbers. */
-function DriftRecordingSection({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
+/**
+ * The node's own alignmentSampledAt/alignmentOffsetMs while a run is
+ * active; never a series plot, only a count and the two summary numbers.
+ * Only rendered for a node that has advertised an audio.* capability: a
+ * projector-only node can never receive a sample.
+ */
+function DriftRecordingSection({ nodeId, hasAudioCapability, gate }: { nodeId: string; hasAudioCapability: boolean; gate: ReturnType<typeof evaluateScope> }) {
   const [attempt, setAttempt] = useState(0)
   const [runsState, setRunsState] = useState<RunsState>({ kind: 'loading' })
   const [details, setDetails] = useState<Record<string, RunDetailState>>({})
@@ -275,6 +280,7 @@ function DriftRecordingSection({ nodeId, gate }: { nodeId: string; gate: ReturnT
   const [stopError, setStopError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!hasAudioCapability) return
     let cancelled = false
     setRunsState({ kind: 'loading' })
     listAudioAlignmentRuns(nodeId)
@@ -284,7 +290,10 @@ function DriftRecordingSection({ nodeId, gate }: { nodeId: string; gate: ReturnT
         setDetails({})
         for (const run of response.runs) {
           setDetails((prev) => ({ ...prev, [run.id]: { kind: 'loading' } }))
-          getAudioAlignmentRun(nodeId, run.id)
+          // summary always covers the run's full series regardless of
+          // limit (api/openapi.yaml), so limit 1 avoids paying for up to
+          // 5000 discarded samples per run on every page load.
+          getAudioAlignmentRun(nodeId, run.id, 1)
             .then((detail) => {
               if (cancelled) return
               setDetails((prev) => ({ ...prev, [run.id]: { kind: 'loaded', summary: detail.summary } }))
@@ -301,7 +310,19 @@ function DriftRecordingSection({ nodeId, gate }: { nodeId: string; gate: ReturnT
     return () => {
       cancelled = true
     }
-  }, [nodeId, attempt])
+  }, [nodeId, attempt, hasAudioCapability])
+
+  if (!hasAudioCapability) {
+    return (
+      <Section id="nd-drift" title="Drift recording">
+        <RuledStrip
+          absence="unobserved"
+          label="No audio output"
+          fact="This node advertises no audio.* capability, so it can never receive an alignment sample to record."
+        />
+      </Section>
+    )
+  }
 
   const runs = runsState.kind === 'loaded' ? runsState.runs : []
   const activeRun = runs.find((run) => run.stoppedAt === null) ?? null
@@ -321,7 +342,12 @@ function DriftRecordingSection({ nodeId, gate }: { nodeId: string; gate: ReturnT
     setStopError(null)
     stopAudioAlignmentRun(nodeId, runId)
       .then(() => setAttempt((n) => n + 1))
-      .catch((err: unknown) => setStopError(describeApiError(err)))
+      .catch((err: unknown) => {
+        setStopError(describeApiError(err))
+        // The run may have already been stopped by someone else; refetch
+        // rather than leave a stale active run showing on this device.
+        setAttempt((n) => n + 1)
+      })
       .finally(() => setStoppingId(null))
   }
 
@@ -338,8 +364,9 @@ function DriftRecordingSection({ nodeId, gate }: { nodeId: string; gate: ReturnT
               <div className="sm-outcome">
                 <StatusPair tone="pending" label="Recording" />
                 <p className="sm-outcome__detail">
-                  Started {formatClock(activeRun.startedAt) ?? 'at an unrecorded time'} by {activeRun.startedBy}.
+                  Started {formatDateClock(activeRun.startedAt) ?? 'at an unrecorded time'} by {activeRun.startedBy}.
                 </p>
+                <DriftSummaryBlock detail={details[activeRun.id]} />
                 <Button
                   variant="danger"
                   disabled={!gate.allowed || stoppingId === activeRun.id}
@@ -370,22 +397,26 @@ function DriftRecordingSection({ nodeId, gate }: { nodeId: string; gate: ReturnT
   )
 }
 
+function DriftSummaryBlock({ detail }: { detail: RunDetailState | undefined }) {
+  if (detail === undefined || detail.kind === 'loading') {
+    return <RuledStrip absence="loading" label="Reading" fact="Reading this run's summary." />
+  }
+  if (detail.kind === 'failed') {
+    return <RuledStrip absence="failed" label="Read failed" fact={detail.reason} />
+  }
+  return <DriftRunSummary summary={detail.summary} />
+}
+
 function DriftRunRow({ run, detail }: { run: AudioAlignmentRun; detail: RunDetailState | undefined }) {
   return (
     <div className="sm-stack-3">
       <p className="sm-small sm-muted">
-        {formatClock(run.startedAt) ?? 'unrecorded time'} to {run.stoppedAt !== null ? (formatClock(run.stoppedAt) ?? 'unrecorded time') : 'active'}
+        {formatDateClock(run.startedAt) ?? 'unrecorded time'} to {run.stoppedAt !== null ? (formatDateClock(run.stoppedAt) ?? 'unrecorded time') : 'active'}
         {' · started by '}
         {run.startedBy}
         {run.stoppedBy !== null && <>, stopped by {run.stoppedBy}</>}
       </p>
-      {detail === undefined || detail.kind === 'loading' ? (
-        <RuledStrip absence="loading" label="Reading" fact="Reading this run's summary." />
-      ) : detail.kind === 'failed' ? (
-        <RuledStrip absence="failed" label="Read failed" fact={detail.reason} />
-      ) : (
-        <DriftRunSummary summary={detail.summary} />
-      )}
+      <DriftSummaryBlock detail={detail} />
     </div>
   )
 }
@@ -399,7 +430,7 @@ function DriftRunSummary({ summary }: { summary: AudioAlignmentRunSummary }) {
         <>
           {', max excursion '}
           {summary.maxExcursionOffsetMs} ms
-          {summary.maxExcursionSampledAt !== null && ` at ${formatClock(summary.maxExcursionSampledAt) ?? 'an unrecorded time'}`}
+          {summary.maxExcursionSampledAt !== null && ` at ${formatDateClock(summary.maxExcursionSampledAt) ?? 'an unrecorded time'}`}
         </>
       )}
       {summary.driftRateMsPerHour !== null ? (
@@ -424,6 +455,7 @@ export function NodeDetail() {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const renderGate = evaluateScope(model.session, model.sessionFetchFailed, 'render:command')
   const assetWriteGate = evaluateScope(model.session, model.sessionFetchFailed, 'asset:write')
+  const audioGate = evaluateScope(model.session, model.sessionFetchFailed, 'audio:command')
 
   const [labelValue, setLabelValue] = useState(node?.label ?? '')
   const [savingLabel, setSavingLabel] = useState(false)
@@ -657,7 +689,7 @@ export function NodeDetail() {
         ))}
       </Section>
 
-      <DriftRecordingSection nodeId={node.nodeId} gate={gate} />
+      <DriftRecordingSection nodeId={node.nodeId} hasAudioCapability={hasAudioCapability} gate={audioGate} />
 
       <Section
         id="nd-caps"

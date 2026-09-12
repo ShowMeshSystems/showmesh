@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api'
 import type { ConfigObjectSummary, Model, Node, NodeAssetManifest, SessionResponse, ShowSurfaceConfigResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
+import { formatDateClock } from '../domain/time'
 
 const stubs = vi.hoisted(() => ({
   listShowSurfacesForNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -562,14 +564,38 @@ describe('Node detail · Drift recording', () => {
     }
   }
 
+  function audioNode(overrides: Partial<Node> = {}) {
+    return node({ capabilities: [{ id: 'audio.output.local', version: 1, attributes: {} }], ...overrides })
+  }
+
+  const withAudioCommand = { session: signedIn(['audio:command']) }
+
   it('renders with no runs', async () => {
     stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [] })
 
-    renderScreen([node()])
+    renderScreen([audioNode()], withAudioCommand)
 
     await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Drift recording' })).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Start drift recording' })).toBeInTheDocument()
     expect(screen.getByText('No completed drift recording exists for this node.')).toBeInTheDocument()
+  })
+
+  it('shows the section as an audio-output absence for a node with no audio capability, rather than an unusable control', async () => {
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Drift recording' })).toBeInTheDocument())
+    expect(screen.getByText(/can never receive an alignment sample/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start drift recording' })).not.toBeInTheDocument()
+  })
+
+  it('disables Start and names the missing audio:command scope for a session that only holds config:write', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [] })
+
+    renderScreen([audioNode()], { session: signedIn(['config:write']) })
+
+    const button = await screen.findByRole('button', { name: 'Start drift recording' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', expect.stringContaining('audio:command'))
   })
 
   it('start dispatches and the new run appears', async () => {
@@ -586,8 +612,9 @@ describe('Node detail · Drift recording', () => {
       started = true
       return Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', run: run({ id: 'run-2', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null }) })
     }
+    stubs.getAudioAlignmentRun = () => Promise.resolve(detail({ id: 'run-2', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null }))
 
-    renderScreen([node()])
+    renderScreen([audioNode()], withAudioCommand)
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start drift recording' })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Start drift recording' }))
@@ -595,6 +622,18 @@ describe('Node detail · Drift recording', () => {
     await waitFor(() => expect(started).toBe(true))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
     expect(screen.getByText(/Started/)).toBeInTheDocument()
+    expect(screen.getByText(/120 samples/)).toBeInTheDocument()
+  })
+
+  it('refuses a start already active with a 409, leaving the run started earlier in place', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [run({ id: 'run-1', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null })] })
+    stubs.getAudioAlignmentRun = () => Promise.resolve(detail({ id: 'run-1', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null }))
+    stubs.startAudioAlignmentRun = () => Promise.reject(new ApiError('this node already has an active audio alignment run', 409, 'https://showmesh.dev/problems/conflict'))
+
+    renderScreen([audioNode()], withAudioCommand)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Start drift recording' })).not.toBeInTheDocument()
   })
 
   it('stop dispatches against the active run', async () => {
@@ -613,7 +652,7 @@ describe('Node detail · Drift recording', () => {
     }
     stubs.getAudioAlignmentRun = () => Promise.resolve(detail({ id: 'run-2' }))
 
-    renderScreen([node()])
+    renderScreen([audioNode()], withAudioCommand)
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
@@ -622,12 +661,43 @@ describe('Node detail · Drift recording', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start drift recording' })).toBeInTheDocument())
   })
 
+  it('refetches the run list on a failed stop rather than leaving a stale active run showing', async () => {
+    let listCalls = 0
+    stubs.listAudioAlignmentRuns = () => {
+      listCalls += 1
+      return Promise.resolve({
+        serverTime: '2026-08-30T21:07:00Z',
+        runs: listCalls === 1 ? [run({ id: 'run-2', stoppedAt: null, stoppedBy: null, stoppedByPrincipalId: null })] : [run({ id: 'run-2' })],
+      })
+    }
+    stubs.stopAudioAlignmentRun = () => Promise.reject(new Error('network error'))
+    stubs.getAudioAlignmentRun = () => Promise.resolve(detail({ id: 'run-2' }))
+
+    renderScreen([audioNode()], withAudioCommand)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+
+    expect(await screen.findByText('Stop failed')).toBeInTheDocument()
+    await waitFor(() => expect(listCalls).toBeGreaterThan(1))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start drift recording' })).toBeInTheDocument())
+  })
+
+  it('reports a run list read failure honestly', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.reject(new Error('coordinator unreachable'))
+
+    renderScreen([audioNode()], withAudioCommand)
+
+    expect(await screen.findByText('coordinator unreachable')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start drift recording' })).not.toBeInTheDocument()
+  })
+
   it('renders a null drift rate with its reason, never a zero', async () => {
     stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [run()] })
     stubs.getAudioAlignmentRun = () =>
       Promise.resolve(detail({}, { sampleCount: 1, maxExcursionOffsetMs: null, maxExcursionSampledAt: null, driftRateMsPerHour: null, driftRateUnavailableReason: 'fewer than two samples' }))
 
-    renderScreen([node()])
+    renderScreen([audioNode()], withAudioCommand)
 
     await waitFor(() => expect(screen.getByText(/drift rate unavailable/)).toBeInTheDocument())
     expect(screen.getByText(/fewer than two samples/)).toBeInTheDocument()
@@ -639,11 +709,34 @@ describe('Node detail · Drift recording', () => {
     stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [run()] })
     stubs.getAudioAlignmentRun = () => Promise.resolve(detail())
 
-    renderScreen([node()])
+    renderScreen([audioNode()], withAudioCommand)
 
     await waitFor(() => expect(screen.getByText(/120 samples/)).toBeInTheDocument())
     expect(screen.getByText(/max excursion 4.2 ms/)).toBeInTheDocument()
     expect(screen.getByText(/drift 0.8 ms\/hour/)).toBeInTheDocument()
+  })
+
+  it('requests only 1 sample per run detail read, since the summary covers the full series regardless of limit', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [run()] })
+    let seenLimit: number | undefined
+    stubs.getAudioAlignmentRun = (_nodeId: string, _runId: string, limit?: number) => {
+      seenLimit = limit
+      return Promise.resolve(detail())
+    }
+
+    renderScreen([audioNode()], withAudioCommand)
+
+    await waitFor(() => expect(seenLimit).toBe(1))
+  })
+
+  it('uses a date-and-clock format for run times, since a run can span days', async () => {
+    stubs.listAudioAlignmentRuns = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', runs: [run()] })
+    stubs.getAudioAlignmentRun = () => Promise.resolve(detail())
+
+    renderScreen([audioNode()], withAudioCommand)
+
+    const expectedStart = formatDateClock('2026-08-30T20:00:00Z')
+    await waitFor(() => expect(screen.getByText(new RegExp(expectedStart!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument())
   })
 })
 
