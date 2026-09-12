@@ -122,15 +122,18 @@ export type NextTransition =
 export function nextTransition(model: Model): NextTransition {
   const instance = model.fpp[0]
   if (instance === undefined) return { known: false, reason: 'No FPP instance is reporting a position.' }
-  const elapsed = findSignal(instance.observations, 'fpp.position.elapsed.seconds')
-  const total = findSignal(instance.observations, 'fpp.position.seconds')
-  if (elapsed === undefined || total === undefined || typeof elapsed.value !== 'number' || typeof total.value !== 'number') {
+  // fpp.position.seconds is FPP's own seconds_played, not a duration - it
+  // equals elapsed on the very first playing poll, so subtracting elapsed
+  // from it always read zero remaining. fpp.position.remaining.seconds is
+  // FPP's own countdown and is read directly, never derived.
+  const remaining = findSignal(instance.observations, 'fpp.position.remaining.seconds')
+  if (remaining === undefined || typeof remaining.value !== 'number') {
     return { known: false, reason: 'The playhead position has not been observed.' }
   }
-  if (elapsed.state !== 'current' || total.state !== 'current') {
-    return { known: false, reason: `The playhead position is ${elapsed.state.replace('_', ' ')}, so the boundary is unknown rather than assumed.` }
+  if (remaining.state !== 'current') {
+    return { known: false, reason: `The playhead position is ${remaining.state.replace('_', ' ')}, so the boundary is unknown rather than assumed.` }
   }
-  return { known: true, remainingSeconds: Math.max(0, total.value - elapsed.value), source: instance.instanceId }
+  return { known: true, remainingSeconds: Math.max(0, remaining.value), source: instance.instanceId }
 }
 
 /**
@@ -203,15 +206,34 @@ export function pinnedCeilingFact(audio: NightBackgroundAudio): string {
  * reason carries what happened. So the label states the evidence state and
  * the tone never reads as a health verdict.
  */
-export const PHASE_TONE: Record<string, Tone> = {
+const PHASE_TONE: Record<string, Tone> = {
   recorded: 'pending',
   unknown: 'unknown',
   not_configured: 'pending',
   not_available: 'unknown',
 }
 
-export function phaseLabel(name: string, state: string): string {
+function phaseLabel(name: string, state: string): string {
   return `${name} ${state.replace('_', ' ')}`
+}
+
+/**
+ * The next-transition box's own headline, one sentence per
+ * `session.boundary.state`. Never derived from `transition`'s reason
+ * string: that field can read "recorded" for a purpose that carries no
+ * boundary at all, which is exactly the "none" case here.
+ */
+export function boundaryHeadline(boundary: NightSessionState['boundary']): string {
+  switch (boundary.state) {
+    case 'armed':
+      return `Boundary armed for ${formatClock(boundary.expectedAt) ?? 'an unrecorded time'}`
+    case 'invalid':
+      return 'Boundary invalidated'
+    case 'none':
+      return 'No boundary for this purpose'
+    default:
+      return 'Boundary unknown'
+  }
 }
 
 /** Anything not observed says so, and none of these readouts is inferred. */

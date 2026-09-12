@@ -6401,6 +6401,17 @@ export interface components {
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             reason: string;
         };
+        /** @description The current state's own content-anchor boundary, distinct from `transition`: `transition` states only whether evidence exists for this purpose at all, and can legitimately read "recorded" for a purpose that carries no boundary (a live show, for one). This field states specifically whether a boundary is armed, so the UI never has to infer "armed" from a `transition` reason string. */
+        NightBoundary: {
+            /**
+             * @description "armed" is the only state `expectedAt` is non-null for. "none" means this purpose carries no boundary at all (for example, a live show). "invalid" means a boundary was derived and then contradicted or found unusable. "unknown" means no boundary evidence has been produced yet.
+             * @enum {string}
+             */
+            state: "armed" | "invalid" | "none" | "unknown";
+            /** Format: date-time */
+            expectedAt: string | null;
+            reason: string;
+        };
         /** @description One configured cue's outbox detail for the session's current cycle. `state` "not_dispatched" means no outbox row exists for this cycle. `state` and `outcome` are never collapsed into one field: a dispatched-but-unconfirmed cue reports `state` "resolved", `outcome` "unconfirmed" - never "failed". */
         NightCue: {
             name: string;
@@ -6490,6 +6501,7 @@ export interface components {
             readiness: components["schemas"]["NightReadiness"];
             powerPhase: components["schemas"]["NightPhaseEvidence"];
             transition: components["schemas"]["NightPhaseEvidence"];
+            boundary: components["schemas"]["NightBoundary"];
             cues: components["schemas"]["NightCues"];
             backgroundAudio: components["schemas"]["NightBackgroundAudio"];
             degraded: boolean;

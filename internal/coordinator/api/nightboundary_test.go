@@ -299,6 +299,71 @@ func TestMapNightTransition_BlankBoundaryReasonNeverRendersBlank(t *testing.T) {
 	}
 }
 
+// TestMapNightBoundary_Armed: an armed boundary reports its expected
+// time and a real reason, never the "recorded"/"none" collapse
+// mapNightTransition's own state alone would force on a reader.
+func TestMapNightBoundary_Armed(t *testing.T) {
+	expected := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
+	rec := store.NightSessionRecord{
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &expected, Reason: "derived from millisecond-precision position"}),
+	}
+	got := mapNightBoundary(rec)
+	if got.State != v1.NightBoundaryArmed {
+		t.Fatalf("State = %q, want %q", got.State, v1.NightBoundaryArmed)
+	}
+	if got.ExpectedAt == nil || *got.ExpectedAt != expected.Format(time.RFC3339) {
+		t.Fatalf("ExpectedAt = %v, want %s", got.ExpectedAt, expected.Format(time.RFC3339))
+	}
+	if got.Reason != "derived from millisecond-precision position" {
+		t.Fatalf("Reason = %q, want the boundary's own reason", got.Reason)
+	}
+}
+
+// TestMapNightBoundary_Invalid: an invalidated boundary reports invalid,
+// never none or unknown, and carries the invalidation's own reason.
+func TestMapNightBoundary_Invalid(t *testing.T) {
+	rec := store.NightSessionRecord{
+		BoundaryJSON: encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: "observed position is already past the asset's own duration"}),
+	}
+	got := mapNightBoundary(rec)
+	if got.State != v1.NightBoundaryInvalid {
+		t.Fatalf("State = %q, want %q", got.State, v1.NightBoundaryInvalid)
+	}
+	if got.ExpectedAt != nil {
+		t.Fatalf("ExpectedAt = %v, want nil for an invalid boundary", got.ExpectedAt)
+	}
+	if got.Reason != "observed position is already past the asset's own duration" {
+		t.Fatalf("Reason = %q, want the invalidation's own reason", got.Reason)
+	}
+}
+
+// TestMapNightBoundary_NoneWhenNoBoundaryRecord: entering a purpose that
+// carries no boundary at all (nightloop.go clears BoundaryJSON on
+// entering live) must report "none", never "armed" or "recorded" -
+// this is the exact case mapNightTransition alone cannot distinguish
+// from an armed boundary without inspecting its reason string.
+func TestMapNightBoundary_NoneWhenNoBoundaryRecord(t *testing.T) {
+	got := mapNightBoundary(store.NightSessionRecord{BoundaryJSON: ""})
+	if got.State != v1.NightBoundaryNone {
+		t.Fatalf("State = %q, want %q", got.State, v1.NightBoundaryNone)
+	}
+	if got.ExpectedAt != nil {
+		t.Fatalf("ExpectedAt = %v, want nil", got.ExpectedAt)
+	}
+}
+
+// TestMapNightBoundary_UnknownWhenUnreadable: a BoundaryJSON value that
+// exists but cannot be decoded is told apart from "no record at all".
+func TestMapNightBoundary_UnknownWhenUnreadable(t *testing.T) {
+	got := mapNightBoundary(store.NightSessionRecord{BoundaryJSON: "{not valid json"})
+	if got.State != v1.NightBoundaryUnknown {
+		t.Fatalf("State = %q, want %q", got.State, v1.NightBoundaryUnknown)
+	}
+	if got.Reason == "" {
+		t.Fatal("expected a stated reason for an unreadable boundary")
+	}
+}
+
 // boundaryTestNow sits inside oneShotAnchor's own armed window, so a case
 // that does not deliberately exercise the idle rule is unaffected by it.
 var boundaryTestNow = time.Date(2026, 10, 31, 20, 0, 30, 0, time.UTC)

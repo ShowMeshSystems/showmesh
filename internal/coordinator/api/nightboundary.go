@@ -507,6 +507,35 @@ func mapNightTransition(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 	}
 }
 
+// mapNightBoundary is the wire form of the current state's own
+// content-anchor boundary alone, distinct from mapNightTransition:
+// unlike `transition`, this never reads "recorded"/"armed"-shaped for a
+// purpose that carries no boundary at all - that case reports "none".
+func mapNightBoundary(rec store.NightSessionRecord) v1.NightBoundary {
+	if rec.BoundaryJSON == "" {
+		return v1.NightBoundary{State: v1.NightBoundaryNone, Reason: "no boundary is armed for the current state"}
+	}
+	boundary, ok := decodeNightBoundary(rec.BoundaryJSON)
+	if !ok {
+		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: "the persisted boundary could not be read"}
+	}
+	switch boundary.State {
+	case nightBoundaryStateArmed:
+		if boundary.ExpectedAt == nil {
+			return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+		}
+		return v1.NightBoundary{
+			State:      v1.NightBoundaryArmed,
+			ExpectedAt: formatTimePtr(boundary.ExpectedAt),
+			Reason:     nightBoundaryReasonOrFallback(boundary, "boundary armed for "+boundary.ExpectedAt.Format(time.RFC3339)),
+		}
+	case nightBoundaryStateInvalid:
+		return v1.NightBoundary{State: v1.NightBoundaryInvalid, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+	default:
+		return v1.NightBoundary{State: v1.NightBoundaryUnknown, Reason: nightBoundaryReasonOrFallback(boundary, "no reason was recorded")}
+	}
+}
+
 // nightBoundaryReasonOrFallback never lets a blank boundary.Reason render
 // as an empty string (no writer leaves it blank today, but this is a
 // wire surface, not an invariant the type system enforces).

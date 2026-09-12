@@ -1858,6 +1858,7 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 		ShutdownIntent: rec.ShutdownIntent, ArmedShowID: rec.ArmedShowID, ShowCommitted: rec.ShowCommitted,
 		Degraded: rec.Degraded, DegradedReason: rec.DegradedReason, AttributionDegraded: rec.AttributionDegraded,
 		Transition: mapNightTransition(rec),
+		Boundary:   mapNightBoundary(rec),
 	}
 	if !rec.UpdatedAt.IsZero() {
 		out.UpdatedAt = formatTime(rec.UpdatedAt)

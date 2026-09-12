@@ -60,13 +60,12 @@ import { audioAssetOptions, type AudioAssetOption } from './showsModel'
 import { StaleWriteStrip } from './StaleWrite'
 import {
   backgroundAudioSteps,
+  boundaryHeadline,
   cycleRail,
   evidenceReadouts,
   nextTransition,
   nightRail,
   nowPlaying,
-  phaseLabel,
-  PHASE_TONE,
   pinnedCeilingFact,
   readinessChecks,
   runOfShow,
@@ -319,11 +318,11 @@ export function ShowNight() {
               <p className="sm-nownext__title">{formatPosition(next.remainingSeconds)}</p>
               <p className="sm-small sm-muted">until the sequence ends and the boundary begins.</p>
               <div className="sm-nownext__boundary">
-                <StatusPair tone={PHASE_TONE[session.transition.state] ?? 'unknown'} label={phaseLabel('Transition', session.transition.state)} />
+                <p>{boundaryHeadline(session.boundary)}</p>
                 <p className="sm-small sm-muted">
-                  {session.transition.reason !== '' ? session.transition.reason : 'Nothing recorded for this transition.'}
-                  {armed > 0 ? ` · ${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle` : ''}
+                  {session.boundary.reason !== '' ? session.boundary.reason : 'Nothing recorded for this boundary.'}
                 </p>
+                {armed > 0 && <p className="sm-small sm-muted">{`${armed} ${armed === 1 ? 'cue' : 'cues'} armed this cycle`}</p>}
               </div>
               <p className="sm-small sm-faint sm-nownext__derivation">
                 Derived from observed playback, not a clock. If the position goes stale the boundary becomes unknown rather than assumed.

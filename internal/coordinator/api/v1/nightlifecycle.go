@@ -51,6 +51,28 @@ type NightPhaseEvidence struct {
 	Reason string             `json:"reason"`
 }
 
+// NightBoundaryState is distinct from [NightEvidenceState]: it states
+// specifically whether a content-anchor boundary is armed, never
+// whether evidence merely exists for this purpose (that is `transition`'s
+// own job, and a purpose can read "recorded" there with no boundary at
+// all - a live show, for one).
+type NightBoundaryState string
+
+const (
+	NightBoundaryArmed   NightBoundaryState = "armed"
+	NightBoundaryInvalid NightBoundaryState = "invalid"
+	NightBoundaryNone    NightBoundaryState = "none"
+	NightBoundaryUnknown NightBoundaryState = "unknown"
+)
+
+// NightBoundary is the current state's own content-anchor boundary.
+// ExpectedAt is non-nil only when State is [NightBoundaryArmed].
+type NightBoundary struct {
+	State      NightBoundaryState `json:"state"`
+	ExpectedAt *string            `json:"expectedAt"`
+	Reason     string             `json:"reason"`
+}
+
 // NightCue is one configured cue's outbox detail for the session's
 // current cycle. State "not_dispatched" means no outbox row exists yet.
 type NightCue struct {
@@ -172,6 +194,7 @@ type NightSessionState struct {
 
 	PowerPhase NightPhaseEvidence `json:"powerPhase"`
 	Transition NightPhaseEvidence `json:"transition"`
+	Boundary   NightBoundary      `json:"boundary"`
 
 	Cues NightCues `json:"cues"`
 
