@@ -356,7 +356,7 @@ func applyEngineGlitchCounts(payload *mqttproto.AudioPayload, engine engineAvail
 }
 
 // engineBackendInfo is the optional interface [gstengine.Engine]
-// implements to report what it actually built against — matching
+// implements to report what it actually built against, matching
 // [engineGlitchCounts]'s identical optional-interface shape, so a wired
 // engine that does not implement it (a test fake) reports every field
 // blank rather than a fabricated value.
@@ -367,10 +367,10 @@ type engineBackendInfo interface {
 }
 
 // applyEngineBackendInfo writes engine's own report of what it built its
-// output pipeline against onto payload — node.audio.engine.sink_backend,
+// output pipeline against onto payload: node.audio.engine.sink_backend,
 // node.audio.engine.sink_target, and
 // node.audio.engine.clock_source/.clock_reason
-// (docs/build/IDENTIFIER-REGISTER.md) — fresh on every call, same
+// (docs/build/IDENTIFIER-REGISTER.md), fresh on every call, same
 // "live, never cached" rule as [applyEngineAvailability]. A nil engine,
 // or one that does not implement [engineBackendInfo], leaves every field
 // blank: never a fabricated backend for a node with no engine built at

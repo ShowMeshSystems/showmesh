@@ -110,7 +110,7 @@ func (b *clockBinding) currentRevision() (revision int64, have bool) {
 
 // currentInterface reports the network interface this node's currently
 // accepted node.clock configuration names, or ok=false when no
-// node.clock.configure has ever been accepted — read by
+// node.clock.configure has ever been accepted, read by
 // [audioEngineRebuilder.buildPipelineClockLocked] (audioengine.go) to
 // open this node's audio pipeline clock off the SAME interface
 // node.clock.ptp.* already reports evidence for. Unguarded, matching

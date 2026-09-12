@@ -913,7 +913,7 @@ A runs the output pipeline's own clock off the node's PTP hardware clock
 (PHC) instead of the system clock, and lets the binding choose PipeWire
 as the output backend instead of alsasink directly, so an operator
 comparing two nodes needs to see which backend and which clock each one
-actually built with — not only whether the engine is available. Both are
+actually built with, not only whether the engine is available. Both are
 live evidence from the bound [gstengine.Engine] itself
 (`SinkBackend`/`ClockSource`), never derived from the audio.node binding
 alone: a binding can request `pipewiresink` and a PHC clock can be
@@ -922,13 +922,13 @@ report what actually happened, not what was asked for.
 
 **`node.audio.engine.sink_target` closes a gap the real-node acceptance
 run found the same night, 2026-09-11.** `pipewiresink` with no explicit
-target plays to whatever PipeWire's own default sink happens to be —
+target plays to whatever PipeWire's own default sink happens to be:
 on the acceptance node that was the motherboard's onboard output, not the
 MOTU M4, until an operator changed the default by hand. `audio.node` now
 carries an optional `pipewireTargetNode`, and the agent builds
 pipewiresink's `target-object` property from it instead of reusing
 `programRoute` (an ALSA device identity such as `hw:CARD=M4,DEV=0`,
-never a PipeWire node name — the earlier code's mistake, which
+never a PipeWire node name: the earlier code's mistake, which
 pipewiresink silently ignored rather than refusing). `sink_target`
 reports the resulting `target-object` value the engine's own bound sink
 was actually built with, live off [gstengine.Engine.SinkTarget]. It is

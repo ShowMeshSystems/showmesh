@@ -671,7 +671,7 @@ describe('Settings › Node routing', () => {
 
     await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
     // An operator editing only the clock domain, never touching the backend
-    // controls at all — this is the surface's own "audio node set" defect,
+    // controls at all: this is the surface's own "audio node set" defect,
     // fixed by carrying the loaded payload's sinkBackend/pipewireTargetNode
     // forward rather than rebuilding the PUT body from scratch.
     fireEvent.change(screen.getByLabelText('Domain'), { target: { value: 'usb-audio-0-renamed' } })

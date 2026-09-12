@@ -22,7 +22,7 @@ func ReadPHC(index int) (time.Time, error) {
 
 // PHCReader is the non-Linux stand-in for [phc.go]'s real PHCReader, so
 // this package always exposes the same type regardless of build
-// platform. Its zero value is never usable directly — [OpenPHC] never
+// platform. Its zero value is never usable directly: [OpenPHC] never
 // succeeds on this platform.
 type PHCReader struct{}
 

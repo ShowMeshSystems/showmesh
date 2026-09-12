@@ -135,7 +135,7 @@ func alsaCardKey(device string) string {
 }
 
 // PipeWireNode is one Audio/Sink node a PipeWire graph reports, with the
-// real channel count and sample rate PipeWire itself negotiated for it —
+// real channel count and sample rate PipeWire itself negotiated for it:
 // a graph fact, not an ALSA probe result.
 type PipeWireNode struct {
 	Name        string
@@ -149,7 +149,7 @@ type PipeWireNode struct {
 type PipeWireEnumerator interface {
 	// Nodes returns every Audio/Sink node pw-dump's output describes.
 	// present is false with a nil error when pw-dump itself failed to
-	// run (no PipeWire on this host at all) — a clean absence, never an
+	// run (no PipeWire on this host at all): a clean absence, never an
 	// enumeration failure. err is non-nil only when pw-dump ran but its
 	// output could not be parsed, which IS a failure a caller must
 	// report rather than read as "no PipeWire".

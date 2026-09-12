@@ -176,7 +176,7 @@ func TestBuildGstEngineConfigReportsPipewireFallbackHonestly(t *testing.T) {
 // TestBuildGstEngineConfigUsesThePipeWireGraphsRealChannelCount pins the
 // symptom-2 defect directly: a 4-channel PipeWire node must build a
 // 4-channel pipeline from the graph's own evidence, never the bindings'
-// own channel floor (program 1-2 plus LTC 3, floor 3) — the mismatch that
+// own channel floor (program 1-2 plus LTC 3, floor 3): the mismatch that
 // made the real output pipeline refuse to reach PLAYING on node-01.
 func TestBuildGstEngineConfigUsesThePipeWireGraphsRealChannelCount(t *testing.T) {
 	origDiscoverer := audioDiscoverer

@@ -113,7 +113,7 @@ type branch struct {
 	// when. checkStallLocked uses the gap between lastAdvanceAt and now to
 	// tell real playback (position moves on every poll) apart from a
 	// pipeline that reached PLAYING and then never presented another
-	// sample — proven on real Raspberry Pi hardware: Start and Observe
+	// sample, proven on real Raspberry Pi hardware: Start and Observe
 	// both reported success while the reported position sat frozen at
 	// preroll forever, with no error anywhere.
 	lastAdvancePos time.Duration
@@ -791,7 +791,7 @@ var positionStallThreshold = 3 * time.Second
 //
 // The position query this reads from is decode-side, not rendered
 // output, so it is weak evidence about fine playback timing (see this
-// package's own queryPosition doc comment) — it is not used that way
+// package's own queryPosition doc comment); it is not used that way
 // here. A dead pipeline stops advancing entirely for as long as this
 // threshold, which is a coarser and much more reliable signal than a
 // decode-side reading's ordinary jitter, and is the one thing this check

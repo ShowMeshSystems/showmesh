@@ -68,7 +68,7 @@ func TestOpenPHCMissingDeviceFailsHonestly(t *testing.T) {
 }
 
 // TestReadPHCCallCost measures a single already-open [PHCReader]'s Now()
-// cost against a real PHC device — RES-019 section 7.2 candidate A's
+// cost against a real PHC device: RES-019 section 7.2 candidate A's
 // pipeline clock callback keeps one open for the engine's whole life
 // specifically so this per-call cost is only the clock_gettime syscall
 // itself, never an open/close pair; this records what that syscall

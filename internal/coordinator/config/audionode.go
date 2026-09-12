@@ -171,10 +171,10 @@ type AudioNodePayload struct {
 	// "alsa_output.usb-MOTU_M4_M4MA0302TY-00.pro-output-0") this node's
 	// pipewiresink builds its "target-object" property from, so the
 	// engine's output is bound to a specific PipeWire node instead of
-	// whatever PipeWire's own default sink happens to be at the moment —
+	// whatever PipeWire's own default sink happens to be at the moment,
 	// a show node must never depend on that, since the default can be an
 	// unrelated onboard output changed by hand. Present only when
-	// SinkBackend is [AudioNodeSinkBackendPipeWire] — refused otherwise,
+	// SinkBackend is [AudioNodeSinkBackendPipeWire]; refused otherwise,
 	// matching Zone's identical "an ignored field would read as an
 	// applied one" rule. Optional even then: omitted, pipewiresink is
 	// built with no target-object property at all, exactly the behavior

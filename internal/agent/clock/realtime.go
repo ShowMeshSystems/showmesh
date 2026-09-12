@@ -6,7 +6,7 @@ import "time"
 // node's pipeline clock when its interface has no associated PHC
 // hardware clock at all. With software timestamping, ptp4l disciplines
 // CLOCK_REALTIME itself, so it IS that node's media clock (see
-// deploy/node/PTP-AUDIO.md on the provisioning branch) — proven by hand
+// deploy/node/PTP-AUDIO.md on the provisioning branch), proven by hand
 // on a Raspberry Pi 3B+ node whose output pipeline never presented a
 // sample under GStreamer's own default clock, and played correctly the
 // moment its pipeline clock was switched to this one. Unlike [PHCReader],

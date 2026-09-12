@@ -30,7 +30,7 @@ var audioPipeWireEnumerator audio.PipeWireEnumerator = audio.PwDumpEnumerator{}
 // merges them into one [audio.Discovery]: a PipeWire-backed node's own
 // device model must still describe the node in ALSA terms alongside
 // whatever PipeWire holds, so both discovery methods run on every call,
-// never a backend selector choosing one or the other — see the union
+// never a backend selector choosing one or the other; see the union
 // advertisement rule documented on [detectAudioCapabilities].
 func discoverAudio(ctx context.Context) audio.Discovery {
 	d := audioDiscoverer(ctx, audioEnumerator)

@@ -22,7 +22,7 @@ func withAudioDiscoverer(t *testing.T, d audio.Discovery) {
 // convention. Every test in this file that predates the PipeWire
 // enumeration seam never calls this, so it keeps hitting the real
 // audio.DiscoverPipeWire against this test host's own (absent) pw-dump,
-// which is a clean absence contributing no routes — see
+// which is a clean absence contributing no routes; see
 // TestDetectAudioCapabilitiesAlsaOnlyAdvertisementUnchangedByRealPipeWireDiscoverer.
 func withAudioPipeWireDiscoverer(t *testing.T, pw audio.PipeWireDiscovery) {
 	t.Helper()
@@ -497,7 +497,7 @@ func TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe(t *testing.T) {
 // TestDetectAudioCapabilitiesAdvertisesTheUnionOfAlsaAndPipeWireRoutes
 // proves acceptance 1: a node with both an ALSA-visible card and a
 // PipeWire-held one advertises both, never a backend switch that hides
-// one for the other — the defect symptom-3 traced back to (ALSA cannot
+// one for the other: the defect symptom-3 traced back to (ALSA cannot
 // see a card PipeWire holds, so the coordinator refused every route).
 func TestDetectAudioCapabilitiesAdvertisesTheUnionOfAlsaAndPipeWireRoutes(t *testing.T) {
 	lastKnownGoodRoutes.reset()
