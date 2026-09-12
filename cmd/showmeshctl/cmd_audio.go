@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -68,13 +69,10 @@ type configAudioNode struct {
 	Role                  string  `json:"role,omitempty"`
 	Zone                  *string `json:"zone,omitempty"`
 
-	// OutputLatency mirrors v1.ConfigAudioOutputLatency. nil (never sent)
-	// leaves the server's own stored value or "unmeasured" default
-	// untouched — this is a full-replacement PUT, so a nil here on a
-	// node that already carries a measured value REPLACES it with the
-	// zero-value/unmeasured default, matching every other field on this
-	// object; --output-latency-method (or any other --output-latency-*
-	// flag) must be repeated on every "set" that should keep it.
+	// OutputLatency mirrors v1.ConfigAudioOutputLatency. This is a
+	// full-replacement PUT; "audio node set" itself reads the node's
+	// current value forward when no --output-latency-* flag is given, so
+	// nil here never reaches the wire as a silent reset.
 	OutputLatency *configAudioOutputLatency `json:"outputLatency,omitempty"`
 }
 
@@ -637,11 +635,9 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
 		_, _ = fmt.Fprintln(stderr, "\n--output-latency-* (RES-019 section 8) is this node's calibrated static")
 		_, _ = fmt.Fprintln(stderr, "output-chain delay. Every field is required together with a measured")
-		_, _ = fmt.Fprintln(stderr, "--output-latency-method (loopback, acoustic, or declared); omitting every")
-		_, _ = fmt.Fprintln(stderr, "--output-latency-* flag sends no outputLatency at all, which REPLACES any")
-		_, _ = fmt.Fprintln(stderr, "value this node already carries with the unmeasured default — this is a")
-		_, _ = fmt.Fprintln(stderr, "full-replacement PUT like every other field here, so an existing measured")
-		_, _ = fmt.Fprintln(stderr, "value must be repeated on every subsequent \"set\" that should keep it.")
+		_, _ = fmt.Fprintln(stderr, "--output-latency-method (loopback, acoustic, or declared). Omitting every")
+		_, _ = fmt.Fprintln(stderr, "--output-latency-* flag carries this node's currently stored value forward")
+		_, _ = fmt.Fprintln(stderr, "unchanged, read from the node just before this write.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this node), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
 		fs.PrintDefaults()
@@ -707,6 +703,27 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
+	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
+
+	// A full-replacement PUT with no --output-latency-* flag would
+	// otherwise reset a stored calibration to unmeasured on any unrelated
+	// edit, and this command's own help text used to instruct operators
+	// to repeat it on every "set", which nobody reliably does. Read the
+	// node's current value forward instead, the same carry-forward the
+	// UI already performs on save. current is also reused below to avoid
+	// a second GET for If-Match resolution.
+	var current *audioNodeConfigResponse
+	fetchCurrent := func() (*audioNodeConfigResponse, error) {
+		if current != nil {
+			return current, nil
+		}
+		var r audioNodeConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return nil, err
+		}
+		current = &r
+		return current, nil
+	}
 
 	body := configAudioNode{
 		ProgramRoute:    programRoute,
@@ -730,15 +747,24 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 			ol.MeasuredAt = &outputLatencyMeasuredAt
 		}
 		body.OutputLatency = ol
+	} else {
+		cur, err := fetchCurrent()
+		if err != nil {
+			var ce *cliError
+			if !errors.As(err, &ce) || ce.code != exitNotFound {
+				return reportError(stderr, "audio node set", err)
+			}
+		} else if cur.Payload.OutputLatency != nil && cur.Payload.OutputLatency.Method != "" && cur.Payload.OutputLatency.Method != "unmeasured" {
+			body.OutputLatency = cur.Payload.OutputLatency
+		}
 	}
-	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
 	ifMatchRevision, ifMatchSet := ifMatchFlag()
 	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
-		var r audioNodeConfigResponse
-		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+		cur, err := fetchCurrent()
+		if err != nil {
 			return 0, err
 		}
-		return r.Revision, nil
+		return cur.Revision, nil
 	})
 	if err != nil {
 		return reportError(stderr, "audio node set", err)

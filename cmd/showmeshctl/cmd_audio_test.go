@@ -241,9 +241,9 @@ func TestCmdAudioNodeSetSendsOutputLatencyFlags(t *testing.T) {
 }
 
 // TestCmdAudioNodeSetOmitsOutputLatencyWhenNoFlagGiven proves omitting
-// every --output-latency-* flag sends no outputLatency key at all, rather
-// than a zero-value object — the server, not this CLI, decides absence
-// means "unmeasured".
+// every --output-latency-* flag against a node whose stored outputLatency
+// is already "unmeasured" sends no outputLatency key at all, rather than
+// a zero-value object.
 func TestCmdAudioNodeSetOmitsOutputLatencyWhenNoFlagGiven(t *testing.T) {
 	var gotBody []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +274,48 @@ func TestCmdAudioNodeSetOmitsOutputLatencyWhenNoFlagGiven(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Output latency:         unmeasured (applies zero)") {
 		t.Errorf("printed detail did not report unmeasured:\n%s", stdout.String())
+	}
+}
+
+// TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven proves an
+// ordinary edit that touches no --output-latency-* flag does not wipe a
+// stored hardware calibration: the command reads the node's current value
+// forward, matching the UI's own save behavior.
+func TestCmdAudioNodeSetCarriesOutputLatencyForwardWhenNoFlagGiven(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			gotBody, _ = io.ReadAll(r.Body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-11T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface",
+			"outputLatency":{"valueUs":55997,"method":"loopback","measuredAt":"2026-09-11T02:00:00Z","reference":"MOTU M4 loopback capture","confidence":"high","configuration":"PipeWire quantum 1024, 48000 Hz"}},
+			"updatedAt":"2026-09-11T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "4",
+		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{
+		`"valueUs":55997`, `"method":"loopback"`, `"measuredAt":"2026-09-11T02:00:00Z"`,
+		`"reference":"MOTU M4 loopback capture"`, `"confidence":"high"`,
+		`"configuration":"PipeWire quantum 1024, 48000 Hz"`,
+	} {
+		if !strings.Contains(string(gotBody), want) {
+			t.Errorf("PUT body missing %q, want the stored output latency carried forward; body: %s", want, gotBody)
+		}
 	}
 }
 
