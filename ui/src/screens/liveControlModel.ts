@@ -135,11 +135,9 @@ export function fppPlaylistNames(definitions: readonly FPPPlaylistDefinitionMeta
 export type FPPPosition = { elapsedSeconds: number; totalSeconds: number }
 
 /**
- * `fpp.position.seconds` is FPP's own `seconds_played`, not a duration -
- * on the very first playing poll it equals elapsed, which is why total
- * must be built as elapsed + `fpp.position.remaining.seconds`
- * (`seconds_remaining`) instead. Null whenever either reading is absent
- * or not current, so a stale pair never renders a frozen position.
+ * `fpp.position.seconds` is FPP's own `seconds_played`, not a duration:
+ * it equals elapsed on the first playing poll. Total is elapsed +
+ * `fpp.position.remaining.seconds` instead.
  */
 export function fppPosition(observations: readonly Evidence[]): FPPPosition | null {
   const elapsed = findSignal(observations, 'fpp.position.elapsed.seconds')
