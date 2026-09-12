@@ -439,7 +439,7 @@ func gstAssetResolver(assetDir string) func(pkgaudio.MediaRef) (string, error) {
 // pipewireBacked skips a non-graph (ALSA) match entirely rather than
 // ever returning it: MEASURED on node-01, a card PipeWire's graph runs
 // at 48000 briefly released the card, and an ALSA probe of the same
-// hardware caught 44100 and won by matching programRoute first — a rate
+// hardware caught 44100 and won by matching programRoute first: a rate
 // nothing downstream of pipewiresink actually plays at. A route this
 // node's own graph backend owns has no honest ALSA reading; see
 // [pipewireFallbackSampleRateSource] for what a caller reports instead.
@@ -483,7 +483,7 @@ const realAudioSinkFactory = "alsasink"
 // graph, clocked from the node's PHC, and rate-matches ALSA output to it
 // through its own resampler. Unlike alsasink's "device" property,
 // pipewiresink takes "target-object" naming the PipeWire target this
-// route resolves to — see [audioEngineSinkFactoryAndProps].
+// route resolves to; see [audioEngineSinkFactoryAndProps].
 const pipewireAudioSinkFactory = "pipewiresink"
 
 // audioEngineSinkFactoryAndProps reports the GStreamer sink factory this
@@ -494,11 +494,11 @@ const pipewireAudioSinkFactory = "pipewiresink"
 // itself something to avoid rather than rely on being harmless).
 // Otherwise node.SinkBackend picks between [pipewireAudioSinkFactory]
 // (with "target-object" set to node.PipewireTargetNode when given, and no
-// such property at all when it is empty — never node.ProgramRoute, which
+// such property at all when it is empty, never node.ProgramRoute, which
 // names an ALSA device identity such as "hw:CARD=M4,DEV=0" rather than a
 // PipeWire node name, and which pipewiresink silently ignores rather than
 // refusing) and [realAudioSinkFactory] (with "device" set to
-// node.ProgramRoute) — the default whenever SinkBackend is empty, matching
+// node.ProgramRoute): the default whenever SinkBackend is empty, matching
 // every audio.node binding before this field existed.
 func audioEngineSinkFactoryAndProps(node audioNodeConfig) (factory string, props map[string]any) {
 	if v := os.Getenv(envGstAudioSinkOverride); v != "" {
@@ -563,7 +563,7 @@ func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCoun
 			if r.Channels > bindingCount {
 				return r.Channels, pipeWireGraphEvidenceSource
 			}
-			return bindingCount, "bindings: highest program or LTC channel index, within this route's graph-reported width"
+			return bindingCount, "bindings: highest program or LTC channel index, exceeding this route's graph-reported width"
 		}
 		if pipewireBacked {
 			continue
