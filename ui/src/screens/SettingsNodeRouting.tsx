@@ -79,6 +79,11 @@ export function SettingsNodeRouting() {
 
   const [nodesState, setNodesState] = useState<NodesState>({ kind: 'loading' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // node.clock is a separate config kind from audio.node (RES-019, ADR-039):
+  // a node can carry a PTP clock configuration without ever advertising audio
+  // routing, so its own node id is entered independently of the audio.node
+  // picker above rather than reused from `selectedId`.
+  const [clockNodeId, setClockNodeId] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -136,6 +141,14 @@ export function SettingsNodeRouting() {
       </Section>
 
       {selectedId !== null && <NodeRoutingForm key={selectedId} nodeId={selectedId} saveGate={gate} />}
+
+      <Section id="st-node-clock-select" title="PTP clock node">
+        <Field label="Node id" help="Any node id. Independent of the audio node picker above: node.clock is its own config kind.">
+          {(props) => <Input {...props} value={clockNodeId} onChange={(e) => setClockNodeId(e.target.value)} />}
+        </Field>
+      </Section>
+
+      {clockNodeId.trim() !== '' && <NodeClockSection key={clockNodeId.trim()} nodeId={clockNodeId.trim()} saveGate={gate} />}
     </>
   )
 }
@@ -539,8 +552,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
           </div>
         </div>
       </Section>
-
-      <NodeClockSection nodeId={nodeId} saveGate={saveGate} />
 
       <Section id="st-output-latency" title="Output latency">
         <p className="sm-small sm-muted">

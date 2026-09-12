@@ -948,6 +948,7 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
     renderAt('/settings/node-routing', { nodes: [] })
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
     expect(screen.getByLabelText('Priority1 · optional')).toHaveValue('128')
@@ -962,6 +963,7 @@ describe('Settings › Node routing › PTP clock', () => {
     stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
 
     renderAt('/settings/node-routing', { nodes: [] })
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
 
     await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
@@ -979,6 +981,7 @@ describe('Settings › Node routing › PTP clock', () => {
     }
 
     renderAt('/settings/node-routing', { nodes: [] })
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
 
     await waitFor(() => expect(screen.getByText(/No node.clock object exists/)).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth1' } })
@@ -1000,6 +1003,7 @@ describe('Settings › Node routing › PTP clock', () => {
     }
 
     renderAt('/settings/node-routing', { nodes: [] })
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
 
     await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth2' } })
@@ -1026,6 +1030,7 @@ describe('Settings › Node routing › PTP clock', () => {
     }
 
     renderAt('/settings/node-routing', { nodes: [] })
+    fireEvent.change(screen.getByLabelText('Node id'), { target: { value: 'audio-node-01' } })
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save clock config' })).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth5' } })
