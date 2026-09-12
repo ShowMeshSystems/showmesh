@@ -18,6 +18,26 @@ var audioDiscoverer = audio.Discover
 // and runAudioReport both probe against.
 var audioEnumerator audio.Enumerator = audio.AlsaEnumerator{}
 
+// audioPipeWireDiscoverer runs this node's PipeWire graph discovery,
+// matching audioDiscoverer's own injection convention.
+var audioPipeWireDiscoverer = audio.DiscoverPipeWire
+
+// audioPipeWireEnumerator is the real [audio.PipeWireEnumerator]
+// audioPipeWireDiscoverer probes against.
+var audioPipeWireEnumerator audio.PipeWireEnumerator = audio.PwDumpEnumerator{}
+
+// discoverAudio runs this node's full ALSA and PipeWire discovery and
+// merges them into one [audio.Discovery]: a PipeWire-backed node's own
+// device model must still describe the node in ALSA terms alongside
+// whatever PipeWire holds, so both discovery methods run on every call,
+// never a backend selector choosing one or the other — see the union
+// advertisement rule documented on [detectAudioCapabilities].
+func discoverAudio(ctx context.Context) audio.Discovery {
+	d := audioDiscoverer(ctx, audioEnumerator)
+	pw := audioPipeWireDiscoverer(ctx, audioPipeWireEnumerator)
+	return d.WithPipeWireRoutes(pw)
+}
+
 // audioEngineAvailable reports whether this node's actual playback
 // engine (the real backend behind internal/agent/audio.Manager, bound to
 // a delivered audio.node configuration) can currently play something —
@@ -191,7 +211,7 @@ var audioSessionCapabilityIDs = []capability.ID{
 // ClockDomainProvenance are the coordinator's own operator-declared
 // audio.node configuration (ADR-039), not anything this agent reports.
 func detectAudioCapabilities(ctx context.Context) capability.Set {
-	d := audioDiscoverer(ctx, audioEnumerator)
+	d := discoverAudio(ctx)
 	lastKnownGoodRoutes.update(d.Routes, d.HardwareEnumerated && !d.Truncated)
 	if !d.EngineUsable {
 		return nil

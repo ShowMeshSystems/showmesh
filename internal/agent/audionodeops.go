@@ -438,11 +438,20 @@ func gstAssetResolver(assetDir string) func(pkgaudio.MediaRef) (string, error) {
 func resolveNodeSampleRate(d audio.Discovery, programRoute string) (rate int, source string) {
 	for _, r := range d.Routes {
 		if r.Device == programRoute && r.Available && r.Rate > 0 {
+			if r.FromGraph {
+				return r.Rate, pipeWireGraphEvidenceSource
+			}
 			return r.Rate, "advertised route probe evidence"
 		}
 	}
 	return 0, noProbeEvidenceSource
 }
+
+// pipeWireGraphEvidenceSource is what both route resolvers report for a
+// route [audio.DiscoverPipeWire] produced: a real fact PipeWire's own
+// graph negotiated for that node, but never an ALSA probe result, so it
+// must not share wording with "advertised route probe evidence".
+const pipeWireGraphEvidenceSource = "PipeWire graph evidence (pw-dump)"
 
 // noProbeEvidenceSource is what both route resolvers report when this
 // node's own discovery run recorded no usable evidence for the bound
@@ -533,6 +542,12 @@ func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCoun
 	for _, r := range d.Routes {
 		if r.Device != programRoute || !r.Available {
 			continue
+		}
+		if r.FromGraph {
+			if r.Channels > bindingCount {
+				return r.Channels, pipeWireGraphEvidenceSource
+			}
+			return bindingCount, "bindings: highest program or LTC channel index, within this route's graph-reported width"
 		}
 		if r.LTCChannels > bindingCount {
 			return r.LTCChannels, "advertised route probe evidence (explicit channel-count probe)"

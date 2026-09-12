@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -132,7 +133,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 		return
 	}
 
-	d := audioDiscoverer(ctx, audioEnumerator)
+	d := discoverAudio(ctx)
 	discovery := buildAudioPayload(d, now())
 
 	publishOne := func() {
@@ -632,6 +633,9 @@ func buildAudioPayload(d audio.Discovery, probedAt time.Time) mqttproto.AudioPay
 		reason := "no real hardware candidate probed to PLAYING"
 		if !d.HasHardwareCards {
 			reason = "no ALSA hardware card found on this node"
+		}
+		if d.PipeWireEnumeratedReason != "" {
+			reason = fmt.Sprintf("%s; this node's PipeWire graph could not be read: %s", reason, d.PipeWireEnumeratedReason)
 		}
 		p.DeviceReason = reason
 		p.ProgramReason = reason

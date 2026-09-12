@@ -97,6 +97,141 @@ func TestHasHardwareCardsNoErrorOnLegitimateNoCards(t *testing.T) {
 	}
 }
 
+// pwDumpSample is a trimmed real `pw-dump` shape: a 4-channel MOTU M4
+// Audio/Sink node alongside a non-audio device node and a monitor source
+// (media.class "Audio/Source", never a route this package advertises),
+// modeled on pw-dump's actual object/info/props structure.
+const pwDumpSample = `[
+  {
+    "id": 45,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "node.name": "alsa_output.usb-MOTU_M4_000000000000-00.analog-surround-4",
+        "node.description": "MOTU M4 Analog Surround 4.0",
+        "media.class": "Audio/Sink",
+        "audio.channels": 4,
+        "audio.rate": 48000
+      }
+    }
+  },
+  {
+    "id": 46,
+    "type": "PipeWire:Interface:Node",
+    "info": {
+      "props": {
+        "node.name": "alsa_output.usb-MOTU_M4_000000000000-00.analog-surround-4.monitor",
+        "media.class": "Audio/Source",
+        "audio.channels": 4,
+        "audio.rate": 48000
+      }
+    }
+  },
+  {
+    "id": 47,
+    "type": "PipeWire:Interface:Device",
+    "info": {
+      "props": {
+        "device.name": "alsa_card.usb-MOTU_M4_000000000000-00"
+      }
+    }
+  }
+]`
+
+func TestParsePwDumpSinkNodesExtractsOnlyAudioSinkNodes(t *testing.T) {
+	nodes, err := parsePwDumpSinkNodes(pwDumpSample)
+	if err != nil {
+		t.Fatalf("parsePwDumpSinkNodes() error = %v, want nil", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("parsePwDumpSinkNodes() = %d nodes %+v, want exactly 1 (Audio/Source and Device objects excluded)", len(nodes), nodes)
+	}
+	got := nodes[0]
+	want := PipeWireNode{
+		Name:        "alsa_output.usb-MOTU_M4_000000000000-00.analog-surround-4",
+		Description: "MOTU M4 Analog Surround 4.0",
+		Channels:    4,
+		Rate:        48000,
+	}
+	if got != want {
+		t.Errorf("parsePwDumpSinkNodes()[0] = %+v, want %+v", got, want)
+	}
+}
+
+func TestParsePwDumpSinkNodesGarbageIsAnError(t *testing.T) {
+	if _, err := parsePwDumpSinkNodes("not json at all"); err == nil {
+		t.Error("parsePwDumpSinkNodes(garbage) returned no error, want one: unparseable pw-dump output is a real failure, not a clean absence")
+	}
+}
+
+// TestPwDumpEnumeratorNoBinaryIsCleanAbsence proves a host with no
+// PipeWire at all (pw-dump itself fails to run) reports present=false
+// with a nil error, never an error a caller would have to explain.
+func TestPwDumpEnumeratorNoBinaryIsCleanAbsence(t *testing.T) {
+	prev := runCommand
+	defer func() { runCommand = prev }()
+	runCommand = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "", errors.New("exec: \"pw-dump\": executable file not found in $PATH")
+	}
+
+	nodes, present, err := PwDumpEnumerator{}.Nodes(context.Background())
+	if err != nil {
+		t.Fatalf("Nodes() error = %v, want nil for a clean absence", err)
+	}
+	if present {
+		t.Error("Nodes() present = true, want false: pw-dump did not run")
+	}
+	if len(nodes) != 0 {
+		t.Errorf("Nodes() = %v, want none", nodes)
+	}
+}
+
+// TestPwDumpEnumeratorGarbageOutputIsAFailure proves pw-dump running but
+// returning unparseable output is a genuine failure this node must report,
+// not silently read as "no PipeWire".
+func TestPwDumpEnumeratorGarbageOutputIsAFailure(t *testing.T) {
+	prev := runCommand
+	defer func() { runCommand = prev }()
+	runCommand = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "{not valid json", nil
+	}
+
+	nodes, present, err := PwDumpEnumerator{}.Nodes(context.Background())
+	if err == nil {
+		t.Fatal("Nodes() returned no error for unparseable pw-dump output, want one")
+	}
+	if !present {
+		t.Error("Nodes() present = false, want true: pw-dump genuinely ran")
+	}
+	if len(nodes) != 0 {
+		t.Errorf("Nodes() = %v, want none", nodes)
+	}
+}
+
+// TestPwDumpEnumeratorRealNodes proves the happy path end to end through
+// PwDumpEnumerator.Nodes, not just the parser it delegates to.
+func TestPwDumpEnumeratorRealNodes(t *testing.T) {
+	prev := runCommand
+	defer func() { runCommand = prev }()
+	runCommand = func(ctx context.Context, name string, args ...string) (string, error) {
+		if name != "pw-dump" {
+			t.Errorf("runCommand called with %q, want pw-dump", name)
+		}
+		return pwDumpSample, nil
+	}
+
+	nodes, present, err := PwDumpEnumerator{}.Nodes(context.Background())
+	if err != nil {
+		t.Fatalf("Nodes() error = %v, want nil", err)
+	}
+	if !present {
+		t.Error("Nodes() present = false, want true")
+	}
+	if len(nodes) != 1 || nodes[0].Channels != 4 || nodes[0].Rate != 48000 {
+		t.Errorf("Nodes() = %+v, want one 4-channel/48kHz node", nodes)
+	}
+}
+
 // TestCandidateDevicesExcludesVirtualNames proves null/default are never
 // presented as a candidate route even when real hardware is also present,
 // and that a second alias of the SAME card ("sysdefault:CARD=PCH") is

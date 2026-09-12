@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -137,6 +138,32 @@ func TestBuildAudioPayloadEnumerationFailureIsUnknownNotAbsent(t *testing.T) {
 		if got != d.HardwareEnumeratedReason {
 			t.Errorf("%s = %q, want the enumeration failure's own reason %q, not a confirmed-absence claim", name, got, d.HardwareEnumeratedReason)
 		}
+	}
+	if err := p.Validate(); err != nil {
+		t.Errorf("built payload fails its own Validate: %v", err)
+	}
+}
+
+// TestBuildAudioPayloadPipeWireReadFailureIsStatedNotSilent proves
+// acceptance 5: a sinkBackend pipewiresink node whose PipeWire graph
+// could not be read (pw-dump ran but returned garbage) states that in
+// DeviceReason/ProgramReason rather than reading identically to a node
+// that simply has no usable hardware at all.
+func TestBuildAudioPayloadPipeWireReadFailureIsStatedNotSilent(t *testing.T) {
+	d := audio.Discovery{
+		EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: false,
+		PipeWireEnumeratedReason: "PipeWire graph enumeration failed: decoding pw-dump JSON: unexpected end of JSON input",
+	}
+	p := buildAudioPayload(d, time.Now())
+
+	if p.DeviceAvailable {
+		t.Fatal("DeviceAvailable = true, want false")
+	}
+	if !strings.Contains(p.DeviceReason, "PipeWire graph could not be read") {
+		t.Errorf("DeviceReason = %q, want it to say the PipeWire graph could not be read", p.DeviceReason)
+	}
+	if !strings.Contains(p.DeviceReason, "unexpected end of JSON input") {
+		t.Errorf("DeviceReason = %q, want the underlying read failure text carried through", p.DeviceReason)
 	}
 	if err := p.Validate(); err != nil {
 		t.Errorf("built payload fails its own Validate: %v", err)

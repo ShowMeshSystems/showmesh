@@ -29,7 +29,7 @@ import (
 // the outgoing engine has released that device; see
 // [audioEngineRebuilder.rebuild] for the ordering.
 func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeConfig) (cfg gstengine.Config, sampleRateSource, channelCountSource string) {
-	d := audioDiscoverer(ctx, audioEnumerator)
+	d := discoverAudio(ctx)
 	rate, rateSource := resolveNodeSampleRate(d, node.ProgramRoute)
 	channelCount, chCountSource := resolveNodeChannelCount(d, node.ProgramRoute, audioNodeChannelCount(node))
 	cfg = staticGstEngineConfig(assetDir, node)
@@ -39,17 +39,19 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 		// built from that device's own probe evidence or refused (see
 		// rebuildLocked).
 	case pipewireAudioSinkFactory:
-		// PipeWire owns the card, so the ALSA probe this node runs can
-		// never see it (that probe is what resolveNodeSampleRate and
-		// resolveNodeChannelCount just consulted, and it reports no
-		// evidence for a route PipeWire holds). Fall back rather than
-		// refuse: this backend exists specifically to ship audio on a
-		// node whose card can never yield an ALSA probe.
+		// This node's own PipeWire graph discovery (merged into d by
+		// discoverAudio) is consulted above like any other route, so a
+		// node.ProgramRoute naming a PipeWire node this graph reports
+		// already resolved to real evidence and skips both fallbacks
+		// below. They remain the last resort: a route this pass's
+		// PipeWire enumeration did not (yet) name, or could never read
+		// at all, still ships rather than refuses, matching why this
+		// backend exists.
 		if rate <= 0 {
-			rate, rateSource = scaffoldSampleRate, pipewireNoProbeSampleRateSource
+			rate, rateSource = scaffoldSampleRate, pipewireFallbackSampleRateSource(d)
 		}
 		if channelCount <= 0 {
-			channelCount, chCountSource = audioNodeChannelCount(node), pipewireNoProbeChannelCountSource
+			channelCount, chCountSource = audioNodeChannelCount(node), pipewireFallbackChannelCountSource(d)
 		}
 	default:
 		if rate <= 0 {
@@ -75,6 +77,28 @@ const (
 	pipewireNoProbeSampleRateSource   = "fallback: pipewiresink backend, no device probe is possible while PipeWire holds the card"
 	pipewireNoProbeChannelCountSource = "fallback: pipewiresink backend, no device probe is possible while PipeWire holds the card; bindings' highest program or LTC channel index"
 )
+
+// pipewireFallbackSampleRateSource and pipewireFallbackChannelCountSource
+// report why a pipewiresink route fell back to a guessed rate or channel
+// count when this node's own PipeWire graph discovery named no matching
+// route: [pipewireNoProbeSampleRateSource]/[pipewireNoProbeChannelCountSource]
+// when this node's PipeWire graph simply does not (yet) name this route,
+// or a reason naming the actual read failure when d.PipeWireEnumeratedReason
+// shows pw-dump ran but could not be parsed — an operator reading either
+// value must be able to tell "not found" from "could not be read" apart.
+func pipewireFallbackSampleRateSource(d audio.Discovery) string {
+	if d.PipeWireEnumeratedReason != "" {
+		return fmt.Sprintf("fallback: pipewiresink backend, this node's PipeWire graph could not be read (%s)", d.PipeWireEnumeratedReason)
+	}
+	return pipewireNoProbeSampleRateSource
+}
+
+func pipewireFallbackChannelCountSource(d audio.Discovery) string {
+	if d.PipeWireEnumeratedReason != "" {
+		return fmt.Sprintf("fallback: pipewiresink backend, this node's PipeWire graph could not be read (%s); bindings' highest program or LTC channel index", d.PipeWireEnumeratedReason)
+	}
+	return pipewireNoProbeChannelCountSource
+}
 
 // scaffoldSampleRate is the rate a config falls back to when this node
 // has no probe evidence for the bound route: a non-hardware sink
