@@ -901,8 +901,8 @@ alongside them.
 | `node.audio.engine.restore.last_reason` | shipped | SM-384 (node-level counterpart to `audio_session.restore.last_reason`) |
 | `node.audio.engine.sink_backend` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`alsasink` or `pipewiresink`; the sibling `node.audio.engine.*` rows above already carry this section's no-additions-without-the-owner rule's standing exception) |
 | `node.audio.engine.sink_target` | shipped | RES-019 section 7.2 candidate A, ADR-046 (the PipeWire node name pipewiresink was configured to target; blank when `sink_backend` is not `pipewiresink` or no target was named at all) |
-| `node.audio.engine.clock_source` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`phc` or `default`) |
-| `node.audio.engine.clock_reason` | shipped | RES-019 section 7.2 candidate A, ADR-046 (required whenever `clock_source` is `default` because a PHC clock was configured but could not be used; blank when nothing was configured at all) |
+| `node.audio.engine.clock_source` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`phc`, `realtime` -- a node with no PHC hardware, clocked from CLOCK_REALTIME instead -- or `default`) |
+| `node.audio.engine.clock_reason` | shipped | RES-019 section 7.2 candidate A, ADR-046 (required whenever `clock_source` is `default` because a clock was configured but could not be used; blank when nothing was configured at all) |
 
 **The three `node.audio.engine.sink_backend`/`clock_source`/
 `clock_reason` rows are Track I's rate-lock step, 2026-09-11.** Candidate

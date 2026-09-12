@@ -70,28 +70,63 @@ type Config struct {
 	Now func() time.Time
 
 	// Clock, when non-nil, is this pipeline's own running clock — the
-	// node's PTP hardware clock (PHC), already open, per RES-019 section
-	// 7.2 candidate A (ADR-046): the output pipeline runs on the same
-	// timebase as the card it plays through, so alsasink never needs to
-	// step the playout pointer to correct for a system/card clock drift.
-	// [Engine] reads it once at construction, before the pipeline's
-	// first state change (a clock installed afterward is proven not to
-	// reach an already-playing sink), to confirm it is actually
-	// readable; a failed read there is not fatal — the engine falls back
-	// to GStreamer's own default clock exactly as it did before this
-	// field existed. nil means no PHC clock was configured for this
-	// node at all, which is likewise not a failure.
+	// node's PTP hardware clock (PHC) or, for a node with no PHC
+	// hardware, its CLOCK_REALTIME (see [ClockKind]) — already open, per
+	// RES-019 section 7.2 candidate A (ADR-046): the output pipeline runs
+	// on the same timebase as the card it plays through, so alsasink
+	// never needs to step the playout pointer to correct for a
+	// system/card clock drift, and pipewiresink never waits forever for a
+	// graph timebase its own pipeline clock does not share (proven on a
+	// Raspberry Pi with no PHC: GStreamer's own default clock never
+	// presented a sample; CLOCK_REALTIME played correctly). [Engine]
+	// reads it once at construction, before the pipeline's first state
+	// change (a clock installed afterward is proven not to reach an
+	// already-playing sink), to confirm it is actually readable; a
+	// failed read there is not fatal — the engine falls back to
+	// GStreamer's own default clock exactly as it did before this field
+	// existed. nil means no clock at all was configured for this node,
+	// which is likewise not a failure.
 	Clock ClockReader
 
+	// ClockKind is which kind of clock Clock actually is — [ClockKindPHC]
+	// or [ClockKindRealtime] — reported verbatim by [Engine.ClockSource]
+	// once Clock is confirmed readable and installed. Meaningless when
+	// Clock is nil. Defaults to [ClockKindPHC] when left empty, matching
+	// this field's only value before [ClockKindRealtime] existed.
+	ClockKind string
+
 	// ClockUnavailableReason is set by the caller instead of Clock when
-	// a PHC clock was configured for this node but could not even be
-	// opened (no PHC associated with the configured interface, or the
-	// device could not be opened) — carried through so [Engine.
-	// ClockSource] reports the same class of reason whether the failure
-	// happened before or after this package ever saw a reader. Left
-	// empty when Clock is nil because nothing was configured at all;
-	// ignored when Clock is non-nil.
+	// a pipeline clock was configured for this node but could not even
+	// be opened (a named interface with a PHC that could not be opened)
+	// — carried through so [Engine.ClockSource] reports the same class
+	// of reason whether the failure happened before or after this
+	// package ever saw a reader. Left empty when Clock is nil because
+	// nothing was configured at all; ignored when Clock is non-nil.
 	ClockUnavailableReason string
+}
+
+// ClockKindPHC and ClockKindRealtime are [Config.ClockKind]'s closed
+// vocabulary, matching [Engine.ClockSource]'s own reserved
+// node.audio.engine.clock_source values.
+const (
+	// ClockKindPHC is Clock's kind when it reads the node's PTP hardware
+	// clock — RES-019 section 7.2 candidate A.
+	ClockKindPHC = "phc"
+
+	// ClockKindRealtime is Clock's kind when it reads CLOCK_REALTIME as
+	// this node's media clock: selected for a node with no PHC hardware,
+	// whose ptp4l instance (in software timestamping mode) disciplines
+	// CLOCK_REALTIME itself, so it IS that node's media clock.
+	ClockKindRealtime = "realtime"
+)
+
+// clockKind reports c.ClockKind, defaulting to [ClockKindPHC] when unset
+// — this field's only value before [ClockKindRealtime] existed.
+func (c Config) clockKind() string {
+	if c.ClockKind == "" {
+		return ClockKindPHC
+	}
+	return c.ClockKind
 }
 
 // ErrConfigInvalid is returned by [Config.Validate] and wraps the reason.

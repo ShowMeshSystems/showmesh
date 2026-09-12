@@ -1085,9 +1085,9 @@ func TestBuildPipelineClockLockedNoSourceWired(t *testing.T) {
 	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
 	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 
-	reader, reason := r.buildPipelineClockLocked()
-	if reader != nil || reason != "" {
-		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, \"\")", reader, reason)
+	reader, kind, reason := r.buildPipelineClockLocked()
+	if reader != nil || kind != "" || reason != "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q, %q), want (nil, \"\", \"\")", reader, kind, reason)
 	}
 }
 
@@ -1101,20 +1101,26 @@ func TestBuildPipelineClockLockedNoInterfaceConfigured(t *testing.T) {
 	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	r.SetPHCInterfaceSource(func() (string, bool) { return "", false })
 
-	reader, reason := r.buildPipelineClockLocked()
-	if reader != nil || reason != "" {
-		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, \"\")", reader, reason)
+	reader, kind, reason := r.buildPipelineClockLocked()
+	if reader != nil || kind != "" || reason != "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q, %q), want (nil, \"\", \"\")", reader, kind, reason)
 	}
 }
 
-// TestBuildPipelineClockLockedInterfaceHasNoPHC proves a configured
-// interface whose PHC lookup reports ok=false with no error carries a
-// stated reason through -- this is a real, nameable failure ("this
-// interface has no PHC"), not the unconfigured case above.
-func TestBuildPipelineClockLockedInterfaceHasNoPHC(t *testing.T) {
+// TestBuildPipelineClockLockedInterfaceHasNoPHCUsesRealtime proves a
+// configured interface whose PHC lookup reports ok=false with no error
+// is not a failure either: this node genuinely has no PHC hardware (a
+// Raspberry Pi's onboard NIC, say), so buildPipelineClockLocked selects
+// the realtime clock instead -- proven by hand on a Raspberry Pi 3B+
+// that only played once its pipeline clock was switched to
+// CLOCK_REALTIME.
+func TestBuildPipelineClockLockedInterfaceHasNoPHCUsesRealtime(t *testing.T) {
 	origLookup := phcIndexForInterface
-	t.Cleanup(func() { phcIndexForInterface = origLookup })
+	origRealtime := newRealtimeReader
+	t.Cleanup(func() { phcIndexForInterface = origLookup; newRealtimeReader = origRealtime })
 	phcIndexForInterface = func(iface string) (int, bool, error) { return 0, false, nil }
+	stub := &closingClockReaderStub{}
+	newRealtimeReader = func() gstengine.ClockReader { return stub }
 
 	dir := t.TempDir()
 	switchable := audio.NewSwitchableEngine()
@@ -1122,12 +1128,15 @@ func TestBuildPipelineClockLockedInterfaceHasNoPHC(t *testing.T) {
 	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
 
-	reader, reason := r.buildPipelineClockLocked()
-	if reader != nil {
-		t.Fatalf("buildPipelineClockLocked() reader = %v, want nil", reader)
+	reader, kind, reason := r.buildPipelineClockLocked()
+	if reader != stub {
+		t.Fatalf("buildPipelineClockLocked() reader = %v, want the injected realtime stub", reader)
 	}
-	if reason == "" {
-		t.Fatalf("buildPipelineClockLocked() reason is empty, want a stated reason for a named interface with no PHC")
+	if kind != gstengine.ClockKindRealtime {
+		t.Fatalf("buildPipelineClockLocked() kind = %q, want %q", kind, gstengine.ClockKindRealtime)
+	}
+	if reason != "" {
+		t.Fatalf("buildPipelineClockLocked() reason = %q, want \"\": a node with no PHC hardware is not a failure", reason)
 	}
 }
 
@@ -1145,15 +1154,16 @@ func TestBuildPipelineClockLockedLookupError(t *testing.T) {
 	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
 
-	reader, reason := r.buildPipelineClockLocked()
-	if reader != nil || reason == "" {
-		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, a stated reason)", reader, reason)
+	reader, kind, reason := r.buildPipelineClockLocked()
+	if reader != nil || kind != "" || reason == "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q, %q), want (nil, \"\", a stated reason)", reader, kind, reason)
 	}
 }
 
 // TestBuildPipelineClockLockedOpensTheReaderTheInjectedFactoryReturns
 // proves a successfully found PHC index is opened via [newPHCReader] and
-// the resulting reader is handed back with no reason.
+// the resulting reader is handed back with no reason, reported as
+// [gstengine.ClockKindPHC].
 func TestBuildPipelineClockLockedOpensTheReaderTheInjectedFactoryReturns(t *testing.T) {
 	origLookup := phcIndexForInterface
 	origReader := newPHCReader
@@ -1173,9 +1183,12 @@ func TestBuildPipelineClockLockedOpensTheReaderTheInjectedFactoryReturns(t *test
 	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
 
-	reader, reason := r.buildPipelineClockLocked()
+	reader, kind, reason := r.buildPipelineClockLocked()
 	if reader != stub {
 		t.Fatalf("buildPipelineClockLocked() reader = %v, want the injected stub", reader)
+	}
+	if kind != gstengine.ClockKindPHC {
+		t.Fatalf("buildPipelineClockLocked() kind = %q, want %q", kind, gstengine.ClockKindPHC)
 	}
 	if reason != "" {
 		t.Fatalf("buildPipelineClockLocked() reason = %q, want \"\"", reason)
@@ -1198,9 +1211,9 @@ func TestBuildPipelineClockLockedOpenFailure(t *testing.T) {
 	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	r.SetPHCInterfaceSource(func() (string, bool) { return "eth0", true })
 
-	reader, reason := r.buildPipelineClockLocked()
-	if reader != nil || reason == "" {
-		t.Fatalf("buildPipelineClockLocked() = (%v, %q), want (nil, a stated reason)", reader, reason)
+	reader, kind, reason := r.buildPipelineClockLocked()
+	if reader != nil || kind != "" || reason == "" {
+		t.Fatalf("buildPipelineClockLocked() = (%v, %q, %q), want (nil, \"\", a stated reason)", reader, kind, reason)
 	}
 }
 

@@ -1657,12 +1657,14 @@ type AudioPayload struct {
 	// node's output pipeline actually runs on
 	// (node.audio.engine.clock_source/.clock_reason): "phc" (RES-019
 	// section 7.2 candidate A -- the pipeline is clocked from the node's
-	// PTP hardware clock) or "default" (GStreamer's own system clock,
-	// either because no PHC clock was configured for this node at all,
-	// or because one was configured but could not be used, in which case
-	// EngineClockReason is required). Both empty for a node with no
-	// engine built at all, or an agent built before these fields
-	// existed.
+	// PTP hardware clock), "realtime" (the node has no PHC hardware, so
+	// the pipeline is clocked from CLOCK_REALTIME instead, which a
+	// software-timestamping ptp4l disciplines directly), or "default"
+	// (GStreamer's own system clock, either because no clock was
+	// configured for this node at all, or because one was configured but
+	// could not be used, in which case EngineClockReason is required).
+	// Both empty for a node with no engine built at all, or an agent
+	// built before these fields existed.
 	EngineClockSource string `json:"engineClockSource,omitempty"`
 	EngineClockReason string `json:"engineClockReason,omitempty"`
 
@@ -1846,7 +1848,7 @@ func (p AudioPayload) Validate() error {
 		return fmt.Errorf("%w: engineRestoreLastReason (required whenever engineRestoreAttempts is nonzero)", ErrPayloadMissingField)
 	}
 	switch p.EngineClockSource {
-	case "", "phc", "default":
+	case "", "phc", "realtime", "default":
 	default:
 		return fmt.Errorf("%w: %q", ErrPayloadInvalidEngineClockSource, p.EngineClockSource)
 	}
@@ -2006,9 +2008,9 @@ var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognize
 var ErrPayloadInvalidEngineRestoreState = errors.New("mqttproto: engineRestoreState is not a recognized value")
 
 // ErrPayloadInvalidEngineClockSource is wrapped by [AudioPayload.Validate]
-// when EngineClockSource is set to something other than "", "phc", or
-// "default" -- the closed vocabulary node.audio.engine.clock_source
-// carries (docs/build/IDENTIFIER-REGISTER.md).
+// when EngineClockSource is set to something other than "", "phc",
+// "realtime", or "default" -- the closed vocabulary
+// node.audio.engine.clock_source carries (docs/build/IDENTIFIER-REGISTER.md).
 var ErrPayloadInvalidEngineClockSource = errors.New("mqttproto: engineClockSource is not a recognized value")
 
 // ErrPayloadInvalidSettingsState is wrapped by [AudioPayload.Validate]

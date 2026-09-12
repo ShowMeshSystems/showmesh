@@ -107,6 +107,35 @@ func TestClockSourcePHCWhenTheConfiguredClockIsReadable(t *testing.T) {
 	}
 }
 
+// TestClockSourceRealtimeWhenConfiguredClockKindIsRealtime proves a
+// readable Clock reports exactly the kind cfg.ClockKind names, not
+// always "phc" -- the exact defect the orchestrator found: a realtime
+// reader wired for a node with no PHC hardware still reported "phc",
+// which hid the running node's own real clock source from every operator
+// and from RES-019's own evidence.
+func TestClockSourceRealtimeWhenConfiguredClockKindIsRealtime(t *testing.T) {
+	reader := &fakeClockReader{base: time.Now(), failAfter: -1}
+	cfg := testConfig(resolveByRuntimeFilename)
+	cfg.Clock = reader
+	cfg.ClockKind = ClockKindRealtime
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	if ok, reason := e.Available(); !ok {
+		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	source, reason := e.ClockSource()
+	if source != clockSourceRealtime || reason != "" {
+		t.Fatalf("ClockSource() = (%q, %q), want (%q, \"\")", source, reason, clockSourceRealtime)
+	}
+	if source == clockSourcePHC {
+		t.Fatalf("ClockSource() reported %q for a realtime reader; a reader must never be reported under another reader's name", source)
+	}
+}
+
 func TestClockSourceFallsBackToDefaultWhenTheConfiguredClockIsUnreadable(t *testing.T) {
 	reader := &fakeClockReader{base: time.Now(), failAfter: 0} // fails on the very first read
 	cfg := testConfig(resolveByRuntimeFilename)

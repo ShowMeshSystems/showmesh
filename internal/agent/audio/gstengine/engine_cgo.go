@@ -591,12 +591,16 @@ func (e *Engine) buildPipeline() error {
 	return nil
 }
 
-// clockSourcePHC and clockSourceDefault are [Engine.ClockSource]'s own
-// closed vocabulary (docs/build/IDENTIFIER-REGISTER.md's
-// node.audio.engine.clock_source reservation).
+// clockSourcePHC, clockSourceRealtime and clockSourceDefault are
+// [Engine.ClockSource]'s own closed vocabulary
+// (docs/build/IDENTIFIER-REGISTER.md's node.audio.engine.clock_source
+// reservation). clockSourcePHC and clockSourceRealtime are aliases of
+// [ClockKindPHC] and [ClockKindRealtime]: the reported source is always
+// exactly the kind of clock actually installed.
 const (
-	clockSourcePHC     = "phc"
-	clockSourceDefault = "default"
+	clockSourcePHC      = ClockKindPHC
+	clockSourceRealtime = ClockKindRealtime
+	clockSourceDefault  = "default"
 )
 
 // phcClockName is the [gstaudio.NewAudioClock] instance name this
@@ -631,7 +635,7 @@ func (e *Engine) installClock(pipeline gst.Pipeline) {
 		return
 	}
 	pipeline.UseClock(gstaudio.NewAudioClock(phcClockName, e.phcClockGetTime))
-	e.clockBackend = clockSourcePHC
+	e.clockBackend = e.cfg.clockKind()
 }
 
 // phcClockGetTime is this pipeline's [gstaudio.AudioClockGetTimeFunc]:
@@ -678,13 +682,13 @@ func (e *Engine) SinkTarget() string {
 	return v
 }
 
-// ClockSource reports whether this engine's pipeline runs on its
-// configured PHC clock or on GStreamer's own default — [clockSourcePHC]
-// or [clockSourceDefault] once buildPipeline has run, or "" for an
-// [NewUnavailable] engine that never attempted a pipeline at all. reason
-// is non-empty whenever source is [clockSourceDefault] because a PHC
-// clock was configured but could not be used; empty when nothing was
-// configured, or when source is [clockSourcePHC].
+// ClockSource reports which clock this engine's pipeline actually runs
+// on — [clockSourcePHC], [clockSourceRealtime], or [clockSourceDefault]
+// once buildPipeline has run, or "" for an [NewUnavailable] engine that
+// never attempted a pipeline at all. reason is non-empty whenever source
+// is [clockSourceDefault] because a configured clock could not be used;
+// empty when nothing was configured, or when a clock was successfully
+// installed.
 func (e *Engine) ClockSource() (source, reason string) {
 	return e.clockBackend, e.clockReason
 }

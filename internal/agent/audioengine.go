@@ -435,7 +435,7 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 		r.haveBuilt = true
 		return audioRebuildOutcome{Attempted: true, Available: false, Reason: reason}
 	}
-	cfg.Clock, cfg.ClockUnavailableReason = r.buildPipelineClockLocked()
+	cfg.Clock, cfg.ClockKind, cfg.ClockUnavailableReason = r.buildPipelineClockLocked()
 	engine, err := newGstEngine(cfg)
 	if err != nil {
 		// See newGstEngine's doc comment: production never reaches this
@@ -498,6 +498,15 @@ var newPHCReader = func(index int) (gstengine.ClockReader, error) {
 	return clock.OpenPHC(index)
 }
 
+// newRealtimeReader opens this host's own CLOCK_REALTIME as a
+// [gstengine.ClockReader] — a package var, matching newPHCReader's own
+// injection convention, so a test can exercise
+// [audioEngineRebuilder.buildPipelineClockLocked]'s no-PHC branch without
+// depending on this test host's real network interfaces.
+var newRealtimeReader = func() gstengine.ClockReader {
+	return clock.NewRealtimeReader()
+}
+
 // phcIndexForInterface reports iface's PHC index — a package var over
 // [clock.PHCIndexForInterface], matching newPHCReader's identical
 // injection convention, so a test can exercise
@@ -517,30 +526,38 @@ var phcIndexForInterface = clock.PHCIndexForInterface
 // interface. That is not a failure — it is exactly what this node
 // reported before this seam existed, so [Config.ClockUnavailableReason]
 // is left empty rather than manufacturing a reason for nothing having
-// been configured. reader is nil WITH a reason when an interface was
-// named but its PHC could not be found or opened; [Engine.installClock]
-// carries that reason through to node.audio.engine.clock_reason
-// unchanged.
-func (r *audioEngineRebuilder) buildPipelineClockLocked() (reader gstengine.ClockReader, unavailableReason string) {
+// been configured.
+//
+// A named interface with genuinely no associated PHC (found == false, no
+// error) is likewise not a failure: [clock.NewRealtimeReader] is
+// returned instead, kind [gstengine.ClockKindRealtime] — proven by hand
+// on a Raspberry Pi 3B+ node whose interface has no PHC hardware at all,
+// where GStreamer's own default clock left the output pipeline prerolled
+// forever and CLOCK_REALTIME played correctly. reader is nil WITH a
+// reason only for a real operational failure: the PHC lookup itself
+// erroring, or a named PHC that could not be opened; [Engine.
+// installClock] carries that reason through to node.audio.engine.
+// clock_reason unchanged.
+func (r *audioEngineRebuilder) buildPipelineClockLocked() (reader gstengine.ClockReader, kind string, unavailableReason string) {
 	if r.phcInterfaceSource == nil {
-		return nil, ""
+		return nil, "", ""
 	}
 	iface, ok := r.phcInterfaceSource()
 	if !ok || iface == "" {
-		return nil, ""
+		return nil, "", ""
 	}
 	index, found, err := phcIndexForInterface(iface)
 	if err != nil {
-		return nil, fmt.Sprintf("PHC lookup for interface %s failed: %v", iface, err)
+		return nil, "", fmt.Sprintf("PHC lookup for interface %s failed: %v", iface, err)
 	}
 	if !found {
-		return nil, fmt.Sprintf("interface %s has no associated PHC", iface)
+		return newRealtimeReader(), gstengine.ClockKindRealtime, ""
 	}
 	rd, err := newPHCReader(index)
 	if err != nil {
-		return nil, fmt.Sprintf("opening the PHC device for interface %s failed: %v", iface, err)
+		return nil, "", fmt.Sprintf("opening the PHC device for interface %s failed: %v", iface, err)
 	}
-	return rd, ""
+	return rd, gstengine.ClockKindPHC, ""
 }
 
 // bind installs engine as this node's current engine through
