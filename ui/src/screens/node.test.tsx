@@ -387,6 +387,52 @@ describe('Node detail', () => {
     await waitFor(() => expect(stubs.probeRenderTransport).toHaveBeenCalledWith('media-garage', 'garage-door'))
   })
 
+  it('renders a current beyond_threshold alignment row as a warn status, not a blank state', () => {
+    renderScreen([
+      node({
+        audio: [
+          {
+            resource: { kind: 'node', id: 'media-garage' },
+            signal: 'node.audio.clock.alignment.state',
+            value: 'beyond_threshold',
+            unit: null,
+            state: 'current',
+            reason: null,
+            observedAt: '2026-08-30T20:41:00Z',
+            collectedAt: '2026-08-30T20:41:00Z',
+            source: 'node-audio:media-garage',
+            quality: 'reported',
+          },
+        ] as unknown as Node['audio'],
+      }),
+    ])
+    const status = screen.getByText('beyond threshold')
+    expect(status.closest('.sm-status')).toHaveClass('sm-status--warn')
+  })
+
+  it('renders a current within_threshold alignment row as a good status', () => {
+    renderScreen([
+      node({
+        audio: [
+          {
+            resource: { kind: 'node', id: 'media-garage' },
+            signal: 'node.audio.clock.alignment.state',
+            value: 'within_threshold',
+            unit: null,
+            state: 'current',
+            reason: null,
+            observedAt: '2026-08-30T20:41:00Z',
+            collectedAt: '2026-08-30T20:41:00Z',
+            source: 'node-audio:media-garage',
+            quality: 'reported',
+          },
+        ] as unknown as Node['audio'],
+      }),
+    ])
+    const status = screen.getByText('within threshold')
+    expect(status.closest('.sm-status')).toHaveClass('sm-status--good')
+  })
+
   it('shows the not-found treatment naming the id when the node is not in the model', () => {
     renderScreen([])
     expect(screen.getAllByText(/media-garage/).length).toBeGreaterThan(0)

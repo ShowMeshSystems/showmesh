@@ -41,6 +41,11 @@ const (
 	// [alignmentObservation].
 	SignalClockAlignment observation.SignalID = "node.audio.clock.alignment"
 
+	// SignalClockAlignmentState is SignalClockAlignment's threshold
+	// verdict against audio.settings' driftIgnoreThresholdMs. See
+	// [alignmentStateObservation]. Minted identifier, docs/build/IDENTIFIER-REGISTER.md.
+	SignalClockAlignmentState observation.SignalID = "node.audio.clock.alignment.state"
+
 	// SignalLTCFrameRate, SignalLTCTimecode, SignalLTCGeneratorState, and
 	// SignalLTCGeneratorReason are the LTC generator's reserved signals —
 	// exact spellings, no additions without the owner. State
@@ -153,6 +158,7 @@ var AllSignalIDs = []observation.SignalID{
 	SignalClockDomain,
 	SignalClockProvenance,
 	SignalClockAlignment,
+	SignalClockAlignmentState,
 	SignalLTCFrameRate,
 	SignalLTCTimecode,
 	SignalLTCGeneratorState,

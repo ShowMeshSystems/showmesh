@@ -33,6 +33,16 @@ const (
 	audioEngineStateUnavailableMirror string               = "unavailable"
 )
 
+// audioClockAlignmentStateSignalID and audioClockAlignmentSignalID mirror
+// nodeaudio.SignalClockAlignmentState/SignalClockAlignment, for the
+// same structural reason audioEngineStateSignalID does above.
+const (
+	audioClockAlignmentStateSignalID observation.SignalID = "node.audio.clock.alignment.state"
+	audioClockAlignmentSignalID      observation.SignalID = "node.audio.clock.alignment"
+	audioClockAlignmentStateWithin   string               = "within_threshold"
+	audioClockAlignmentStateBeyond   string               = "beyond_threshold"
+)
+
 // Track F seam F5's own readiness checks (RESTING-MODE.md §13), added to
 // nightComputeReadinessChecks (nightsessioncontrol.go) alongside seam F3/
 // F4's own. Only checked when resting.backgroundAudio is configured at
@@ -436,5 +446,83 @@ func (h *handlers) nightCheckAnnouncementPolicyEnforceable(ctx context.Context, 
 		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("announcement cue(s) %v declare a source role that could not outrank a background bed, but no resting background audio is configured for them to make room in", cannotOutrank)}
 	default:
 		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d announcement cue(s) bind audio.session.apply, declare no params contradicting their configured policy, and declare no source role that could not outrank a background bed", announcements)}
+	}
+}
+
+// nightCheckAudioAlignment is one entry per configured "audio.node" object
+// (skipping a tombstoned object, CurrentRevision == 0), reading that node's
+// node.audio.clock.alignment.state. Never reports failed, only healthy,
+// degraded, unknown, or not_verifiable.
+func (h *handlers) nightCheckAudioAlignment(ctx context.Context, now time.Time) []nightReadinessCheck {
+	objs, err := h.deps.Config.ListConfigObjects(ctx, config.AudioNodeConfigKind)
+	if err != nil {
+		return []nightReadinessCheck{{name: "audio:alignment", health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"could not list configured audio.node objects: %s", err.Error())}}
+	}
+	var checks []nightReadinessCheck
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		checks = append(checks, h.nightCheckAudioAlignmentForNode(ctx, now, obj.ID))
+	}
+	return checks
+}
+
+// nightCheckAudioAlignmentForNode is [nightCheckAudioAlignment]'s per-node
+// check. beyond_threshold is degraded, never failed: a drifting show still
+// runs. not_verifiable only when the state observation exists with absence
+// not_collected; missing, stale, or collection_failed evidence is unknown.
+func (h *handlers) nightCheckAudioAlignmentForNode(ctx context.Context, now time.Time, nodeID string) nightReadinessCheck {
+	name := "audio:alignment:" + nodeID
+
+	var stateObs, alignObs *observation.Observation
+	for _, o := range h.deps.Audio.NodeAudioObservations(nodeID) {
+		switch o.Signal {
+		case audioClockAlignmentStateSignalID:
+			o := o
+			stateObs = &o
+		case audioClockAlignmentSignalID:
+			o := o
+			alignObs = &o
+		}
+	}
+
+	if stateObs == nil {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"no node.audio.clock.alignment.state evidence has ever been reported for audio.node %q", nodeID)}
+	}
+	switch stateObs.StateAt(now) {
+	case observation.StateNotCollected:
+		reason := stateObs.Reason
+		if reason == "" {
+			reason = fmt.Sprintf("audio.node %q's node.audio.clock.alignment.state has not been collected", nodeID)
+		}
+		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: reason}
+	case observation.StateCurrent:
+		// falls through to the within/beyond verdict below
+	default:
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"audio.node %q's node.audio.clock.alignment.state is not current: %s", nodeID, stateObs.StateAt(now))}
+	}
+
+	switch stateObs.Value {
+	case audioClockAlignmentStateWithin:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
+			"audio.node %q's measured program-to-LTC alignment is within audio.settings' driftIgnoreThresholdMs", nodeID)}
+	case audioClockAlignmentStateBeyond:
+		offsetText := "unknown"
+		if alignObs != nil && alignObs.StateAt(now) == observation.StateCurrent {
+			offsetText = fmt.Sprintf("%vms", alignObs.Value)
+		}
+		thresholdText := "unknown"
+		if settings, _, err := resolveAudioSettings(ctx, h.deps.Config); err == nil {
+			thresholdText = fmt.Sprintf("%dms", settings.DriftIgnoreThresholdMs)
+		}
+		return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
+			"audio.node %q's measured program-to-LTC alignment (%s) exceeds the currently configured driftIgnoreThresholdMs (%s); this is a warning, not a failure, and the night still starts", nodeID, offsetText, thresholdText)}
+	default:
+		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: fmt.Sprintf(
+			"audio.node %q's node.audio.clock.alignment.state reports an unrecognized value %q", nodeID, stateObs.Value)}
 	}
 }

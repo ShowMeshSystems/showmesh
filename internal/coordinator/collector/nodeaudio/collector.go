@@ -16,6 +16,13 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
+// alignmentStateWithinThreshold and alignmentStateBeyondThreshold are
+// node.audio.clock.alignment.state's two collected values.
+const (
+	alignmentStateWithinThreshold = "within_threshold"
+	alignmentStateBeyondThreshold = "beyond_threshold"
+)
+
 // alignmentAbsentFallbackReason is [alignmentObservation]'s reason for a
 // node whose payload carries [mqttproto.AudioPayload.AlignmentMeasured]
 // false with no reason of its own: an agent built before the alignment*
@@ -110,6 +117,68 @@ func alignmentObservation(nodeID string, p mqttproto.AudioPayload, rep report) o
 		reason = alignmentAbsentFallbackReason
 	}
 	return notCollected(res, SignalClockAlignment, source, reason, rep.receivedAt)
+}
+
+// alignmentStateObservation renders node.audio.clock.alignment.state, the
+// threshold verdict on the same sample alignmentObservation reported.
+// An unmeasured sample carries its own not_collected reason forward.
+func alignmentStateObservation(ctx context.Context, nodeID string, p mqttproto.AudioPayload, rep report, clockSrc ClockDomainSource) observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+
+	if !p.AlignmentMeasured {
+		reason := p.AlignmentReason
+		if reason == "" {
+			reason = alignmentAbsentFallbackReason
+		}
+		return notCollected(res, SignalClockAlignmentState, source, reason, rep.receivedAt)
+	}
+
+	thresholdMs, reason := lookupDriftIgnoreThresholdMs(ctx, clockSrc)
+	if reason != "" {
+		return failed(res, SignalClockAlignmentState, source, reason, rep.receivedAt)
+	}
+	if thresholdMs <= 0 {
+		return notCollected(res, SignalClockAlignmentState, source, "no drift threshold is configured; audio.settings driftIgnoreThresholdMs is 0", rep.receivedAt)
+	}
+
+	offsetMs := p.AlignmentOffsetMs
+	if offsetMs < 0 {
+		offsetMs = -offsetMs
+	}
+	state := alignmentStateWithinThreshold
+	if offsetMs > int64(thresholdMs) {
+		state = alignmentStateBeyondThreshold
+	}
+	return buildValue(nodeID, SignalClockAlignmentState, state, p.AlignmentSampledAt, rep)
+}
+
+// lookupDriftIgnoreThresholdMs reads audio.settings' driftIgnoreThresholdMs
+// live through clockSrc. An object nothing has configured reports the
+// shipped default (config.AudioSettingsDefaultPayload).
+func lookupDriftIgnoreThresholdMs(ctx context.Context, clockSrc ClockDomainSource) (thresholdMs int, reason string) {
+	if clockSrc == nil {
+		return 0, "no configuration source wired into this coordinator"
+	}
+	obj, err := clockSrc.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+		return config.AudioSettingsDefaultPayload.DriftIgnoreThresholdMs, ""
+	case err != nil:
+		return 0, fmt.Sprintf("failed to read audio.settings configuration: %v", err)
+	case obj.CurrentRevision == 0:
+		return config.AudioSettingsDefaultPayload.DriftIgnoreThresholdMs, ""
+	}
+
+	rev, err := clockSrc.GetConfigRevision(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return 0, fmt.Sprintf("failed to read active audio.settings configuration: %v", err)
+	}
+	payload, verr := config.DecodeAudioSettingsPayload(rev.PayloadJSON)
+	if verr != nil {
+		return 0, fmt.Sprintf("stored audio.settings configuration payload is malformed: %v", verr)
+	}
+	return payload.DriftIgnoreThresholdMs, ""
 }
 
 // ltcFrameRateAbsentReason states why a node reports no frame rate, which
@@ -250,6 +319,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	}
 
 	obs = append(obs, alignmentObservation(nodeID, p, rep))
+	obs = append(obs, alignmentStateObservation(ctx, nodeID, p, rep, clockSrc))
 
 	obs = append(obs,
 		buildValue(nodeID, SignalLTCGeneratorState, p.LTCGeneratorState, observedAt, rep),
