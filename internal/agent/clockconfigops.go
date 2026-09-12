@@ -56,13 +56,18 @@ type clockNodeConfig struct {
 type clockBinding struct {
 	mgr *clock.Manager
 
+	// localSocketDir is this agent's own configured asset directory,
+	// passed through to clock.Config.LocalSocketDir as pmc's local-socket
+	// fallback candidate (see [clock.ExternalConfig.LocalSocketDir]).
+	localSocketDir string
+
 	haveConfig bool
 	revision   int64
 	cfg        clockNodeConfig
 }
 
-func newClockBinding(mgr *clock.Manager) *clockBinding {
-	return &clockBinding{mgr: mgr}
+func newClockBinding(mgr *clock.Manager, localSocketDir string) *clockBinding {
+	return &clockBinding{mgr: mgr, localSocketDir: localSocketDir}
 }
 
 // applyConfig refuses p.Revision older than the currently held one, is a
@@ -93,6 +98,7 @@ func (b *clockBinding) applyConfig(ctx context.Context, p clockNodeConfig) error
 		HardwareTimestamping: p.HardwareTimestamping,
 		ExternalUDSAddress:   p.ExternalUDSAddress,
 		FPPBaseURL:           p.FPPBaseURL,
+		LocalSocketDir:       b.localSocketDir,
 	}
 	if err := b.mgr.SetConfig(ctx, cfg); err != nil {
 		return fmt.Errorf("node.clock.configure: %w", err)

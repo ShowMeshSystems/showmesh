@@ -406,7 +406,7 @@ func Run() int {
 	// report tick, matching what a node with no clock provider reported
 	// before this seam existed.
 	clockMgr := clock.NewManager(time.Now, logger)
-	clockBind := newClockBinding(clockMgr)
+	clockBind := newClockBinding(clockMgr, cfg.AssetDir)
 	// Seam I2: the audio session layer reads the same media clock, for a
 	// scheduled start's T0 and for its timeline. Read-only; the audio
 	// Manager never configures or steps it.

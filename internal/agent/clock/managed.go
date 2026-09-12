@@ -522,7 +522,10 @@ func (p *ManagedProvider) Poll(ctx context.Context) RawStatus {
 		return RawStatus{Reachable: false, Reason: fmt.Sprintf("managed ptp4l process is running but its management socket %s is not yet present: %v", p.roSocket, err)}
 	}
 
-	raw := pollViaUDS(ctx, p.roSocket, p.cfg.Domain, ManagedOwner)
+	// p.cfg.RunDir is passed as pmc's own local-socket hint: [NewManagedProvider]
+	// already MkdirAll'd it, so it is known-writable, unlike a bare
+	// os.TempDir() guess under the hardened agent unit.
+	raw := pollViaUDS(ctx, p.roSocket, p.cfg.Domain, ManagedOwner, p.cfg.RunDir)
 	if raw.Reachable {
 		// The REACHED mode, never the requested ManagedConfig.
 		// HardwareTimestamping — see [ManagedProvider.reached]'s own doc

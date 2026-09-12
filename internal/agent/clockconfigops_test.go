@@ -13,7 +13,7 @@ import (
 // PHC clock at all", matching a node that never had node.clock
 // configuration before this seam existed.
 func TestClockBindingCurrentInterfaceUnconfigured(t *testing.T) {
-	b := newClockBinding(clock.NewManager(nil, nil))
+	b := newClockBinding(clock.NewManager(nil, nil), "")
 	iface, ok := b.currentInterface()
 	if ok || iface != "" {
 		t.Fatalf("currentInterface() = (%q, %v), want (\"\", false)", iface, ok)
@@ -25,7 +25,7 @@ func TestClockBindingCurrentInterfaceUnconfigured(t *testing.T) {
 // recently accepted, which is what lets the audio pipeline clock read
 // the same PHC node.clock.ptp.* already evaluates.
 func TestClockBindingCurrentInterfaceReportsTheAcceptedConfiguration(t *testing.T) {
-	b := newClockBinding(clock.NewManager(nil, nil))
+	b := newClockBinding(clock.NewManager(nil, nil), "")
 	// applyConfig calls into clock.Manager.SetConfig, which for an
 	// external provider builds no supervised process and cannot fail --
 	// see clock.Manager.SetConfig's own doc comment.
