@@ -80,6 +80,7 @@ WIREPLUMBER_CONFD=/etc/wireplumber/wireplumber.conf.d
 PIPEWIRE_UNIT_DEST=/etc/systemd/system/pipewire-showmesh.service
 WIREPLUMBER_UNIT_DEST=/etc/systemd/system/wireplumber-showmesh.service
 PTP_RO_SOCKET=/var/run/ptp/ptp4lro
+ANNOUNCE_TIMESCALE_DEST=/usr/local/lib/showmesh/announce-grandmaster-timescale.sh
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "install-ptp-audio.sh: must be run as root" >&2
@@ -230,6 +231,19 @@ mkdir -p "$(dirname "$PTP4L_CONF")"
   echo "uds_ro_address $PTP_RO_SOCKET"
   echo "logging_level 6"
   echo "summary_interval 0"
+  if [ "$ROLE" = "follower" ]; then
+    # step_threshold defaults to 0.0 (never step after the first update):
+    # a follower that starts seconds away from the domain's time then
+    # slews the whole gap at the servo's 10% maximum rate instead of
+    # stepping it -- measured on a real Raspberry Pi 3B+ follower, a
+    # 37-second gap took about six minutes to close, wrong the entire
+    # time. 1.0s corrects anything at or above a gross error instantly
+    # and still slews anything smaller. A step is a discontinuity, so it
+    # must happen before a show starts, never during one -- see
+    # PTP-AUDIO.md for why this node's own clock state is worth checking
+    # before showtime, not assumed to have already converged.
+    echo "step_threshold 1.0"
+  fi
 } > "$PTP4L_CONF"
 chmod 0644 "$PTP4L_CONF"
 
@@ -237,6 +251,32 @@ sed -e "s|@IFACE@|$IFACE|g" -e "s|@CONF@|$PTP4L_CONF|g" \
   "$TEMPLATE_DIR/ptp4l-showmesh.service.template" > "$PTP4L_UNIT_DEST"
 chmod 0644 "$PTP4L_UNIT_DEST"
 echo "install-ptp-audio.sh: wrote $PTP4L_CONF and $PTP4L_UNIT_DEST"
+
+# --- grandmaster-role node announces an arbitrary (non-TAI) timescale ---
+# `ptpTimescale` cannot go in ptp4l.conf (see the installed script's own
+# comment for why); it is a runtime `pmc SET GRANDMASTER_SETTINGS_NP`
+# instead, wired as ExecStartPost on ptp4l-showmesh.service so it
+# re-applies every time that service (re)starts, not just at install
+# time. `follower`-role nodes never get this: they follow whatever
+# timescale the domain's actual grandmaster announces.
+if [ "$ROLE" = "grandmaster" ]; then
+  mkdir -p "$(dirname "$ANNOUNCE_TIMESCALE_DEST")"
+  cp "$TEMPLATE_DIR/announce-grandmaster-timescale.sh" "$ANNOUNCE_TIMESCALE_DEST"
+  chmod 0755 "$ANNOUNCE_TIMESCALE_DEST"
+  if ! grep -q "$ANNOUNCE_TIMESCALE_DEST" "$PTP4L_UNIT_DEST"; then
+    awk -v post="ExecStartPost=$ANNOUNCE_TIMESCALE_DEST $DOMAIN" \
+      '/^ExecStart=/ { print; print post; next } { print }' \
+      "$PTP4L_UNIT_DEST" > "$PTP4L_UNIT_DEST.tmp" && mv "$PTP4L_UNIT_DEST.tmp" "$PTP4L_UNIT_DEST"
+  fi
+  echo "install-ptp-audio.sh: wrote $ANNOUNCE_TIMESCALE_DEST, wired as ExecStartPost on $PTP4L_UNIT_DEST (currentUtcOffset=37, ptpTimescale=0)"
+elif [ -e "$ANNOUNCE_TIMESCALE_DEST" ]; then
+  # Re-running with a different role: PTP4L_UNIT_DEST above was already
+  # regenerated fresh from the template (no ExecStartPost line unless this
+  # branch just added one), so only the now-unreferenced script itself is
+  # left to clean up.
+  rm -f "$ANNOUNCE_TIMESCALE_DEST"
+  echo "install-ptp-audio.sh: removed stale $ANNOUNCE_TIMESCALE_DEST (this run is role=$ROLE, not grandmaster)"
+fi
 
 # --- phc2sys: grandmaster-role node disciplines its own PHC from the
 #     system clock, so it never announces an arbitrary free-run epoch ---

@@ -61,7 +61,21 @@ with a PHC:
   NTP-detection branch runs and reports honestly that no NTP client is
   active here (this bench never installs or runs one, so it cannot prove
   the branch actually stops a real NTP client -- the orchestrator proved
-  that by hand on the Raspberry Pi 3B+, see `PTP-AUDIO.md`).
+  that by hand on the Raspberry Pi 3B+, see `PTP-AUDIO.md`);
+- **the grandmaster timescale announcement end to end, on the wire**: the
+  grandmaster container's `announce-grandmaster-timescale.sh` (its own
+  `ptp4l-showmesh.service` `ExecStartPost`, invoked directly since this
+  bench has no systemd to fire it) applies `currentUtcOffset 37,
+  ptpTimescale 0` via a real `pmc SET`, and the follower container reads
+  those exact values back from its own `TIME_PROPERTIES_DATA_SET` over
+  the real PTP wire between the two containers -- the actual mechanism
+  the 36.7-second wall-clock gap fix depends on, proven by protocol
+  behavior this bench can reach without a PHC;
+- `ptp4l.conf` never contains `ptpTimescale`, and a config file that does
+  set it makes a real `ptp4l` in this bench refuse to start -- the
+  regression this guards against, reproduced directly, not just asserted;
+- `step_threshold 1.0` appears in a `follower`-role node's `ptp4l.conf`
+  and is absent from a `grandmaster`-role node's.
 
 **Cannot prove, and does not claim to**:
 
@@ -92,7 +106,16 @@ with a PHC:
   (`showmesh-node-01` and a Raspberry Pi 3B+, see `PTP-AUDIO.md`); this
   bench proves only that the role/PHC-conditional generation logic takes
   the correct negative branch and that the NTP-detection code path runs
-  without error and reports honestly.
+  without error and reports honestly;
+- the actual wall-clock gap the timescale fix closes, or `step_threshold`
+  actually stepping instead of slewing: this bench's two containers start
+  within seconds of each other, so there is no real multi-second gap for
+  either fix to close. Both were measured and fixed by hand on the real
+  pair (`showmesh-node-01` grandmaster, a Raspberry Pi 3B+ follower, see
+  `PTP-AUDIO.md`); this bench proves the protocol values the timescale fix
+  puts on the wire and that `step_threshold` is generated for the correct
+  role, not the seconds-scale wall-clock behavior those values produce on
+  real hardware.
 
 ## What this bench actually found
 

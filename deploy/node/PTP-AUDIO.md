@@ -109,7 +109,40 @@ operator-edited state that a re-run must avoid touching.
    correction about to happen. `follower`-role nodes never get this unit:
    their PHC belongs to the domain, not to their own system clock. A stale
    unit from a previous run with a different role or interface is removed.
-5. **Writes `/etc/showmesh/ptp4l.conf`** and a systemd unit
+5. **Makes a `grandmaster`-role node announce an arbitrary (non-TAI)
+   timescale**, so every node in the domain reads the same wall-clock
+   number. `ptp4l`'s default `ptpTimescale 1` (PTP/TAI) means a
+   PHC-less follower subtracts `currentUtcOffset` (37 seconds, as of this
+   writing) from what it reads; measured on the real pair
+   (`showmesh-node-01` grandmaster with a PHC kept at UTC by `phc2sys`, a
+   Raspberry Pi 3B+ follower with none), that put the two nodes' wall
+   clocks **exactly 36.7 seconds apart**, even with `ptp4l`'s own
+   `master_offset` reading a healthy half a millisecond. `ptpTimescale` is
+   **not** a valid `ptp4l.conf` option -- putting it there makes `ptp4l`
+   refuse to start at all ("failed to parse configuration file"). It is a
+   runtime-only `pmc SET GRANDMASTER_SETTINGS_NP` (`currentUtcOffset 37`,
+   `ptpTimescale 0`, PTP/ARB), so the script installs a small script
+   (`/usr/local/lib/showmesh/announce-grandmaster-timescale.sh`) and wires
+   it as `ExecStartPost` on `ptp4l-showmesh.service`, retried for up to
+   10 seconds after every (re)start (the management socket may not exist
+   the instant `ptp4l` forks). **This makes the domain's time this
+   grandmaster's own UTC, not a traceable TAI reference** -- an accepted
+   tradeoff for a system whose actual requirement is every node agreeing
+   on the same wall clock, not tracing that clock to a TAI standard.
+   `follower`-role nodes never get this: they take whatever timescale the
+   domain's real grandmaster announces.
+6. **Gives `follower`-role nodes a `step_threshold`** (`1.0` second) in
+   `ptp4l.conf`. The default, `0.0`, means `ptp4l` never steps a gross
+   error after its first update -- only slews it, at the servo's 10%
+   maximum rate. Measured on the real Raspberry Pi 3B+ follower: a
+   37-second gap (from the timescale mismatch above, before it was fixed)
+   took about six minutes to close this way, wrong the entire time, twice
+   in one night. `1.0` corrects anything at or above a one-second error
+   instantly and still slews anything smaller. A step is a discontinuity,
+   so it must happen before a show starts, never during one -- this is
+   why a follower node's own clock state is worth checking before
+   showtime, not assumed to have already converged.
+7. **Writes `/etc/showmesh/ptp4l.conf`** and a systemd unit
    (`ptp4l-showmesh.service`) that runs it, `clientOnly`/`priority1` set
    by the requested role:
 
@@ -125,12 +158,12 @@ operator-edited state that a re-run must avoid touching.
    state recommended in slave only mode" instead of ever reaching SLAVE
    -- measured in this repository's own `bench/ptp-node`, not assumed.
 
-6. **Installs a udev rule** (`/etc/udev/rules.d/99-showmesh-ptp.rules`)
+8. **Installs a udev rule** (`/etc/udev/rules.d/99-showmesh-ptp.rules`)
    granting the `showmesh` group read access to any `/dev/ptpN`: the
    agent's external clock provider reads the PHC directly, and PipeWire's
    node.driver opens it too (the `pipewire` system user this script
    creates is added to the `showmesh` group for exactly this reason).
-7. **Creates a dedicated `pipewire` system user** and installs
+9. **Creates a dedicated `pipewire` system user** and installs
    `pipewire-showmesh.service` and `wireplumber-showmesh.service`,
    running both as ordinary headless system services sharing one runtime
    directory (`/run/pipewire`). This is necessary, not cosmetic: Debian's
@@ -140,7 +173,7 @@ operator-edited state that a re-run must avoid touching.
    needs a lingering login this node is never going to have. A PipeWire
    that only exists inside a user session is a node that goes silent
    after every reboot.
-8. **Installs the PipeWire clock config**
+10. **Installs the PipeWire clock config**
    (`/etc/pipewire/pipewire.conf.d/10-showmesh-ptp-clock.conf`): a
    `support.node.driver` named `showmesh-ptp-driver`, `priority.driver
    210000` (above the stock config's own highest entry, 190000, so it
@@ -161,7 +194,7 @@ operator-edited state that a re-run must avoid touching.
    sat unused in a group of one while the card drove itself. Putting the
    driver and the card's ALSA output node in the same group is what makes
    `priority.driver` the comparison that actually happens.
-9. **Installs a WirePlumber rate rule**
+11. **Installs a WirePlumber rate rule**
    (`/etc/wireplumber/wireplumber.conf.d/51-showmesh-alsa-rate.conf`,
    generated from `51-showmesh-alsa-rate.conf.template`) that:
    - pins the sound card (matched by `audio-card-match`, default `M4`)
@@ -197,10 +230,10 @@ operator-edited state that a re-run must avoid touching.
    here -- see "What this repository's own verification proved" below for
    exactly what that covered and what still needs a re-run of this
    script.
-10. **Enables and starts everything**, or -- on a host with no systemd PID
+12. **Enables and starts everything**, or -- on a host with no systemd PID
    1 (a plain container) -- installs every file and says exactly what it
    could not do and why, the same pattern `deploy/node/install.sh` uses.
-11. **Prints a summary**: installed package versions, the PTP role/mode/
+13. **Prints a summary**: installed package versions, the PTP role/mode/
    PHC it configured, the live port state read back from `pmc` (SLAVE
    with a grandmaster, MASTER if this node is currently the domain's
    active clock, or an honest "not yet available" if `ptp4l` is still
@@ -322,6 +355,7 @@ sudo rm -f /etc/systemd/system/ptp4l-showmesh.service \
            /etc/systemd/system/pipewire-showmesh.service \
            /etc/systemd/system/wireplumber-showmesh.service \
            /etc/systemd/system/phc2sys-showmesh.service
+sudo rm -f /usr/local/lib/showmesh/announce-grandmaster-timescale.sh   # only present on a grandmaster-role node
 sudo systemctl daemon-reload
 sudo rm -f /etc/showmesh/ptp4l.conf
 sudo rm -f /etc/udev/rules.d/99-showmesh-ptp.rules

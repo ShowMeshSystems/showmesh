@@ -112,6 +112,54 @@ else
 fi
 
 echo ""
+echo "--- step 2c: step_threshold (follower only) and the ptpTimescale config-file regression guard ---"
+case "$ROLE" in
+  follower)
+    if grep -q '^step_threshold 1.0$' /etc/showmesh/ptp4l.conf; then
+      echo "OK: step_threshold 1.0 present for role=follower"
+    else
+      echo "FAIL: expected step_threshold 1.0 in ptp4l.conf for role=follower"
+      exit 1
+    fi
+    ;;
+  grandmaster)
+    if grep -q '^step_threshold' /etc/showmesh/ptp4l.conf; then
+      echo "FAIL: step_threshold should not be set for role=grandmaster"
+      exit 1
+    else
+      echo "OK: step_threshold correctly absent for role=grandmaster"
+    fi
+    ;;
+esac
+if grep -qi 'ptpTimescale' /etc/showmesh/ptp4l.conf; then
+  echo "FAIL: ptp4l.conf must never contain ptpTimescale -- it is not a valid config-file option and makes ptp4l refuse to start"
+  exit 1
+else
+  echo "OK: generated ptp4l.conf correctly never sets ptpTimescale (applied separately, at runtime, via pmc)"
+fi
+# Regression guard against the actual finding on real hardware, not just
+# the generator: a config file that DOES set ptpTimescale must make ptp4l
+# refuse to start outright ("failed to parse configuration file"). Run
+# before the real ptp4l starts below, so there is no port/socket conflict
+# with it.
+BAD_CONF="$(mktemp)"
+cat /etc/showmesh/ptp4l.conf > "$BAD_CONF"
+echo "ptpTimescale 1" >> "$BAD_CONF"
+if timeout 3 /usr/sbin/ptp4l -f "$BAD_CONF" -i "$IFACE" -m > /tmp/ptp4l-badconf.log 2>&1; then
+  echo "FAIL: ptp4l unexpectedly accepted a config file setting ptpTimescale"
+  cat /tmp/ptp4l-badconf.log
+  exit 1
+else
+  RC=$?
+  if [ "$RC" -eq 124 ]; then
+    echo "FAIL: ptp4l did not fail immediately on a config file setting ptpTimescale (ran until timeout instead)"
+    exit 1
+  fi
+  echo "OK: ptp4l correctly refuses a config file that sets ptpTimescale ($(tr -d '\n' < /tmp/ptp4l-badconf.log))"
+fi
+rm -f "$BAD_CONF"
+
+echo ""
 echo "--- step 3: start ptp4l manually (this container has no systemd PID 1) ---"
 mkdir -p /var/run/ptp
 /usr/sbin/ptp4l -f /etc/showmesh/ptp4l.conf -i "$IFACE" -m > /tmp/ptp4l.log 2>&1 &
@@ -136,6 +184,29 @@ case "$ROLE" in
     if [ "$FINAL_STATE" = "SLAVE" ]; then
       echo "OK: follower container reached SLAVE (locked to the grandmaster container over software timestamping)"
       pmc -u -b 0 -d "$DOMAIN" -s /var/run/ptp/ptp4lro 'GET TIME_STATUS_NP' 2>/dev/null
+
+      echo ""
+      echo "--- step 3b: this follower must see the grandmaster's announced timescale, not the linuxptp default ---"
+      # The grandmaster container's own announce-grandmaster-timescale.sh
+      # applies its pmc SET on its own schedule, independent of this
+      # container's own settle loop above; give it a few seconds to land
+      # on the wire and propagate through this follower's own ANNOUNCE
+      # processing before reading it back.
+      TIME_PROPS=""
+      for _ in $(seq 1 30); do
+        TIME_PROPS="$(pmc -u -b 0 -d "$DOMAIN" -s /var/run/ptp/ptp4lro 'GET TIME_PROPERTIES_DATA_SET' 2>/dev/null)"
+        if echo "$TIME_PROPS" | grep -qE 'currentUtcOffset[[:space:]]+37'; then
+          break
+        fi
+        sleep 1
+      done
+      echo "$TIME_PROPS"
+      if echo "$TIME_PROPS" | grep -qE 'currentUtcOffset[[:space:]]+37' && echo "$TIME_PROPS" | grep -qE 'ptpTimescale[[:space:]]+0'; then
+        echo "OK: this follower sees currentUtcOffset=37, ptpTimescale=0 from the grandmaster -- the exact reading a PHC-less follower otherwise gets wrong (it would subtract 37s from a PTP/TAI-timescale domain instead of reading this grandmaster's own UTC directly)"
+      else
+        echo "FAIL: expected this follower's own TIME_PROPERTIES_DATA_SET to show currentUtcOffset=37, ptpTimescale=0 from the grandmaster's pmc SET"
+        exit 1
+      fi
     else
       echo "FAIL: follower container did not reach SLAVE (state: ${FINAL_STATE:-none}); see /tmp/ptp4l.log"
       tail -40 /tmp/ptp4l.log
@@ -148,6 +219,18 @@ case "$ROLE" in
     else
       echo "FAIL: grandmaster container did not reach MASTER (state: ${FINAL_STATE:-none}); see /tmp/ptp4l.log"
       tail -40 /tmp/ptp4l.log
+      exit 1
+    fi
+
+    echo ""
+    echo "--- step 3b: pmc SET GRANDMASTER_SETTINGS_NP (install-ptp-audio.sh's own ExecStartPost, invoked directly since this container has no systemd to fire it) ---"
+    /usr/local/lib/showmesh/announce-grandmaster-timescale.sh "$DOMAIN"
+    TIME_PROPS="$(pmc -u -b 0 -d "$DOMAIN" -s /var/run/ptp4l 'GET TIME_PROPERTIES_DATA_SET' 2>/dev/null)"
+    echo "$TIME_PROPS"
+    if echo "$TIME_PROPS" | grep -qE 'currentUtcOffset[[:space:]]+37' && echo "$TIME_PROPS" | grep -qE 'ptpTimescale[[:space:]]+0'; then
+      echo "OK: grandmaster announces currentUtcOffset=37, ptpTimescale=0 (PTP/ARB) -- the pmc SET this bench's PHC-less follower actually sees on the wire"
+    else
+      echo "FAIL: expected currentUtcOffset=37 and ptpTimescale=0 in TIME_PROPERTIES_DATA_SET after announce-grandmaster-timescale.sh ran"
       exit 1
     fi
     ;;
