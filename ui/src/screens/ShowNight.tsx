@@ -227,7 +227,6 @@ export function ShowNight() {
   const next = nextTransition(model)
   const steps = runOfShow(session)
   const armed = steps.filter((step) => step.when === 'Armed').length
-  const nextArmedStep = steps.find((step) => step.when === 'Armed')
   const elapsedSeconds = state?.elapsedSeconds ?? null
   const totalSeconds = state?.totalSeconds ?? null
   const playbackPercent =
@@ -318,9 +317,9 @@ export function ShowNight() {
               <p className="sm-nownext__title">{formatPosition(next.remainingSeconds)}</p>
               <p className="sm-small sm-muted">until the sequence ends and the boundary begins.</p>
               <div className="sm-nownext__boundary">
-                <p>{nextArmedStep?.name ?? 'No Transition Step is armed'}</p>
+                <p>{session.transition.state === 'recorded' ? 'Boundary armed' : 'No boundary armed'}</p>
                 <p className="sm-small sm-muted">
-                  {nextArmedStep === undefined ? 'The boundary has no recorded next step.' : `${nextArmedStep.detail} · ${armed} ${armed === 1 ? 'step' : 'steps'} armed`}
+                  {session.transition.reason !== '' ? session.transition.reason : 'Nothing recorded for this transition.'}
                 </p>
               </div>
               <p className="sm-small sm-faint sm-nownext__derivation">

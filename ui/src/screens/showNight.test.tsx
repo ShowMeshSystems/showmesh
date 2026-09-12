@@ -222,6 +222,26 @@ describe('Show Night', () => {
     if (!next.known) expect(next.reason).toContain('unknown rather than assumed')
   })
 
+  it('reports the boundary armed from session.transition, not from an empty cue list', () => {
+    const instance = {
+      instanceId: 'main',
+      observations: [
+        { signal: 'fpp.position.elapsed.seconds', value: 102, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+        { signal: 'fpp.position.seconds', value: 168, state: 'current', resource: { kind: 'fpp', id: 'main' } },
+      ],
+    } as unknown as FPPInstance
+    renderScreen({
+      nightSession: session({
+        transition: { state: 'recorded', reason: 'boundary armed for 2026-08-28T21:10:00Z' },
+        cues: { state: 'recorded', reason: '', cues: [] },
+      }),
+      fpp: [instance],
+    })
+    const boundary = screen.getByText('Boundary armed').closest('.sm-nownext__boundary') as HTMLElement
+    expect(within(boundary).getByText('boundary armed for 2026-08-28T21:10:00Z')).toBeInTheDocument()
+    expect(screen.queryByText('No Transition Step is armed')).not.toBeInTheDocument()
+  })
+
   it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {
     const rail = nightRail(session({ cycle: 3, state: 'live' }))
     const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
