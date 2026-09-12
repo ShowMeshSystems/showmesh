@@ -6,14 +6,20 @@ import {
   declareNode,
   deleteNodeDeclaration,
   deployNodeCueCatalog,
+  getAudioAlignmentRun,
   getShowSurface,
   getNodeAssetManifest,
   getNodeCueCatalog,
+  listAudioAlignmentRuns,
   listShowSurfacesForNode,
   probeRenderTransport,
   restartRenderPipeline,
   resyncNodeAssets,
   runDiscovery,
+  startAudioAlignmentRun,
+  stopAudioAlignmentRun,
+  type AudioAlignmentRun,
+  type AudioAlignmentRunSummary,
   type Capability,
   type CueCatalogDeployResult,
   type CueCatalogResponse,
@@ -255,6 +261,187 @@ function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType
   return <div className="sm-stack-3"><h3 className="sm-subsection__title">Cue catalog</h3>{catalog === null ? <RuledStrip absence={error === null ? 'loading' : 'failed'} label={error === null ? 'Reading' : 'Read failed'} fact={error ?? 'Reading this node’s resolved cue catalog.'} /> : <><p className="sm-small sm-muted">{catalog.configured ? `${catalog.entries.length} entries · ${catalog.acknowledgedStatus.replace('catalog-', '').replace('-', ' ')}` : 'No active-show cue catalog is configured.'}</p><Button disabled={!gate.allowed || deploying || !catalog.configured} title={gate.allowed ? undefined : gate.reason} onClick={deploy}>{deploying ? 'Deploying…' : 'Deploy cue catalog'}</Button></>}{result !== null && <div className="sm-outcome"><StatusPair tone={result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : result.outcome === '' ? 'pending' : 'bad'} label={label} /><p className="sm-outcome__detail">{result.reason ?? `Catalog revision ${result.revision} was dispatched.`}</p></div>}</div>
 }
 
+type RunsState = { kind: 'loading' } | { kind: 'loaded'; runs: AudioAlignmentRun[] } | { kind: 'failed'; reason: string }
+type RunDetailState = { kind: 'loading' } | { kind: 'loaded'; summary: AudioAlignmentRunSummary } | { kind: 'failed'; reason: string }
+
+/**
+ * The node's own alignmentSampledAt/alignmentOffsetMs while a run is
+ * active; never a series plot, only a count and the two summary numbers.
+ * Only rendered for a node that has advertised an audio.* capability: a
+ * projector-only node can never receive a sample.
+ */
+function DriftRecordingSection({ nodeId, hasAudioCapability, gate }: { nodeId: string; hasAudioCapability: boolean; gate: ReturnType<typeof evaluateScope> }) {
+  const [attempt, setAttempt] = useState(0)
+  const [runsState, setRunsState] = useState<RunsState>({ kind: 'loading' })
+  const [details, setDetails] = useState<Record<string, RunDetailState>>({})
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
+  const [stoppingId, setStoppingId] = useState<string | null>(null)
+  const [stopError, setStopError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!hasAudioCapability) return
+    let cancelled = false
+    setRunsState({ kind: 'loading' })
+    listAudioAlignmentRuns(nodeId)
+      .then((response) => {
+        if (cancelled) return
+        setRunsState({ kind: 'loaded', runs: response.runs })
+        setDetails({})
+        for (const run of response.runs) {
+          setDetails((prev) => ({ ...prev, [run.id]: { kind: 'loading' } }))
+          // summary always covers the run's full series regardless of
+          // limit (api/openapi.yaml), so limit 1 avoids paying for up to
+          // 5000 discarded samples per run on every page load.
+          getAudioAlignmentRun(nodeId, run.id, 1)
+            .then((detail) => {
+              if (cancelled) return
+              setDetails((prev) => ({ ...prev, [run.id]: { kind: 'loaded', summary: detail.summary } }))
+            })
+            .catch((err: unknown) => {
+              if (cancelled) return
+              setDetails((prev) => ({ ...prev, [run.id]: { kind: 'failed', reason: describeApiError(err) } }))
+            })
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setRunsState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [nodeId, attempt, hasAudioCapability])
+
+  if (!hasAudioCapability) {
+    return (
+      <Section id="nd-drift" title="Drift recording">
+        <RuledStrip
+          absence="unobserved"
+          label="No audio output"
+          fact="This node advertises no audio.* capability, so it can never receive an alignment sample to record."
+        />
+      </Section>
+    )
+  }
+
+  const runs = runsState.kind === 'loaded' ? runsState.runs : []
+  const activeRun = runs.find((run) => run.stoppedAt === null) ?? null
+  const pastRuns = runs.filter((run) => run.stoppedAt !== null)
+
+  const start = () => {
+    setStarting(true)
+    setStartError(null)
+    startAudioAlignmentRun(nodeId)
+      .then(() => setAttempt((n) => n + 1))
+      .catch((err: unknown) => setStartError(describeApiError(err)))
+      .finally(() => setStarting(false))
+  }
+
+  const stop = (runId: string) => {
+    setStoppingId(runId)
+    setStopError(null)
+    stopAudioAlignmentRun(nodeId, runId)
+      .then(() => setAttempt((n) => n + 1))
+      .catch((err: unknown) => {
+        setStopError(describeApiError(err))
+        // The run may have already been stopped by someone else; refetch
+        // rather than leave a stale active run showing on this device.
+        setAttempt((n) => n + 1)
+      })
+      .finally(() => setStoppingId(null))
+  }
+
+  return (
+    <Section id="nd-drift" title="Drift recording">
+      {runsState.kind === 'loading' && (
+        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for this node's drift recordings." />
+      )}
+      {runsState.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={runsState.reason} />}
+      {runsState.kind === 'loaded' && (
+        <>
+          <div className="sm-stack-3">
+            {activeRun !== null ? (
+              <div className="sm-outcome">
+                <StatusPair tone="pending" label="Recording" />
+                <p className="sm-outcome__detail">
+                  Started {formatDateClock(activeRun.startedAt) ?? 'at an unrecorded time'} by {activeRun.startedBy}.
+                </p>
+                <DriftSummaryBlock detail={details[activeRun.id]} />
+                <Button
+                  variant="danger"
+                  disabled={!gate.allowed || stoppingId === activeRun.id}
+                  title={gate.allowed ? undefined : gate.reason}
+                  onClick={() => stop(activeRun.id)}
+                >
+                  {stoppingId === activeRun.id ? 'Stopping…' : 'Stop'}
+                </Button>
+              </div>
+            ) : (
+              <Button disabled={!gate.allowed || starting} title={gate.allowed ? undefined : gate.reason} onClick={start}>
+                {starting ? 'Starting…' : 'Start drift recording'}
+              </Button>
+            )}
+          </div>
+          {startError !== null && <RuledStrip absence="failed" label="Start failed" fact={startError} />}
+          {stopError !== null && <RuledStrip absence="failed" label="Stop failed" fact={stopError} />}
+
+          <h3 className="sm-subsection__title">Past runs</h3>
+          {pastRuns.length === 0 ? (
+            <RuledStrip absence="empty" label="None" fact="No completed drift recording exists for this node." />
+          ) : (
+            pastRuns.map((run) => <DriftRunRow key={run.id} run={run} detail={details[run.id]} />)
+          )}
+        </>
+      )}
+    </Section>
+  )
+}
+
+function DriftSummaryBlock({ detail }: { detail: RunDetailState | undefined }) {
+  if (detail === undefined || detail.kind === 'loading') {
+    return <RuledStrip absence="loading" label="Reading" fact="Reading this run's summary." />
+  }
+  if (detail.kind === 'failed') {
+    return <RuledStrip absence="failed" label="Read failed" fact={detail.reason} />
+  }
+  return <DriftRunSummary summary={detail.summary} />
+}
+
+function DriftRunRow({ run, detail }: { run: AudioAlignmentRun; detail: RunDetailState | undefined }) {
+  return (
+    <div className="sm-stack-3">
+      <p className="sm-small sm-muted">
+        {formatDateClock(run.startedAt) ?? 'unrecorded time'} to {run.stoppedAt !== null ? (formatDateClock(run.stoppedAt) ?? 'unrecorded time') : 'active'}
+        {' · started by '}
+        {run.startedBy}
+        {run.stoppedBy !== null && <>, stopped by {run.stoppedBy}</>}
+      </p>
+      <DriftSummaryBlock detail={detail} />
+    </div>
+  )
+}
+
+/** No number here is invented: a null summary field is stated as unavailable, never rendered as zero. */
+function DriftRunSummary({ summary }: { summary: AudioAlignmentRunSummary }) {
+  return (
+    <p className="sm-small sm-muted">
+      {summary.sampleCount} sample{summary.sampleCount === 1 ? '' : 's'}
+      {summary.maxExcursionOffsetMs !== null && (
+        <>
+          {', max excursion '}
+          {summary.maxExcursionOffsetMs} ms
+          {summary.maxExcursionSampledAt !== null && ` at ${formatDateClock(summary.maxExcursionSampledAt) ?? 'an unrecorded time'}`}
+        </>
+      )}
+      {summary.driftRateMsPerHour !== null ? (
+        <>, drift {summary.driftRateMsPerHour} ms/hour</>
+      ) : (
+        <>, drift rate unavailable{summary.driftRateUnavailableReason !== undefined ? `: ${summary.driftRateUnavailableReason}` : ''}</>
+      )}
+    </p>
+  )
+}
+
 export function NodeDetail() {
   const { nodeId = '' } = useParams<{ nodeId: string }>()
   const model = useModelContext()
@@ -268,6 +455,7 @@ export function NodeDetail() {
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const renderGate = evaluateScope(model.session, model.sessionFetchFailed, 'render:command')
   const assetWriteGate = evaluateScope(model.session, model.sessionFetchFailed, 'asset:write')
+  const audioGate = evaluateScope(model.session, model.sessionFetchFailed, 'audio:command')
 
   const [labelValue, setLabelValue] = useState(node?.label ?? '')
   const [savingLabel, setSavingLabel] = useState(false)
@@ -500,6 +688,8 @@ export function NodeDetail() {
           </section>
         ))}
       </Section>
+
+      <DriftRecordingSection nodeId={node.nodeId} hasAudioCapability={hasAudioCapability} gate={audioGate} />
 
       <Section
         id="nd-caps"

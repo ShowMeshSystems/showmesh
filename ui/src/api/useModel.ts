@@ -85,6 +85,9 @@ import type { components } from './generated/schema'
 import type {
   ActionBinding,
   ActionInvocationResult,
+  AudioAlignmentRunDetailResponse,
+  AudioAlignmentRunListResponse,
+  AudioAlignmentRunResponse,
   AudioNodeConfigResponse,
   AudioSettingsConfigResponse,
   ConfigAudioNode,
@@ -347,6 +350,23 @@ export function putAudioNode(id: string, payload: ConfigAudioNode): Promise<Audi
 
 export function getAudioNodeConfigRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getAudioNodeConfigRevisions(id)
+}
+
+// Long-run program-to-LTC drift recordings. Same thin pass-through pattern.
+export function listAudioAlignmentRuns(nodeId: string): Promise<AudioAlignmentRunListResponse> {
+  return store.listAudioAlignmentRuns(nodeId)
+}
+
+export function startAudioAlignmentRun(nodeId: string): Promise<AudioAlignmentRunResponse> {
+  return store.startAudioAlignmentRun(nodeId)
+}
+
+export function getAudioAlignmentRun(nodeId: string, runId: string, limit?: number): Promise<AudioAlignmentRunDetailResponse> {
+  return store.getAudioAlignmentRun(nodeId, runId, limit)
+}
+
+export function stopAudioAlignmentRun(nodeId: string, runId: string, reason?: string): Promise<AudioAlignmentRunResponse> {
+  return store.stopAudioAlignmentRun(nodeId, runId, reason)
 }
 
 // Track I seam I1, RES-019, ADR-039: node.clock per-node PTP configuration.
