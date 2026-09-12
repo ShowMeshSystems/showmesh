@@ -1,0 +1,34 @@
+# phc2sys, disciplining a grandmaster-role node's own PHC FROM this host's
+# NTP-disciplined system clock. Templated by install-ptp-audio.sh
+# (@PHC_DEV@); installed to /etc/systemd/system/phc2sys-showmesh.service.
+# Written ONLY for role=grandmaster nodes that have a PHC: a PHC free-runs
+# from whatever it held at boot until something disciplines it, and this
+# node's ptp4l then announces that arbitrary epoch as the domain's time to
+# every follower on the wire. Measured on showmesh-node-01: an
+# undisciplined PHC read 17.7 seconds behind the host's own
+# NTP-disciplined system clock, and a PHC-less follower on the same domain
+# slewed its own wall clock 54.7 seconds away from real time following it.
+#
+# A follower-role node must NEVER run this unit in this direction -- its
+# PHC belongs to the domain, not to this node's own system clock.
+#
+# Before=ptp4l-showmesh.service (added to that unit by install-ptp-audio.sh
+# only when this unit exists): the correction must be underway before
+# ptp4l starts announcing this PHC's time, because correcting an
+# 18-second PHC error while a show is already running would be an
+# 18-second clock step mid-show.
+[Unit]
+Description=ShowMesh PHC discipline from system clock (grandmaster role only)
+Documentation=https://github.com/ShowMeshSystems/showmesh
+After=network-online.target
+Wants=network-online.target
+Before=ptp4l-showmesh.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/phc2sys -s CLOCK_REALTIME -c @PHC_DEV@ -O 0
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+# Runs PipeWire as a headless system service instead of the
+# user-session unit Debian's pipewire package actually ships
+# (/usr/lib/systemd/user/pipewire.service): this node has no logged-in
+# desktop user, and `systemctl --user` needs a lingering login this node
+# is never going to have. Templated by install-ptp-audio.sh (@USER@,
+# @GROUP@); installed to /etc/systemd/system/pipewire-showmesh.service.
+#
+# PIPEWIRE_RUNTIME_DIR and XDG_RUNTIME_DIR both point at the same
+# directory as wireplumber-showmesh.service, which is how WirePlumber's
+# session manager finds this PipeWire instance without either of them
+# ever going through a real user session.
+[Unit]
+Description=ShowMesh headless PipeWire (PTP-clocked audio graph)
+Documentation=https://github.com/ShowMeshSystems/showmesh
+After=network.target ptp4l-showmesh.service
+Wants=ptp4l-showmesh.service
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+RuntimeDirectory=pipewire
+RuntimeDirectoryMode=0700
+Environment=PIPEWIRE_RUNTIME_DIR=/run/pipewire
+Environment=XDG_RUNTIME_DIR=/run/pipewire
+ExecStart=/usr/bin/pipewire
+Restart=on-failure
+RestartSec=1s
+LimitNOFILE=65536
+# Realtime scheduling for the graph thread, exactly what the desktop
+# session unit grants via rtkit in a normal install; this node has no
+# rtkit/session, so the capability is granted directly instead.
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+
+[Install]
+WantedBy=multi-user.target
