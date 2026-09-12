@@ -113,6 +113,12 @@ func pushNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() tim
 	if payload.SinkBackend != "" && payload.SinkBackend != config.AudioNodeSinkBackendDefault {
 		params["sinkBackend"] = payload.SinkBackend
 	}
+	// Refused by DecodeAudioNodePayload unless SinkBackend is
+	// pipewiresink, so a non-nil value here always accompanies the
+	// "sinkBackend" key set just above.
+	if payload.PipewireTargetNode != nil {
+		params["pipewireTargetNode"] = *payload.PipewireTargetNode
+	}
 	idempotencyKey := fmt.Sprintf("audio.node.configure/%s/rev-%d", nodeID, obj.CurrentRevision)
 	return publish(ctx, pub, now, nodeID, "audio.node.configure", idempotencyKey, params)
 }

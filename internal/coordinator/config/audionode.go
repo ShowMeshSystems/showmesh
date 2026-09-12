@@ -63,6 +63,12 @@ var audioNodeSinkBackends = map[string]bool{
 	AudioNodeSinkBackendPipeWire: true,
 }
 
+// audioNodePipewireTargetNodeConstraintDetail is the refusal text shared
+// between [DecodeAudioNodePayload]'s "present but sinkBackend is not
+// pipewiresink" branch, so the wording matches the field's own doc
+// comment exactly.
+const audioNodePipewireTargetNodeConstraintDetail = "pipewireTargetNode must be absent unless sinkBackend is \"pipewiresink\": an ignored field would read as an applied one"
+
 // ValidateAudioNodeObjectID validates an audio.node object id against the
 // same syntax a node id must satisfy — reusing [ValidateShowObjectID]'s own
 // reuse of [mqttproto.ValidateNodeID] rather than a second copy of the
@@ -77,6 +83,7 @@ var audioNodeTopLevelKeys = map[string]bool{
 	"programChannels": true, "ltcChannel": true,
 	"clockDomain": true, "clockDomainProvenance": true,
 	"role": true, "zone": true, "sinkBackend": true,
+	"pipewireTargetNode": true,
 }
 
 // AudioNodePayload is config_revisions.payload_json's decoded, VALIDATED
@@ -159,6 +166,25 @@ type AudioNodePayload struct {
 	// audio.node written before this field existed keeps decoding
 	// unchanged.
 	SinkBackend string `json:"sinkBackend,omitempty"`
+
+	// PipewireTargetNode is the PipeWire node name (e.g.
+	// "alsa_output.usb-MOTU_M4_M4MA0302TY-00.pro-output-0") this node's
+	// pipewiresink builds its "target-object" property from, so the
+	// engine's output is bound to a specific PipeWire node instead of
+	// whatever PipeWire's own default sink happens to be at the moment —
+	// a show node must never depend on that, since the default can be an
+	// unrelated onboard output changed by hand. Present only when
+	// SinkBackend is [AudioNodeSinkBackendPipeWire] — refused otherwise,
+	// matching Zone's identical "an ignored field would read as an
+	// applied one" rule. Optional even then: omitted, pipewiresink is
+	// built with no target-object property at all, exactly the behavior
+	// this node had before this field existed (PipeWire's own default
+	// sink). ProgramRoute is deliberately NOT reused for this: it names
+	// the node's discovered ALSA device identity (e.g.
+	// "hw:CARD=M4,DEV=0"), not a PipeWire node name, and pipewiresink's
+	// target-object silently ignores a name it does not recognize rather
+	// than failing, which is exactly the gap this field closes.
+	PipewireTargetNode *string `json:"pipewireTargetNode,omitempty"`
 }
 
 // EncodeAudioNodePayload marshals p into config_revisions.payload_json's
@@ -252,13 +278,48 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		zone = &s
 	}
 
+	pipewireTargetNode, verr := decodeAudioNodePipewireTargetNode(top, sinkBackend)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
+
 	return AudioNodePayload{
 		ProgramRoute: programRoute, LTCRoute: ltcRoute,
 		ProgramChannels: programChannels, LTCChannel: ltcChannel,
 		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
 		Role: role, Zone: zone,
-		SinkBackend: sinkBackend,
+		SinkBackend:        sinkBackend,
+		PipewireTargetNode: pipewireTargetNode,
 	}, nil
+}
+
+// decodeAudioNodePipewireTargetNode decodes the optional
+// "pipewireTargetNode" field, mirroring "zone"'s own decode rules exactly
+// (present-only-when-applicable, never null, never empty): refused unless
+// sinkBackend is [AudioNodeSinkBackendPipeWire], since a value that would
+// never be read must not be silently accepted.
+func decodeAudioNodePipewireTargetNode(top map[string]json.RawMessage, sinkBackend string) (*string, *ValidationError) {
+	raw, present := top["pipewireTargetNode"]
+	if !present {
+		return nil, nil
+	}
+	if sinkBackend != AudioNodeSinkBackendPipeWire {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "pipewireTargetNode",
+			Detail: audioNodePipewireTargetNodeConstraintDetail,
+		}
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{Code: ValidationCodeFieldNull, Field: "pipewireTargetNode", Detail: "pipewireTargetNode must not be null; omit it to leave it unset"}
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "pipewireTargetNode", Detail: "pipewireTargetNode must be a string"}
+	}
+	if s == "" {
+		return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: "pipewireTargetNode", Detail: "pipewireTargetNode must not be an empty string"}
+	}
+	return &s, nil
 }
 
 // decodeAudioNodeProgramChannels decodes and validates the required

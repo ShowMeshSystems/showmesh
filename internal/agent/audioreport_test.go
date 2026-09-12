@@ -1544,11 +1544,13 @@ func TestRunAudioReportReportsIntermediateGainAcrossADispatchedFade(t *testing.T
 type stubEngineBackendInfo struct {
 	stubEngineAvailability
 	sinkBackend string
+	sinkTarget  string
 	clockSource string
 	clockReason string
 }
 
 func (s *stubEngineBackendInfo) SinkBackend() string { return s.sinkBackend }
+func (s *stubEngineBackendInfo) SinkTarget() string  { return s.sinkTarget }
 func (s *stubEngineBackendInfo) ClockSource() (string, string) {
 	return s.clockSource, s.clockReason
 }
@@ -1557,9 +1559,9 @@ func (s *stubEngineBackendInfo) ClockSource() (string, string) {
 // engine (no asset directory configured on this node) never fabricates a
 // backend or clock source.
 func TestApplyEngineBackendInfoNilEngineLeavesFieldsBlank(t *testing.T) {
-	payload := mqttproto.AudioPayload{EngineSinkBackend: "stale", EngineClockSource: "stale", EngineClockReason: "stale"}
+	payload := mqttproto.AudioPayload{EngineSinkBackend: "stale", EngineSinkTarget: "stale", EngineClockSource: "stale", EngineClockReason: "stale"}
 	applyEngineBackendInfo(&payload, nil)
-	if payload.EngineSinkBackend != "" || payload.EngineClockSource != "" || payload.EngineClockReason != "" {
+	if payload.EngineSinkBackend != "" || payload.EngineSinkTarget != "" || payload.EngineClockSource != "" || payload.EngineClockReason != "" {
 		t.Fatalf("applyEngineBackendInfo with a nil engine left stale values: %+v", payload)
 	}
 }
@@ -1586,11 +1588,14 @@ func TestApplyEngineBackendInfoEngineWithoutTheOptionalInterfaceLeavesFieldsBlan
 // same "live, never cached" rule every other applyEngine* function in
 // this file follows.
 func TestApplyEngineBackendInfoReportsWhatTheEngineBuiltWith(t *testing.T) {
-	engine := &stubEngineBackendInfo{sinkBackend: "pipewiresink", clockSource: "phc"}
+	engine := &stubEngineBackendInfo{sinkBackend: "pipewiresink", sinkTarget: "showmesh-pw-target", clockSource: "phc"}
 	var payload mqttproto.AudioPayload
 	applyEngineBackendInfo(&payload, engine)
 	if payload.EngineSinkBackend != "pipewiresink" {
 		t.Errorf("EngineSinkBackend = %q, want %q", payload.EngineSinkBackend, "pipewiresink")
+	}
+	if payload.EngineSinkTarget != "showmesh-pw-target" {
+		t.Errorf("EngineSinkTarget = %q, want %q", payload.EngineSinkTarget, "showmesh-pw-target")
 	}
 	if payload.EngineClockSource != "phc" {
 		t.Errorf("EngineClockSource = %q, want %q", payload.EngineClockSource, "phc")

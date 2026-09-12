@@ -900,6 +900,7 @@ alongside them.
 | `node.audio.engine.restore.next_attempt_ms` | shipped | SM-384 (node-level counterpart to `audio_session.restore.next_attempt_ms`; not_collected, not zero, once the state is not `scheduled`) |
 | `node.audio.engine.restore.last_reason` | shipped | SM-384 (node-level counterpart to `audio_session.restore.last_reason`) |
 | `node.audio.engine.sink_backend` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`alsasink` or `pipewiresink`; the sibling `node.audio.engine.*` rows above already carry this section's no-additions-without-the-owner rule's standing exception) |
+| `node.audio.engine.sink_target` | shipped | RES-019 section 7.2 candidate A, ADR-046 (the PipeWire node name pipewiresink was configured to target; blank when `sink_backend` is not `pipewiresink` or no target was named at all) |
 | `node.audio.engine.clock_source` | shipped | RES-019 section 7.2 candidate A, ADR-046 (`phc` or `default`) |
 | `node.audio.engine.clock_reason` | shipped | RES-019 section 7.2 candidate A, ADR-046 (required whenever `clock_source` is `default` because a PHC clock was configured but could not be used; blank when nothing was configured at all) |
 
@@ -915,6 +916,28 @@ live evidence from the bound [gstengine.Engine] itself
 alone: a binding can request `pipewiresink` and a PHC clock can be
 configured, and either can still fail to build, in which case these
 report what actually happened, not what was asked for.
+
+**`node.audio.engine.sink_target` closes a gap the real-node acceptance
+run found the same night, 2026-09-11.** `pipewiresink` with no explicit
+target plays to whatever PipeWire's own default sink happens to be —
+on the acceptance node that was the motherboard's onboard output, not the
+MOTU M4, until an operator changed the default by hand. `audio.node` now
+carries an optional `pipewireTargetNode`, and the agent builds
+pipewiresink's `target-object` property from it instead of reusing
+`programRoute` (an ALSA device identity such as `hw:CARD=M4,DEV=0`,
+never a PipeWire node name — the earlier code's mistake, which
+pipewiresink silently ignored rather than refusing). `sink_target`
+reports the resulting `target-object` value the engine's own bound sink
+was actually built with, live off [gstengine.Engine.SinkTarget]. It is
+NOT confirmation that PipeWire resolved that name to a real node:
+pipewiresink accepts an unrecognized `target-object` without raising a
+GStreamer bus error (measured against the same behavior that made the
+acceptance node's misconfigured `programRoute`-as-target silently fall
+back to the default sink instead of failing visibly), so a wrong name and
+a correct one are not distinguishable by anything this engine observes.
+What this signal removes is the PRIOR gap, where a node reported no
+target at all, and an operator's only way to notice a wrong or missing
+one was to hear sound come out of the wrong device.
 
 **The four `node.audio.engine.restore.*` rows close a gap the widened
 retry driver opened, 2026-09-03.** `Manager.SetRestoreRetryStatus` only

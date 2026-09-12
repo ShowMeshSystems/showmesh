@@ -78,6 +78,16 @@ type ConfigAudioNode struct {
 	// candidate A, ADR-046). Optional on the wire; absent decodes to
 	// "alsasink".
 	SinkBackend string `json:"sinkBackend,omitempty"`
+
+	// PipewireTargetNode is the PipeWire node name this node's
+	// pipewiresink builds its "target-object" property from, so program
+	// audio goes to a specific PipeWire node rather than whatever
+	// PipeWire's own default sink happens to be. Present only when
+	// SinkBackend is "pipewiresink". Optional even then: omitted,
+	// pipewiresink is built with no target-object property at all
+	// (PipeWire's own default sink, unchanged from before this field
+	// existed).
+	PipewireTargetNode *string `json:"pipewireTargetNode,omitempty"`
 }
 
 // AudioNodeSummary is one element of [AudioNodeListResponse]: enough to

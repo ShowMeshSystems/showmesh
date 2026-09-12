@@ -660,6 +660,24 @@ func (e *Engine) SinkBackend() string {
 	return e.cfg.SinkFactory
 }
 
+// SinkTarget reports the PipeWire node name this engine's pipewiresink
+// was configured to target — docs/build/IDENTIFIER-REGISTER.md's
+// node.audio.engine.sink_target reservation. Empty when SinkBackend is
+// not "pipewiresink", when no target-object property was set (the
+// binding named none, so pipewiresink plays to PipeWire's own default
+// sink), or for an [NewUnavailable] engine.
+//
+// This reports what the pipeline was CONFIGURED to target, not confirmed
+// evidence that PipeWire actually resolved and linked to a node by that
+// name: pipewiresink accepts an unrecognized target-object value without
+// raising a GStreamer bus error, so an invalid name is not distinguishable
+// from a valid one by anything this engine observes. See this field's own
+// IDENTIFIER-REGISTER.md entry.
+func (e *Engine) SinkTarget() string {
+	v, _ := e.cfg.SinkProperties["target-object"].(string)
+	return v
+}
+
 // ClockSource reports whether this engine's pipeline runs on its
 // configured PHC clock or on GStreamer's own default — [clockSourcePHC]
 // or [clockSourceDefault] once buildPipeline has run, or "" for an

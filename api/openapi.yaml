@@ -14341,6 +14341,17 @@ components:
         `alsasink` or `pipewiresink`. Optional on the wire; absent
         decodes to `alsasink`, the backend every audio.node ran before
         this field existed.
+
+
+        `pipewireTargetNode` is the PipeWire node name (e.g.
+        `alsa_output.usb-MOTU_M4_M4MA0302TY-00.pro-output-0`) this node's
+        pipewiresink builds its `target-object` property from, present
+        only when `sinkBackend` is `pipewiresink` - refused on any other
+        backend, since an ignored field would read as an applied one.
+        Optional even then: omitted, pipewiresink is built with no
+        target-object property at all, which plays to whatever PipeWire's
+        own default sink happens to be - the behavior every audio.node had
+        before this field existed.
       required:
         [programRoute, programChannels, clockDomain, clockDomainProvenance]
       dependentRequired:
@@ -14380,6 +14391,13 @@ components:
           description: >-
             Optional; absent decodes to "alsasink" (RES-019 section 7.2
             candidate A, ADR-046).
+        pipewireTargetNode:
+          type: string
+          description: >-
+            The PipeWire node name pipewiresink's "target-object" property
+            is set to. Present only when sinkBackend is "pipewiresink".
+            Optional even then; omitted means no target-object property
+            is set at all (PipeWire's own default sink).
     AudioNodeConfigResponse:
       type: object
       description: The body of GET and PUT /config/audio.node/{id}.

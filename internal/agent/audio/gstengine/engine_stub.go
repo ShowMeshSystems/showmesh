@@ -136,6 +136,10 @@ func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
 // against any sink factory.
 func (e *Engine) SinkBackend() string { return "" }
 
+// SinkTarget always reports "": this build never built a pipeline
+// against any sink factory, so no target-object was ever set.
+func (e *Engine) SinkTarget() string { return "" }
+
 // ClockSource always reports "", "": this build never attempted a
 // pipeline clock at all.
 func (e *Engine) ClockSource() (source, reason string) { return "", "" }

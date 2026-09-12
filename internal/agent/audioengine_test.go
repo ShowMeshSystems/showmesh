@@ -1024,20 +1024,37 @@ func TestAudioEngineSinkFactoryAndPropsDefaultsToALSA(t *testing.T) {
 
 // TestAudioEngineSinkFactoryAndPropsPipeWire proves a binding requesting
 // "pipewiresink" builds against that factory with "target-object" set to
-// the program route instead of "device" -- RES-019 section 7.2 candidate
-// A, ADR-046: the "device" property does not apply to a PipeWire-owned
-// graph.
+// the configured PipewireTargetNode, never the program route, instead of
+// "device" -- RES-019 section 7.2 candidate A, ADR-046: the "device"
+// property does not apply to a PipeWire-owned graph, and ProgramRoute
+// names an ALSA device identity, never a PipeWire node name.
 func TestAudioEngineSinkFactoryAndPropsPipeWire(t *testing.T) {
+	node := audioNodeConfig{ProgramRoute: "showmesh-program", SinkBackend: pipewireAudioSinkFactory, PipewireTargetNode: "showmesh-pw-target"}
+	factory, props := audioEngineSinkFactoryAndProps(node)
+	if factory != pipewireAudioSinkFactory {
+		t.Errorf("factory = %q, want %q", factory, pipewireAudioSinkFactory)
+	}
+	if props["target-object"] != "showmesh-pw-target" {
+		t.Errorf("props[target-object] = %v, want %q", props["target-object"], "showmesh-pw-target")
+	}
+	if _, has := props["device"]; has {
+		t.Errorf("props carries device for a pipewiresink binding")
+	}
+}
+
+// TestAudioEngineSinkFactoryAndPropsPipeWireNoTarget proves a pipewiresink
+// binding with no PipewireTargetNode sets no "target-object" property at
+// all, matching this node's behavior before that field existed (PipeWire's
+// own default sink) rather than falling back to ProgramRoute, which is an
+// ALSA device identity pipewiresink would silently fail to resolve.
+func TestAudioEngineSinkFactoryAndPropsPipeWireNoTarget(t *testing.T) {
 	node := audioNodeConfig{ProgramRoute: "showmesh-program", SinkBackend: pipewireAudioSinkFactory}
 	factory, props := audioEngineSinkFactoryAndProps(node)
 	if factory != pipewireAudioSinkFactory {
 		t.Errorf("factory = %q, want %q", factory, pipewireAudioSinkFactory)
 	}
-	if props["target-object"] != "showmesh-program" {
-		t.Errorf("props[target-object] = %v, want %q", props["target-object"], "showmesh-program")
-	}
-	if _, has := props["device"]; has {
-		t.Errorf("props carries device for a pipewiresink binding")
+	if _, has := props["target-object"]; has {
+		t.Errorf("props carries target-object %v for a binding with no PipewireTargetNode", props["target-object"])
 	}
 }
 

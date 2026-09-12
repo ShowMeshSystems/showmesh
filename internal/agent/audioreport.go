@@ -357,23 +357,26 @@ func applyEngineGlitchCounts(payload *mqttproto.AudioPayload, engine engineAvail
 // engineBackendInfo is the optional interface [gstengine.Engine]
 // implements to report what it actually built against — matching
 // [engineGlitchCounts]'s identical optional-interface shape, so a wired
-// engine that does not implement it (a test fake) reports both fields
+// engine that does not implement it (a test fake) reports every field
 // blank rather than a fabricated value.
 type engineBackendInfo interface {
 	SinkBackend() string
+	SinkTarget() string
 	ClockSource() (source, reason string)
 }
 
 // applyEngineBackendInfo writes engine's own report of what it built its
-// output pipeline against onto payload — node.audio.engine.sink_backend
-// and node.audio.engine.clock_source/.clock_reason
+// output pipeline against onto payload — node.audio.engine.sink_backend,
+// node.audio.engine.sink_target, and
+// node.audio.engine.clock_source/.clock_reason
 // (docs/build/IDENTIFIER-REGISTER.md) — fresh on every call, same
 // "live, never cached" rule as [applyEngineAvailability]. A nil engine,
-// or one that does not implement [engineBackendInfo], leaves all three
-// fields blank: never a fabricated backend for a node with no engine
-// built at all.
+// or one that does not implement [engineBackendInfo], leaves every field
+// blank: never a fabricated backend for a node with no engine built at
+// all.
 func applyEngineBackendInfo(payload *mqttproto.AudioPayload, engine engineAvailability) {
 	payload.EngineSinkBackend = ""
+	payload.EngineSinkTarget = ""
 	payload.EngineClockSource = ""
 	payload.EngineClockReason = ""
 	if engine == nil {
@@ -384,6 +387,7 @@ func applyEngineBackendInfo(payload *mqttproto.AudioPayload, engine engineAvaila
 		return
 	}
 	payload.EngineSinkBackend = b.SinkBackend()
+	payload.EngineSinkTarget = b.SinkTarget()
 	payload.EngineClockSource, payload.EngineClockReason = b.ClockSource()
 }
 

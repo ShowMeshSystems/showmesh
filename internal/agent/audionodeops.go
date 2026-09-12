@@ -44,6 +44,14 @@ type audioNodeConfig struct {
 	// ("pipewiresink", RES-019 section 7.2 candidate A / ADR-046).
 	SinkBackend string `json:"sinkBackend,omitempty"`
 
+	// PipewireTargetNode is the PipeWire node name pipewiresink's
+	// "target-object" property is built from, present only when
+	// SinkBackend is [pipewireAudioSinkFactory]. Optional even then:
+	// empty builds pipewiresink with no target-object property at all
+	// (PipeWire's own default sink), matching this node's behavior
+	// before this field existed.
+	PipewireTargetNode string `json:"pipewireTargetNode,omitempty"`
+
 	Revision int64 `json:"revision"`
 }
 
@@ -195,7 +203,7 @@ func (b *audioBinding) currentSettingsRevision() (revision int64, have bool) {
 var audioNodeConfigureKnownKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true, "programChannels": true,
 	"ltcChannel": true, "clockDomain": true, "clockDomainProvenance": true,
-	"sinkBackend": true, "revision": true,
+	"sinkBackend": true, "pipewireTargetNode": true, "revision": true,
 }
 
 // decodeAudioNodeConfig validates params' shape against
@@ -259,6 +267,9 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 	case "", realAudioSinkFactory, pipewireAudioSinkFactory:
 	default:
 		return audioNodeConfig{}, fmt.Errorf("%s: params.sinkBackend %q must be %q or %q", action, p.SinkBackend, realAudioSinkFactory, pipewireAudioSinkFactory)
+	}
+	if p.PipewireTargetNode != "" && p.SinkBackend != pipewireAudioSinkFactory {
+		return audioNodeConfig{}, fmt.Errorf("%s: params.pipewireTargetNode is set but params.sinkBackend is %q, not %q; an ignored field would read as an applied one", action, p.SinkBackend, pipewireAudioSinkFactory)
 	}
 	if p.Revision < 0 {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.revision must not be negative", action)
@@ -461,16 +472,23 @@ const pipewireAudioSinkFactory = "pipewiresink"
 // "target-object" property, and setting an unknown GObject property is
 // itself something to avoid rather than rely on being harmless).
 // Otherwise node.SinkBackend picks between [pipewireAudioSinkFactory]
-// (with "target-object" set to node.ProgramRoute) and
-// [realAudioSinkFactory] (with "device" set to node.ProgramRoute) — the
-// default whenever SinkBackend is empty, matching every audio.node
-// binding before this field existed.
+// (with "target-object" set to node.PipewireTargetNode when given, and no
+// such property at all when it is empty — never node.ProgramRoute, which
+// names an ALSA device identity such as "hw:CARD=M4,DEV=0" rather than a
+// PipeWire node name, and which pipewiresink silently ignores rather than
+// refusing) and [realAudioSinkFactory] (with "device" set to
+// node.ProgramRoute) — the default whenever SinkBackend is empty, matching
+// every audio.node binding before this field existed.
 func audioEngineSinkFactoryAndProps(node audioNodeConfig) (factory string, props map[string]any) {
 	if v := os.Getenv(envGstAudioSinkOverride); v != "" {
 		return v, map[string]any{}
 	}
 	if node.SinkBackend == pipewireAudioSinkFactory {
-		return pipewireAudioSinkFactory, map[string]any{"target-object": node.ProgramRoute}
+		props := map[string]any{}
+		if node.PipewireTargetNode != "" {
+			props["target-object"] = node.PipewireTargetNode
+		}
+		return pipewireAudioSinkFactory, props
 	}
 	return realAudioSinkFactory, map[string]any{"device": node.ProgramRoute}
 }
