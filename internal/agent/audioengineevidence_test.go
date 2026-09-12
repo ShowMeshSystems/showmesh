@@ -90,3 +90,85 @@ func TestRebuildStillBuildsANonHardwareSinkWithoutProbeEvidence(t *testing.T) {
 		t.Errorf("newGstEngine called %d times, want 1", built)
 	}
 }
+
+// TestRebuildStillBuildsAPipewireRouteWithNoProbeEvidence pins the tonight
+// defect directly: a pipewiresink-backed node has no ALSA probe evidence
+// for its route (PipeWire holds the card, so nothing else can open it to
+// probe), and must still build rather than being refused alongside a bare
+// alsasink route. It must also report its fallback rate and channel count
+// honestly, never reusing the ALSA probe's own vocabulary for a value that
+// did not come from a probe.
+func TestRebuildStillBuildsAPipewireRouteWithNoProbeEvidence(t *testing.T) {
+	origNewEngine := newGstEngine
+	origDiscoverer := audioDiscoverer
+	t.Cleanup(func() {
+		newGstEngine = origNewEngine
+		audioDiscoverer = origDiscoverer
+	})
+
+	built := 0
+	var built0 gstengine.Config
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		built++
+		built0 = cfg
+		return audio.NewFakeEngine(time.Now), nil
+	}
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		return audio.Discovery{}
+	}
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+
+	r.rebuild(audioNodeConfig{
+		ProgramRoute:       "hw:CARD=M4,DEV=0",
+		SinkBackend:        pipewireAudioSinkFactory,
+		PipewireTargetNode: "showmesh-program",
+		ProgramChannels:    []int{1, 2},
+		LTCChannel:         3,
+		Revision:           1,
+	})
+
+	if built != 1 {
+		t.Fatalf("newGstEngine called %d times, want 1: a pipewiresink route with no ALSA probe evidence must still build", built)
+	}
+	if built0.SampleRate <= 0 || built0.ChannelCount <= 0 {
+		t.Errorf("built with SampleRate %d and ChannelCount %d, want both positive", built0.SampleRate, built0.ChannelCount)
+	}
+}
+
+// TestBuildGstEngineConfigReportsPipewireFallbackHonestly pins the
+// wording an operator reads: a pipewiresink route falling back to a
+// non-probed rate or channel count must say plainly that no device probe
+// was possible, never reuse [noProbeEvidenceSource]'s "no advertised
+// probe evidence" wording, which reads as the ALSA refusal outcome.
+func TestBuildGstEngineConfigReportsPipewireFallbackHonestly(t *testing.T) {
+	origDiscoverer := audioDiscoverer
+	t.Cleanup(func() { audioDiscoverer = origDiscoverer })
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		return audio.Discovery{}
+	}
+
+	node := audioNodeConfig{
+		ProgramRoute:    "hw:CARD=M4,DEV=0",
+		SinkBackend:     pipewireAudioSinkFactory,
+		ProgramChannels: []int{1, 2},
+		LTCChannel:      3,
+	}
+	cfg, rateSource, channelCountSource := buildGstEngineConfig(context.Background(), t.TempDir(), node)
+
+	if cfg.SampleRate <= 0 || cfg.ChannelCount <= 0 {
+		t.Fatalf("SampleRate %d, ChannelCount %d, want both positive", cfg.SampleRate, cfg.ChannelCount)
+	}
+	if strings.Contains(rateSource, "advertised probe evidence") {
+		t.Errorf("rate source = %q, want it to say no device probe was possible, not reuse the probe-evidence vocabulary", rateSource)
+	}
+	if strings.Contains(channelCountSource, "advertised probe evidence") {
+		t.Errorf("channel count source = %q, want it to say no device probe was possible, not reuse the probe-evidence vocabulary", channelCountSource)
+	}
+	if !strings.Contains(rateSource, "pipewiresink") || !strings.Contains(channelCountSource, "pipewiresink") {
+		t.Errorf("rate source %q / channel count source %q, want both to name the pipewiresink backend", rateSource, channelCountSource)
+	}
+}

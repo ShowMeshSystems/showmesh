@@ -33,7 +33,25 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 	rate, rateSource := resolveNodeSampleRate(d, node.ProgramRoute)
 	channelCount, chCountSource := resolveNodeChannelCount(d, node.ProgramRoute, audioNodeChannelCount(node))
 	cfg = staticGstEngineConfig(assetDir, node)
-	if cfg.SinkFactory != realAudioSinkFactory && cfg.SinkFactory != pipewireAudioSinkFactory {
+	switch cfg.SinkFactory {
+	case realAudioSinkFactory:
+		// No fallback: a route reaching a physical ALSA device must be
+		// built from that device's own probe evidence or refused (see
+		// rebuildLocked).
+	case pipewireAudioSinkFactory:
+		// PipeWire owns the card, so the ALSA probe this node runs can
+		// never see it (that probe is what resolveNodeSampleRate and
+		// resolveNodeChannelCount just consulted, and it reports no
+		// evidence for a route PipeWire holds). Fall back rather than
+		// refuse: this backend exists specifically to ship audio on a
+		// node whose card can never yield an ALSA probe.
+		if rate <= 0 {
+			rate, rateSource = scaffoldSampleRate, pipewireNoProbeSampleRateSource
+		}
+		if channelCount <= 0 {
+			channelCount, chCountSource = audioNodeChannelCount(node), pipewireNoProbeChannelCountSource
+		}
+	default:
 		if rate <= 0 {
 			rate, rateSource = scaffoldSampleRate, "fallback: non-hardware sink, no advertised probe evidence for this route"
 		}
@@ -46,12 +64,27 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 	return cfg, rateSource, chCountSource
 }
 
-// scaffoldSampleRate is the rate a config built against a non-hardware
-// sink ([envGstAudioSinkOverride]) uses when this node has no probe
-// evidence for the bound route. Such a sink accepts whatever it is
-// handed, so the value is scaffolding rather than a claim about a
-// device. A route bound to the real [realAudioSinkFactory] gets no such
-// substitution: see [audioEngineRebuilder.rebuild].
+// pipewireNoProbeSampleRateSource and pipewireNoProbeChannelCountSource
+// report a pipewiresink route's fallback rate and channel count
+// honestly: "no probe evidence" would read as an ALSA refusal outcome
+// (see [noProbeEvidenceSource]), but this value was never a probe result
+// at all, just this node's own configured channel floor and a fixed
+// 48 kHz, chosen because no device probe is possible while PipeWire
+// holds the card.
+const (
+	pipewireNoProbeSampleRateSource   = "fallback: pipewiresink backend, no device probe is possible while PipeWire holds the card"
+	pipewireNoProbeChannelCountSource = "fallback: pipewiresink backend, no device probe is possible while PipeWire holds the card; bindings' highest program or LTC channel index"
+)
+
+// scaffoldSampleRate is the rate a config falls back to when this node
+// has no probe evidence for the bound route: a non-hardware sink
+// ([envGstAudioSinkOverride], which accepts whatever it is handed) or a
+// [pipewireAudioSinkFactory] route (whose card an ALSA probe can never
+// reach while PipeWire holds it). In both cases the value is scaffolding
+// rather than a claim about a device; see [pipewireNoProbeSampleRateSource]
+// for how that is reported for the PipeWire case. A route bound to the
+// real [realAudioSinkFactory] gets no such substitution: see
+// [audioEngineRebuilder.rebuild].
 const scaffoldSampleRate = 48000
 
 // staticGstEngineConfig builds the part of a [gstengine.Config] that
