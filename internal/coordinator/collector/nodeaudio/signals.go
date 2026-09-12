@@ -98,6 +98,20 @@ const (
 	SignalEngineRestoreLastReason    observation.SignalID = "node.audio.engine.restore.last_reason"
 )
 
+// SignalEngineSinkBackend, SignalEngineSinkTarget, SignalEngineClockSource,
+// and SignalEngineClockReason report what this node's output pipeline
+// was actually built against (mqttproto.AudioPayload.EngineSinkBackend/
+// EngineSinkTarget/EngineClockSource/EngineClockReason) -- already
+// reserved as "shipped" in docs/build/IDENTIFIER-REGISTER.md, published
+// by the agent since RES-019 section 7.2 candidate A but never
+// surfaced past it until this collector read them.
+const (
+	SignalEngineSinkBackend observation.SignalID = "node.audio.engine.sink_backend"
+	SignalEngineSinkTarget  observation.SignalID = "node.audio.engine.sink_target"
+	SignalEngineClockSource observation.SignalID = "node.audio.engine.clock_source"
+	SignalEngineClockReason observation.SignalID = "node.audio.engine.clock_reason"
+)
+
 // SignalTimelineScheduledAt, SignalTimelineExpectedMs,
 // SignalTimelineActualMs, SignalTimelineErrorMs, SignalTimelineResyncs,
 // and SignalTimelineLastResyncReason are Track I seam I2's scheduled
@@ -181,6 +195,10 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSettingsState,
 	SignalSettingsSubstitutedFields,
 	SignalSettingsReason,
+	SignalEngineSinkBackend,
+	SignalEngineSinkTarget,
+	SignalEngineClockSource,
+	SignalEngineClockReason,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one
