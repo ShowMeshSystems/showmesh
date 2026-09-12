@@ -117,9 +117,11 @@ const (
 // and SignalTimelineLastResyncReason are Track I seam I2's scheduled
 // playback timeline (RES-019 section 10), minted by the owner and closed:
 // no seventh name is added here without another ruling. ScheduledAt is
-// the T0 the running session was given, on the reporting node's media
-// clock, in nanoseconds (an int64 that exceeds float64's exact integer
-// range: see pkg/audio.ParamScheduledAtNs). ExpectedMs is media_now
+// the engine's own start instant, on the reporting node's media clock, in
+// nanoseconds, after RES-019 section 8's calibrated output latency
+// adjustment: it can read earlier than the T0 the coordinator dispatched
+// (an int64 that exceeds float64's exact integer range: see
+// pkg/audio.ParamScheduledAtNs). ExpectedMs is media_now
 // minus T0; ActualMs is the presented sample count over the nominal
 // rate, read from the sink clock rather than the decode frontier;
 // ErrorMs is expected minus actual. Resyncs counts discontinuity seeks

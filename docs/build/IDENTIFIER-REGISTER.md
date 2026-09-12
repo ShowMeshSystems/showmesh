@@ -141,6 +141,17 @@ object. `audio.node.clockDomain` and `clockDomainProvenance` are unchanged
 clock, which is a different statement from which PTP domain that hardware clock
 follows.
 
+**`audio.node.outputLatency` (RES-019 §8, Track I seam I5) is an additive field
+on the existing `audio.node` object, not a new kind.** A signed per-output
+offset in microseconds with provenance (`valueUs`, `method`, `measuredAt`,
+`reference`, `confidence`, `configuration`), subtracted from that node's
+scheduled start instant. Absent on every pre-I5 stored revision, which decodes
+to `method: unmeasured` and applies zero unchanged. No node in this repository
+ships a non-`unmeasured` value from this seam; the loopback/acoustic
+measurement procedure is documented in RES-019 §8.2, and the real measurement
+that motivated the seam is recorded there as hardware evidence, never as a
+shipped default.
+
 **`fppconnect.settings` holds the two byte caps and the enable flag for the
 node's xLights ingestion listener** (`enabled`, `maxFileBytes` default 2 GiB,
 `maxAssetDirBytes` default 20 GiB), store-backed per

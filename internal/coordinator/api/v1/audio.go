@@ -88,6 +88,35 @@ type ConfigAudioNode struct {
 	// (PipeWire's own default sink, unchanged from before this field
 	// existed).
 	PipewireTargetNode *string `json:"pipewireTargetNode,omitempty"`
+
+	// OutputLatency is this node's calibrated static output-chain delay
+	// (RES-019 section 8), always present so its provenance (or the
+	// "unmeasured" default) is never omitted from a read.
+	OutputLatency ConfigAudioOutputLatency `json:"outputLatency"`
+}
+
+// ConfigAudioOutputLatency is "audio.node.outputLatency" (RES-019
+// section 8): a signed per-output offset, in microseconds, subtracted
+// from that node's scheduled start instant so playback reaches the air
+// at the intended instant instead of one output-chain delay late.
+// Method "unmeasured" is the default, applies zero, and carries every
+// other field empty/absent: a value beside it would be a fabricated
+// measurement. Every other method requires MeasuredAt, Reference,
+// Confidence, and Configuration together with ValueUs: Configuration in
+// particular records the buffer/quantum/sample-rate configuration the
+// value was measured under, because RES-019 section 8 found the offset
+// moves with PipeWire's graph quantum and a value is only valid for the
+// configuration it was measured under.
+type ConfigAudioOutputLatency struct {
+	// ValueUs is a pointer so a stored measured value of exactly 0
+	// microseconds still reaches the wire; a plain int with omitempty
+	// would drop it and break a carry-forward write of that value.
+	ValueUs       *int    `json:"valueUs,omitempty"`
+	Method        string  `json:"method"`
+	MeasuredAt    *string `json:"measuredAt,omitempty"`
+	Reference     string  `json:"reference,omitempty"`
+	Confidence    string  `json:"confidence,omitempty"`
+	Configuration string  `json:"configuration,omitempty"`
 }
 
 // AudioNodeSummary is one element of [AudioNodeListResponse]: enough to

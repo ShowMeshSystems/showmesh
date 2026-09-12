@@ -375,6 +375,17 @@ func (h *handlers) handleDeleteAudioNode(w http.ResponseWriter, r *http.Request)
 	h.writeInternalError(w, now, "delete audio.node config object", err)
 }
 
+// outputLatencyValueUsPtr reports p.ValueUs as a pointer for a measured
+// method so a stored value of exactly 0 still reaches the wire, and nil
+// for unmeasured, where valueUs is never sent.
+func outputLatencyValueUsPtr(p config.OutputLatencyPayload) *int {
+	if p.Method == "" || p.Method == config.OutputLatencyMethodUnmeasured {
+		return nil
+	}
+	v := p.ValueUs
+	return &v
+}
+
 func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, obj store.ConfigObjectRecord, p config.AudioNodePayload) v1.AudioNodeConfigResponse {
 	return v1.AudioNodeConfigResponse{
 		ServerTime: formatTime(now), Kind: config.AudioNodeConfigKind, ID: obj.ID, Revision: rev.Revision,
@@ -385,6 +396,12 @@ func mapAudioNodeConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 			Role: p.Role, Zone: p.Zone,
 			SinkBackend:        p.SinkBackend,
 			PipewireTargetNode: p.PipewireTargetNode,
+			OutputLatency: v1.ConfigAudioOutputLatency{
+				ValueUs: outputLatencyValueUsPtr(p.OutputLatency), Method: p.OutputLatency.Method,
+				MeasuredAt: formatTimePtr(p.OutputLatency.MeasuredAt),
+				Reference:  p.OutputLatency.Reference, Confidence: p.OutputLatency.Confidence,
+				Configuration: p.OutputLatency.Configuration,
+			},
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),

@@ -77,6 +77,24 @@ type configAudioNode struct {
 	// PipewireTargetNode mirrors v1.ConfigAudioNode.PipewireTargetNode:
 	// present only when SinkBackend is "pipewiresink".
 	PipewireTargetNode *string `json:"pipewireTargetNode,omitempty"`
+
+	// OutputLatency mirrors v1.ConfigAudioOutputLatency. This is a
+	// full-replacement PUT; "audio node set" itself reads the node's
+	// current value forward when no --output-latency-* flag is given, so
+	// nil here never reaches the wire as a silent reset.
+	OutputLatency *configAudioOutputLatency `json:"outputLatency,omitempty"`
+}
+
+// configAudioOutputLatency mirrors v1.ConfigAudioOutputLatency. ValueUs is
+// a pointer for the same reason: a stored measured value of exactly 0
+// must round-trip through a GET and back out a carry-forward PUT.
+type configAudioOutputLatency struct {
+	ValueUs       *int    `json:"valueUs,omitempty"`
+	Method        string  `json:"method,omitempty"`
+	MeasuredAt    *string `json:"measuredAt,omitempty"`
+	Reference     string  `json:"reference,omitempty"`
+	Confidence    string  `json:"confidence,omitempty"`
+	Configuration string  `json:"configuration,omitempty"`
 }
 
 // audioNodeSummary mirrors v1.AudioNodeSummary: one element of an audio.node
@@ -617,23 +635,38 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
 	fs.StringVar(&sinkBackend, "sink-backend", "", "one of alsasink or pipewiresink (ADR-046); omitted, carried forward from the node's current definition, or defaults to alsasink for a new node")
 	fs.StringVar(&pipewireTargetNode, "pipewire-target-node", "", "the PipeWire node name program audio targets; only accepted with --sink-backend pipewiresink; omitted, carried forward from the node's current definition")
+	var outputLatencyUs int
+	var outputLatencyMethod, outputLatencyMeasuredAt, outputLatencyReference, outputLatencyConfidence, outputLatencyConfiguration string
+	fs.IntVar(&outputLatencyUs, "output-latency-us", 0, "calibrated output offset in signed microseconds (RES-019 section 8); required with a measured --output-latency-method")
+	fs.StringVar(&outputLatencyMethod, "output-latency-method", "", "one of unmeasured, loopback, acoustic, declared; required with the other four --output-latency-* flags for a measured method, or given alone as unmeasured to clear a stored calibration")
+	fs.StringVar(&outputLatencyMeasuredAt, "output-latency-measured-at", "", "RFC 3339 timestamp when --output-latency-us was measured; required with a measured method")
+	fs.StringVar(&outputLatencyReference, "output-latency-reference", "", "what --output-latency-us was measured against; required with a measured method")
+	fs.StringVar(&outputLatencyConfidence, "output-latency-confidence", "", "free-text judgment of how much to trust --output-latency-us; required with a measured method")
+	fs.StringVar(&outputLatencyConfiguration, "output-latency-configuration", "", "the buffer/quantum/sample-rate configuration --output-latency-us was measured under; required with a measured method")
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only.")
-		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, but --sink-backend and --pipewire-target-node")
-		_, _ = fmt.Fprintln(stderr, "are carried forward from a read of the node's current definition when")
-		_, _ = fmt.Fprintln(stderr, "omitted, so changing a route never resets a PipeWire-routed node back to")
-		_, _ = fmt.Fprintln(stderr, "alsasink. Every other flag reflects only what is passed on this")
-		_, _ = fmt.Fprintln(stderr, "invocation. Refused unless the node has already advertised the routes in")
-		_, _ = fmt.Fprintln(stderr, "its own capability report, never accepted on the operator's claim")
-		_, _ = fmt.Fprintln(stderr, "alone. --program-route and --ltc-route must name the same route.")
+		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT, but --sink-backend, --pipewire-target-node,")
+		_, _ = fmt.Fprintln(stderr, "and --output-latency-* are each carried forward from a read of the")
+		_, _ = fmt.Fprintln(stderr, "node's current definition when their flags are omitted, so changing a")
+		_, _ = fmt.Fprintln(stderr, "route never resets a PipeWire-routed node back to alsasink or drops a")
+		_, _ = fmt.Fprintln(stderr, "stored output-latency calibration. Every other flag reflects only what")
+		_, _ = fmt.Fprintln(stderr, "is passed on this invocation. Refused unless the node has already")
+		_, _ = fmt.Fprintln(stderr, "advertised the routes in its own capability report, never accepted on")
+		_, _ = fmt.Fprintln(stderr, "the operator's claim alone. --program-route and --ltc-route must name")
+		_, _ = fmt.Fprintln(stderr, "the same route.")
 		_, _ = fmt.Fprintln(stderr, "\n--ltc-route and --ltc-channel are the one OPTIONAL pair, and they are")
 		_, _ = fmt.Fprintln(stderr, "optional TOGETHER: omit both to declare a program-only node that emits")
 		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
 		_, _ = fmt.Fprintln(stderr, "has no channel to spare for a discrete LTC signal. Passing one without")
 		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
+		_, _ = fmt.Fprintln(stderr, "\n--output-latency-* (RES-019 section 8) is this node's calibrated static")
+		_, _ = fmt.Fprintln(stderr, "output-chain delay. Every field is required together with a measured")
+		_, _ = fmt.Fprintln(stderr, "--output-latency-method (loopback, acoustic, or declared). Omitting every")
+		_, _ = fmt.Fprintln(stderr, "--output-latency-* flag carries this node's currently stored value forward")
+		_, _ = fmt.Fprintln(stderr, "unchanged, read from the node just before this write.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this node), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
 		fs.PrintDefaults()
@@ -656,7 +689,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	// the authority on rejecting, mirroring assets settings set's
 	// identical fs.Visit-over-zero-value pattern) is sent through rather
 	// than refused here as if it had been omitted.
-	ltcChannelSet, zoneSet, sinkBackendSet, pipewireTargetNodeSet := false, false, false, false
+	ltcChannelSet, zoneSet, sinkBackendSet, pipewireTargetNodeSet, outputLatencySet := false, false, false, false, false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "ltc-channel":
@@ -667,6 +700,9 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 			sinkBackendSet = true
 		case "pipewire-target-node":
 			pipewireTargetNodeSet = true
+		case "output-latency-us", "output-latency-method", "output-latency-measured-at",
+			"output-latency-reference", "output-latency-confidence", "output-latency-configuration":
+			outputLatencySet = true
 		}
 	})
 	if programRoute == "" || programChannels == "" || clockDomain == "" || clockDomainProvenance == "" {
@@ -700,24 +736,30 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
-
 	apiPath := "/api/v1/config/audio.node/" + url.PathEscape(id)
 
-	// One read serves both the If-Match precondition and the sink backend /
-	// PipeWire target carried forward below, mirroring "show set"'s own
-	// read-before-write shape (cmd_show.go): --sink-backend and
-	// --pipewire-target-node have no way to express "leave unchanged"
-	// other than reading what "unchanged" currently is, since this
-	// endpoint is a full replacement. A 404 here is this node's first
-	// "set", not a failure; resolveIfMatch's own exitNotFound branch below
-	// turns it into "send no precondition".
-	var current audioNodeConfigResponse
-	readErr := c.getJSON(ctx, apiPath, nil, &current)
-	if readErr != nil {
-		var ce *cliError
-		if !errors.As(readErr, &ce) || ce.code != exitNotFound {
-			return reportError(stderr, "audio node set", readErr)
+	// A full-replacement PUT with --sink-backend, --pipewire-target-node,
+	// or --output-latency-* omitted would otherwise reset those fields to
+	// their zero value on any unrelated edit, and this command's own help
+	// text used to instruct operators to repeat --output-latency-* on
+	// every "set", which nobody reliably does. Read the node's current
+	// value forward instead, the same carry-forward the UI already
+	// performs on save. fetchCurrent is also reused below for If-Match
+	// resolution, and its GET runs at most once. --force must not gain a
+	// GET dependency: it exists to write when the read path is degraded,
+	// so a forced write carries none of these fields forward instead of
+	// depending on a read that may itself be failing.
+	var current *audioNodeConfigResponse
+	fetchCurrent := func() (*audioNodeConfigResponse, error) {
+		if current != nil {
+			return current, nil
 		}
+		var r audioNodeConfigResponse
+		if err := c.getJSON(ctx, apiPath, nil, &r); err != nil {
+			return nil, err
+		}
+		current = &r
+		return current, nil
 	}
 
 	body := configAudioNode{
@@ -734,18 +776,62 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	}
 	if sinkBackendSet {
 		body.SinkBackend = sinkBackend
-	} else if readErr == nil {
-		body.SinkBackend = current.Payload.SinkBackend
+	} else if !forceFlag() {
+		cur, err := fetchCurrent()
+		if err != nil {
+			var ce *cliError
+			if !errors.As(err, &ce) || ce.code != exitNotFound {
+				return reportError(stderr, "audio node set", err)
+			}
+		} else {
+			body.SinkBackend = cur.Payload.SinkBackend
+		}
 	}
 	if pipewireTargetNodeSet {
 		body.PipewireTargetNode = &pipewireTargetNode
-	} else if readErr == nil && body.SinkBackend == "pipewiresink" {
-		body.PipewireTargetNode = current.Payload.PipewireTargetNode
+	} else if !forceFlag() && body.SinkBackend == "pipewiresink" {
+		cur, err := fetchCurrent()
+		if err != nil {
+			var ce *cliError
+			if !errors.As(err, &ce) || ce.code != exitNotFound {
+				return reportError(stderr, "audio node set", err)
+			}
+		} else {
+			body.PipewireTargetNode = cur.Payload.PipewireTargetNode
+		}
 	}
-
+	if outputLatencySet {
+		ol := &configAudioOutputLatency{
+			Method:    outputLatencyMethod,
+			Reference: outputLatencyReference, Confidence: outputLatencyConfidence,
+			Configuration: outputLatencyConfiguration,
+		}
+		if outputLatencyMethod != "" && outputLatencyMethod != "unmeasured" {
+			v := outputLatencyUs
+			ol.ValueUs = &v
+		}
+		if outputLatencyMeasuredAt != "" {
+			ol.MeasuredAt = &outputLatencyMeasuredAt
+		}
+		body.OutputLatency = ol
+	} else if !forceFlag() {
+		cur, err := fetchCurrent()
+		if err != nil {
+			var ce *cliError
+			if !errors.As(err, &ce) || ce.code != exitNotFound {
+				return reportError(stderr, "audio node set", err)
+			}
+		} else if cur.Payload.OutputLatency != nil && cur.Payload.OutputLatency.Method != "" && cur.Payload.OutputLatency.Method != "unmeasured" {
+			body.OutputLatency = cur.Payload.OutputLatency
+		}
+	}
 	ifMatchRevision, ifMatchSet := ifMatchFlag()
 	ifMatch, err := resolveIfMatch(forceFlag(), ifMatchRevision, ifMatchSet, 0, func() (int64, error) {
-		return current.Revision, readErr
+		cur, err := fetchCurrent()
+		if err != nil {
+			return 0, err
+		}
+		return cur.Revision, nil
 	})
 	if err != nil {
 		return reportError(stderr, "audio node set", err)
@@ -936,6 +1022,22 @@ func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 	_, _ = fmt.Fprintf(w, "Sink backend:           %s\n", sinkBackend)
 	if p.PipewireTargetNode != nil {
 		_, _ = fmt.Fprintf(w, "PipeWire target node:   %s\n", *p.PipewireTargetNode)
+	}
+	if p.OutputLatency == nil || p.OutputLatency.Method == "" || p.OutputLatency.Method == "unmeasured" {
+		_, _ = fmt.Fprintln(w, "Output latency:         unmeasured (applies zero)")
+	} else {
+		ol := p.OutputLatency
+		var valueUs int
+		if ol.ValueUs != nil {
+			valueUs = *ol.ValueUs
+		}
+		_, _ = fmt.Fprintf(w, "Output latency:         %d us (%s)\n", valueUs, ol.Method)
+		if ol.MeasuredAt != nil {
+			_, _ = fmt.Fprintf(w, "  measured at:          %s\n", *ol.MeasuredAt)
+		}
+		_, _ = fmt.Fprintf(w, "  reference:            %s\n", ol.Reference)
+		_, _ = fmt.Fprintf(w, "  confidence:           %s\n", ol.Confidence)
+		_, _ = fmt.Fprintf(w, "  configuration:        %s\n", ol.Configuration)
 	}
 	_, _ = fmt.Fprintf(w, "Revision:               %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:                %s\n", resp.UpdatedAt.Format(time.RFC3339))

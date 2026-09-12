@@ -353,3 +353,48 @@ func TestDecodeAudioNodeConfigRejectsUnknownSinkBackend(t *testing.T) {
 		t.Fatal("decodeAudioNodeConfig accepted an unrecognized sinkBackend")
 	}
 }
+
+// TestDecodeAudioNodeConfigAcceptsOutputLatency proves a binding with no
+// "outputLatency" key at all (every pre-I5 delivery) still decodes: the
+// field is additive, absent decodes to the zero outputLatencyConfig, and
+// effectiveOutputLatencyUs reports zero for it.
+func TestDecodeAudioNodeConfigAcceptsOutputLatency(t *testing.T) {
+	p, err := decodeAudioNodeConfig(programOnlyNodeParams())
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if got := p.OutputLatency.effectiveOutputLatencyUs(); got != 0 {
+		t.Errorf("effectiveOutputLatencyUs = %d, want 0 for an absent outputLatency", got)
+	}
+}
+
+// TestDecodeAudioNodeConfigCarriesMeasuredOutputLatency proves a
+// delivered measured value round-trips through decode into
+// effectiveOutputLatencyUs.
+func TestDecodeAudioNodeConfigCarriesMeasuredOutputLatency(t *testing.T) {
+	params := programOnlyNodeParams()
+	params["outputLatency"] = map[string]any{
+		"valueUs": float64(55997), "method": "loopback",
+		"measuredAt": "2026-09-11T02:00:00Z", "reference": "MOTU M4 loopback capture",
+		"confidence": "high", "configuration": "PipeWire quantum 1024, 48000 Hz",
+	}
+	p, err := decodeAudioNodeConfig(params)
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if got := p.OutputLatency.effectiveOutputLatencyUs(); got != 55997 {
+		t.Errorf("effectiveOutputLatencyUs = %d, want 55997", got)
+	}
+}
+
+// TestOutputLatencyConfigUnmeasuredAppliesZero proves the "unmeasured"
+// method reports zero even if ValueUs were somehow non-zero: the
+// coordinator's own decode already refuses that combination, but this
+// package's own application logic does not additionally trust Method
+// alone without also gating on it.
+func TestOutputLatencyConfigUnmeasuredAppliesZero(t *testing.T) {
+	c := outputLatencyConfig{ValueUs: 12345, Method: "unmeasured"}
+	if got := c.effectiveOutputLatencyUs(); got != 0 {
+		t.Errorf("effectiveOutputLatencyUs = %d, want 0 for method \"unmeasured\"", got)
+	}
+}

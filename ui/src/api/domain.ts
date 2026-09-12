@@ -226,6 +226,7 @@ export type ShowCueConfigResponse = components['schemas']['ShowCueConfigResponse
 export type ConfigAudioSettingsPayload = components['schemas']['ConfigAudioSettingsPayload']
 export type AudioSettingsConfigResponse = components['schemas']['AudioSettingsConfigResponse']
 export type ConfigAudioNode = components['schemas']['ConfigAudioNode']
+export type ConfigAudioOutputLatency = components['schemas']['ConfigAudioOutputLatency']
 export type AudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
 export type AudioNodeSummary = components['schemas']['AudioNodeSummary']
 export type AudioNodeListResponse = components['schemas']['AudioNodeListResponse']

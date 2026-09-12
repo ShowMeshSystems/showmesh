@@ -53,6 +53,33 @@ type audioNodeConfig struct {
 	PipewireTargetNode string `json:"pipewireTargetNode,omitempty"`
 
 	Revision int64 `json:"revision"`
+
+	// OutputLatency is RES-019 section 8's calibrated static output
+	// delay, absent/zero-value ("unmeasured") on a node the operator has
+	// never measured. See [effectiveOutputLatencyUs].
+	OutputLatency outputLatencyConfig `json:"outputLatency,omitempty"`
+}
+
+// outputLatencyConfig mirrors config.OutputLatencyPayload's JSON tags.
+// This package only reads ValueUs and Method (see
+// [effectiveOutputLatencyUs]); the rest is provenance for a human.
+type outputLatencyConfig struct {
+	ValueUs       int     `json:"valueUs,omitempty"`
+	Method        string  `json:"method,omitempty"`
+	MeasuredAt    *string `json:"measuredAt,omitempty"`
+	Reference     string  `json:"reference,omitempty"`
+	Confidence    string  `json:"confidence,omitempty"`
+	Configuration string  `json:"configuration,omitempty"`
+}
+
+// effectiveOutputLatencyUs is the microsecond offset a scheduled start
+// actually applies: zero unless Method names a real measurement
+// (RES-019 section 8).
+func (c outputLatencyConfig) effectiveOutputLatencyUs() int {
+	if c.Method == "" || c.Method == "unmeasured" {
+		return 0
+	}
+	return c.ValueUs
 }
 
 // audioSettingsConfig is "audio.settings.configure"'s params shape,
@@ -204,6 +231,7 @@ var audioNodeConfigureKnownKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true, "programChannels": true,
 	"ltcChannel": true, "clockDomain": true, "clockDomainProvenance": true,
 	"sinkBackend": true, "pipewireTargetNode": true, "revision": true,
+	"outputLatency": true,
 }
 
 // decodeAudioNodeConfig validates params' shape against

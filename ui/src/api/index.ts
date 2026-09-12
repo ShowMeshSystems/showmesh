@@ -56,6 +56,7 @@ export type {
   ConfigAudioSettingsPayload,
   AudioNodeConfigResponse,
   ConfigAudioNode,
+  ConfigAudioOutputLatency,
   AudioNodeSummary,
   AudioNodeListResponse,
   FPPInstance,
