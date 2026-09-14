@@ -143,6 +143,7 @@ const INSTANCE_PARTICIPATION_CASES: Array<{
 }> = [
   { state: 'participating', show: 'halloween-2026', reason: null, expected: 'participating' },
   { state: 'not_participating', show: 'halloween-2026', reason: null, expected: 'not_participating' },
+  { state: 'selection_unrecorded', show: 'halloween-2026', reason: 'never recorded', expected: 'selection_unrecorded' },
   { state: 'unknown', show: '', reason: 'store error', expected: 'unknown' },
   { state: 'not_configured', show: '', reason: 'no show active', expected: 'not_configured' },
 ]
@@ -162,14 +163,6 @@ describe('fppAttention participation', () => {
       expect(items[0]?.participation).toBe(showParticipation.expected)
     })
   }
-
-  it('folds selection_unrecorded into participating, per the API contract that every configured instance takes part', () => {
-    const items = fppAttention([
-      fpp('fpp-1', 'failed', { state: 'selection_unrecorded', show: 'halloween-2026', reason: 'never recorded' }),
-    ])
-    expect(items).toHaveLength(1)
-    expect(items[0]?.participation).toBe<ParticipationState>('participating')
-  })
 })
 
 describe('resolumeAttention participation', () => {
@@ -187,14 +180,6 @@ describe('resolumeAttention participation', () => {
       expect(items[0]?.participation).toBe(showParticipation.expected)
     })
   }
-
-  it('folds selection_unrecorded into participating, per the API contract that every configured instance takes part', () => {
-    const items = resolumeAttention([
-      resolumeInstance('res-1', 'failed', { state: 'selection_unrecorded', show: 'halloween-2026', reason: 'never recorded' }),
-    ])
-    expect(items).toHaveLength(1)
-    expect(items[0]?.participation).toBe<ParticipationState>('participating')
-  })
 })
 
 describe('partitionAttentionItems', () => {
@@ -277,12 +262,39 @@ describe('attentionItems ordering', () => {
     const items = attentionItems({ ...initialModel(), nodes: [unknownParticipation, bad] }, null)
     expect(items.map((item) => item.key)).toEqual(['node:bad-node', 'node:unknown-node'])
   })
+
+  it('ranks a participating FPP instance with participating nodes, and every other instance participation below both', () => {
+    const participant = node('n-participant', 'unknown', { state: 'participating', show: 'halloween-2026', reason: null })
+    const items = attentionItems(
+      {
+        ...initialModel(),
+        nodes: [participant],
+        fpp: [
+          fpp('fpp-participant', 'unknown', { state: 'participating', show: 'halloween-2026', reason: null }),
+          fpp('fpp-not-participant', 'unknown', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+          fpp('fpp-unrecorded', 'unknown', { state: 'selection_unrecorded', show: 'halloween-2026', reason: 'never recorded' }),
+          fpp('fpp-unknown', 'unknown', { state: 'unknown', show: '', reason: 'store error' }),
+          fpp('fpp-absent', 'unknown', undefined),
+        ],
+      },
+      null,
+    )
+    expect(items.map((item) => item.key)).toEqual([
+      'node:n-participant',
+      'fpp:fpp-participant',
+      'fpp:fpp-not-participant',
+      'fpp:fpp-unrecorded',
+      'fpp:fpp-unknown',
+      'fpp:fpp-absent',
+    ])
+  })
 })
 
 describe('participationLabel', () => {
   it('renders the coordinator’s own word, spaced, for each reported state', () => {
     expect(participationLabel('participating')).toBe('participating')
     expect(participationLabel('not_participating')).toBe('not participating')
+    expect(participationLabel('selection_unrecorded')).toBe('selection unrecorded')
     expect(participationLabel('unknown')).toBe('unknown')
     expect(participationLabel('not_configured')).toBe('not configured')
   })

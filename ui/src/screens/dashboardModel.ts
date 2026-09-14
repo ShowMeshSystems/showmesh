@@ -4,10 +4,11 @@ import { countSignals, type SignalCounts } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 
 /**
- * showParticipation.state, plus "absent" for an older coordinator that
- * never sent the field: a fifth value, never folded into "unknown".
+ * The union of NodeShowParticipation's and InstanceShowParticipation's state
+ * vocabularies, plus "absent" for an older coordinator that never sent the
+ * field at all: rendered directly, never inferred and never folded.
  */
-export type ParticipationState = Node['showParticipation']['state'] | 'absent'
+export type ParticipationState = Node['showParticipation']['state'] | FPPInstance['showParticipation']['state'] | 'absent'
 
 export type AttentionItem = {
   key: string
@@ -22,21 +23,12 @@ export type AttentionItem = {
   hideable: boolean
 }
 
-function participationOf(showParticipation: Node['showParticipation'] | undefined): ParticipationState {
+function participationOf(
+  showParticipation: Node['showParticipation'] | FPPInstance['showParticipation'] | undefined,
+): ParticipationState {
   // The optional chain stays even though the schema marks the field required:
   // an older coordinator serving a newer UI never sends it at all.
   return showParticipation?.state ?? 'absent'
-}
-
-/**
- * "selection_unrecorded" is the one state InstanceShowParticipation adds
- * over Node's vocabulary; the API's own contract treats it as taking part,
- * so this folds it into "participating" rather than exposing a sixth value.
- */
-function instanceParticipationOf(showParticipation: FPPInstance['showParticipation'] | undefined): ParticipationState {
-  if (showParticipation === undefined) return 'absent'
-  if (showParticipation.state === 'selection_unrecorded') return 'participating'
-  return showParticipation.state
 }
 
 /** The coordinator's own participation word, exactly as reported; absent says nothing. */
@@ -94,7 +86,7 @@ export function fppAttention(instances: readonly FPPInstance[]): AttentionItem[]
   const items: AttentionItem[] = []
   for (const instance of instances) {
     const to = `/monitor/fleet/fpp/${instance.instanceId}`
-    const participation = instanceParticipationOf(instance.showParticipation)
+    const participation = participationOf(instance.showParticipation)
     const tone = HEALTH_TONE[instance.health]
     if (tone !== undefined) {
       items.push({
@@ -140,7 +132,7 @@ export function resolumeAttention(instances: readonly ResolumeInstance[]): Atten
       fact: `is reporting ${instance.health}`,
       to: '/monitor/fleet/resolume',
       detail: 'This is what Arena reports about itself, not a ShowMesh-side verdict.',
-      participation: instanceParticipationOf(instance.showParticipation),
+      participation: participationOf(instance.showParticipation),
       hideable: true,
     })
   }

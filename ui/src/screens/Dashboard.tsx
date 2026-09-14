@@ -32,6 +32,7 @@ import {
 const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
   participating: "Participating in tonight's show.",
   not_participating: "Not participating in tonight's show.",
+  selection_unrecorded: "No selection recorded for tonight's show.",
   unknown: 'Participation unknown.',
   not_configured: 'No active show.',
 }
@@ -150,13 +151,20 @@ export function Dashboard() {
           ) : undefined
         }
       >
-        {rendered.length === 0 ? (
+        {rendered.length === 0 && items.length === 0 ? (
           <BlankingPlate headingLevel={3}
             absence="empty"
             stamp="Clear"
             eyebrow="Attention · empty"
             title="Nothing needs you"
             detail="No failed, held, or unknown conditions are reported. That is not proof the show looks right, only that nothing has asked for you."
+          />
+        ) : rendered.length === 0 ? (
+          <RuledStrip
+            absence="empty"
+            label="Hidden"
+            fact={`${items.length} ${items.length === 1 ? 'item concerns' : 'items concern'} an instance the active show did not select.`}
+            detail={<>Turn on <code className="sm-data">Show unselected instances</code> above to see them.</>}
           />
         ) : (
           <div className="sm-dashboard__attention">

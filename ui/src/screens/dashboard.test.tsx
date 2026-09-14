@@ -188,6 +188,20 @@ describe('Dashboard', () => {
     expect(screen.getByText('3 items')).toBeInTheDocument()
   })
 
+  it('never shows the all-clear plate when every attention item is hidden by the filter', () => {
+    renderDashboard({
+      fpp: [
+        fpp('fpp-unselected', 'failed', false, { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    expect(screen.queryByText('Nothing needs you')).not.toBeInTheDocument()
+    expect(screen.queryByText(/not proof the show looks right/)).not.toBeInTheDocument()
+    expect(screen.getByText('1 item')).toBeInTheDocument()
+    expect(screen.queryByText('fpp-unselected')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Show unselected instances'))
+    expect(screen.getByText('fpp-unselected')).toBeInTheDocument()
+  })
+
   it('renders every instance, unfiltered, for an older-coordinator payload without participation', () => {
     renderDashboard({
       fpp: [fpp('fpp-1', 'failed'), fpp('fpp-2', 'degraded')],
