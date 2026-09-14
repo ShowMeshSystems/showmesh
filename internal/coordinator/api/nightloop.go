@@ -636,18 +636,27 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// [handlers.nightShowLaunchIfBusy]'s own doc comment for why that is
 	// safe only because replace is granted solely on positive identity.
 	ifBusy, staleEvidenceReason := h.nightShowLaunchIfBusy(ctx, now, payload)
+	if staleEvidenceReason != "" {
+		// This coordinator's own bookkeeping, not FPP, is why launch
+		// would refuse: nudging the REST collector for an immediate poll
+		// and re-deciding next tick reaches fresh evidence far sooner
+		// than dispatching into a refusal and waiting out
+		// nightDispatchRetryBackoff would. No anchor is created here, so
+		// this tick never counts as an attempt - the moment evidence is
+		// current and fresh (from this nudge, the collector's own
+		// cadence, or a push source), the very next tick decides again
+		// from scratch. NudgePoll is rate-limited and safe to call every
+		// tick this stays stale (see [FPPPollNudger]); its return value
+		// is not consulted, matching every other caller.
+		h.deps.Nudger.NudgePoll(payload.ShowPlaylist.FPPInstanceID)
+		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: staleEvidenceReason})
+		return
+	}
 	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeShow, payload.ShowPlaylist.FPPInstanceID, payload.ShowPlaylist.Playlist, false, 0, ifBusy)
 	if !changed {
 		return
 	}
 	if !ready {
-		// anchor.Source carries the primitive's own refusal detail; when
-		// this coordinator's own stale evidence is why ifBusy was refuse
-		// at all, that is prepended so the record does not read as FPP
-		// having refused a busy host it was never actually asked about.
-		if staleEvidenceReason != "" {
-			anchor.Source = staleEvidenceReason + ". " + anchor.Source
-		}
 		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: anchor.Source})
 		return
 	}
