@@ -589,14 +589,6 @@ func (b *branch) queryPosition() time.Duration {
 	return time.Duration(ns)
 }
 
-// renderedPosition returns renderedPos, the start of the last buffer
-// actually seen at volume's sink pad. See alignment.go for its caller.
-func (b *branch) renderedPosition() time.Duration {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.renderedPos
-}
-
 // renderedEndPosition returns renderedPos+renderedDur: where the last
 // rendered buffer actually ends, not merely where it starts. Freezing at
 // the start replays that buffer on Resume; Pause uses this instead.
@@ -606,10 +598,8 @@ func (b *branch) renderedEndPosition() time.Duration {
 	return b.renderedPos + b.renderedDur
 }
 
-// heldPosition returns heldPTS, the PTS of the buffer most recently
-// captured at the hold on queue's own src pad. See heldPTS's own doc
-// comment for why this is race-free to call once prepare has confirmed
-// a post-seek buffer reached the hold.
+// heldPosition returns heldPTS. See heldPTS's own doc comment for why
+// this is race-free once prepare confirms a post-seek buffer is held.
 func (b *branch) heldPosition() time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
