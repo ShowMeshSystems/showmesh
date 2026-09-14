@@ -124,17 +124,31 @@ func (f firstCycleFixture) state(t *testing.T) store.NightSessionRecord {
 	return mustGetCurrentSession(t, f.st)
 }
 
+// countEventsByCategory lists every recorded event and counts how many
+// carry category.
+func countEventsByCategory(t *testing.T, st *store.Store, category string) int {
+	t.Helper()
+	events, _, err := st.ListEvents(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	n := 0
+	for _, ev := range events {
+		if ev.Category == category {
+			n++
+		}
+	}
+	return n
+}
+
 // TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidence
 // checks whether ordinary FPP poll cadence alone - fpp.DefaultPollInterval
 // is 15s, nightShowLaunchEvidenceMaxAge is 5s - trips the stale-evidence
 // path documented for later cycles, with no enterShow lead configured at
-// all. Nothing here proves this is unique to the first cycle: the
-// mechanism is ordinary poll-cadence timing, and nothing in this code
-// makes a later cycle immune to the same race. Per the owner's ruling,
-// this must never dispatch into a refusal and wait out
+// all. This must nudge once and launch on the tick fresh evidence lands,
+// well inside nightShowLaunchStaleNudgeWindow, never waiting out
 // nightDispatchRetryBackoff for evidence a nudge could fetch in one LAN
-// round trip: it nudges the REST collector and launches on the very next
-// tick once fresh evidence lands.
+// round trip.
 func TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidence(t *testing.T) {
 	f := newFirstCycleFixture(t)
 	nudger := &recordingNudger{accept: true}
@@ -166,6 +180,9 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidenc
 	if got := nudger.callsFor("player-01"); got != 1 {
 		t.Fatalf("NudgePoll calls for player-01 = %d, want exactly 1", got)
 	}
+	if got := countEventsByCategory(t, f.st, nightEventCategoryStaleEvidenceRefusal); got != 1 {
+		t.Fatalf("stale-evidence-refusal events = %d, want exactly 1", got)
+	}
 	got := f.state(t)
 	if got.State != nightStateTransitionToShow {
 		t.Fatalf("state while stale = %q, want still %q", got.State, nightStateTransitionToShow)
@@ -178,8 +195,16 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidenc
 		t.Fatalf("transition reason = %q, want it to name the coordinator's own stale evidence, not just a busy refusal", transition.Reason)
 	}
 
-	// The nudged poll lands one tick later: launch must happen on THIS
-	// tick, nowhere near nightDispatchRetryBackoff (10s).
+	// A second tick, still well inside nightShowLaunchStaleNudgeWindow,
+	// must not nudge again.
+	f.advance(1 * time.Second)
+	f.tick()
+	if got := nudger.callsFor("player-01"); got != 1 {
+		t.Fatalf("NudgePoll calls for player-01 after a second stale tick = %d, want still exactly 1 (no repeat within the window)", got)
+	}
+
+	// The nudged poll lands: launch must happen on THIS tick, nowhere
+	// near nightDispatchRetryBackoff (10s).
 	f.advance(1 * time.Second)
 	f.obs.obs = []observation.Observation{
 		statusObservation("player-01", fppStatusValuePlaying, *f.now),
@@ -187,22 +212,26 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidenc
 	}
 	f.tick()
 	if got := f.state(t); got.State != nightStateLive {
-		t.Fatalf("state one tick after fresh evidence landed = %q, want %q", got.State, nightStateLive)
+		t.Fatalf("state once fresh evidence landed = %q, want %q", got.State, nightStateLive)
 	}
 	if n := strings.Count(f.logBuf.String(), "startPlaylist did not launch on this attempt"); n != 0 {
 		t.Fatalf("log line count over the whole run = %d, want 0 (never dispatched into a refusal)", n)
+	}
+	// 2, not 1: the stale-evidence episode's own nudge, plus the
+	// pre-existing, unrelated post-dispatch confirmation nudge every
+	// successful dispatch already issues (fppcommand_dispatch.go).
+	if got := nudger.callsFor("player-01"); got != 2 {
+		t.Fatalf("NudgePoll calls for player-01 over the whole run = %d, want exactly 2", got)
 	}
 }
 
 // TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBackoff
 // is the required fallback: a nudge that never produces fresh evidence
 // (FPP unreachable, or its poll otherwise fails) must not wedge the
-// launch decision forever. Once the stale evidence ages past its own
-// currency window (the fake fpp.playlist.name/fpp.status observations'
-// ValidFor, 1 minute here), nightShowLaunchIfBusy's ordinary
-// not-current handling takes over and this coordinator falls back to the
-// existing dispatch-and-backoff path, which still applies and records
-// its own reason exactly as it did before this change.
+// launch decision forever, and must not repeat the nudge on every tick
+// while it waits. Once nightShowLaunchStaleNudgeWindow elapses with
+// evidence still stale, the existing dispatch-and-backoff path takes over
+// exactly as it did before this change.
 func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBackoff(t *testing.T) {
 	f := newFirstCycleFixture(t)
 	nudger := &recordingNudger{accept: false}
@@ -218,9 +247,8 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 	beforeArgs := len(f.host.sent())
 
 	// The nudge never refreshes the store (simulating an unreachable
-	// host): several ticks pass, evidence stays stale but still current,
-	// nothing hot-loops past one nudge call per tick, and nothing
-	// dispatches.
+	// host): several ticks pass while still inside the window, one nudge
+	// only, nothing dispatches.
 	for i := 0; i < 3; i++ {
 		f.tick()
 		f.advance(1 * time.Second)
@@ -228,8 +256,11 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 	if got := len(f.host.sent()); got != beforeArgs {
 		t.Fatalf("Start Playlist reached FPP while nudging was unproductive = %d commands, want none", got-beforeArgs)
 	}
-	if got := nudger.totalCalls(); got != 3 {
-		t.Fatalf("NudgePoll calls while stale = %d, want exactly 3 (one per tick, no hot-loop)", got)
+	if got := nudger.totalCalls(); got != 1 {
+		t.Fatalf("NudgePoll calls while stale = %d, want exactly 1 (one per episode, not one per tick)", got)
+	}
+	if got := countEventsByCategory(t, f.st, nightEventCategoryStaleEvidenceRefusal); got != 1 {
+		t.Fatalf("stale-evidence-refusal events = %d, want exactly 1", got)
 	}
 	got := f.state(t)
 	transition := mapNightTransition(got)
@@ -237,18 +268,12 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 		t.Fatalf("transition reason while stale = %q, want it to keep naming the coordinator's own stale evidence", transition.Reason)
 	}
 
-	// Evidence now ages past its own currency window entirely: this is
-	// no longer "stale but current", so the normal dispatch-and-backoff
-	// path takes over, refuses once (FPP itself, not this coordinator's
-	// bookkeeping, since evidence is not current at all), and starts the
-	// unchanged nightDispatchRetryBackoff. Advanced in small steps - each
-	// safely under nightClockForwardJumpTolerance (30s) - so this does not
-	// trip the loop's own clock-discontinuity resync, which a single
-	// one-minute jump would.
-	for f.now.Sub(pollAt) <= time.Minute {
-		f.tick()
-		f.advance(5 * time.Second)
-	}
+	// nightShowLaunchStaleNudgeWindow elapses with evidence still stale
+	// (well inside its own 1-minute ValidFor): the ordinary refuse path
+	// takes over, dispatches once, and FPP itself refuses as busy - the
+	// persisted reason must still carry the original stale-evidence
+	// wording, not just the wire-level busy detail.
+	f.advance(nightShowLaunchStaleNudgeWindow)
 	f.tick()
 	if got := len(f.host.sent()); got != beforeArgs {
 		t.Fatalf("Start Playlist reached FPP on the fallback refusal = %d commands, want none (refused before the wire)", got-beforeArgs)
@@ -256,12 +281,22 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 	if n := strings.Count(f.logBuf.String(), "startPlaylist did not launch on this attempt"); n != 1 {
 		t.Fatalf("log line count after the fallback refusal = %d, want exactly 1: %s", n, f.logBuf.String())
 	}
+	if got := countEventsByCategory(t, f.st, nightEventCategoryStaleEvidenceUnproductive); got != 1 {
+		t.Fatalf("stale-evidence-nudge-unproductive events = %d, want exactly 1", got)
+	}
+	fallbackTransition := mapNightTransition(f.state(t))
+	if !strings.Contains(fallbackTransition.Reason, "coordinator's own evidence") {
+		t.Fatalf("transition reason after the fallback refusal = %q, want it to still name the coordinator's own stale evidence", fallbackTransition.Reason)
+	}
 
-	// Still inside the backoff window: silence, no retry.
+	// Still inside the backoff window: silence, no retry, no repeat nudge.
 	f.advance(3 * time.Second)
 	f.tick()
 	if n := strings.Count(f.logBuf.String(), "startPlaylist did not launch on this attempt"); n != 1 {
 		t.Fatalf("log line count mid-backoff = %d, want still 1: %s", n, f.logBuf.String())
+	}
+	if got := nudger.totalCalls(); got != 1 {
+		t.Fatalf("NudgePoll calls mid-backoff = %d, want still exactly 1", got)
 	}
 
 	// The backoff elapses and fresh evidence has landed: the retry lands.
@@ -273,6 +308,51 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 	f.tick()
 	if got := f.state(t); got.State != nightStateLive {
 		t.Fatalf("state once the backoff elapsed and evidence refreshed = %q, want %q", got.State, nightStateLive)
+	}
+}
+
+// TestFullNight_FirstCycleDispatchedShowAnchorSkipsStaleNudge covers a show
+// anchor already dispatched and awaiting confirmation (a replace already
+// sent to FPP): the stale-evidence nudge must never run here, even when
+// the resting-playlist evidence nightShowLaunchIfBusy reads independently
+// is itself stale - nightEnsureAnchor's own observation-polling path for
+// the ALREADY-DISPATCHED show playlist owns this decision, unchanged.
+func TestFullNight_FirstCycleDispatchedShowAnchorSkipsStaleNudge(t *testing.T) {
+	f := newFirstCycleFixture(t)
+	nudger := &recordingNudger{accept: true}
+	f.h.deps.Nudger = nudger
+
+	pollAt := f.now.Add(-8 * time.Second)
+	f.obs.obs = []observation.Observation{
+		statusObservation("player-01", fppStatusValuePlaying, pollAt),
+		playlistNameObservation("player-01", "halloween-resting", pollAt),
+	}
+	mustNightCommand(t, f.api, f.opTok, "start-night")
+
+	dispatchedAt := *f.now
+	anchor := nightContentAnchor{
+		Purpose: nightAnchorPurposeShow, FPPInstanceID: "player-01", Playlist: "halloween-show",
+		DispatchedAt: dispatchedAt,
+	}
+	rec := f.state(t)
+	rec.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+	if err := f.st.UpdateNightSession(context.Background(), rec, *f.now); err != nil {
+		t.Fatalf("seed dispatched show anchor: %v", err)
+	}
+
+	before := f.state(t)
+	f.tick()
+
+	if got := nudger.totalCalls(); got != 0 {
+		t.Fatalf("NudgePoll calls with a show anchor already dispatched = %d, want 0", got)
+	}
+	if got := countEventsByCategory(t, f.st, nightEventCategoryStaleEvidenceRefusal); got != 0 {
+		t.Fatalf("stale-evidence-refusal events with a show anchor already dispatched = %d, want 0", got)
+	}
+	after := f.state(t)
+	if after.ContentAnchorJSON != before.ContentAnchorJSON || after.BoundaryJSON != before.BoundaryJSON {
+		t.Fatalf("session record changed while awaiting confirmation of an already-dispatched anchor: before anchor=%s boundary=%s; after anchor=%s boundary=%s",
+			before.ContentAnchorJSON, before.BoundaryJSON, after.ContentAnchorJSON, after.BoundaryJSON)
 	}
 }
 
@@ -298,5 +378,53 @@ func TestFullNight_FirstCycleFreshRestingEvidenceLaunchesImmediately(t *testing.
 	}
 	if got := f.state(t); got.State != nightStateLive {
 		t.Fatalf("state with fresh evidence = %q, want %q on the very first tick", got.State, nightStateLive)
+	}
+}
+
+// TestFullNight_FirstCycleMixedSourcePluginStaleButCurrentNudgesOnceThenFallsBack
+// is the mixed-source case: the only evidence for the resting playlist
+// comes from fpp-plugin (REST is unreachable, so it has recorded nothing),
+// and that plugin row is itself older than nightShowLaunchEvidenceMaxAge
+// but still within its own 45s ValidFor. This must still nudge the REST
+// collector exactly once - a fresher REST poll could still outrank the
+// aging plugin claim on recency - and, since REST stays unreachable and
+// nothing fresher ever arrives, fall back to the ordinary backoff path
+// once nightShowLaunchStaleNudgeWindow elapses, exactly like a REST-only
+// host.
+func TestFullNight_FirstCycleMixedSourcePluginStaleButCurrentNudgesOnceThenFallsBack(t *testing.T) {
+	f := newFirstCycleFixture(t)
+	nudger := &recordingNudger{accept: false}
+	f.h.deps.Nudger = nudger
+
+	pluginAt := f.now.Add(-14 * time.Second)
+	f.obs.obs = []observation.Observation{
+		pluginStatusObservation("player-01", fppStatusValuePlaying, pluginAt),
+		pluginPlaylistNameObservation("player-01", "halloween-resting", pluginAt),
+	}
+
+	mustNightCommand(t, f.api, f.opTok, "start-night")
+	beforeArgs := len(f.host.sent())
+
+	for i := 0; i < 3; i++ {
+		f.tick()
+		f.advance(1 * time.Second)
+	}
+	if got := nudger.totalCalls(); got != 1 {
+		t.Fatalf("NudgePoll calls with a stale-but-current plugin row and unreachable REST = %d, want exactly 1", got)
+	}
+	if got := len(f.host.sent()); got != beforeArgs {
+		t.Fatalf("Start Playlist reached FPP while nudging was unproductive = %d commands, want none", got-beforeArgs)
+	}
+
+	f.advance(nightShowLaunchStaleNudgeWindow)
+	f.tick()
+	if got := len(f.host.sent()); got != beforeArgs {
+		t.Fatalf("Start Playlist reached FPP on the fallback refusal = %d commands, want none (refused before the wire)", got-beforeArgs)
+	}
+	if n := strings.Count(f.logBuf.String(), "startPlaylist did not launch on this attempt"); n != 1 {
+		t.Fatalf("log line count after the fallback refusal = %d, want exactly 1: %s", n, f.logBuf.String())
+	}
+	if got := nudger.totalCalls(); got != 1 {
+		t.Fatalf("NudgePoll calls after the fallback = %d, want still exactly 1", got)
 	}
 }

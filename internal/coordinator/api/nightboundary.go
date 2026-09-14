@@ -90,6 +90,11 @@ type nightBoundary struct {
 	ExpectedAt *time.Time `json:"expectedAt,omitempty"`
 	LastTickAt *time.Time `json:"lastTickAt,omitempty"`
 	Kind       string     `json:"kind,omitempty"`
+	// StaleNudgedAt marks when nightAdvanceTransitionToShow's own
+	// stale-evidence episode issued its one nudge; nil before a nudge, or
+	// once the episode ends (a fresh boundary write never carries it
+	// forward). See nightShowLaunchStaleNudgeWindow.
+	StaleNudgedAt *time.Time `json:"staleNudgedAt,omitempty"`
 }
 
 const (

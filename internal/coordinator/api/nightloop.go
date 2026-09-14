@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -11,6 +12,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Track F seam F3: the event-driven driver that advances a night session
@@ -299,6 +301,44 @@ func (h *handlers) nightCommitBoundary(ctx context.Context, now time.Time, rec s
 		cur.BoundaryJSON = encodeNightBoundary(boundary)
 		return cur
 	})
+}
+
+// nightCommitWithEvent is [handlers.nightCommit] plus one [store.EventRecord]
+// appended in the same transaction, so a durable event and the state it
+// describes always land together or not at all.
+func (h *handlers) nightCommitWithEvent(ctx context.Context, now time.Time, sessionID, expectState string, mutate func(store.NightSessionRecord) store.NightSessionRecord, ev store.EventRecord) {
+	err := h.deps.NightSessions.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+		cur, ok, err := tx.GetCurrentNightSession(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok || cur.ID != sessionID || cur.State != expectState {
+			return nil
+		}
+		if err := tx.UpdateNightSession(ctx, mutate(cur), now); err != nil {
+			return err
+		}
+		_, err = tx.AppendEvent(ctx, ev)
+		return err
+	})
+	if err != nil {
+		h.logWarn("night loop: failed to persist night session state and event", "sessionId", sessionID, "error", err)
+	}
+}
+
+func (h *handlers) nightCommitBoundaryAndEvent(ctx context.Context, now time.Time, rec store.NightSessionRecord, boundary nightBoundary, ev store.EventRecord) {
+	h.nightCommitWithEvent(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.BoundaryJSON = encodeNightBoundary(boundary)
+		return cur
+	}, ev)
+}
+
+func (h *handlers) nightCommitAnchorAndEvent(ctx context.Context, now time.Time, rec store.NightSessionRecord, anchor nightContentAnchor, boundary nightBoundary, ev store.EventRecord) {
+	h.nightCommitWithEvent(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
+		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
+		cur.BoundaryJSON = encodeNightBoundary(boundary)
+		return cur
+	}, ev)
 }
 
 // nightAdvancePreshow runs the resting playlist in repeat mode: preshow's
@@ -636,27 +676,51 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// [handlers.nightShowLaunchIfBusy]'s own doc comment for why that is
 	// safe only because replace is granted solely on positive identity.
 	ifBusy, staleEvidenceReason := h.nightShowLaunchIfBusy(ctx, now, payload)
-	if staleEvidenceReason != "" {
-		// This coordinator's own bookkeeping, not FPP, is why launch
-		// would refuse: nudging the REST collector for an immediate poll
-		// and re-deciding next tick reaches fresh evidence far sooner
-		// than dispatching into a refusal and waiting out
-		// nightDispatchRetryBackoff would. No anchor is created here, so
-		// this tick never counts as an attempt - the moment evidence is
-		// current and fresh (from this nudge, the collector's own
-		// cadence, or a push source), the very next tick decides again
-		// from scratch. NudgePoll is rate-limited and safe to call every
-		// tick this stays stale (see [FPPPollNudger]); its return value
-		// is not consulted, matching every other caller.
-		h.deps.Nudger.NudgePoll(payload.ShowPlaylist.FPPInstanceID)
-		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: staleEvidenceReason})
-		return
+	instanceID := payload.ShowPlaylist.FPPInstanceID
+
+	// An anchor already in flight for this purpose/playlist owns its own
+	// progression (confirmation or backoff); the stale-evidence nudge below
+	// applies only to a fresh decision with nothing yet dispatched.
+	existingAnchor, hasExistingAnchor := decodeNightContentAnchor(rec.ContentAnchorJSON)
+	anchorInFlight := hasExistingAnchor && existingAnchor.Purpose == nightAnchorPurposeShow && existingAnchor.Playlist == payload.ShowPlaylist.Playlist
+
+	fellBackFromStaleNudge := false
+	if staleEvidenceReason != "" && !anchorInFlight {
+		switch {
+		case b.StaleNudgedAt == nil:
+			// First tick of a stale-evidence episode: nudge once and wait.
+			h.deps.Nudger.NudgePoll(instanceID)
+			nudgedAt := now
+			h.nightRecordStaleEvidenceNudge(ctx, now, rec, boundaryE, lastTick, nudgedAt, staleEvidenceReason, instanceID, payload.ShowPlaylist.Playlist)
+			return
+		case now.Sub(*b.StaleNudgedAt) < nightShowLaunchStaleNudgeWindow:
+			// Already nudged this episode; keep waiting, no second nudge.
+			h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, StaleNudgedAt: b.StaleNudgedAt, Reason: staleEvidenceReason})
+			return
+		default:
+			// The window elapsed with evidence still stale: fall through
+			// to the ordinary refuse-and-backoff path below.
+			fellBackFromStaleNudge = true
+		}
 	}
-	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeShow, payload.ShowPlaylist.FPPInstanceID, payload.ShowPlaylist.Playlist, false, 0, ifBusy)
+	anchor, ready, changed := h.nightEnsureAnchor(ctx, now, rec, nightAnchorPurposeShow, instanceID, payload.ShowPlaylist.Playlist, false, 0, ifBusy)
 	if !changed {
 		return
 	}
 	if !ready {
+		// anchor.Source carries the primitive's own refusal detail; when
+		// this coordinator's own stale evidence is why ifBusy was refuse
+		// at all, that is prepended so mapNightTransition (which reads
+		// anchor.Source ahead of the boundary's own Reason for an
+		// unconfirmed anchor) never reads as FPP having refused a busy
+		// host it was never actually asked about.
+		if staleEvidenceReason != "" {
+			anchor.Source = staleEvidenceReason + ". " + anchor.Source
+		}
+		if fellBackFromStaleNudge {
+			h.nightRecordStaleEvidenceNudgeUnproductive(ctx, now, rec, anchor, boundaryE, lastTick, instanceID)
+			return
+		}
 		h.nightCommitAnchor(ctx, now, rec, anchor, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: anchor.Source})
 		return
 	}
@@ -668,6 +732,63 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		cur.BoundaryJSON = ""
 		return cur
 	})
+}
+
+// nightShowLaunchStaleNudgeWindow bounds one stale-evidence episode's wait
+// after its one nudge: collector.DefaultNudgeMinInterval (2s, the nudge's
+// own floor) plus fpp.DefaultRequestTimeout (5s, one REST poll's own
+// per-request bound) - neither package is imported here (see
+// [FPPPollNudger]'s own doc comment for why), so both are cited by value.
+const nightShowLaunchStaleNudgeWindow = 2*time.Second + 5*time.Second
+
+const (
+	nightEventCategoryStaleEvidenceRefusal      = "night.launch.stale_evidence_refusal"
+	nightEventCategoryStaleEvidenceUnproductive = "night.launch.stale_evidence_nudge_unproductive"
+)
+
+// nightRecordStaleEvidenceNudge persists the one nudge a stale-evidence
+// episode issues, an event row naming the reason and evidence age, and the
+// armed boundary, all in one transaction. Called exactly once per episode,
+// on the tick [nightBoundary.StaleNudgedAt] is first set.
+func (h *handlers) nightRecordStaleEvidenceNudge(ctx context.Context, now time.Time, rec store.NightSessionRecord, boundaryE, lastTick, nudgedAt time.Time, reason, instanceID, playlist string) {
+	age := time.Duration(0)
+	if collectedAt, ok := nightResolveCollectedAt(ctx, h.deps.Observations, instanceID, fppPlaylistNameSignal, time.Time{}, now); ok {
+		age = now.Sub(collectedAt)
+	}
+	details, _ := json.Marshal(map[string]any{
+		"sessionId": rec.ID, "instanceId": instanceID, "playlist": playlist,
+		"ageSeconds": age.Seconds(), "nudgeRequested": true,
+	})
+	ev := store.EventRecord{
+		Source:   "night-loop",
+		Resource: observation.ResourceRef{Kind: observation.ResourceFPP, ID: instanceID},
+		Category: nightEventCategoryStaleEvidenceRefusal, Severity: "warning",
+		Summary: reason, Details: details, OccurredAt: &now,
+	}
+	h.nightCommitBoundaryAndEvent(ctx, now, rec, nightBoundary{
+		State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick,
+		StaleNudgedAt: &nudgedAt, Reason: reason,
+	}, ev)
+}
+
+// nightRecordStaleEvidenceNudgeUnproductive persists the fallback anchor
+// and boundary plus an event row, once per episode: the nudge window
+// elapsed with evidence still stale, and the ensuing ordinary dispatch
+// attempt (ifBusy=refuse, at [instanceID]) was itself refused.
+func (h *handlers) nightRecordStaleEvidenceNudgeUnproductive(ctx context.Context, now time.Time, rec store.NightSessionRecord, anchor nightContentAnchor, boundaryE, lastTick time.Time, instanceID string) {
+	details, _ := json.Marshal(map[string]any{
+		"sessionId": rec.ID, "instanceId": instanceID, "windowSeconds": nightShowLaunchStaleNudgeWindow.Seconds(),
+	})
+	ev := store.EventRecord{
+		Source:   "night-loop",
+		Resource: observation.ResourceRef{Kind: observation.ResourceFPP, ID: instanceID},
+		Category: nightEventCategoryStaleEvidenceUnproductive, Severity: "warning",
+		Summary: fmt.Sprintf("nudging the FPP REST collector for instance %q did not produce fresh evidence within %s; falling back to the ordinary refuse-and-backoff path", instanceID, nightShowLaunchStaleNudgeWindow),
+		Details: details, OccurredAt: &now,
+	}
+	h.nightCommitAnchorAndEvent(ctx, now, rec, anchor, nightBoundary{
+		State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: anchor.Source,
+	}, ev)
 }
 
 // nightShowLaunchEvidenceMaxAge is deliberately far tighter than
