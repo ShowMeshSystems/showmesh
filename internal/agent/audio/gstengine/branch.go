@@ -67,14 +67,9 @@ type branch struct {
 	// post-seek buffer apart from one already parked before the seek.
 	heldSeq atomic.Uint64
 
-	// heldPTS is the PTS of the most recent buffer the hold probe has
-	// captured, at queue's own src pad: the exact point a branch's
-	// contribution to the mix is measured at (see countQueueSrcBuffers in
-	// pauseflow_real_integration_test.go). Guarded by mu. Read only after
-	// awaitHeldOrEOS confirms heldSeq has advanced past a snapshot taken
-	// before seeking, which is what makes reading it race-free: the
-	// streaming thread that set it is parked at the hold until join
-	// releases it, well after prepare returns.
+	// heldPTS is the PTS of the buffer the hold probe most recently
+	// captured, at queue's own src pad. Guarded by mu; race-free to read
+	// once awaitHeldOrEOS confirms heldSeq advanced past a pre-seek snapshot.
 	heldPTS time.Duration
 
 	// joined is true once join has linked this branch to the mixer.
@@ -95,12 +90,20 @@ type branch struct {
 	frozen   bool // true when Position must come from frozenAt, not a live query
 	frozenAt time.Duration
 
-	// renderedPos is the PTS of the last buffer actually seen at volume's
-	// own sink pad, kept current for the branch's whole lifetime by the
-	// probe build installs. Pause freezes at this rather than at
-	// queryPosition's live result, which resolves upstream toward the
-	// source and over-reports by however far decode is running ahead.
+	// renderedPos is the start PTS of the last buffer actually seen at
+	// volume's own sink pad. See alignment.go for its own use of the raw
+	// field; Pause uses renderedEndPosition instead (see its doc comment).
 	renderedPos time.Duration
+	// renderedDur is that same buffer's own duration, kept alongside
+	// renderedPos so renderedEndPosition can report where it actually ends.
+	renderedDur time.Duration
+
+	// resyncAt is the wall-clock instant resyncMixerPads last anchored this
+	// branch's offset to the aggregator's "now". Guarded by mu.
+	resyncAt time.Time
+	// firstMixedAt is when this branch's own first buffer after that
+	// actually reached a mixer pad; see resumeGap. Guarded by mu.
+	firstMixedAt time.Time
 
 	// segmentStart is the branch position the current GStreamer segment
 	// began at: 0 until the first seek, then whatever position the most
@@ -342,12 +345,18 @@ func (b *branch) build(path string) error {
 		}
 	})
 
-	// Keep renderedPos current for Pause: see its own field comment for
-	// why this is more trustworthy than a live queryPosition call.
+	// Keep renderedPos/renderedDur current: see renderedEndPosition's doc
+	// comment for why Pause needs both, not a live queryPosition call.
 	b.volume.GetStaticPad("sink").AddProbe(gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		if buf := info.GetBuffer(); buf != nil {
+			dur := buf.Duration()
 			b.mu.Lock()
 			b.renderedPos = time.Duration(buf.PTS())
+			if dur != gst.ClockTimeNone {
+				b.renderedDur = time.Duration(dur)
+			} else {
+				b.renderedDur = 0
+			}
 			b.mu.Unlock()
 		}
 		return gst.PadProbeOK
@@ -580,12 +589,21 @@ func (b *branch) queryPosition() time.Duration {
 	return time.Duration(ns)
 }
 
-// renderedPosition returns renderedPos, the actually-rendered position
-// Pause freezes at instead of queryPosition's read-ahead result.
+// renderedPosition returns renderedPos, the start of the last buffer
+// actually seen at volume's sink pad. See alignment.go for its caller.
 func (b *branch) renderedPosition() time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.renderedPos
+}
+
+// renderedEndPosition returns renderedPos+renderedDur: where the last
+// rendered buffer actually ends, not merely where it starts. Freezing at
+// the start replays that buffer on Resume; Pause uses this instead.
+func (b *branch) renderedEndPosition() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.renderedPos + b.renderedDur
 }
 
 // heldPosition returns heldPTS, the PTS of the buffer most recently
@@ -630,12 +648,45 @@ func (b *branch) pipelineRunningTime() time.Duration {
 // GstAudioAggregator's past. join is the only caller, while held.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
 	offset := int64(b.pipelineRunningTime()) - b.localRunningTime(atPos).Nanoseconds()
+	b.mu.Lock()
+	b.resyncAt = time.Now()
+	b.firstMixedAt = time.Time{}
+	b.mu.Unlock()
 	// A pad offset is only reliable on a source pad, so this offsets deinterleave's src pads, not the mixer's sink pads.
 	for _, pad := range b.deinterleaveSrcPads {
 		if pad != nil {
 			pad.SetOffset(offset)
 		}
 	}
+}
+
+// armFirstMixedProbe records firstMixedAt, the wall-clock instant this
+// branch's audio actually starts reaching the mix. join calls it right
+// after resyncMixerPads, before its mixer pad can carry any buffer.
+func (b *branch) armFirstMixedProbe() {
+	if len(b.channelMixerPads) == 0 || b.channelMixerPads[0] == nil {
+		return
+	}
+	b.channelMixerPads[0].AddProbe(gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		b.mu.Lock()
+		if b.firstMixedAt.IsZero() {
+			b.firstMixedAt = time.Now()
+		}
+		b.mu.Unlock()
+		return gst.PadProbeRemove
+	})
+}
+
+// resumeGap reports wall-clock dispatch latency from resyncMixerPads to a
+// branch's first buffer reaching a mixer pad, or false before it fires.
+// Software dispatch time only, not the aggregator's stream-time gap.
+func (b *branch) resumeGap() (time.Duration, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.firstMixedAt.IsZero() {
+		return 0, false
+	}
+	return b.firstMixedAt.Sub(b.resyncAt), true
 }
 
 // prepare seeks to position, then waits, bounded only by ctx, for the
@@ -703,6 +754,7 @@ func (b *branch) join(atPos time.Duration, releaseHold bool) error {
 		b.channelMixerPads[k] = pad
 	}
 	b.resyncMixerPads(atPos)
+	b.armFirstMixedProbe()
 	for k := 0; k < n; k++ {
 		if b.deinterleaveSrcPads[k].Link(b.channelMixerPads[k]) != gst.PadLinkOK {
 			return fmt.Errorf("gstengine: could not link deinterleave output %d to its channel mixer during join", k)

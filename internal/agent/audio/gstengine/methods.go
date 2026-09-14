@@ -215,7 +215,7 @@ func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (age
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	pos := b.renderedPosition()
+	pos := b.renderedEndPosition()
 	b.blockFlow()
 	b.freezeAt(pos)
 	b.setState(pkgaudio.StatePaused)
