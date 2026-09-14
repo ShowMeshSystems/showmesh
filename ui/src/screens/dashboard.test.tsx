@@ -197,9 +197,22 @@ describe('Dashboard', () => {
     expect(screen.queryByText('Nothing needs you')).not.toBeInTheDocument()
     expect(screen.queryByText(/not proof the show looks right/)).not.toBeInTheDocument()
     expect(screen.getByText('1 item')).toBeInTheDocument()
+    expect(screen.getByText('1 item concerns an instance the active show did not select.')).toBeInTheDocument()
     expect(screen.queryByText('fpp-unselected')).not.toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Show unselected instances'))
     expect(screen.getByText('fpp-unselected')).toBeInTheDocument()
+  })
+
+  it('pluralizes the all-hidden summary correctly for more than one hidden item', () => {
+    renderDashboard({
+      fpp: [
+        fpp('fpp-unselected', 'failed', false, { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+      resolume: [
+        resolumeInstance('res-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    expect(screen.getByText('2 items concern instances the active show did not select.')).toBeInTheDocument()
   })
 
   it('renders every instance, unfiltered, for an older-coordinator payload without participation', () => {

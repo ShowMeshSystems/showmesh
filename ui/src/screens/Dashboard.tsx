@@ -163,7 +163,11 @@ export function Dashboard() {
           <RuledStrip
             absence="empty"
             label="Hidden"
-            fact={`${items.length} ${items.length === 1 ? 'item concerns' : 'items concern'} an instance the active show did not select.`}
+            fact={
+              items.length === 1
+                ? '1 item concerns an instance the active show did not select.'
+                : `${items.length} items concern instances the active show did not select.`
+            }
             detail={<>Turn on <code className="sm-data">Show unselected instances</code> above to see them.</>}
           />
         ) : (
