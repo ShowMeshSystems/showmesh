@@ -487,6 +487,7 @@ func (e *Engine) buildPipeline() error {
 	if err := linkInterleaveToSink(bin, interleave, sink, e.cfg.ChannelCount, positionBits); err != nil {
 		return err
 	}
+	dropLeakedQosEvents(interleave)
 
 	programSet := make(map[int]int, len(e.cfg.ProgramChannels)) // channel index -> position in ProgramChannels
 	for pos, ch := range e.cfg.ProgramChannels {
@@ -895,6 +896,35 @@ func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCoun
 		return errors.New("could not link interleave's format adaptation chain to sink")
 	}
 	return nil
+}
+
+// dropLeakedQosEvents frees the GST_EVENT_QOS the sink's qos=true posts
+// upstream on every render before it reaches interleave's own src-pad
+// event handler: that handler (gst-plugins-good's interleave.c, GStreamer
+// 1.26.2, "QoS might be tricky") refuses the event without ever calling
+// gst_event_unref on it, leaking one GstEvent per render indefinitely.
+// Dropping it here, on interleave's own pad, does not touch the sink's
+// bus-level QOS message, which watchBus's GlitchCounts.QosEvents already
+// counts independently and unaffected by this.
+func dropLeakedQosEvents(interleave gst.Element) {
+	interleave.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventUpstream,
+		func(pad gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+			ev := info.GetEvent()
+			if ev == nil {
+				return gst.PadProbeOK
+			}
+			// info.GetEvent() takes its own reference (go-gst's "transfer
+			// none" wrapper, released only when Go's GC finalizes it), so
+			// this probe must drop that reference itself rather than wait
+			// on GC, or every QOS event stays retained until a collection
+			// happens to run.
+			hasName := ev.HasName("GstEventQOS")
+			gst.UnsafeEventUnref(ev)
+			if hasName {
+				return gst.PadProbeDrop
+			}
+			return gst.PadProbeOK
+		})
 }
 
 // addMixerKeepAlive gives mixer one permanently connected silent sink pad,
