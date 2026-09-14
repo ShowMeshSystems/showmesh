@@ -8,20 +8,11 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// TestNightAdvanceTransitionToShow_LivePluginEvidenceNeverExtraNudges is
-// the last required case for the owner's stale-evidence nudge ruling: when
-// a push source (fpp-plugin here; fpp-mqtt is symmetric per
-// nightloop_mqtt_precedence_test.go) already supplies fresh, matching
-// evidence, nightShowLaunchIfBusy returns replace with an empty
-// staleEvidenceReason, so this coordinator's own stale-evidence nudge
-// (nightAdvanceTransitionToShow's own branch, distinct from the unrelated
-// post-dispatch confirmation nudge every successful dispatch already
-// issues - fppcommand_dispatch.go's own [FPPPollNudger] call) must never
-// fire: a nudge here would poke the REST collector, which has nothing to
-// fix and cannot affect a decision the plugin evidence already settled.
-// Exactly one nudge call is still expected - the pre-existing
-// post-dispatch one - proving this test isolates the NEW code path rather
-// than asserting no nudge ever happens for a launch.
+// TestNightAdvanceTransitionToShow_LivePluginEvidenceNeverExtraNudges: live
+// plugin evidence (fpp-mqtt is symmetric) makes nightShowLaunchIfBusy
+// return replace with an empty staleEvidenceReason, so the stale-evidence
+// nudge branch must never fire. The one nudge still seen is the unrelated,
+// pre-existing post-dispatch confirmation nudge every dispatch issues.
 func TestNightAdvanceTransitionToShow_LivePluginEvidenceNeverExtraNudges(t *testing.T) {
 	now0 := time.Date(2026, 10, 31, 20, 0, 0, 0, time.UTC)
 	restStaleAt := now0.Add(-14 * time.Second)

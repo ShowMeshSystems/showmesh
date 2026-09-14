@@ -141,14 +141,10 @@ func countEventsByCategory(t *testing.T, st *store.Store, category string) int {
 	return n
 }
 
-// TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidence
-// checks whether ordinary FPP poll cadence alone - fpp.DefaultPollInterval
-// is 15s, nightShowLaunchEvidenceMaxAge is 5s - trips the stale-evidence
-// path documented for later cycles, with no enterShow lead configured at
-// all. This must nudge once and launch on the tick fresh evidence lands,
-// well inside nightShowLaunchStaleNudgeWindow, never waiting out
-// nightDispatchRetryBackoff for evidence a nudge could fetch in one LAN
-// round trip.
+// TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidence:
+// ordinary poll cadence (15s) trips the stale-evidence path (5s window).
+// This must nudge once and launch the tick fresh evidence lands, well
+// inside nightShowLaunchStaleNudgeWindow, never waiting nightDispatchRetryBackoff.
 func TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidence(t *testing.T) {
 	f := newFirstCycleFixture(t)
 	nudger := &recordingNudger{accept: true}
@@ -225,13 +221,10 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgesAndLaunchesOnFreshEvidenc
 	}
 }
 
-// TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBackoff
-// is the required fallback: a nudge that never produces fresh evidence
-// (FPP unreachable, or its poll otherwise fails) must not wedge the
-// launch decision forever, and must not repeat the nudge on every tick
-// while it waits. Once nightShowLaunchStaleNudgeWindow elapses with
-// evidence still stale, the existing dispatch-and-backoff path takes over
-// exactly as it did before this change.
+// TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBackoff:
+// a nudge that never produces fresh evidence must not repeat every tick or
+// wedge the launch forever. Once nightShowLaunchStaleNudgeWindow elapses,
+// the existing dispatch-and-backoff path takes over unchanged.
 func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBackoff(t *testing.T) {
 	f := newFirstCycleFixture(t)
 	nudger := &recordingNudger{accept: false}
@@ -311,12 +304,10 @@ func TestFullNight_FirstCycleStaleRestingEvidenceNudgeUnproductiveFallsBackToBac
 	}
 }
 
-// TestFullNight_FirstCycleDispatchedShowAnchorSkipsStaleNudge covers a show
-// anchor already dispatched and awaiting confirmation (a replace already
-// sent to FPP): the stale-evidence nudge must never run here, even when
-// the resting-playlist evidence nightShowLaunchIfBusy reads independently
-// is itself stale - nightEnsureAnchor's own observation-polling path for
-// the ALREADY-DISPATCHED show playlist owns this decision, unchanged.
+// TestFullNight_FirstCycleDispatchedShowAnchorSkipsStaleNudge: a show
+// anchor already dispatched, awaiting confirmation, must never take the
+// stale-evidence nudge branch - nightEnsureAnchor's own observation-polling
+// path for that anchor owns this decision, unchanged.
 func TestFullNight_FirstCycleDispatchedShowAnchorSkipsStaleNudge(t *testing.T) {
 	f := newFirstCycleFixture(t)
 	nudger := &recordingNudger{accept: true}
@@ -381,16 +372,10 @@ func TestFullNight_FirstCycleFreshRestingEvidenceLaunchesImmediately(t *testing.
 	}
 }
 
-// TestFullNight_FirstCycleMixedSourcePluginStaleButCurrentNudgesOnceThenFallsBack
-// is the mixed-source case: the only evidence for the resting playlist
-// comes from fpp-plugin (REST is unreachable, so it has recorded nothing),
-// and that plugin row is itself older than nightShowLaunchEvidenceMaxAge
-// but still within its own 45s ValidFor. This must still nudge the REST
-// collector exactly once - a fresher REST poll could still outrank the
-// aging plugin claim on recency - and, since REST stays unreachable and
-// nothing fresher ever arrives, fall back to the ordinary backoff path
-// once nightShowLaunchStaleNudgeWindow elapses, exactly like a REST-only
-// host.
+// TestFullNight_FirstCycleMixedSourcePluginStaleButCurrentNudgesOnceThenFallsBack:
+// only evidence is a stale-but-current fpp-plugin row (REST unreachable).
+// A fresher REST poll could still outrank it, so this nudges once, then
+// falls back once nightShowLaunchStaleNudgeWindow elapses, like REST-only.
 func TestFullNight_FirstCycleMixedSourcePluginStaleButCurrentNudgesOnceThenFallsBack(t *testing.T) {
 	f := newFirstCycleFixture(t)
 	nudger := &recordingNudger{accept: false}
