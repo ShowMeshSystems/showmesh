@@ -36,6 +36,68 @@ func countQueueSrcBuffers(t *testing.T, e *Engine, handle string) func() int64 {
 	return n.Load
 }
 
+// queueSrcSample is one buffer's start PTS and duration as seen at a
+// branch's queue src pad, the point countQueueSrcBuffers documents as
+// this file's own measurement point.
+type queueSrcSample struct {
+	pts time.Duration
+	dur time.Duration
+}
+
+// end returns the stream position immediately after this buffer.
+func (s queueSrcSample) end() time.Duration { return s.pts + s.dur }
+
+// trackQueueSrcPosition installs a probe on handle's branch's queue src
+// pad and returns a function reading the most recently seen buffer's
+// start PTS and duration there.
+func trackQueueSrcPosition(t *testing.T, e *Engine, handle string) func() (queueSrcSample, bool) {
+	t.Helper()
+	b, err := e.branchFor(agentaudio.EngineHandle(handle))
+	if err != nil {
+		t.Fatalf("branchFor %q: %v", handle, err)
+	}
+	var pts, dur atomic.Int64
+	var seen atomic.Bool
+	pad := b.queue.GetStaticPad("src")
+	pad.AddProbe(gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		if buf := info.GetBuffer(); buf != nil {
+			pts.Store(int64(buf.PTS()))
+			if d := buf.Duration(); d != gst.ClockTimeNone {
+				dur.Store(int64(d))
+			}
+			seen.Store(true)
+		}
+		return gst.PadProbeOK
+	})
+	return func() (queueSrcSample, bool) {
+		return queueSrcSample{pts: time.Duration(pts.Load()), dur: time.Duration(dur.Load())}, seen.Load()
+	}
+}
+
+// settlePosition polls latest until its PTS stops changing for
+// settleWindow, or timeout elapses: the buffer a branch's queue has
+// actually finished draining to after Pause (blockFlow lets whatever it
+// already held keep draining out, so position right after Pause is stale).
+func settlePosition(latest func() (queueSrcSample, bool), timeout, settleWindow time.Duration) (queueSrcSample, bool) {
+	deadline := time.Now().Add(timeout)
+	const pollInterval = 5 * time.Millisecond
+	last, ok := latest()
+	lastChanged := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		cur, curOK := latest()
+		if curOK && cur.pts != last.pts {
+			last, ok = cur, curOK
+			lastChanged = time.Now()
+			continue
+		}
+		if curOK && time.Since(lastChanged) >= settleWindow {
+			return last, true
+		}
+	}
+	return last, ok
+}
+
 // TestPausedBranchStopsBufferFlow is the acceptance evidence the defect
 // demands: flow, not position. A buffer probe on the paused branch's own
 // queue src pad must count exactly zero buffers for the duration of the
@@ -450,28 +512,47 @@ func TestBlockFlowNoopsOnceReleased(t *testing.T) {
 	_ = e.Release(context.Background(), "bf1")
 }
 
-// TestResumeSeekLossAcrossManyResumes measures the per-resume audio loss
-// resyncMixerPads' synchronous offset read leaves behind: it reads
-// pipelineRunningTime before the state change that resumes flow, so it
-// measures "now" before decode has actually restarted and this branch's
-// own queue has refilled, and that gap's own duration is discarded, not
-// merely delayed — see resyncMixerPads' doc comment for why a deferred,
-// first-buffer version was attempted and reverted rather than adopted.
-// This is a MEASURED, NAMED LIMITATION, not a pass/fail gate: it reports
-// the loss rather than asserting a bound on it, since the loss is real
-// and not yet closed. See docs/build/BUILD-LOG.md and the PR body's
-// acceptance gaps for the recorded number.
+// resumeContentSkipTolerance bounds |skip| (positive skipped, negative
+// repeated) for one resume in TestResumeSeekLossAcrossManyResumes: real
+// resumes measured exactly 0ms; the fixture's own buffers are 40ms.
+const resumeContentSkipTolerance = 15 * time.Millisecond
+
+// waitForResumeGap polls nb.resumeGap until it is available or timeout
+// elapses: the probe it reads fires on the aggregator's own thread, some
+// short, variable time after Resume returns.
+func waitForResumeGap(nb *branch, timeout time.Duration) (time.Duration, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if gap, ok := nb.resumeGap(); ok {
+			return gap, true
+		}
+		if time.Now().After(deadline) {
+			return 0, false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// TestResumeSeekLossAcrossManyResumes asserts, in stream position, that
+// Resume neither skips nor repeats program content, and logs (without
+// asserting) a dispatch gap and the historical SEAM LOSS wall-clock number.
 func TestResumeSeekLossAcrossManyResumes(t *testing.T) {
 	const fileDuration = 8 * time.Second
 	const numCycles = 6
 	const playSlice = 700 * time.Millisecond
 	const holdPerCycle = 300 * time.Millisecond
+	// settleWindow must exceed one buffer period (40ms here) or the poll
+	// below mistakes the gap between two draining buffers for done.
+	const settleWindow = 80 * time.Millisecond
 
 	e := newTestEngine(t)
 	dir := t.TempDir()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	var skips []time.Duration
+	var gaps []time.Duration
 
 	runToEOS := func(handle string, wav string, cycle bool) time.Duration {
 		if _, err := e.Load(ctx, agentaudio.EngineHandle(handle), mediaRef(wav), fileDuration); err != nil {
@@ -482,15 +563,41 @@ func TestResumeSeekLossAcrossManyResumes(t *testing.T) {
 			t.Fatalf("Start %s: %v", handle, err)
 		}
 		if cycle {
+			latest := trackQueueSrcPosition(t, e, handle)
 			for i := 0; i < numCycles; i++ {
 				time.Sleep(playSlice)
+				pauseTime := time.Now()
 				if _, err := e.Pause(ctx, agentaudio.EngineHandle(handle)); err != nil {
 					t.Fatalf("Pause %s cycle %d: %v", handle, i, err)
 				}
-				time.Sleep(holdPerCycle)
+				settleTimeout := holdPerCycle - 10*time.Millisecond
+				if settleTimeout < 0 {
+					settleTimeout = 0
+				}
+				lastBefore, ok := settlePosition(latest, settleTimeout, settleWindow)
+				if !ok {
+					t.Fatalf("cycle %d: queue src position never settled after Pause", i)
+				}
+				if remaining := holdPerCycle - time.Since(pauseTime); remaining > 0 {
+					time.Sleep(remaining)
+				}
 				if _, err := e.Resume(ctx, agentaudio.EngineHandle(handle)); err != nil {
 					t.Fatalf("Resume %s cycle %d: %v", handle, i, err)
 				}
+				nb, err := e.branchFor(agentaudio.EngineHandle(handle))
+				if err != nil {
+					t.Fatalf("branchFor %s after resume cycle %d: %v", handle, i, err)
+				}
+				firstAfterPTS := nb.heldPosition()
+				skip := firstAfterPTS - lastBefore.end()
+				skips = append(skips, skip)
+				gap, gapOK := waitForResumeGap(nb, 200*time.Millisecond)
+				if gapOK {
+					gaps = append(gaps, gap)
+				}
+				t.Logf("cycle %d: last content before pause=[%s,%s) first content after resume=%s skip=%s dispatchGap=%s(ok=%v)",
+					i, lastBefore.pts, lastBefore.end(), firstAfterPTS, skip, gap, gapOK)
+				latest = trackQueueSrcPosition(t, e, handle)
 			}
 		}
 		deadline := time.Now().Add(45 * time.Second)
@@ -524,5 +631,38 @@ func TestResumeSeekLossAcrossManyResumes(t *testing.T) {
 
 	t.Logf("control (no pause): wall to EOS = %s", controlWall)
 	t.Logf("%d pause/resume cycles: wall to EOS excluding %s held = %s", numCycles, heldTotal, cycledActive)
+	// Also counts intended post-Pause queue drain time inside the hold
+	// window; logged for historical comparability, never asserted on.
 	t.Logf("SEAM LOSS: %s over %d cycles = %s per resume", loss, numCycles, perResume)
+
+	var maxAbsSkip time.Duration
+	var totalSkip time.Duration
+	for _, s := range skips {
+		abs := s
+		if abs < 0 {
+			abs = -abs
+		}
+		if abs > maxAbsSkip {
+			maxAbsSkip = abs
+		}
+		totalSkip += s
+	}
+	t.Logf("content skip: max|skip|=%s total=%s over %d resumes (positive=skipped, negative=repeated)", maxAbsSkip, totalSkip, len(skips))
+	if maxAbsSkip > resumeContentSkipTolerance {
+		t.Errorf("resume skipped or repeated %s of program content, want at most %s", maxAbsSkip, resumeContentSkipTolerance)
+	}
+
+	var totalGap time.Duration
+	for _, g := range gaps {
+		totalGap += g
+	}
+	// This is software dispatch latency (resync to the buffer physically
+	// reaching a mixer pad), not the aggregator's own stream-time
+	// late-start gap: see resumeGap's doc comment and the PR body's
+	// GST_DEBUG=audioaggregator:6 capture for that measurement.
+	if len(gaps) > 0 {
+		t.Logf("resume dispatch gap: mean=%s over %d/%d resumes with a measured gap", totalGap/time.Duration(len(gaps)), len(gaps), len(skips))
+	} else {
+		t.Logf("resume dispatch gap: no resume's probe fired within its wait")
+	}
 }
