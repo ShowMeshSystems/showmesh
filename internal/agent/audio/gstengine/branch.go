@@ -67,6 +67,16 @@ type branch struct {
 	// post-seek buffer apart from one already parked before the seek.
 	heldSeq atomic.Uint64
 
+	// heldPTS is the PTS of the most recent buffer the hold probe has
+	// captured, at queue's own src pad: the exact point a branch's
+	// contribution to the mix is measured at (see countQueueSrcBuffers in
+	// pauseflow_real_integration_test.go). Guarded by mu. Read only after
+	// awaitHeldOrEOS confirms heldSeq has advanced past a snapshot taken
+	// before seeking, which is what makes reading it race-free: the
+	// streaming thread that set it is parked at the hold until join
+	// releases it, well after prepare returns.
+	heldPTS time.Duration
+
 	// joined is true once join has linked this branch to the mixer.
 	// Start, Seek, and Resume flush-seek in place only while false; once
 	// true they swap in a replacement instead (see methods.go).
@@ -361,6 +371,11 @@ func (b *branch) build(path string) error {
 	// deinterleave and let it create its pads, but no buffer crosses
 	// until join removes the probe.
 	b.holdProbeID = queueSrc.AddProbe(gst.PadProbeTypeBlock|gst.PadProbeTypeBuffer, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		if buf := info.GetBuffer(); buf != nil {
+			b.mu.Lock()
+			b.heldPTS = time.Duration(buf.PTS())
+			b.mu.Unlock()
+		}
 		b.heldSeq.Add(1)
 		b.maybeReady()
 		return gst.PadProbeOK
@@ -571,6 +586,16 @@ func (b *branch) renderedPosition() time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.renderedPos
+}
+
+// heldPosition returns heldPTS, the PTS of the buffer most recently
+// captured at the hold on queue's own src pad. See heldPTS's own doc
+// comment for why this is race-free to call once prepare has confirmed
+// a post-seek buffer reached the hold.
+func (b *branch) heldPosition() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.heldPTS
 }
 
 // localRunningTime returns atPos translated into the running time this
