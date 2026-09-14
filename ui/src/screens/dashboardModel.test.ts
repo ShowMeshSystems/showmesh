@@ -6,6 +6,7 @@ import {
   fppAttention,
   nodeAttention,
   participationLabel,
+  partitionAttentionItems,
   resolumeAttention,
   type ParticipationState,
 } from './dashboardModel'
@@ -56,11 +57,16 @@ function node(
   return base as unknown as Node
 }
 
-function fpp(instanceId: string, health: FPPInstance['health']): FPPInstance {
-  return {
+function fpp(
+  instanceId: string,
+  health: FPPInstance['health'],
+  showParticipation?: FPPInstance['showParticipation'],
+): FPPInstance {
+  const instance = {
     instanceId,
     endpoint: 'http://198.51.100.1',
     health,
+    showParticipation,
     observations: [],
     lastPollAt: null,
     lastPollError: null,
@@ -68,16 +74,29 @@ function fpp(instanceId: string, health: FPPInstance['health']): FPPInstance {
     instanceUuidFirstObservedAt: null,
     instanceUuidChange: null,
     duplicateInstanceUuidEndpointIds: [],
-  } as unknown as FPPInstance
+  }
+  if (showParticipation === undefined) {
+    delete (instance as Partial<typeof instance>).showParticipation
+  }
+  return instance as unknown as FPPInstance
 }
 
-function resolumeInstance(instanceId: string, health: ResolumeInstance['health']): ResolumeInstance {
-  return {
+function resolumeInstance(
+  instanceId: string,
+  health: ResolumeInstance['health'],
+  showParticipation?: ResolumeInstance['showParticipation'],
+): ResolumeInstance {
+  const instance = {
     instanceId,
     health,
+    showParticipation,
     observations: [],
     composition: null,
-  } as unknown as ResolumeInstance
+  }
+  if (showParticipation === undefined) {
+    delete (instance as Partial<typeof instance>).showParticipation
+  }
+  return instance as unknown as ResolumeInstance
 }
 
 describe('nodeAttention participation', () => {
@@ -116,31 +135,131 @@ describe('nodeAttention participation', () => {
   })
 })
 
+const INSTANCE_PARTICIPATION_CASES: Array<{
+  state: FPPInstance['showParticipation']['state']
+  show: string
+  reason: string | null
+  expected: ParticipationState
+}> = [
+  { state: 'participating', show: 'halloween-2026', reason: null, expected: 'participating' },
+  { state: 'not_participating', show: 'halloween-2026', reason: null, expected: 'not_participating' },
+  { state: 'unknown', show: '', reason: 'store error', expected: 'unknown' },
+  { state: 'not_configured', show: '', reason: 'no show active', expected: 'not_configured' },
+]
+
 describe('fppAttention participation', () => {
-  it('carries the absent case for a degraded instance, never a guessed value', () => {
+  it('carries the absent case for a degraded instance whose coordinator never sent the field', () => {
     const items = fppAttention([fpp('fpp-1', 'degraded')])
     expect(items).toHaveLength(1)
     expect(items[0]?.participation).toBe<ParticipationState>('absent')
+    expect(items[0]?.hideable).toBe(true)
   })
 
-  it('carries the absent case for a failed instance', () => {
-    const items = fppAttention([fpp('fpp-1', 'failed')])
+  for (const showParticipation of INSTANCE_PARTICIPATION_CASES) {
+    it(`carries ${showParticipation.state} through unchanged for a failed instance`, () => {
+      const items = fppAttention([fpp('fpp-1', 'failed', showParticipation)])
+      expect(items).toHaveLength(1)
+      expect(items[0]?.participation).toBe(showParticipation.expected)
+    })
+  }
+
+  it('folds selection_unrecorded into participating, per the API contract that every configured instance takes part', () => {
+    const items = fppAttention([
+      fpp('fpp-1', 'failed', { state: 'selection_unrecorded', show: 'halloween-2026', reason: 'never recorded' }),
+    ])
     expect(items).toHaveLength(1)
-    expect(items[0]?.participation).toBe<ParticipationState>('absent')
+    expect(items[0]?.participation).toBe<ParticipationState>('participating')
   })
 })
 
 describe('resolumeAttention participation', () => {
-  it('carries the absent case for a degraded instance, never a guessed value', () => {
+  it('carries the absent case for a degraded instance whose coordinator never sent the field', () => {
     const items = resolumeAttention([resolumeInstance('res-1', 'degraded')])
     expect(items).toHaveLength(1)
     expect(items[0]?.participation).toBe<ParticipationState>('absent')
+    expect(items[0]?.hideable).toBe(true)
   })
 
-  it('carries the absent case for a failed instance', () => {
-    const items = resolumeAttention([resolumeInstance('res-1', 'failed')])
+  for (const showParticipation of INSTANCE_PARTICIPATION_CASES) {
+    it(`carries ${showParticipation.state} through unchanged for a failed instance`, () => {
+      const items = resolumeAttention([resolumeInstance('res-1', 'failed', showParticipation)])
+      expect(items).toHaveLength(1)
+      expect(items[0]?.participation).toBe(showParticipation.expected)
+    })
+  }
+
+  it('folds selection_unrecorded into participating, per the API contract that every configured instance takes part', () => {
+    const items = resolumeAttention([
+      resolumeInstance('res-1', 'failed', { state: 'selection_unrecorded', show: 'halloween-2026', reason: 'never recorded' }),
+    ])
     expect(items).toHaveLength(1)
-    expect(items[0]?.participation).toBe<ParticipationState>('absent')
+    expect(items[0]?.participation).toBe<ParticipationState>('participating')
+  })
+})
+
+describe('partitionAttentionItems', () => {
+  it('hides only an unselected FPP or Resolume item, by default', () => {
+    const items = [
+      ...fppAttention([
+        fpp('fpp-selected', 'failed', { state: 'participating', show: 'halloween-2026', reason: null }),
+        fpp('fpp-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ]),
+      ...resolumeAttention([
+        resolumeInstance('res-selected', 'failed', { state: 'participating', show: 'halloween-2026', reason: null }),
+        resolumeInstance('res-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ]),
+    ]
+    const { visible, hidden } = partitionAttentionItems(items)
+    expect(visible.map((item) => item.key)).toEqual(['fpp:fpp-selected', 'resolume:res-selected'])
+    expect(hidden.map((item) => item.key)).toEqual(['fpp:fpp-unselected', 'resolume:res-unselected'])
+  })
+
+  it('never hides a node item, even one the show does not select', () => {
+    const notParticipating = node('n1', 'offline', { state: 'not_participating', show: 'halloween-2026', reason: null })
+    const items = nodeAttention([notParticipating], null)
+    const { visible, hidden } = partitionAttentionItems(items)
+    expect(visible.map((item) => item.key)).toEqual(['node:n1'])
+    expect(hidden).toHaveLength(0)
+  })
+
+  it('keeps an absent-participation instance visible, uninvited into hidden', () => {
+    const items = fppAttention([fpp('fpp-1', 'failed')])
+    const { visible, hidden } = partitionAttentionItems(items)
+    expect(visible.map((item) => item.key)).toEqual(['fpp:fpp-1'])
+    expect(hidden).toHaveLength(0)
+  })
+
+  it('keeps an unknown-participation instance visible', () => {
+    const items = fppAttention([
+      fpp('fpp-1', 'failed', { state: 'unknown', show: '', reason: 'store error' }),
+    ])
+    const { visible, hidden } = partitionAttentionItems(items)
+    expect(visible.map((item) => item.key)).toEqual(['fpp:fpp-1'])
+    expect(hidden).toHaveLength(0)
+  })
+
+  it('treats selection_unrecorded as taking part, so it is never hidden', () => {
+    const items = fppAttention([
+      fpp('fpp-1', 'failed', { state: 'selection_unrecorded', show: 'halloween-2026', reason: 'never recorded' }),
+    ])
+    const { visible, hidden } = partitionAttentionItems(items)
+    expect(visible.map((item) => item.key)).toEqual(['fpp:fpp-1'])
+    expect(hidden).toHaveLength(0)
+  })
+
+  it('never changes the total item count, whichever items are hidden', () => {
+    const items = [
+      ...fppAttention([
+        fpp('fpp-selected', 'failed', { state: 'participating', show: 'halloween-2026', reason: null }),
+        fpp('fpp-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ]),
+      ...resolumeAttention([
+        resolumeInstance('res-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ]),
+    ]
+    const { visible, hidden } = partitionAttentionItems(items)
+    expect(visible.length + hidden.length).toBe(items.length)
+    expect(items.length).toBe(3)
   })
 })
 

@@ -4,6 +4,8 @@ import { getCurrentNightSession, type NightSessionState } from '../api'
 import {
   AttentionRow,
   BlankingPlate,
+  Choice,
+  ChoiceRow,
   PageTitle,
   RuledStrip,
   Section,
@@ -18,6 +20,7 @@ import {
   fleetCounts,
   fppDetail,
   nodesDetail,
+  partitionAttentionItems,
   staleSignalLeader,
   nextStartVerdict,
   showInProgress,
@@ -83,6 +86,9 @@ export function Dashboard() {
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const session = useNightSession()
   const items = attentionItems(model, nowIso)
+  const { visible, hidden } = partitionAttentionItems(items)
+  const [showHidden, setShowHidden] = useState(false)
+  const rendered = showHidden ? items : visible
   const counts = fleetCounts(model)
   const staleLeader = staleSignalLeader(model)
   const inProgress = showInProgress(session)
@@ -128,13 +134,23 @@ export function Dashboard() {
         title="Needs you"
         aside={
           items.length > 0 ? (
-            <span className="sm-small sm-muted">
-              {items.length} {items.length === 1 ? 'item' : 'items'}
-            </span>
+            <ChoiceRow>
+              <span className="sm-small sm-muted">
+                {items.length} {items.length === 1 ? 'item' : 'items'}
+              </span>
+              {hidden.length > 0 && (
+                <Choice
+                  type="checkbox"
+                  checked={showHidden}
+                  onChange={(event) => setShowHidden(event.target.checked)}
+                  label="Show unselected instances"
+                />
+              )}
+            </ChoiceRow>
           ) : undefined
         }
       >
-        {items.length === 0 ? (
+        {rendered.length === 0 ? (
           <BlankingPlate headingLevel={3}
             absence="empty"
             stamp="Clear"
@@ -144,7 +160,7 @@ export function Dashboard() {
           />
         ) : (
           <div className="sm-dashboard__attention">
-            {items.map((item) => {
+            {rendered.map((item) => {
               const participationSentence =
                 item.participation === 'absent' ? null : PARTICIPATION_SENTENCE[item.participation]
               return (
