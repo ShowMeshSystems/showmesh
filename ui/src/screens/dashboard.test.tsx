@@ -1,7 +1,7 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { FPPInstance, Model, NightSessionState, Node } from '../api'
+import type { FPPInstance, Model, NightSessionState, Node, ResolumeInstance } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { Dashboard } from './Dashboard'
@@ -56,11 +56,17 @@ function node(
   } as unknown as Node
 }
 
-function fpp(instanceId: string, health: FPPInstance['health'], uuidChanged = false): FPPInstance {
+function fpp(
+  instanceId: string,
+  health: FPPInstance['health'],
+  uuidChanged = false,
+  showParticipation?: FPPInstance['showParticipation'],
+): FPPInstance {
   return {
     instanceId,
     endpoint: 'http://198.51.100.1',
     health,
+    showParticipation,
     observations: [],
     lastPollAt: null,
     lastPollError: null,
@@ -69,6 +75,20 @@ function fpp(instanceId: string, health: FPPInstance['health'], uuidChanged = fa
     instanceUuidChange: uuidChanged ? ({ previousUuid: 'old', changedAt: '2026-08-28T20:54:00Z' }) : null,
     duplicateInstanceUuidEndpointIds: [],
   } as unknown as FPPInstance
+}
+
+function resolumeInstance(
+  instanceId: string,
+  health: ResolumeInstance['health'],
+  showParticipation?: ResolumeInstance['showParticipation'],
+): ResolumeInstance {
+  return {
+    instanceId,
+    health,
+    showParticipation,
+    observations: [],
+    composition: null,
+  } as unknown as ResolumeInstance
 }
 
 function session(readiness: Partial<NightSessionState['readiness']>): NightSessionState {
@@ -132,6 +152,78 @@ describe('Dashboard', () => {
     renderDashboard({ fpp: [fpp('barn-player', 'healthy', true)] })
     expect(screen.getByText(/Bindings held/i)).toBeInTheDocument()
     expect(screen.getByText(/changed its instance identity/)).toBeInTheDocument()
+  })
+
+  it('hides an unselected FPP and an unselected Resolume instance by default, and shows the selected ones', () => {
+    renderDashboard({
+      fpp: [
+        fpp('fpp-selected', 'failed', false, { state: 'participating', show: 'halloween-2026', reason: null }),
+        fpp('fpp-unselected', 'failed', false, { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+      resolume: [
+        resolumeInstance('res-selected', 'failed', { state: 'participating', show: 'halloween-2026', reason: null }),
+        resolumeInstance('res-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    expect(screen.getByText('fpp-selected')).toBeInTheDocument()
+    expect(screen.getByText('res-selected')).toBeInTheDocument()
+    expect(screen.queryByText('fpp-unselected')).not.toBeInTheDocument()
+    expect(screen.queryByText('res-unselected')).not.toBeInTheDocument()
+    expect(screen.getByText('4 items')).toBeInTheDocument()
+  })
+
+  it('reveals the hidden FPP and Resolume instances when the filter is toggled on, without changing the count', () => {
+    renderDashboard({
+      fpp: [
+        fpp('fpp-selected', 'failed', false, { state: 'participating', show: 'halloween-2026', reason: null }),
+        fpp('fpp-unselected', 'failed', false, { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+      resolume: [
+        resolumeInstance('res-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    fireEvent.click(screen.getByLabelText('Show unselected instances'))
+    expect(screen.getByText('fpp-unselected')).toBeInTheDocument()
+    expect(screen.getByText('res-unselected')).toBeInTheDocument()
+    expect(screen.getByText('3 items')).toBeInTheDocument()
+  })
+
+  it('never shows the all-clear plate when every attention item is hidden by the filter', () => {
+    renderDashboard({
+      fpp: [
+        fpp('fpp-unselected', 'failed', false, { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    expect(screen.queryByText('Nothing needs you')).not.toBeInTheDocument()
+    expect(screen.queryByText(/not proof the show looks right/)).not.toBeInTheDocument()
+    expect(screen.getByText('1 item')).toBeInTheDocument()
+    expect(screen.getByText('1 item concerns an instance the active show did not select.')).toBeInTheDocument()
+    expect(screen.queryByText('fpp-unselected')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Show unselected instances'))
+    expect(screen.getByText('fpp-unselected')).toBeInTheDocument()
+  })
+
+  it('pluralizes the all-hidden summary correctly for more than one hidden item', () => {
+    renderDashboard({
+      fpp: [
+        fpp('fpp-unselected', 'failed', false, { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+      resolume: [
+        resolumeInstance('res-unselected', 'failed', { state: 'not_participating', show: 'halloween-2026', reason: null }),
+      ],
+    })
+    expect(screen.getByText('2 items concern instances the active show did not select.')).toBeInTheDocument()
+  })
+
+  it('renders every instance, unfiltered, for an older-coordinator payload without participation', () => {
+    renderDashboard({
+      fpp: [fpp('fpp-1', 'failed'), fpp('fpp-2', 'degraded')],
+      resolume: [resolumeInstance('res-1', 'failed')],
+    })
+    expect(screen.getByText('fpp-1')).toBeInTheDocument()
+    expect(screen.getByText('fpp-2')).toBeInTheDocument()
+    expect(screen.getByText('res-1')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Show unselected instances')).not.toBeInTheDocument()
   })
 
   it('sorts a participating node above a non-participating node whose tone would otherwise put it first', () => {

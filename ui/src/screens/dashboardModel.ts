@@ -4,10 +4,11 @@ import { countSignals, type SignalCounts } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 
 /**
- * showParticipation.state, plus "absent" for an older coordinator that
- * never sent the field: a fifth value, never folded into "unknown".
+ * The union of NodeShowParticipation's and InstanceShowParticipation's state
+ * vocabularies, plus "absent" for an older coordinator that never sent the
+ * field at all: rendered directly, never inferred and never folded.
  */
-export type ParticipationState = Node['showParticipation']['state'] | 'absent'
+export type ParticipationState = Node['showParticipation']['state'] | FPPInstance['showParticipation']['state'] | 'absent'
 
 export type AttentionItem = {
   key: string
@@ -18,9 +19,13 @@ export type AttentionItem = {
   to: string
   detail: string
   participation: ParticipationState
+  /** Only an FPP or Resolume attention row can be hidden by the unselected-instance filter. */
+  hideable: boolean
 }
 
-function participationOf(showParticipation: Node['showParticipation'] | undefined): ParticipationState {
+function participationOf(
+  showParticipation: Node['showParticipation'] | FPPInstance['showParticipation'] | undefined,
+): ParticipationState {
   // The optional chain stays even though the schema marks the field required:
   // an older coordinator serving a newer UI never sends it at all.
   return showParticipation?.state ?? 'absent'
@@ -53,6 +58,7 @@ export function nodeAttention(nodes: readonly Node[], nowIso: string | null): At
         to,
         detail: node.controlPlane.reason ?? 'The coordinator has heard nothing from this node since.',
         participation,
+        hideable: false,
       })
     } else if (node.controlPlane.state === 'unknown') {
       items.push({
@@ -66,6 +72,7 @@ export function nodeAttention(nodes: readonly Node[], nowIso: string | null): At
           node.controlPlane.reason ??
           'The coordinator cannot currently say whether this node is reporting. Unknown is not a soft online.',
         participation,
+        hideable: false,
       })
     }
   }
@@ -79,6 +86,7 @@ export function fppAttention(instances: readonly FPPInstance[]): AttentionItem[]
   const items: AttentionItem[] = []
   for (const instance of instances) {
     const to = `/monitor/fleet/fpp/${instance.instanceId}`
+    const participation = participationOf(instance.showParticipation)
     const tone = HEALTH_TONE[instance.health]
     if (tone !== undefined) {
       items.push({
@@ -89,7 +97,8 @@ export function fppAttention(instances: readonly FPPInstance[]): AttentionItem[]
         fact: `is reporting ${instance.health}`,
         to,
         detail: instance.lastPollError ?? 'This is the FPP instance’s own health, as the coordinator last read it.',
-        participation: 'absent',
+        participation,
+        hideable: true,
       })
     }
     if (instance.instanceUuidChange !== null) {
@@ -102,7 +111,8 @@ export function fppAttention(instances: readonly FPPInstance[]): AttentionItem[]
         to,
         detail:
           'Bindings that name this instance are held rather than guessed until the change is acknowledged. FPP itself may be healthy.',
-        participation: 'absent',
+        participation,
+        hideable: true,
       })
     }
   }
@@ -122,7 +132,8 @@ export function resolumeAttention(instances: readonly ResolumeInstance[]): Atten
       fact: `is reporting ${instance.health}`,
       to: '/monitor/fleet/resolume',
       detail: 'This is what Arena reports about itself, not a ShowMesh-side verdict.',
-      participation: 'absent',
+      participation: participationOf(instance.showParticipation),
+      hideable: true,
     })
   }
   return items
@@ -144,6 +155,26 @@ export function attentionItems(model: Model, nowIso: string | null): AttentionIt
   return [...nodeAttention(model.nodes, nowIso), ...fppAttention(model.fpp), ...resolumeAttention(model.resolume)].sort(
     (a, b) => participationRank(a.participation) - participationRank(b.participation) || TONE_ORDER[a.tone] - TONE_ORDER[b.tone],
   )
+}
+
+export type AttentionPartition = {
+  visible: AttentionItem[]
+  hidden: AttentionItem[]
+}
+
+/**
+ * An unselected FPP or Resolume item hides by default; a node item is never
+ * hideable. The item count stays whatever attentionItems returned; this only
+ * decides which of those same items render.
+ */
+export function partitionAttentionItems(items: readonly AttentionItem[]): AttentionPartition {
+  const visible: AttentionItem[] = []
+  const hidden: AttentionItem[] = []
+  for (const item of items) {
+    const isUnselected = item.hideable && item.participation === 'not_participating'
+    ;(isUnselected ? hidden : visible).push(item)
+  }
+  return { visible, hidden }
 }
 
 export type FleetCounts = {

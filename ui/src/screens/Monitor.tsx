@@ -36,6 +36,7 @@ import { attentionItems, fleetCounts, fppDetail, nodesDetail, type Participation
 const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
   participating: "Participating in tonight's show.",
   not_participating: "Not participating in tonight's show.",
+  selection_unrecorded: "No selection recorded for tonight's show.",
   unknown: 'Participation unknown.',
   not_configured: 'No active show.',
 }

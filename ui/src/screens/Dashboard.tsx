@@ -4,6 +4,8 @@ import { getCurrentNightSession, type NightSessionState } from '../api'
 import {
   AttentionRow,
   BlankingPlate,
+  Choice,
+  ChoiceRow,
   PageTitle,
   RuledStrip,
   Section,
@@ -18,6 +20,7 @@ import {
   fleetCounts,
   fppDetail,
   nodesDetail,
+  partitionAttentionItems,
   staleSignalLeader,
   nextStartVerdict,
   showInProgress,
@@ -29,6 +32,7 @@ import {
 const PARTICIPATION_SENTENCE: Record<Exclude<ParticipationState, 'absent'>, string> = {
   participating: "Participating in tonight's show.",
   not_participating: "Not participating in tonight's show.",
+  selection_unrecorded: "No selection recorded for tonight's show.",
   unknown: 'Participation unknown.',
   not_configured: 'No active show.',
 }
@@ -83,6 +87,9 @@ export function Dashboard() {
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const session = useNightSession()
   const items = attentionItems(model, nowIso)
+  const { visible, hidden } = partitionAttentionItems(items)
+  const [showHidden, setShowHidden] = useState(false)
+  const rendered = showHidden ? items : visible
   const counts = fleetCounts(model)
   const staleLeader = staleSignalLeader(model)
   const inProgress = showInProgress(session)
@@ -128,13 +135,23 @@ export function Dashboard() {
         title="Needs you"
         aside={
           items.length > 0 ? (
-            <span className="sm-small sm-muted">
-              {items.length} {items.length === 1 ? 'item' : 'items'}
-            </span>
+            <ChoiceRow>
+              <span className="sm-small sm-muted">
+                {items.length} {items.length === 1 ? 'item' : 'items'}
+              </span>
+              {hidden.length > 0 && (
+                <Choice
+                  type="checkbox"
+                  checked={showHidden}
+                  onChange={(event) => setShowHidden(event.target.checked)}
+                  label="Show unselected instances"
+                />
+              )}
+            </ChoiceRow>
           ) : undefined
         }
       >
-        {items.length === 0 ? (
+        {rendered.length === 0 && items.length === 0 ? (
           <BlankingPlate headingLevel={3}
             absence="empty"
             stamp="Clear"
@@ -142,9 +159,20 @@ export function Dashboard() {
             title="Nothing needs you"
             detail="No failed, held, or unknown conditions are reported. That is not proof the show looks right, only that nothing has asked for you."
           />
+        ) : rendered.length === 0 ? (
+          <RuledStrip
+            absence="empty"
+            label="Hidden"
+            fact={
+              items.length === 1
+                ? '1 item concerns an instance the active show did not select.'
+                : `${items.length} items concern instances the active show did not select.`
+            }
+            detail={<>Turn on <code className="sm-data">Show unselected instances</code> above to see them.</>}
+          />
         ) : (
           <div className="sm-dashboard__attention">
-            {items.map((item) => {
+            {rendered.map((item) => {
               const participationSentence =
                 item.participation === 'absent' ? null : PARTICIPATION_SENTENCE[item.participation]
               return (
