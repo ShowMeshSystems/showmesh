@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { BlankingPlate, Button, ChoiceGroup, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 import { clampPopoverLeft } from './Popover'
 
 afterEach(cleanup)
@@ -193,6 +193,62 @@ describe('Field', () => {
     expect(document.getElementById(secondId)).toBe(error)
     // Label, control, help, error: never side by side.
     expect(container.querySelector('.sm-field')?.children.length).toBe(4)
+  })
+})
+
+describe('ChoiceGroup', () => {
+  function Harness({ initial = [] as string[] }: { initial?: string[] }) {
+    const [value, setValue] = useState<string[]>(initial)
+    return (
+      <ChoiceGroup
+        label="Audio target nodes"
+        options={[
+          { value: 'node-a', label: 'Node A' },
+          { value: 'node-b', label: 'Node B' },
+        ]}
+        value={value}
+        onChange={setValue}
+      />
+    )
+  }
+
+  it('toggles a value into and out of the selection, leaving the rest untouched', async () => {
+    render(<Harness initial={['node-a']} />)
+    const a = screen.getByRole('checkbox', { name: 'Node A' })
+    const b = screen.getByRole('checkbox', { name: 'Node B' })
+    expect(a).toBeChecked()
+    expect(b).not.toBeChecked()
+
+    await userEvent.click(b)
+    expect(a).toBeChecked()
+    expect(b).toBeChecked()
+
+    await userEvent.click(a)
+    expect(a).not.toBeChecked()
+    expect(b).toBeChecked()
+  })
+
+  it('renders a selected value with no matching option as checked and deselectable, never dropped', async () => {
+    render(<Harness initial={['node-x']} />)
+    const unknown = screen.getByRole('checkbox', { name: 'node-x (not declared)' })
+    expect(unknown).toBeChecked()
+    await userEvent.click(unknown)
+    expect(screen.queryByRole('checkbox', { name: /node-x/ })).toBeNull()
+  })
+
+  it('groups the checkboxes under one labelled fieldset, and wires help text to it', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        help="No nodes selected: plays on the program+ltc node."
+        options={[{ value: 'node-a', label: 'Node A' }]}
+        value={[]}
+        onChange={() => {}}
+      />,
+    )
+    const group = screen.getByRole('group', { name: 'Audio target nodes' })
+    const helpText = screen.getByText('No nodes selected: plays on the program+ltc node.')
+    expect(group.getAttribute('aria-describedby')).toBe(helpText.id)
   })
 })
 

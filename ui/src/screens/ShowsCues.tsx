@@ -13,7 +13,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Callout, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, ChoiceGroup, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -403,6 +403,51 @@ function TargetNodeField({
   )
 }
 
+/** ADR-049: audio and announcement outputs name a list of audio.node targets, plural where LTC's TargetNodeField stays singular. */
+function TargetNodesField({
+  label,
+  value,
+  onChange,
+  nodesState,
+}: {
+  label: string
+  value: string[]
+  onChange: (value: string[]) => void
+  nodesState: AudioNodesState
+}) {
+  if (nodesState.kind === 'loading') return <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
+  if (nodesState.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
+  if (nodesState.nodes.length === 0) {
+    return (
+      <>
+        <RuledStrip absence="empty" label="None" fact="No audio node is declared." />
+        {value.length > 0 && (
+          <p className="sm-small sm-faint">
+            Stored targets: <span className="sm-data">{value.join(', ')}</span>
+          </p>
+        )}
+      </>
+    )
+  }
+  const known = new Set(nodesState.nodes.map((node) => node.id))
+  const unknown = value.filter((id) => !known.has(id))
+  const help =
+    unknown.length > 0
+      ? `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not declared; readiness will report ${unknown.length === 1 ? 'it' : 'them'} as unbound.`
+      : value.length === 0
+        ? 'No nodes selected: plays on the program+ltc node.'
+        : undefined
+  return (
+    <ChoiceGroup
+      label={label}
+      help={help}
+      options={nodesState.nodes.map((node) => ({ value: node.id, label: node.label }))}
+      value={value}
+      onChange={onChange}
+    />
+  )
+}
+
 const OUTPUT_OPTIONS: readonly { kind: CueOutputKind; title: string; description: string }[] = [
   { kind: 'render', title: 'Render', description: 'Drive lighting and video from a sequence' },
   { kind: 'audio', title: 'Audience audio', description: 'Play an audio asset on the program bus' },
@@ -455,11 +500,6 @@ function CueEditor({
   const [announcementPolicy, setAnnouncementPolicy] = useState<'duck' | 'mix' | 'interrupt'>(cue?.payload.outputs.announcement?.policy ?? 'duck')
   const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
-  // audioTargets/announcementTargets carry the loaded targets list
-  // unchanged (ADR-049) until the operator touches the Select below, which
-  // can only narrow it to zero or one node: TargetNodeField edits a single
-  // value, so a loaded Cue with more than one target keeps every entry a
-  // save never touched, rather than silently dropping the rest.
   const [audioTargets, setAudioTargets] = useState<string[]>(cue?.payload.outputs.audio?.targets ?? [])
   const [ltcTarget, setLtcTarget] = useState(cue?.payload.outputs.ltc?.target ?? '')
   const [announcementTargets, setAnnouncementTargets] = useState<string[]>(cue?.payload.outputs.announcement?.targets ?? [])
@@ -695,12 +735,7 @@ function CueEditor({
               />
             )}
           </Field>
-          <TargetNodeField
-            label="Audio target node"
-            value={audioTargets[0] ?? ''}
-            onChange={(value) => setAudioTargets(value === '' ? [] : [value])}
-            nodesState={audioNodes}
-          />
+          <TargetNodesField label="Audio target nodes" value={audioTargets} onChange={setAudioTargets} nodesState={audioNodes} />
         </div>
       )}
 
@@ -743,12 +778,7 @@ function CueEditor({
             </Field>
             <Field label="Fade (ms)">{(props) => <Input {...props} value={fadeMillis} onChange={(e) => setFadeMillis(e.target.value)} />}</Field>
           </div>
-          <TargetNodeField
-            label="Announcement target node"
-            value={announcementTargets[0] ?? ''}
-            onChange={(value) => setAnnouncementTargets(value === '' ? [] : [value])}
-            nodesState={audioNodes}
-          />
+          <TargetNodesField label="Announcement target nodes" value={announcementTargets} onChange={setAnnouncementTargets} nodesState={audioNodes} />
         </div>
       )}
 

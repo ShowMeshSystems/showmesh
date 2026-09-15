@@ -249,6 +249,22 @@
   gap: var(--s-5);
 }
 
+/* A checkbox group: a fieldset laid out like .sm-choice-row, its own legend as the field label. */
+.sm-choice-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-5);
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.sm-choice-group > legend {
+  width: 100%;
+  padding: 0;
+}
+
 /* A checkbox option list drawn as one joined card, hairline dividers between rows. */
 .sm-choice-list {
   display: grid;

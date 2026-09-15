@@ -1,0 +1,147 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// This file tests ADR-049's "targets" list on show.cue outputs.audio and
+// outputs.announcement, kept separate from cmd_cue_test.go's own additions
+// on this branch to avoid colliding with parallel work on that file.
+
+func TestCmdCueSetRoundTripsTargetsList(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-15T21:00:00Z","kind":"show.cue","id":"thriller","revision":1,
+			"payload":{"show":"halloween-2026","name":"Thriller","outputs":{"audio":{"asset":"thriller","startOffsetMillis":0,"targets":["node-a","node-b"]}}},
+			"updatedAt":"2026-09-15T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdCue([]string{
+		"set", "--server", ts.URL,
+		"--show", "halloween-2026", "--name", "Thriller",
+		"--outputs-json", `{"audio":{"asset":"thriller","startOffsetMillis":0,"targets":["node-a","node-b"]}}`,
+		"thriller",
+	}, &stdout, &stderr, fixedClock(mustParse(t, "2026-09-15T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+
+	var decoded configShowCue
+	if err := json.Unmarshal(gotBody, &decoded); err != nil {
+		t.Fatalf("decoding request body: %v; body: %s", err, gotBody)
+	}
+	if !strings.Contains(string(decoded.Outputs), `"targets":["node-a","node-b"]`) {
+		t.Errorf("outputs = %s, want targets to round-trip unchanged", decoded.Outputs)
+	}
+}
+
+func TestCmdCueGetDisplaysTargetsReadably(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-15T21:00:00Z","kind":"show.cue","id":"thriller","revision":1,
+			"payload":{"show":"halloween-2026","name":"Thriller","outputs":{
+				"audio":{"asset":"thriller","startOffsetMillis":0,"targets":["node-a","node-b"]},
+				"announcement":{"policy":"duck","duckGainDb":-18,"fadeMillis":400,"targets":["node-b"]},
+				"ltc":{"startOffsetMillis":0,"target":"node-a"}
+			}},
+			"updatedAt":"2026-09-15T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdCue([]string{"get", "--server", ts.URL, "thriller"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-09-15T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Audio targets:        node-a, node-b") {
+		t.Errorf("stdout = %q, want it to list both audio targets readably", out)
+	}
+	if !strings.Contains(out, "Announcement targets: node-b") {
+		t.Errorf("stdout = %q, want it to list the announcement target readably", out)
+	}
+	if !strings.Contains(out, "LTC target:           node-a") {
+		t.Errorf("stdout = %q, want it to name the LTC target readably", out)
+	}
+}
+
+func TestCmdCueGetDisplaysEmptyTargetsAsResolvingToProgramLTCNode(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-15T21:00:00Z","kind":"show.cue","id":"thriller","revision":1,
+			"payload":{"show":"halloween-2026","name":"Thriller","outputs":{
+				"audio":{"asset":"thriller","startOffsetMillis":0},
+				"ltc":{"startOffsetMillis":0}
+			}},
+			"updatedAt":"2026-09-15T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdCue([]string{"get", "--server", ts.URL, "thriller"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-09-15T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Audio targets:        (resolves to the program+ltc node)") {
+		t.Errorf("stdout = %q, want an absent targets list to say it resolves to the program+ltc node", out)
+	}
+	if !strings.Contains(out, "LTC target:           (resolves to the program+ltc node)") {
+		t.Errorf("stdout = %q, want an absent LTC target to say it resolves to the program+ltc node", out)
+	}
+	if strings.Contains(out, "Announcement targets:") {
+		t.Errorf("stdout = %q, want no announcement line when the cue has no announcement output", out)
+	}
+}
+
+func TestCmdCueGetDisplaysDeprecatedSingularTargetAsOneElementList(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-15T21:00:00Z","kind":"show.cue","id":"thriller","revision":1,
+			"payload":{"show":"halloween-2026","name":"Thriller","outputs":{
+				"audio":{"asset":"thriller","startOffsetMillis":0,"target":"node-a"}
+			}},
+			"updatedAt":"2026-09-15T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdCue([]string{"get", "--server", ts.URL, "thriller"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-09-15T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Audio targets:        node-a") {
+		t.Errorf("stdout = %q, want the old-form singular target to read as a one-element list", out)
+	}
+}
+
+func TestCmdCueSetUsageNamesTargetsList(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdCue([]string{"set", "--help"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-09-15T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stderr.String()
+	if !strings.Contains(out, `"targets"`) {
+		t.Errorf("usage = %q, want it to name the \"targets\" list field", out)
+	}
+	if !strings.Contains(out, "ADR-049") {
+		t.Errorf("usage = %q, want it to cite ADR-049", out)
+	}
+}

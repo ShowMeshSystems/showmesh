@@ -6,6 +6,7 @@ import {
   ButtonRule,
   Callout,
   Choice,
+  ChoiceGroup,
   ChoiceRow,
   ChromeBar,
   ChromeProgress,
@@ -123,6 +124,7 @@ export function Specimen() {
   const [theme, setTheme] = useState<Theme>('dark')
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
 
   return (
     <div className="sm sm-spec" data-theme={theme} data-density={density}>
@@ -256,6 +258,16 @@ export function Specimen() {
             <Choice type="radio" name="specimen-mode" defaultChecked={true} label="Show mode" />
             <Choice type="radio" name="specimen-mode" label="Program mode" />
           </ChoiceRow>
+          <ChoiceGroup
+            label="Audio target nodes"
+            help={choiceGroupValue.length === 0 ? 'No nodes selected: plays on the program+ltc node.' : undefined}
+            options={[
+              { value: 'node-a', label: 'Barn roof' },
+              { value: 'node-b', label: 'Driveway arch' },
+            ]}
+            value={choiceGroupValue}
+            onChange={setChoiceGroupValue}
+          />
         </SpecSection>
 
         <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">
