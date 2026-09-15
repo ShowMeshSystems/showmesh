@@ -500,7 +500,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return report, nil
 	}
 
-	// Condition 12: ADR-049 decision 5's clock-alignment warning — every
+	// Condition 12: ADR-049 decision 5's clock-alignment warning: every
 	// node a Cue's audio/announcement outputs target holds the SAME
 	// clock-provider lock state internal/agent/audio.Manager.StartAt
 	// honors when it decides whether a scheduled multi-node start is

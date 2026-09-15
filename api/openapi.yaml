@@ -16628,12 +16628,20 @@ components:
         full account of what was added and why): whether one FPP-backed
         Playlist is ready, and which condition fails first when it is not.
         `warning` is set when a condition did not fail readiness outright
-        but is still worth surfacing: either the non-fatal form of the
+        but is still worth surfacing: the non-fatal form of the
         observation-hash check (no observation received at all yet, "the
-        normal afternoon state, not a fault"), or
+        normal afternoon state, not a fault");
         `exclusive-claim-conflict`'s own inconclusive form (a stored Cue
         elsewhere could not be decoded, so the check could not be
-        verified). `warning` is never set alongside a non-empty
+        verified); ADR-049's own audio-target warnings for a Cue whose
+        outputs.audio and outputs.announcement targets, together, reach
+        more than one node (a targets list excluding the installation's
+        program+ltc node, which can never start aligned; or a listed
+        target whose reported PTP clock is not confirmed locked --
+        unlocked, no evidence yet, stale evidence, or the node itself not
+        currently reporting, each named distinctly, never failing
+        readiness on its own). More than one of these can be joined into
+        one `warning` string. `warning` is never set alongside a non-empty
         `failingCondition` equal to `observation-hash-mismatch`. An
         observation that WAS received but could not establish identity is
         the `evidence-unavailable` failing condition, not a warning:

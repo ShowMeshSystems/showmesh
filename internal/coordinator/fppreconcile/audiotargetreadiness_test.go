@@ -202,6 +202,61 @@ func TestAudioTargetReadinessNoWarningWhenMultiNodeTargetsIncludeProgramLTC(t *t
 	}
 }
 
+// TestAudioTargetReadinessWarnsWhenAudioAndAnnouncementTogetherExcludeProgramLTC
+// proves the union is computed across BOTH outputs, not one at a time: a
+// Cue whose outputs.audio names one node and outputs.announcement names a
+// different one reaches two nodes together, even though neither output
+// alone names more than one, and the pair excludes the program+ltc node.
+func TestAudioTargetReadinessWarnsWhenAudioAndAnnouncementTogetherExcludeProgramLTC(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putAudioNode(t, st, "c")
+	putProgramOnlyAudioNode(t, st, "a")
+	putProgramOnlyAudioNode(t, st, "b")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio:        &config.ShowCueAudioOutput{Asset: "x", Targets: []string{"a"}},
+		Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyDuck, Targets: []string{"b"}},
+	})
+
+	cond, _, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q, want ready: an unaligned start is a warning, never a failure", cond)
+	}
+	if !strings.Contains(warning, "cue-1") {
+		t.Errorf("warning = %q, want it to name the cue: audio targets a, announcement targets b, together excluding program+ltc node c", warning)
+	}
+}
+
+// TestAudioTargetReadinessNoWarningWhenAudioAndAnnouncementTogetherIncludeProgramLTC
+// proves the reverse: outputs.audio alone names more than one node, but
+// the pair's union includes the program+ltc node (named by
+// outputs.announcement), so the Cue CAN start aligned and must not warn.
+func TestAudioTargetReadinessNoWarningWhenAudioAndAnnouncementTogetherIncludeProgramLTC(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putAudioNode(t, st, "c")
+	putProgramOnlyAudioNode(t, st, "a")
+	putProgramOnlyAudioNode(t, st, "b")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio:        &config.ShowCueAudioOutput{Asset: "x", Targets: []string{"a", "b"}},
+		Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyDuck, Targets: []string{"c"}},
+	})
+
+	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q (%s), want ready", cond, reason)
+	}
+	if warning != "" {
+		t.Errorf("warning = %q, want empty: the union {a,b,c} includes program+ltc node c, even though outputs.audio alone does not", warning)
+	}
+}
+
 // TestAudioTargetReadinessEmptyTargetsResolveToTheSoleAudioNode proves the
 // empty-list default rule's OTHER branch (TestAudioTargetReadinessPassesTheReferenceInstallation
 // covers the program+ltc branch): with no node holding program+ltc at

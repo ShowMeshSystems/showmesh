@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -33,13 +34,16 @@ import (
 // would name the wrong cause.
 //
 // The returned warning is ADR-049 decision 5's second readiness rule: a
-// multi-node Cue (more than one listed audio/announcement target) whose
-// targets exclude the installation's program+ltc node can never start
-// aligned (decision 3's one-instant selection has no program+ltc reading to
-// choose from), which is worth surfacing even though decision 4 still plays
-// the audio unaligned. Only the FIRST such Cue is named, matching this
-// function's own failure-reporting determinism; it never overrides an
-// actual failure found later in the same scan.
+// Cue whose audio and announcement outputs, TOGETHER, reach more than one
+// node, and whose combined reach excludes the installation's program+ltc
+// node, can never start aligned (decision 3's one-instant selection has no
+// program+ltc reading to choose from) -- worth surfacing even though
+// decision 4 still plays the audio unaligned. The two outputs are unioned
+// per Cue, not judged one at a time: a Cue reaching two nodes by naming one
+// each in outputs.audio and outputs.announcement is exactly as unaligned as
+// one naming both in a single output. Only the FIRST such Cue is named,
+// matching this function's own failure-reporting determinism; it never
+// overrides an actual failure found later in the same scan.
 func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (ReadinessCondition, string, string, error) {
 	declared, ltcEmitters, err := audioNodeRoles(ctx, st)
 	if err != nil {
@@ -50,23 +54,7 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 			"audio.node %q and %q both hold role %q; exactly one node may be the installation's LTC emitter (ADR-018's one clock domain, ADR-045)",
 			ltcEmitters[0], ltcEmitters[1], config.AudioNodeRoleProgramLTC), "", nil
 	}
-	programLTC := ""
-	if len(ltcEmitters) == 1 {
-		programLTC = ltcEmitters[0]
-	}
-
-	// The node an output naming no target resolves to: the sole
-	// program+ltc node, or, when there is none, the sole audio.node of any
-	// role. Kept identical to assetsync's own resolution rule; the two
-	// disagreeing would mean readiness passes a Show whose catalog resolves
-	// to nothing, which is the exact failure this condition exists to stop.
-	defaultTarget := ""
-	switch {
-	case len(ltcEmitters) == 1:
-		defaultTarget = ltcEmitters[0]
-	case len(declared) == 1:
-		defaultTarget = declared[0]
-	}
+	programLTC, defaultTarget := programLTCAndDefault(declared, ltcEmitters)
 
 	warning := ""
 	for _, entry := range p.Entries {
@@ -115,22 +103,78 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 						entry.Cue, out.name, target), "", nil
 				}
 			}
-			// ADR-049 decision 5's second readiness rule: a Cue reaching
-			// more than one node starts at ONE instant read off the
-			// program+ltc node's media clock (decision 3); a targets list
-			// that excludes it (or names none at all, when no node holds
-			// the role) leaves nothing for that selection to read, so this
-			// Cue can never start aligned. outputs.ltc is exempt: it names
-			// only one node by construction (ADR-045 decision 2), so the
-			// "multi-node" premise never applies to it.
-			if warning == "" && out.name != "outputs.ltc" && len(out.targets) > 1 && !containsID(out.targets, programLTC) {
+		}
+		// Every output above passed its own unbound-target check, so the
+		// union below is safe to compute against already-valid targets.
+		if warning == "" {
+			union := cueAudioAnnouncementNodes(payload, defaultTarget)
+			if len(union) > 1 && !containsID(union, programLTC) {
 				warning = fmt.Sprintf(
-					"cue %q's %s targets %v, which exclude the installation's program+ltc node; a Cue reaching more than one node starts at one instant read from that node's clock (ADR-049), so this Cue can never start aligned",
-					entry.Cue, out.name, out.targets)
+					"cue %q's audio and announcement outputs together reach %v, which exclude the installation's program+ltc node; a Cue reaching more than one node starts at one instant read from that node's clock (ADR-049), so this Cue can never start aligned",
+					entry.Cue, union)
 			}
 		}
 	}
 	return "", "", warning, nil
+}
+
+// programLTCAndDefault returns the installation's program+ltc node
+// (empty when none holds that role) and the node an output naming no
+// target resolves to: the sole program+ltc node, or, when there is none,
+// the sole audio.node of any role (ADR-045's own resolution rule, shared
+// by every audio-target condition in this file, kept identical to
+// assetsync's -- the two disagreeing would mean readiness passes a Show
+// whose catalog resolves to nothing).
+func programLTCAndDefault(declared, ltcEmitters []string) (programLTC, defaultTarget string) {
+	switch {
+	case len(ltcEmitters) == 1:
+		return ltcEmitters[0], ltcEmitters[0]
+	case len(declared) == 1:
+		return "", declared[0]
+	default:
+		return "", ""
+	}
+}
+
+// cueAudioAnnouncementNodes is the set of nodes payload's outputs.audio and
+// outputs.announcement, TOGETHER, actually reach: an empty Targets list
+// resolves to defaultTarget (ADR-045's own default-target rule), a
+// non-empty one is taken verbatim, and the two outputs' resolved sets are
+// unioned, deduplicated, and sorted for a deterministic report. outputs.ltc
+// is never included: ADR-045 decision 2 keeps it single-node, so it never
+// contributes to whether a Cue reaches more than one node.
+func cueAudioAnnouncementNodes(payload config.ShowCuePayload, defaultTarget string) []string {
+	seen := make(map[string]bool)
+	var nodes []string
+	add := func(targets []string) {
+		for _, id := range resolvedTargets(targets, defaultTarget) {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				nodes = append(nodes, id)
+			}
+		}
+	}
+	if payload.Outputs.Audio != nil {
+		add(payload.Outputs.Audio.Targets)
+	}
+	if payload.Outputs.Announcement != nil {
+		add(payload.Outputs.Announcement.Targets)
+	}
+	sort.Strings(nodes)
+	return nodes
+}
+
+// resolvedTargets is one output's actual reach: targets verbatim when
+// non-empty, or defaultTarget alone when the output names no target and
+// one exists, or no node at all when neither applies.
+func resolvedTargets(targets []string, defaultTarget string) []string {
+	if len(targets) > 0 {
+		return targets
+	}
+	if defaultTarget == "" {
+		return nil
+	}
+	return []string{defaultTarget}
 }
 
 func targetsOf(o *config.ShowCueAudioOutput) []string {
@@ -262,23 +306,28 @@ type noClockObservationsLister struct{}
 func (noClockObservationsLister) NodeClockObservations(string) []observation.Observation { return nil }
 
 // audioTargetClockReadiness is ADR-049 decision 5's clock-alignment
-// warning: every node a Cue's outputs.audio or outputs.announcement
-// Targets names is checked for the SAME clock-provider lock state
-// internal/agent/audio.Manager.StartAt honors when it decides whether a
-// scheduled multi-node start is actually usable
+// warning: every node reached by a Cue whose audio and announcement
+// outputs, TOGETHER, target more than one node (see
+// [cueAudioAnnouncementNodes]) is checked for the SAME clock-provider lock
+// state internal/agent/audio.Manager.StartAt honors when it decides
+// whether a scheduled multi-node start is actually usable
 // (internal/agent/audio/timeline.go's resolveScheduleLocked, gated on
 // agentclock.StateLocked) -- reported to the coordinator verbatim as
 // node.clock.ptp.state (internal/agent/clockreport.go's
 // clockPayloadFromStatus, internal/coordinator/collector/nodeclock's own
-// SignalState). outputs.ltc is exempt, matching [audioTargetReadiness]'s
-// identical exemption: ADR-045 decision 2 keeps it single-target, so
-// there is no cross-node alignment question for it to answer.
+// SignalState). A Cue reaching exactly one node is skipped entirely:
+// ADR-049 decision 3 only picks a shared start instant when a Cue reaches
+// more than one node, so a single-node Cue's clock state changes nothing.
+// outputs.ltc is exempt for the same reason [audioTargetReadiness] exempts
+// it: ADR-045 decision 2 keeps it single-target.
 //
-// This never fails readiness -- decision 4 still plays the audio
-// unaligned when a target's clock is not locked -- and reports at most
-// ONE node's problem, the first found in playlist-entry order then
-// output order then target order, matching this package's other
-// first-found determinism. locked contributes no warning at all; every
+// This never fails readiness -- decision 4 still plays the audio unaligned
+// when a target's clock is not locked -- and collects EVERY offending
+// node across the whole playlist rather than stopping at the first: a
+// one-node Cue earlier in playlist-entry order must never suppress a
+// genuinely multi-node Cue's unlocked target found later in the same
+// scan. Each offending node is reported once even if more than one
+// qualifying Cue names it. locked contributes no warning at all; every
 // other outcome (unlocked, no evidence yet, stale evidence, node
 // unavailable/offline) gets its own distinct text, per MANAGER DECISION 2,
 // so an operator is never told a missing reading looks the same as a
@@ -291,13 +340,23 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 	if err != nil {
 		return "", err
 	}
+	declared, ltcEmitters, err := audioNodeRoles(ctx, st)
+	if err != nil {
+		return "", err
+	}
+	_, defaultTarget := programLTCAndDefault(declared, ltcEmitters)
 
+	reported := make(map[string]bool)
+	var warnings []string
 	for _, entry := range p.Entries {
 		payload, ok, err := decodeCueForAudioTargets(ctx, st, logger, entry.Cue)
 		if err != nil {
 			return "", err
 		}
 		if !ok || payload.Show != p.Show {
+			continue
+		}
+		if len(cueAudioAnnouncementNodes(payload, defaultTarget)) <= 1 {
 			continue
 		}
 		for _, out := range []struct {
@@ -311,14 +370,18 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 			if !out.set {
 				continue
 			}
-			for _, target := range out.targets {
+			for _, target := range resolvedTargets(out.targets, defaultTarget) {
+				if reported[target] {
+					continue
+				}
 				if warning := nodeClockWarning(clock, liveness, now, target); warning != "" {
-					return fmt.Sprintf("cue %q's %s targets node %q: %s", entry.Cue, out.name, target, warning), nil
+					reported[target] = true
+					warnings = append(warnings, fmt.Sprintf("cue %q's %s targets node %q: %s", entry.Cue, out.name, target, warning))
 				}
 			}
 		}
 	}
-	return "", nil
+	return strings.Join(warnings, "; "), nil
 }
 
 // nodeClockWarning reports nodeID's clock-lock problem, or "" when it is
