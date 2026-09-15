@@ -61,18 +61,18 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 			continue
 		}
 		for _, out := range []struct {
-			name   string
-			target string
-			set    bool
+			name    string
+			targets []string
+			set     bool
 		}{
-			{"outputs.audio", targetOf(payload.Outputs.Audio), payload.Outputs.Audio != nil},
-			{"outputs.ltc", targetOfLTC(payload.Outputs.LTC), payload.Outputs.LTC != nil},
-			{"outputs.announcement", targetOfAnnouncement(payload.Outputs.Announcement), payload.Outputs.Announcement != nil},
+			{"outputs.audio", targetsOf(payload.Outputs.Audio), payload.Outputs.Audio != nil},
+			{"outputs.ltc", targetsOfLTC(payload.Outputs.LTC), payload.Outputs.LTC != nil},
+			{"outputs.announcement", targetsOfAnnouncement(payload.Outputs.Announcement), payload.Outputs.Announcement != nil},
 		} {
 			if !out.set {
 				continue
 			}
-			if out.target == "" {
+			if len(out.targets) == 0 {
 				// An installation with NO audio.node at all is left
 				// exactly as it was: a Show declaring audio outputs on a
 				// fleet with no audio node has always been reported ready,
@@ -87,35 +87,44 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 				}
 				continue
 			}
-			if !containsID(declared, out.target) {
-				return ReadinessAudioTargetUnbound, fmt.Sprintf(
-					"cue %q's %s targets node %q, which holds no audio.node object, so that output would reach nobody",
-					entry.Cue, out.name, out.target), nil
+			// ADR-049 widened outputs.audio/announcement to a targets
+			// list; every listed node is checked, in order, so the first
+			// unbound one is always the one named, matching this
+			// function's own doc comment on deterministic ordering.
+			for _, target := range out.targets {
+				if !containsID(declared, target) {
+					return ReadinessAudioTargetUnbound, fmt.Sprintf(
+						"cue %q's %s targets node %q, which holds no audio.node object, so that output would reach nobody",
+						entry.Cue, out.name, target), nil
+				}
 			}
 		}
 	}
 	return "", "", nil
 }
 
-func targetOf(o *config.ShowCueAudioOutput) string {
+func targetsOf(o *config.ShowCueAudioOutput) []string {
 	if o == nil {
-		return ""
+		return nil
 	}
-	return o.Target
+	return o.Targets
 }
 
-func targetOfLTC(o *config.ShowCueLTCOutput) string {
-	if o == nil {
-		return ""
+// targetsOfLTC wraps outputs.ltc's own singular Target (ADR-045; ADR-049
+// kept it singular) in a slice so it can share this file's own uniform
+// targets loop with the list-valued audio/announcement outputs.
+func targetsOfLTC(o *config.ShowCueLTCOutput) []string {
+	if o == nil || o.Target == "" {
+		return nil
 	}
-	return o.Target
+	return []string{o.Target}
 }
 
-func targetOfAnnouncement(o *config.ShowCueAnnouncementOutput) string {
+func targetsOfAnnouncement(o *config.ShowCueAnnouncementOutput) []string {
 	if o == nil {
-		return ""
+		return nil
 	}
-	return o.Target
+	return o.Targets
 }
 
 func containsID(ids []string, id string) bool {

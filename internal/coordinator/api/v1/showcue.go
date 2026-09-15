@@ -9,30 +9,33 @@ type ConfigShowCueRenderOutput struct {
 	Sequence string `json:"sequence"`
 }
 
-// ConfigShowCueAudioOutput is show.cue.outputs.audio. Target is ADR-045's
-// optional target node, mirroring show.surface's "node" field: absent
-// resolves later to the installation's single program+ltc audio.node.
+// ConfigShowCueAudioOutput is show.cue.outputs.audio. Targets is ADR-049's
+// list of target audio.node ids (superseding ADR-045's single "target"
+// field, still accepted on the wire as a one-element form — config
+// package's DecodeShowCuePayload/UnmarshalJSON): an empty list resolves
+// later to the installation's single program+ltc audio.node.
 type ConfigShowCueAudioOutput struct {
-	Asset             string `json:"asset"`
-	StartOffsetMillis int    `json:"startOffsetMillis"`
-	Target            string `json:"target,omitempty"`
+	Asset             string   `json:"asset"`
+	StartOffsetMillis int      `json:"startOffsetMillis"`
+	Targets           []string `json:"targets,omitempty"`
 }
 
 // ConfigShowCueLTCOutput is show.cue.outputs.ltc. Target is ADR-045's
-// optional target node — see [ConfigShowCueAudioOutput.Target].
+// optional target node; ADR-049 kept this output singular — see
+// [ConfigShowCueAudioOutput.Targets].
 type ConfigShowCueLTCOutput struct {
 	StartOffsetMillis int    `json:"startOffsetMillis"`
 	Target            string `json:"target,omitempty"`
 }
 
 // ConfigShowCueAnnouncementOutput is show.cue.outputs.announcement.
-// DuckGainDb is present only when Policy is "duck". Target is ADR-045's
-// optional target node — see [ConfigShowCueAudioOutput.Target].
+// DuckGainDb is present only when Policy is "duck". Targets is ADR-049's
+// list of target audio.node ids — see [ConfigShowCueAudioOutput.Targets].
 type ConfigShowCueAnnouncementOutput struct {
 	Policy     string   `json:"policy"`
 	DuckGainDb *float64 `json:"duckGainDb,omitempty"`
 	FadeMillis int      `json:"fadeMillis"`
-	Target     string   `json:"target,omitempty"`
+	Targets    []string `json:"targets,omitempty"`
 }
 
 // ConfigShowCueOutputs is show.cue.outputs. At least one member is

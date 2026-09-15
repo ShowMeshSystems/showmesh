@@ -455,9 +455,14 @@ function CueEditor({
   const [announcementPolicy, setAnnouncementPolicy] = useState<'duck' | 'mix' | 'interrupt'>(cue?.payload.outputs.announcement?.policy ?? 'duck')
   const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
-  const [audioTarget, setAudioTarget] = useState(cue?.payload.outputs.audio?.target ?? '')
+  // audioTargets/announcementTargets carry the loaded targets list
+  // unchanged (ADR-049) until the operator touches the Select below, which
+  // can only narrow it to zero or one node: TargetNodeField edits a single
+  // value, so a loaded Cue with more than one target keeps every entry a
+  // save never touched, rather than silently dropping the rest.
+  const [audioTargets, setAudioTargets] = useState<string[]>(cue?.payload.outputs.audio?.targets ?? [])
   const [ltcTarget, setLtcTarget] = useState(cue?.payload.outputs.ltc?.target ?? '')
-  const [announcementTarget, setAnnouncementTarget] = useState(cue?.payload.outputs.announcement?.target ?? '')
+  const [announcementTargets, setAnnouncementTargets] = useState<string[]>(cue?.payload.outputs.announcement?.targets ?? [])
   const audioNodes = useAudioNodes()
   const ltcFrameRateState = useLtcFrameRate()
   const fps = ltcFrameRateState.kind === 'loaded' ? ltcFrameRateState.fps : null
@@ -513,10 +518,10 @@ function CueEditor({
 
   const activationDraft: CueActivationDraft = {
     render: kinds.has('render') ? { sequence: renderSequence } : null,
-    audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: audioOffsetMillis ?? 0, target: audioTarget } : null,
+    audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: audioOffsetMillis ?? 0, targets: audioTargets } : null,
     ltc: kinds.has('ltc') ? { startOffsetMillis: ltcOffsetMillis ?? 0, target: ltcTarget } : null,
     announcement: kinds.has('announcement')
-      ? { policy: announcementPolicy, duckGainDb: Number(duckGainDb) || 0, fadeMillis: Number(fadeMillis) || 0, target: announcementTarget }
+      ? { policy: announcementPolicy, duckGainDb: Number(duckGainDb) || 0, fadeMillis: Number(fadeMillis) || 0, targets: announcementTargets }
       : null,
     ltcFps: fps,
   }
@@ -530,7 +535,7 @@ function CueEditor({
             audio: {
               asset: audioAsset,
               startOffsetMillis: audioOffsetMillis ?? 0,
-              ...(audioTarget !== '' ? { target: audioTarget } : {}),
+              ...(audioTargets.length > 0 ? { targets: audioTargets } : {}),
             },
           }
         : {}),
@@ -548,7 +553,7 @@ function CueEditor({
               policy: announcementPolicy,
               fadeMillis: Number(fadeMillis),
               ...(announcementPolicy === 'duck' ? { duckGainDb: Number(duckGainDb) } : {}),
-              ...(announcementTarget !== '' ? { target: announcementTarget } : {}),
+              ...(announcementTargets.length > 0 ? { targets: announcementTargets } : {}),
             },
           }
         : {}),
@@ -690,7 +695,12 @@ function CueEditor({
               />
             )}
           </Field>
-          <TargetNodeField label="Audio target node" value={audioTarget} onChange={setAudioTarget} nodesState={audioNodes} />
+          <TargetNodeField
+            label="Audio target node"
+            value={audioTargets[0] ?? ''}
+            onChange={(value) => setAudioTargets(value === '' ? [] : [value])}
+            nodesState={audioNodes}
+          />
         </div>
       )}
 
@@ -733,7 +743,12 @@ function CueEditor({
             </Field>
             <Field label="Fade (ms)">{(props) => <Input {...props} value={fadeMillis} onChange={(e) => setFadeMillis(e.target.value)} />}</Field>
           </div>
-          <TargetNodeField label="Announcement target node" value={announcementTarget} onChange={setAnnouncementTarget} nodesState={audioNodes} />
+          <TargetNodeField
+            label="Announcement target node"
+            value={announcementTargets[0] ?? ''}
+            onChange={(value) => setAnnouncementTargets(value === '' ? [] : [value])}
+            nodesState={audioNodes}
+          />
         </div>
       )}
 

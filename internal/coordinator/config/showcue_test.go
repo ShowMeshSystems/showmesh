@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -591,11 +593,11 @@ func TestDecodeShowCuePayloadNoTargetUnchangedForOneNodeFixtures(t *testing.T) {
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
-	if p.Outputs.Audio.Target != "" {
-		t.Fatalf("expected outputs.audio.target empty absent any \"target\" key, got %q", p.Outputs.Audio.Target)
+	if len(p.Outputs.Audio.Targets) != 0 {
+		t.Fatalf("expected outputs.audio.targets empty absent any \"target\"/\"targets\" key, got %q", p.Outputs.Audio.Targets)
 	}
-	if p.Outputs.Announcement.Target != "" {
-		t.Fatalf("expected outputs.announcement.target empty absent any \"target\" key, got %q", p.Outputs.Announcement.Target)
+	if len(p.Outputs.Announcement.Targets) != 0 {
+		t.Fatalf("expected outputs.announcement.targets empty absent any \"target\"/\"targets\" key, got %q", p.Outputs.Announcement.Targets)
 	}
 
 	ltc, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists, alwaysFalseAudioNodeExists)
@@ -645,8 +647,8 @@ func TestDecodeShowCuePayloadAudioTargetValid(t *testing.T) {
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
-	if p.Outputs.Audio.Target != "audio-zone-1" {
-		t.Fatalf("expected target audio-zone-1, got %q", p.Outputs.Audio.Target)
+	if !reflect.DeepEqual(p.Outputs.Audio.Targets, []string{"audio-zone-1"}) {
+		t.Fatalf("expected targets [audio-zone-1], got %q", p.Outputs.Audio.Targets)
 	}
 }
 
@@ -708,5 +710,185 @@ func TestDecodeShowCuePayloadTargetEmptyStringRefused(t *testing.T) {
 	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
 	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "outputs.audio.target" {
 		t.Fatalf("expected field-empty on outputs.audio.target, got %+v", verr)
+	}
+}
+
+// --- ADR-049: outputs.audio/announcement.targets ---
+
+// TestDecodeShowCuePayloadTargetsMultipleDecodeInOrder proves a "targets"
+// array decodes onto Targets in the order it was authored, never sorted or
+// deduplicated silently.
+func TestDecodeShowCuePayloadTargetsMultipleDecodeInOrder(t *testing.T) {
+	j := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": ["node-b", "node-a"]}}
+	}`
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if !reflect.DeepEqual(p.Outputs.Audio.Targets, []string{"node-b", "node-a"}) {
+		t.Fatalf("targets = %q, want [node-b node-a] in authored order", p.Outputs.Audio.Targets)
+	}
+}
+
+// TestDecodeShowCuePayloadTargetsEmptyAndAbsentBothResolveEmpty proves an
+// explicit "targets": [] and an absent "targets" key are the identical
+// resolve-later-to-the-default-node state (ADR-049), not two different
+// author intents the way "target" absent/null/"" are.
+func TestDecodeShowCuePayloadTargetsEmptyAndAbsentBothResolveEmpty(t *testing.T) {
+	empty := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": []}}
+	}`
+	p, verr := DecodeShowCuePayload(empty, alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.Outputs.Audio.Targets) != 0 {
+		t.Fatalf("targets = %q, want empty", p.Outputs.Audio.Targets)
+	}
+
+	absent := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0}}
+	}`
+	p, verr = DecodeShowCuePayload(absent, alwaysTrueShowExists, alwaysFalseAudioNodeExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.Outputs.Audio.Targets) != 0 {
+		t.Fatalf("targets = %q, want empty", p.Outputs.Audio.Targets)
+	}
+}
+
+// TestDecodeShowCuePayloadTargetAndTargetsBothRefused is the OWNER
+// RULING's own refusal: a Cue naming both the deprecated "target" and its
+// replacement "targets" on the same output is refused, never merged or
+// silently preferring one.
+func TestDecodeShowCuePayloadTargetAndTargetsBothRefused(t *testing.T) {
+	j := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "target": "node-a", "targets": ["node-a"]}}
+	}`
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.audio" {
+		t.Fatalf("expected field-invalid on outputs.audio, got %+v", verr)
+	}
+	if !strings.Contains(verr.Detail, "target") || !strings.Contains(verr.Detail, "targets") {
+		t.Errorf("detail = %q, want it to name both keys", verr.Detail)
+	}
+}
+
+// TestDecodeShowCuePayloadTargetsDuplicateRefused proves a repeated
+// audio.node id in "targets" is refused rather than silently deduplicated
+// (OWNER RULING).
+func TestDecodeShowCuePayloadTargetsDuplicateRefused(t *testing.T) {
+	j := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": ["node-a", "node-a"]}}
+	}`
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	if verr == nil || verr.Code != ValidationCodeShowCueTargetDuplicate || verr.Field != "outputs.audio.targets[1]" {
+		t.Fatalf("expected show-cue-target-duplicate on outputs.audio.targets[1], got %+v", verr)
+	}
+}
+
+// TestDecodeShowCuePayloadTargetsUnknownRefused is
+// TestDecodeShowCuePayloadAudioTargetUnknownRefused's "targets" sibling: an
+// id in the array naming no configured audio.node is refused, named by its
+// own index.
+func TestDecodeShowCuePayloadTargetsUnknownRefused(t *testing.T) {
+	j := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0, "targets": ["node-a", "no-such-node"]}}
+	}`
+	audioNodeExists := func(id string) bool { return id == "node-a" }
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, audioNodeExists)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "outputs.audio.targets[1]" {
+		t.Fatalf("expected field-unknown-reference on outputs.audio.targets[1], got %+v", verr)
+	}
+}
+
+// TestDecodeShowCuePayloadLTCRefusesTargetsKey proves outputs.ltc kept its
+// ADR-045 singular "target" (OWNER RULING: "do not widen it") rather than
+// silently accepting the same "targets" array outputs.audio/announcement
+// gained.
+func TestDecodeShowCuePayloadLTCRefusesTargetsKey(t *testing.T) {
+	j := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {
+			"audio": {"asset": "a", "startOffsetMillis": 0},
+			"ltc": {"startOffsetMillis": 0, "targets": ["node-a"]}
+		}
+	}`
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey || verr.Field != "outputs.ltc" {
+		t.Fatalf("expected field-unknown-key refusal on outputs.ltc, got %+v", verr)
+	}
+	if !strings.Contains(verr.Detail, "targets") {
+		t.Errorf("detail = %q, want it to name the unrecognized targets key", verr.Detail)
+	}
+}
+
+// TestEncodeDecodeShowCuePayloadTargetsRoundTrip proves
+// EncodeShowCuePayload/DecodeShowCuePayload round-trip a multi-element
+// targets list unchanged.
+func TestEncodeDecodeShowCuePayloadTargetsRoundTrip(t *testing.T) {
+	p := ShowCuePayload{
+		Show: "halloween-2026", Name: "x",
+		Outputs: ShowCueOutputs{
+			Audio: &ShowCueAudioOutput{Asset: "a", Targets: []string{"node-a", "node-b"}},
+		},
+	}
+	raw, err := EncodeShowCuePayload(p)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(raw, `"targets":["node-a","node-b"]`) {
+		t.Fatalf("encoded payload = %s, want a \"targets\" array, never \"target\"", raw)
+	}
+	got, verr := DecodeShowCuePayload(raw, alwaysTrueShowExists, alwaysTrueAudioNodeExists)
+	if verr != nil {
+		t.Fatalf("decode: %+v", verr)
+	}
+	if !reflect.DeepEqual(got.Outputs.Audio.Targets, []string{"node-a", "node-b"}) {
+		t.Fatalf("round-tripped targets = %q, want [node-a node-b]", got.Outputs.Audio.Targets)
+	}
+}
+
+// TestShowCueAudioOutputUnmarshalJSONReadsStoredSingularTarget proves a
+// row stored before ADR-049 (raw JSON carrying the old singular "target")
+// still reads through a plain json.Unmarshal against [ShowCuePayload] —
+// the non-validating path api/showcue.go's GET handler, fallbackcompile,
+// and fppreconcile all use — and that re-encoding it produces "targets",
+// never "target" (ADR-049's encode-side canonicalization).
+func TestShowCueAudioOutputUnmarshalJSONReadsStoredSingularTarget(t *testing.T) {
+	stored := `{"show":"halloween-2026","name":"x","outputs":{"audio":{"asset":"a","startOffsetMillis":0,"target":"node-a"}}}`
+	var p ShowCuePayload
+	if err := json.Unmarshal([]byte(stored), &p); err != nil {
+		t.Fatalf("unmarshal stored row: %v", err)
+	}
+	if !reflect.DeepEqual(p.Outputs.Audio.Targets, []string{"node-a"}) {
+		t.Fatalf("targets = %q, want [node-a]", p.Outputs.Audio.Targets)
+	}
+	reencoded, err := EncodeShowCuePayload(p)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if !strings.Contains(reencoded, `"targets":["node-a"]`) || strings.Contains(reencoded, `"target":`) {
+		t.Fatalf("re-encoded payload = %s, want \"targets\":[\"node-a\"] and no \"target\" key", reencoded)
+	}
+}
+
+// TestShowCueAudioOutputUnmarshalJSONRefusesBothForms is
+// TestDecodeShowCuePayloadTargetAndTargetsBothRefused's non-validating
+// sibling: a stored row somehow carrying both "target" and "targets" is
+// refused by UnmarshalJSON too, not merged.
+func TestShowCueAudioOutputUnmarshalJSONRefusesBothForms(t *testing.T) {
+	stored := `{"asset":"a","startOffsetMillis":0,"target":"node-a","targets":["node-a"]}`
+	var o ShowCueAudioOutput
+	if err := json.Unmarshal([]byte(stored), &o); err == nil {
+		t.Fatalf("expected an error decoding both \"target\" and \"targets\", got none")
 	}
 }
