@@ -15,11 +15,10 @@ import (
 )
 
 // This file proves ADR-049 decision 3's own coordinator-side scheduling
-// step. show.cue's audio output is still single-target pre-merge (the
-// parallel claude/sm-628-cue-targets-contract lane owns the multi-target
-// schema), so a real single Cue cannot resolve on two nodes' catalogs yet
-// — the task's own inventory names this and authorizes faking it in
-// tests. These fixtures fake it by giving each of two nodes its OWN
+// step. show.cue's audio output is still single-target: a separate,
+// not-yet-merged change owns the multi-target schema ADR-049 decision 1
+// describes, so a real single Cue cannot resolve on two nodes' catalogs
+// yet. These fixtures fake it by giving each of two nodes its OWN
 // legitimately single-targeted Cue and building one Activation per node
 // for its own Cue: scheduleCueActivations never inspects whether the
 // Activations in one batch share a CueID, only whether each node's own
