@@ -530,9 +530,9 @@ func TestPutShowCueRoundTripPreservesTwoAudioTargets(t *testing.T) {
 }
 
 // TestGetShowCuePreSeededOldFormTargetRow proves a row stored before
-// ADR-049 (the deprecated singular "target") still reads through GET —
+// ADR-049 (the deprecated singular "target") still reads through GET:
 // api/showcue.go's handleGetShowCue uses jsonUnmarshalStrict, the
-// non-validating path DecodeShowCuePayload never touches — and reports it
+// non-validating path DecodeShowCuePayload never touches, and reports it
 // as a one-element "targets", never a 500.
 func TestGetShowCuePreSeededOldFormTargetRow(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))

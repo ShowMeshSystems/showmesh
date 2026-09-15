@@ -859,9 +859,9 @@ func TestEncodeDecodeShowCuePayloadTargetsRoundTrip(t *testing.T) {
 
 // TestShowCueAudioOutputUnmarshalJSONReadsStoredSingularTarget proves a
 // row stored before ADR-049 (raw JSON carrying the old singular "target")
-// still reads through a plain json.Unmarshal against [ShowCuePayload] —
+// still reads through a plain json.Unmarshal against [ShowCuePayload],
 // the non-validating path api/showcue.go's GET handler, fallbackcompile,
-// and fppreconcile all use — and that re-encoding it produces "targets",
+// and fppreconcile all use, and that re-encoding it produces "targets",
 // never "target" (ADR-049's encode-side canonicalization).
 func TestShowCueAudioOutputUnmarshalJSONReadsStoredSingularTarget(t *testing.T) {
 	stored := `{"show":"halloween-2026","name":"x","outputs":{"audio":{"asset":"a","startOffsetMillis":0,"target":"node-a"}}}`
@@ -881,6 +881,21 @@ func TestShowCueAudioOutputUnmarshalJSONReadsStoredSingularTarget(t *testing.T) 
 	}
 }
 
+// TestShowCueAnnouncementOutputUnmarshalJSONReadsStoredSingularTarget is
+// TestShowCueAudioOutputUnmarshalJSONReadsStoredSingularTarget's
+// outputs.announcement sibling: the legacy singular "target" reads through
+// the same non-validating path on this output type too.
+func TestShowCueAnnouncementOutputUnmarshalJSONReadsStoredSingularTarget(t *testing.T) {
+	stored := `{"policy":"mix","fadeMillis":0,"target":"node-b"}`
+	var o ShowCueAnnouncementOutput
+	if err := json.Unmarshal([]byte(stored), &o); err != nil {
+		t.Fatalf("unmarshal stored row: %v", err)
+	}
+	if !reflect.DeepEqual(o.Targets, []string{"node-b"}) {
+		t.Fatalf("targets = %q, want [node-b]", o.Targets)
+	}
+}
+
 // TestShowCueAudioOutputUnmarshalJSONRefusesBothForms is
 // TestDecodeShowCuePayloadTargetAndTargetsBothRefused's non-validating
 // sibling: a stored row somehow carrying both "target" and "targets" is
@@ -890,5 +905,64 @@ func TestShowCueAudioOutputUnmarshalJSONRefusesBothForms(t *testing.T) {
 	var o ShowCueAudioOutput
 	if err := json.Unmarshal([]byte(stored), &o); err == nil {
 		t.Fatalf("expected an error decoding both \"target\" and \"targets\", got none")
+	}
+}
+
+// TestShowCueAudioOutputUnmarshalJSONRefusesTargetAlongsideNullTargets
+// proves a stored row naming "target" alongside a present but null
+// "targets" is refused too, matching decodeShowCueTargets: a plain
+// json.Unmarshal into a []string field cannot distinguish a present null
+// from an absent key, so this needs its own presence check.
+func TestShowCueAudioOutputUnmarshalJSONRefusesTargetAlongsideNullTargets(t *testing.T) {
+	stored := `{"asset":"a","startOffsetMillis":0,"target":"node-a","targets":null}`
+	var o ShowCueAudioOutput
+	if err := json.Unmarshal([]byte(stored), &o); err == nil {
+		t.Fatalf("expected an error decoding \"target\" alongside a present null \"targets\", got none")
+	}
+}
+
+// TestShowCueAudioOutputUnmarshalJSONRefusesDuplicateTarget proves a
+// stored row with a repeated id in "targets" is refused by UnmarshalJSON,
+// matching decodeShowCueTargets's own ValidationCodeShowCueTargetDuplicate
+// refusal: a malformed row must not be accepted by GET, fallbackcompile,
+// and fppreconcile's non-validating reads while assetsync's
+// DecodeShowCuePayload read rejects it.
+func TestShowCueAudioOutputUnmarshalJSONRefusesDuplicateTarget(t *testing.T) {
+	stored := `{"asset":"a","startOffsetMillis":0,"targets":["node-a","node-a"]}`
+	var o ShowCueAudioOutput
+	if err := json.Unmarshal([]byte(stored), &o); err == nil {
+		t.Fatalf("expected an error decoding a repeated target id, got none")
+	}
+}
+
+// TestShowCueAudioOutputUnmarshalJSONTreatsEmptyTargetAsAbsent proves a
+// stored row carrying "target":"" (this package's own encoder never
+// writes one, since it omits an empty Target, but an older or
+// hand-edited row might) decodes to an empty Targets, not a one-element
+// list holding "" that matches no node: the pre-ADR-049 plain string
+// field's own empty value meant "resolve to the default node", and this
+// read-back path must keep meaning that.
+func TestShowCueAudioOutputUnmarshalJSONTreatsEmptyTargetAsAbsent(t *testing.T) {
+	stored := `{"asset":"a","startOffsetMillis":0,"target":""}`
+	var o ShowCueAudioOutput
+	if err := json.Unmarshal([]byte(stored), &o); err != nil {
+		t.Fatalf("unmarshal stored row: %v", err)
+	}
+	if len(o.Targets) != 0 {
+		t.Fatalf("targets = %q, want empty", o.Targets)
+	}
+}
+
+// TestShowCueAnnouncementOutputUnmarshalJSONTreatsEmptyTargetAsAbsent is
+// the outputs.announcement sibling of
+// TestShowCueAudioOutputUnmarshalJSONTreatsEmptyTargetAsAbsent.
+func TestShowCueAnnouncementOutputUnmarshalJSONTreatsEmptyTargetAsAbsent(t *testing.T) {
+	stored := `{"policy":"mix","fadeMillis":0,"target":""}`
+	var o ShowCueAnnouncementOutput
+	if err := json.Unmarshal([]byte(stored), &o); err != nil {
+		t.Fatalf("unmarshal stored row: %v", err)
+	}
+	if len(o.Targets) != 0 {
+		t.Fatalf("targets = %q, want empty", o.Targets)
 	}
 }
