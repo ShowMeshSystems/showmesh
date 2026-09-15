@@ -156,6 +156,53 @@ func TestCmdCueRevisions(t *testing.T) {
 	}
 }
 
+// TestReportCueActivateResponsePrintsAlignedInstant proves ADR-049
+// decision 6: an aligned multi-node activation prints the shared instant
+// once, before the existing per-node lines.
+func TestReportCueActivateResponsePrintsAlignedInstant(t *testing.T) {
+	at := int64(1_789_012_345_678_901_234)
+	resp := cueActivateResponse{
+		CueID: "thriller", Aligned: true, ScheduledAtNs: &at,
+		Nodes: []cueActivationNodeOutcome{
+			{NodeID: "audio-01", Dispatched: true, Confirmed: true, Outcome: "confirmed"},
+			{NodeID: "audio-02", Dispatched: true, Confirmed: true, Outcome: "confirmed"},
+		},
+	}
+	var stdout bytes.Buffer
+	code := reportCueActivateResponse(&stdout, resp)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK", code)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "aligned") || !strings.Contains(got, "1789012345678901234") {
+		t.Fatalf("output = %q, want it to name the aligned instant exactly", got)
+	}
+	if !strings.Contains(got, "audio-01") || !strings.Contains(got, "audio-02") {
+		t.Fatalf("output = %q, want both per-node lines still present", got)
+	}
+}
+
+// TestReportCueActivateResponsePrintsUnalignedReason proves the
+// complementary unaligned case: the concrete reason is printed, never a
+// synchronized success that was not reached.
+func TestReportCueActivateResponsePrintsUnalignedReason(t *testing.T) {
+	resp := cueActivateResponse{
+		CueID: "thriller", Aligned: false, UnalignedReason: "started on arrival, NOT aligned to a shared instant: no target holds the shared media clock",
+		Nodes: []cueActivationNodeOutcome{
+			{NodeID: "audio-01", Dispatched: true, Confirmed: true, Outcome: "confirmed"},
+		},
+	}
+	var stdout bytes.Buffer
+	code := reportCueActivateResponse(&stdout, resp)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK", code)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "unaligned") || !strings.Contains(got, "no target holds the shared media clock") {
+		t.Fatalf("output = %q, want the concrete unaligned reason printed", got)
+	}
+}
+
 // TestCmdCueUnknownSubcommandIsUsageError matches
 // TestCmdSurfaceUnknownSubcommandIsUsageError (cmd_surface_test.go).
 func TestCmdCueUnknownSubcommandIsUsageError(t *testing.T) {

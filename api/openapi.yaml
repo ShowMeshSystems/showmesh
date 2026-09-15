@@ -16016,7 +16016,7 @@ components:
         The body of POST /cues/{id}/activate (status 202 - accepted, and
         each node's own outcome below is this coordinator's own evidence,
         never a claim of success).
-      required: [serverTime, cueId, nodes]
+      required: [serverTime, cueId, nodes, aligned]
       properties:
         serverTime:
           type: string
@@ -16033,6 +16033,33 @@ components:
             for this Cue.
           items:
             $ref: "#/components/schemas/CueActivationNodeOutcome"
+        aligned:
+          type: boolean
+          description: >-
+            ADR-049 decision 3's own verdict: true when this Cue reached
+            at most one audio-bearing node (nothing to align - a Cue
+            reaching one node behaves exactly as before this field
+            existed), or when it reached more than one and the
+            coordinator chose one shared start instant for all of them.
+            False only when more than one audio-bearing node was reached
+            and no usable media-clock reading could be obtained - every
+            one of those nodes still started, on arrival, never reported
+            as a synchronized success it did not reach.
+        unalignedReason:
+          type: string
+          description: The concrete reason, present only when aligned is false.
+        scheduledAtNs:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            The shared start instant every audio-bearing node was started
+            at, present only when aligned is true AND scheduling was
+            actually attempted (more than one audio-bearing node); a
+            single-audio-node or render-only Cue never sets it. Around
+            1.79e18 nanoseconds, past IEEE-754 double's exact integer
+            range (9.007e15): a client parsing this body with a stock
+            JSON parser ROUNDS it. Parse it as an exact integer.
     CueActivationNodeOutcome:
       type: object
       description: >-

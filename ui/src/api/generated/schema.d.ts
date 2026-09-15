@@ -5523,6 +5523,15 @@ export interface components {
             cueId: string;
             /** @description One outcome per node participating in cueId, never a single collapsed verdict: a Cue's outputs may resolve on several nodes, and one node's refusal is never evidence about another's. Empty when no node currently resolves any output for this Cue. */
             nodes: components["schemas"]["CueActivationNodeOutcome"][];
+            /** @description ADR-049 decision 3's own verdict: true when this Cue reached at most one audio-bearing node (nothing to align - a Cue reaching one node behaves exactly as before this field existed), or when it reached more than one and the coordinator chose one shared start instant for all of them. False only when more than one audio-bearing node was reached and no usable media-clock reading could be obtained - every one of those nodes still started, on arrival, never reported as a synchronized success it did not reach. */
+            aligned: boolean;
+            /** @description The concrete reason, present only when aligned is false. */
+            unalignedReason?: string;
+            /**
+             * Format: int64
+             * @description The shared start instant every audio-bearing node was started at, present only when aligned is true AND scheduling was actually attempted (more than one audio-bearing node); a single-audio-node or render-only Cue never sets it. Around 1.79e18 nanoseconds, past IEEE-754 double's exact integer range (9.007e15): a client parsing this body with a stock JSON parser ROUNDS it. Parse it as an exact integer.
+             */
+            scheduledAtNs?: number;
         };
         /** @description One node's own cue.activate dispatch outcome, in the shared "confirmed" | "unconfirmed" | "refused" | "failed" vocabulary (ADR-020) every other command route on this API already reports outcomes in. */
         CueActivationNodeOutcome: {

@@ -15,6 +15,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 )
 
 // This file is the operator-fired cue-activation HTTP surface: POST /api/v1/cues/{id}/activate,
@@ -25,11 +26,15 @@ import (
 // (cueactivationloop.go) at all - there is no FPP playlist entry behind
 // this call, only an operator's own click.
 //
-// This handler calls dispatchOneCueActivation ALONE, once per
-// participating node, never dispatchCueActivations (cueactivationdispatch.go):
-// that wrapper also fires safeDispatchPrepareAheadAudio, which guesses the
-// NEXT PLAYLIST entry - meaningless, and wrong, for a hand-fired
-// announcement that has no playlist behind it at all.
+// This handler calls [handlers.scheduleCueActivations] and
+// dispatchCueActivationsConcurrently directly (cueactivationdispatch.go),
+// never dispatchCueActivations itself: that wrapper also fires
+// safeDispatchPrepareAheadAudio, which guesses the NEXT PLAYLIST entry -
+// meaningless, and wrong, for a hand-fired announcement that has no
+// playlist behind it at all. It still reaches the identical ADR-049
+// decision 3 scheduling step and concurrent per-node dispatch that
+// wrapper uses, per that ADR's own "not two implementations" rule -
+// see cueactivationschedule.go's own doc comment.
 //
 // It always resolves live (pin == nil, ADR-033 program mode's own
 // behavior): see [cueactivate.ResolveDirectCueActivations]'s own doc
@@ -139,17 +144,30 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 
 	// Never dispatchCueActivations - see this file's own doc comment for
 	// why: that wrapper's own safeDispatchPrepareAheadAudio call guesses a
-	// playlist entry that does not exist here.
-	nodes := make([]v1.CueActivationNodeOutcome, 0, len(activations))
-	for nodeID, act := range activations {
-		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, nil)
-		nodes = append(nodes, cueActivateWireOutcome(outcome))
+	// playlist entry that does not exist here. scheduleCueActivations and
+	// dispatchCueActivationsConcurrently are called directly instead, so
+	// this route reaches the identical ADR-049 decision 3 scheduling step
+	// and concurrent per-node dispatch the Playlist path's own
+	// dispatchCueActivations wraps, per that ADR's own "not two
+	// implementations" rule.
+	h.scheduleCueActivations(ctx, now, activations, issuer, nil)
+	outcomes := dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
+		return h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, nil)
+	})
+	nodes := make([]v1.CueActivationNodeOutcome, len(outcomes))
+	for i, outcome := range outcomes {
+		nodes[i] = cueActivateWireOutcome(outcome)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 
+	aligned, unalignedReason, scheduledAtNs := cueActivationAlignment(activations)
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(v1.CueActivateResponse{ServerTime: formatTime(now), CueID: cueID, Nodes: nodes})
+	_ = json.NewEncoder(w).Encode(v1.CueActivateResponse{
+		ServerTime: formatTime(now), CueID: cueID, Nodes: nodes,
+		Aligned: aligned, UnalignedReason: unalignedReason, ScheduledAtNs: scheduledAtNs,
+	})
 }
 
 // cueActivateWireOutcome renders one node's own [cueActivationDispatchOutcome]

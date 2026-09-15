@@ -52,6 +52,28 @@ type Activation struct {
 	CueRevision      int64     `json:"cueRevision"`
 	PositionMS       int64     `json:"positionMs"`
 	EvidenceAt       time.Time `json:"evidenceAt"`
+
+	// ScheduledAtNs is ADR-049 decision 3's shared multi-node start
+	// instant: nanoseconds on the coordinator-selected clock-holder
+	// node's own media clock, set identically on every Activation the
+	// coordinator's own scheduling step dispatched together, nil when
+	// this activation reaches one node or no usable clock reading could
+	// be obtained for it. The wire key deliberately matches
+	// [pkgaudio.ParamScheduledAtNs] ("scheduledAtNs"): mqttproto's own
+	// exactIntegerParams already treats that name as an exact-integer
+	// param (see pkg/mqttproto's preserveExactIntegers), so this value
+	// survives the coordinator's Activation-to-params-map hop and the
+	// wire without any separate precision plumbing, the identical
+	// mechanism audio.session.start's own scheduledAtNs param relies on.
+	ScheduledAtNs *int64 `json:"scheduledAtNs,omitempty"`
+
+	// UnalignedReason is set only when this activation was part of a
+	// multi-node scheduling attempt that could not choose an instant (no
+	// target held a locked media clock) — ADR-049 decision 4's own
+	// concrete reason, never a silent fallback to start-on-arrival. Empty
+	// whenever ScheduledAtNs is set, and empty for a single-node
+	// activation, which never attempts scheduling at all.
+	UnalignedReason string `json:"unalignedReason,omitempty"`
 }
 
 // Tuple projects a's authorization fields into [cueauth.AuthorizationTuple]
@@ -103,6 +125,9 @@ func (a Activation) Validate() error {
 	}
 	if a.EvidenceAt.IsZero() {
 		return fmt.Errorf("cueactivation: evidenceAt is required")
+	}
+	if a.ScheduledAtNs != nil && *a.ScheduledAtNs < 0 {
+		return fmt.Errorf("cueactivation: scheduledAtNs must not be negative, got %d", *a.ScheduledAtNs)
 	}
 	return nil
 }
@@ -171,6 +196,19 @@ const AnnouncementSessionID = "cue-activation:announcement"
 // loaded handle is moved onto [AudioSessionID] by Promote; this id itself
 // never plays anything.
 const PrepareStagingSessionID = "cue-activation:prepare-staging"
+
+// ScheduleProbeSessionID is the one audio session ADR-049 decision 3's
+// coordinator-side scheduling step prepares under, to read a fresh
+// per-node media-clock evidence for a multi-node Cue's OWN upcoming
+// activation before choosing a shared start instant. It is deliberately
+// a THIRD session, distinct from both [AudioSessionID] (which may still
+// be Playing the PRECEDING Cue — preparing it would stop that Cue's own
+// LTC and release its engine handle mid-playback) and
+// [PrepareStagingSessionID] (which a concurrently-dispatched prepare-ahead
+// round for a DIFFERENT, later Cue may already be using). It is never
+// started and never promoted from: its only purpose is the media-clock
+// reading its own audio.session.prepare result carries.
+const ScheduleProbeSessionID = "cue-activation:schedule-probe"
 
 // PrepareStagingSessionStepApply and PrepareStagingSessionStepPrepare are
 // [PrepareStagingSessionID]'s own two steps — Apply then Prepare, never

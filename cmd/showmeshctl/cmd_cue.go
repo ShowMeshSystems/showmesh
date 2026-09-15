@@ -379,9 +379,12 @@ func cmdCueDelete(args []string, stdout, stderr io.Writer, _ func() time.Time) i
 // identical reasoning one file over): showmeshctl never imports the
 // coordinator's internal v1 package.
 type cueActivateResponse struct {
-	ServerTime time.Time                  `json:"serverTime"`
-	CueID      string                     `json:"cueId"`
-	Nodes      []cueActivationNodeOutcome `json:"nodes"`
+	ServerTime      time.Time                  `json:"serverTime"`
+	CueID           string                     `json:"cueId"`
+	Nodes           []cueActivationNodeOutcome `json:"nodes"`
+	Aligned         bool                       `json:"aligned"`
+	UnalignedReason string                     `json:"unalignedReason,omitempty"`
+	ScheduledAtNs   *int64                     `json:"scheduledAtNs,omitempty"`
 }
 
 // cueActivationNodeOutcome mirrors v1.CueActivationNodeOutcome field for
@@ -454,6 +457,17 @@ func reportCueActivateResponse(stdout io.Writer, resp cueActivateResponse) int {
 	if len(resp.Nodes) == 0 {
 		_, _ = fmt.Fprintf(stdout, "%s: accepted, but no node resolves this cue (nothing to report)\n", resp.CueID)
 		return exitOK
+	}
+	// ADR-049 decision 3's own verdict, printed once before the per-node
+	// lines it applies to: aligned names the shared instant every node
+	// was started at, unaligned names the concrete reason every node
+	// started on arrival instead, never a synchronized success that was
+	// not reached.
+	switch {
+	case resp.Aligned && resp.ScheduledAtNs != nil:
+		_, _ = fmt.Fprintf(stdout, "%s: aligned, started at %d\n", resp.CueID, *resp.ScheduledAtNs)
+	case !resp.Aligned:
+		_, _ = fmt.Fprintf(stdout, "%s: unaligned: %s\n", resp.CueID, resp.UnalignedReason)
 	}
 	for _, n := range resp.Nodes {
 		_, _ = fmt.Fprintf(stdout, "%s: %s %s: %s\n", n.Outcome, resp.CueID, n.NodeID, n.OutcomeReason)

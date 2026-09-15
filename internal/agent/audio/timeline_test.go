@@ -233,6 +233,101 @@ func TestScheduledStartInThePastIsRefused(t *testing.T) {
 	}
 }
 
+// TestStartAtPositionPresentsTheExplicitPositionAtT0 proves a scheduled
+// start's play head is exactly the caller's own position on the SAME
+// engine call, never 0 (the bookmark-less default [Manager.StartAt]
+// would use) — the defect a Start-then-Seek pair cannot avoid, per
+// [Manager.StartAtPosition]'s own doc comment.
+func TestStartAtPositionPresentsTheExplicitPositionAtT0(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	ctx := context.Background()
+
+	const wantPosition = 12500 * time.Millisecond
+	t0 := f.media.Now(ctx).Time.Add(30 * time.Millisecond)
+	before := f.media.reads()
+	done := make(chan pkgaudio.OutcomeResult, 1)
+	go func() {
+		done <- f.m.StartAtPosition(ctx, f.id, "inv-start", 2, t0.UnixNano(), wantPosition)
+	}()
+	f.media.waitForReads(t, before+1)
+	f.media.advance(30 * time.Millisecond)
+
+	var out pkgaudio.OutcomeResult
+	select {
+	case out = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartAtPosition never returned after the media clock reached T0")
+	}
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("StartAtPosition = %q (%s), want started", out.Outcome, out.Reason)
+	}
+
+	snaps := f.m.Snapshot(ctx)
+	var got *SessionSnapshot
+	for i := range snaps {
+		if snaps[i].ID == f.id {
+			got = &snaps[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("no snapshot for session %q", f.id)
+	}
+	if !got.PositionKnown || got.Position != wantPosition {
+		t.Fatalf("Position = %v (known=%v), want %v", got.Position, got.PositionKnown, wantPosition)
+	}
+}
+
+// TestStartAtPositionOverridesAnyBookmark proves the explicit position
+// is used even when the session holds a bookmark that would otherwise be
+// STALE (a mismatched item identity): [Manager.start] never even reaches
+// resolveBookmarkPositionLocked's own stale-bookmark refusal once an
+// explicit position is given, since it is never consulted at all.
+func TestStartAtPositionOverridesAnyBookmark(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	ctx := context.Background()
+
+	s, ok := f.m.get(f.id)
+	if !ok {
+		t.Fatal("session not found")
+	}
+	s.mu.Lock()
+	s.bookmark = &pkgaudio.Bookmark{ItemID: "not-the-real-item", Position: 999 * time.Second}
+	s.mu.Unlock()
+
+	const wantPosition = 3 * time.Second
+	t0 := f.media.Now(ctx).Time.Add(30 * time.Millisecond)
+	before := f.media.reads()
+	done := make(chan pkgaudio.OutcomeResult, 1)
+	go func() {
+		done <- f.m.StartAtPosition(ctx, f.id, "inv-start", 2, t0.UnixNano(), wantPosition)
+	}()
+	f.media.waitForReads(t, before+1)
+	f.media.advance(30 * time.Millisecond)
+
+	var out pkgaudio.OutcomeResult
+	select {
+	case out = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartAtPosition never returned after the media clock reached T0")
+	}
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("StartAtPosition = %q (%s), want started (a stale bookmark must never refuse an explicit-position start)", out.Outcome, out.Reason)
+	}
+	snaps := f.m.Snapshot(ctx)
+	var got *SessionSnapshot
+	for i := range snaps {
+		if snaps[i].ID == f.id {
+			got = &snaps[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("no snapshot for session %q", f.id)
+	}
+	if !got.PositionKnown || got.Position != wantPosition {
+		t.Fatalf("Position = %v (known=%v), want %v: the stale bookmark's position leaked through", got.Position, got.PositionKnown, wantPosition)
+	}
+}
+
 // TestScheduledStartAppliesOutputLatency proves RES-019 section 8's
 // adjustment: a bound calibrated output latency shifts the engine's own
 // start instant earlier by exactly that amount, so the timeline's own
