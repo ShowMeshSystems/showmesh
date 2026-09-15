@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
-import type { Event, FPPInstance, Model, Node } from '../api'
+import type { Event, FPPInstance, FPPPlaylistEntryObservation, Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { Monitor } from './Monitor'
@@ -23,6 +23,10 @@ const nodeStubs = vi.hoisted(() => ({
   getNodeAssetManifest: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
+const reconciliationStubs = vi.hoisted(() => ({
+  getFPPPlaylistEntryReconciliation: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+}))
+
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
   return {
@@ -32,6 +36,7 @@ vi.mock('../api', async () => {
     listShowSurfacesForNode: (...args: never[]) => nodeStubs.listShowSurfacesForNode(...args),
     getShowSurface: (...args: never[]) => nodeStubs.getShowSurface(...args),
     getNodeAssetManifest: (...args: never[]) => nodeStubs.getNodeAssetManifest(...args),
+    getFPPPlaylistEntryReconciliation: (...args: never[]) => reconciliationStubs.getFPPPlaylistEntryReconciliation(...args),
   }
 })
 
@@ -349,5 +354,141 @@ describe('Monitor · Fleet · FPP inspector · Fallback program', () => {
     expect(inspector.getByText('4')).toBeInTheDocument()
     await waitFor(() => expect(inspector.getByText('Current')).toBeInTheDocument())
     expect(inspector.getByText('Present')).toBeInTheDocument()
+  })
+})
+
+// FPP inspector · playlist-entry reconciliation verdict. FPP advances
+// entries live; the verdict must follow model.fppPlaylistEntryObservations'
+// per-instance sequence instead of only fetching once per selection.
+describe('Monitor · Fleet · FPP inspector · playlist-entry reconciliation', () => {
+  beforeEach(() => {
+    fallbackStubs.listFallbackPrograms = () => PENDING()
+    fallbackStubs.getFallbackProgram = () => PENDING()
+  })
+  afterEach(cleanup)
+
+  const withUuid = { ...fpp('barn-player', 'healthy'), instanceUuid: 'barn-uuid' } as FPPInstance
+
+  function observationAt(instanceUuid: string, sequence: number): FPPPlaylistEntryObservation {
+    return {
+      instanceUuid,
+      endpointId: null,
+      schemaVersion: 1,
+      sequence,
+      action: 'playing',
+      observedAt: '2026-09-01T00:00:00Z',
+      coalescedSincePreviousAcknowledged: 0,
+      receivedAt: '2026-09-01T00:00:00Z',
+    } as unknown as FPPPlaylistEntryObservation
+  }
+
+  function reconciliationAt(serverTime: string, outcome = 'resolved', reason = 'Matches the imported definition.') {
+    return {
+      instanceUuid: 'barn-uuid',
+      outcome,
+      reason,
+      definitionAvailable: true,
+      serverTime,
+    }
+  }
+
+  function screenWith(observations: FPPPlaylistEntryObservation[]) {
+    return (
+      <ModelContext.Provider
+        value={{
+          ...initialModel(),
+          fpp: [withUuid],
+          fppPlaylistEntryObservations: observations,
+          serverTime: '2026-09-01T00:07:00Z',
+          serverTimeReceivedAt: Date.now(),
+        }}
+      >
+        <MemoryRouter initialEntries={['/monitor/fleet']}>
+          <Routes>
+            <Route path="/monitor/fleet" element={<Monitor />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>
+    )
+  }
+
+  function renderWithObservations(observations: FPPPlaylistEntryObservation[]) {
+    const result = render(screenWith(observations))
+    fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
+    return result
+  }
+
+  it('refetches the reconciliation verdict when the selected instance’s observation sequence advances (fails on unmodified code: times out waiting for a second fetch)', async () => {
+    let calls = 0
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => {
+      calls += 1
+      return Promise.resolve(reconciliationAt('2026-09-01T00:07:00Z'))
+    }
+
+    const { rerender } = renderWithObservations([observationAt('barn-uuid', 5)])
+    await waitFor(() => expect(calls).toBe(1))
+
+    rerender(screenWith([observationAt('barn-uuid', 6)]))
+
+    await waitFor(() => expect(calls).toBe(2))
+  })
+
+  it('does not refetch on a re-render whose observation is a new object with the same sequence', async () => {
+    let calls = 0
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => {
+      calls += 1
+      return Promise.resolve(reconciliationAt('2026-09-01T00:07:00Z'))
+    }
+
+    const { rerender } = renderWithObservations([observationAt('barn-uuid', 5)])
+    await waitFor(() => expect(calls).toBe(1))
+
+    // Same sequence, new array and object identity: must not retrigger.
+    rerender(screenWith([observationAt('barn-uuid', 5)]))
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls).toBe(1)
+  })
+
+  it('does not refetch the selected instance’s verdict when a different instance’s sequence advances', async () => {
+    let calls = 0
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => {
+      calls += 1
+      return Promise.resolve(reconciliationAt('2026-09-01T00:07:00Z'))
+    }
+
+    const { rerender } = renderWithObservations([observationAt('barn-uuid', 5), observationAt('other-uuid', 1)])
+    await waitFor(() => expect(calls).toBe(1))
+
+    rerender(screenWith([observationAt('barn-uuid', 5), observationAt('other-uuid', 2)]))
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls).toBe(1)
+  })
+
+  it('never lets a slower, superseded fetch overwrite the verdict from a newer one', async () => {
+    const resolvers: Array<(value: unknown) => void> = []
+    let calls = 0
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () =>
+      new Promise((resolve) => {
+        calls += 1
+        resolvers.push(resolve)
+      })
+
+    const { rerender } = renderWithObservations([observationAt('barn-uuid', 5)])
+    await waitFor(() => expect(calls).toBe(1))
+
+    rerender(screenWith([observationAt('barn-uuid', 6)]))
+    await waitFor(() => expect(calls).toBe(2))
+
+    // The newer (second) fetch's response arrives first, then the stale
+    // first fetch's response arrives late: the stale one must never apply.
+    resolvers[1]!(reconciliationAt('2026-09-01T00:08:00Z', 'resolved', 'Second, newer response.'))
+    await waitFor(() => expect(screen.getByText('Second, newer response.')).toBeInTheDocument())
+
+    resolvers[0]!(reconciliationAt('2026-09-01T00:07:00Z', 'unbound', 'First, stale response.'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('Second, newer response.')).toBeInTheDocument()
+    expect(screen.queryByText('First, stale response.')).not.toBeInTheDocument()
   })
 })

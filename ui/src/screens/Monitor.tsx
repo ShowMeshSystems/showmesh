@@ -16,7 +16,7 @@ import {
   type Connection,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
-import { effectiveServerTimeIso } from '../domain/time'
+import { ageMs, effectiveServerTimeIso, formatClock, formatDuration } from '../domain/time'
 import {
   acknowledgeFPPInstanceUUIDChange,
   ApiError,
@@ -27,6 +27,7 @@ import {
   type FallbackProgramListEntry,
   type FallbackProgramResponse,
   type FPPInstance,
+  type FPPPlaylistEntryReconciliationResponse,
   type Model,
 } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -387,14 +388,22 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   const [ackError, setAckError] = useState<string | null>(null)
   const [clearingObservation, setClearingObservation] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
-  const [reconciliation, setReconciliation] = useState<{ outcome: string; reason: string } | null>(null)
+  const [reconciliation, setReconciliation] = useState<FPPPlaylistEntryReconciliationResponse | null>(null)
   const [reconciliationError, setReconciliationError] = useState<string | null>(null)
+  // Keyed on the numeric sequence, not the observation object (a new
+  // identity every snapshot) or its receivedAt: FPP advancing entries
+  // moves this instance's model.fppPlaylistEntryObservations entry, and
+  // the verdict must follow it live instead of only fetching once per
+  // selection.
+  const latestObservationSequence =
+    model.fppPlaylistEntryObservations.find((o) => o.instanceUuid === instance.instanceUuid)?.sequence ?? null
   useEffect(() => {
     if (instance.instanceUuid === null) { setReconciliation(null); return }
     let cancelled = false
+    setReconciliationError(null)
     getFPPPlaylistEntryReconciliation(instance.instanceUuid).then((response) => { if (!cancelled) setReconciliation(response) }).catch((err: unknown) => { if (!cancelled) setReconciliationError(describeApiError(err)) })
     return () => { cancelled = true }
-  }, [instance.instanceUuid])
+  }, [instance.instanceUuid, latestObservationSequence])
   const acknowledge = () => {
     setAcknowledging(true)
     setAckError(null)
@@ -448,7 +457,17 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
       </div>
       {ackError !== null && <RuledStrip absence="failed" label="Acknowledgement refused" fact={ackError} />}
       {clearError !== null && <RuledStrip absence="failed" label="Observation reset refused" fact={clearError} />}
-      {reconciliation !== null && <div className="sm-outcome"><StatusPair tone={reconciliation.outcome === 'resolved' ? 'good' : 'warn'} label={reconciliation.outcome.replaceAll('-', ' ')} /><p className="sm-outcome__detail">{reconciliation.reason}</p></div>}
+      {reconciliation !== null && (
+        <div className="sm-outcome">
+          <StatusPair tone={reconciliation.outcome === 'resolved' ? 'good' : 'warn'} label={reconciliation.outcome.replaceAll('-', ' ')} />
+          <p className="sm-outcome__detail">{reconciliation.reason}</p>
+          <p className="sm-small sm-faint">
+            {`Checked ${formatClock(reconciliation.serverTime) ?? 'at an unrecorded time'}${
+              ageMs(reconciliation.serverTime, nowIso) === null ? '' : ` · ${formatDuration(ageMs(reconciliation.serverTime, nowIso)!)} ago`
+            }`}
+          </p>
+        </div>
+      )}
       {reconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={reconciliationError} />}
     </div>
   )
