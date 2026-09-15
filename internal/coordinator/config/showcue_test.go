@@ -935,6 +935,31 @@ func TestShowCueAudioOutputUnmarshalJSONRefusesDuplicateTarget(t *testing.T) {
 	}
 }
 
+// TestShowCueAudioOutputUnmarshalJSONRefusesEmptyTargetsEntry proves a
+// stored row with an empty string inside "targets" is refused, matching
+// decodeShowCueTargets's own refusal of that shape: an empty entry
+// resolves to no node, so a Cue like this would silently play nowhere
+// rather than being flagged. "target":"" (the singular, deprecated form)
+// stays lenient and reads as absent; only the array form is refused.
+func TestShowCueAudioOutputUnmarshalJSONRefusesEmptyTargetsEntry(t *testing.T) {
+	stored := `{"asset":"a","startOffsetMillis":0,"targets":["node-a",""]}`
+	var o ShowCueAudioOutput
+	if err := json.Unmarshal([]byte(stored), &o); err == nil {
+		t.Fatalf("expected an error decoding an empty string inside targets, got none")
+	}
+}
+
+// TestShowCueAnnouncementOutputUnmarshalJSONRefusesEmptyTargetsEntry is
+// TestShowCueAudioOutputUnmarshalJSONRefusesEmptyTargetsEntry's
+// outputs.announcement sibling.
+func TestShowCueAnnouncementOutputUnmarshalJSONRefusesEmptyTargetsEntry(t *testing.T) {
+	stored := `{"policy":"mix","fadeMillis":0,"targets":["node-a",""]}`
+	var o ShowCueAnnouncementOutput
+	if err := json.Unmarshal([]byte(stored), &o); err == nil {
+		t.Fatalf("expected an error decoding an empty string inside targets, got none")
+	}
+}
+
 // TestShowCueAudioOutputUnmarshalJSONTreatsEmptyTargetAsAbsent proves a
 // stored row carrying "target":"" (this package's own encoder never
 // writes one, since it omits an empty Target, but an older or

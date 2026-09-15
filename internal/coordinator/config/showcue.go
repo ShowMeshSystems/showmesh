@@ -119,11 +119,10 @@ type ShowCueAudioOutput struct {
 // outputs.audio, so a row stored before ADR-049 still reads through the
 // non-validating paths (api/showcue.go's jsonUnmarshalStrict GET,
 // fallbackcompile, fppreconcile) that call plain json.Unmarshal against
-// [ShowCuePayload] directly rather than DecodeShowCuePayload. It refuses
-// the same malformed shapes [decodeShowCueTargets] does (a present
-// "targets" key, including null, alongside "target"; a repeated id in
-// "targets"), so no stored row decodeShowCueTargets rejects is silently
-// accepted through this path instead. See [decodeStoredShowCueTargets].
+// [ShowCuePayload] directly rather than DecodeShowCuePayload. See
+// [decodeStoredShowCueTargets] for exactly which of
+// [decodeShowCueTargets]'s refusals this path shares, and which it
+// deliberately leaves to the validating decoder.
 func (o *ShowCueAudioOutput) UnmarshalJSON(b []byte) error {
 	var wire struct {
 		Asset             string `json:"asset"`
@@ -148,16 +147,19 @@ func (o *ShowCueAudioOutput) UnmarshalJSON(b []byte) error {
 
 // decodeStoredShowCueTargets is [decodeShowCueTargets]'s own compatibility
 // twin for UnmarshalJSON's non-validating, stored-row read-back path
-// (ADR-049): both keys present (including a present, null "targets") is
-// refused, and a repeated id in "targets" is refused, matching the
-// validating decoder exactly. It diverges on one point deliberately: a
-// present but empty "target" (impossible from this package's own encoder,
-// which omits an empty Target, but not impossible in older or hand-edited
-// rows) is treated as absent rather than refused, so it resolves to the
-// installation's default node exactly as the pre-ADR-049 plain string
-// field did, instead of becoming a one-element list matching no node. This
-// function does not check that an id names a configured audio.node: that
-// check needs a live audioNodeExists callback this read-back path has no
+// (ADR-049). It shares three of that function's refusals: both keys
+// present (including a present, null "targets", alongside "target"), a
+// repeated id in "targets", and an empty string inside "targets". It
+// leaves two refusals to the validating decoder alone: a present, null,
+// or empty "target" reads as absent here (impossible from this package's
+// own encoder, which omits an empty Target, but not impossible in older
+// or hand-edited rows), resolving to the installation's default node
+// exactly as the pre-ADR-049 plain string field's own empty value did,
+// rather than becoming a one-element list matching no node; and a
+// present, null "targets" alone reads as absent the same way, rather than
+// the validating decoder's own refusal of that shape. It also never
+// checks that an id names a configured audio.node, because that check
+// needs a live audioNodeExists callback this read-back path has no
 // access to.
 func decodeStoredShowCueTargets(fields map[string]json.RawMessage, path string) ([]string, error) {
 	targetRaw, targetPresent := fields["target"]
@@ -190,6 +192,9 @@ func decodeStoredShowCueTargets(fields map[string]json.RawMessage, path string) 
 	}
 	seen := make(map[string]bool, len(targets))
 	for _, id := range targets {
+		if id == "" {
+			return nil, fmt.Errorf("%s.targets must not contain an empty string", path)
+		}
 		if seen[id] {
 			return nil, fmt.Errorf("%s.targets must not repeat %q", path, id)
 		}
