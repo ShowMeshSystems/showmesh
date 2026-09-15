@@ -109,7 +109,7 @@ func TestActivateAudioSelectsCueAssetAndSeeksToPosition(t *testing.T) {
 
 // seekCountingFakeEngine counts Seek calls, so a test can prove a
 // scheduled activation presents PositionMS in the SAME engine.Start call
-// rather than a separate engine.Seek after it — the exact defect ADR-049
+// rather than a separate engine.Seek after it, the exact defect ADR-049
 // decision 3 exists to close (see [audio.Manager.StartAtPosition]'s own
 // doc comment).
 type seekCountingFakeEngine struct {

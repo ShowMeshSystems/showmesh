@@ -95,7 +95,7 @@ func TestDecodeParamsRejectsUnmarshalableValue(t *testing.T) {
 
 // TestScheduledAtNsRoundTripsExactly proves a start instant near 1.79e18
 // (nanosecond-scale, past float64's exact integer range) survives
-// DecodeParams exactly — the identical exact-integer round trip
+// DecodeParams exactly: the identical exact-integer round trip
 // mqttproto's own exactIntegerParams gives audio.session.start's
 // scheduledAtNs param, since this field deliberately shares that wire
 // name (see [Activation.ScheduledAtNs]'s own doc comment).
@@ -168,7 +168,7 @@ func TestScheduledAtNsOmittedWhenNil(t *testing.T) {
 // a fresh per-node clock reading must never be taken against the live show
 // session (which may already be Playing the preceding Cue) or the
 // prepare-ahead staging session (which a concurrent tick may already be
-// using for a different, later Cue) — see [ScheduleProbeSessionID]'s own
+// using for a different, later Cue), see [ScheduleProbeSessionID]'s own
 // doc comment.
 func TestScheduleProbeSessionIDIsNeverAnotherWellKnownSessionID(t *testing.T) {
 	for _, other := range []string{AudioSessionID, AnnouncementSessionID, PrepareStagingSessionID, BackgroundSessionID} {

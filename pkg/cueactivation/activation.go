@@ -69,7 +69,7 @@ type Activation struct {
 
 	// UnalignedReason is set only when this activation was part of a
 	// multi-node scheduling attempt that could not choose an instant (no
-	// target held a locked media clock) — ADR-049 decision 4's own
+	// target held a locked media clock), ADR-049 decision 4's own
 	// concrete reason, never a silent fallback to start-on-arrival. Empty
 	// whenever ScheduledAtNs is set, and empty for a single-node
 	// activation, which never attempts scheduling at all.
@@ -202,7 +202,7 @@ const PrepareStagingSessionID = "cue-activation:prepare-staging"
 // per-node media-clock evidence for a multi-node Cue's OWN upcoming
 // activation before choosing a shared start instant. It is deliberately
 // a THIRD session, distinct from both [AudioSessionID] (which may still
-// be Playing the PRECEDING Cue — preparing it would stop that Cue's own
+// be Playing the PRECEDING Cue, preparing it would stop that Cue's own
 // LTC and release its engine handle mid-playback) and
 // [PrepareStagingSessionID] (which a concurrently-dispatched prepare-ahead
 // round for a DIFFERENT, later Cue may already be using). It is never

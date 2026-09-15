@@ -236,7 +236,7 @@ func TestScheduledStartInThePastIsRefused(t *testing.T) {
 // TestStartAtPositionPresentsTheExplicitPositionAtT0 proves a scheduled
 // start's play head is exactly the caller's own position on the SAME
 // engine call, never 0 (the bookmark-less default [Manager.StartAt]
-// would use) — the defect a Start-then-Seek pair cannot avoid, per
+// would use), the defect a Start-then-Seek pair cannot avoid, per
 // [Manager.StartAtPosition]'s own doc comment.
 func TestStartAtPositionPresentsTheExplicitPositionAtT0(t *testing.T) {
 	f := newScheduledFixture(t, 20)

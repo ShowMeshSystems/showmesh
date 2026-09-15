@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
@@ -24,20 +25,44 @@ import (
 // (ADR-049's own "a Cue reaching one node behaves exactly as today").
 
 // scheduleProbeApplyStep and scheduleProbePrepareStep are two small,
-// strictly-increasing revisions for [cueactivation.ScheduleProbeSessionID]
-// — that session is never touched by anything else, so unlike
-// [cueactivation.AudioSessionRevision] this derivation owes no other
-// caller's own step numbering; it only has to increase between this
-// function's own two calls on the SAME (fresh, per-attempt) timestamp.
+// strictly-increasing revisions for [cueactivation.ScheduleProbeSessionID].
+// Every attempt serializes on [scheduleProbeNodeLock] before it touches
+// that session, so unlike [cueactivation.AudioSessionRevision] this
+// derivation owes no other caller's own step numbering; it only has to
+// increase between this function's own two calls on the SAME (fresh,
+// per-attempt) timestamp.
 const (
 	scheduleProbeApplyStep   = 0
 	scheduleProbePrepareStep = 1
 )
 
+// scheduleProbeNodeLocks serializes [cueactivation.ScheduleProbeSessionID]
+// access per node, across every concurrent scheduling attempt: the
+// Playlist loop's own tick and an operator's own direct Fire can resolve
+// onto the same node at the same time, and that session id is one fixed
+// string per node, so two overlapping attempts' apply, prepare and clear
+// calls would otherwise interleave and corrupt each other's evidence.
+//
+// Package-level, not a *handlers field: the Playlist loop
+// (cueactivationloop.go's NewCueActivationLoop) and the direct-fire HTTP
+// route each build their OWN *handlers, so a struct field could not be
+// shared between the two paths this lock must actually serialize.
+var scheduleProbeNodeLocks sync.Map // nodeID string -> *sync.Mutex
+
+// scheduleProbeNodeLock returns the one *sync.Mutex every scheduling
+// attempt touching nodeID's own probe session must hold for the whole
+// apply-prepare-clear cycle, creating it on first use. Never released
+// back: a node is a small, bounded set for the life of this process, so
+// this never grows unbounded the way a lock per ACTIVATION would.
+func scheduleProbeNodeLock(nodeID string) *sync.Mutex {
+	v, _ := scheduleProbeNodeLocks.LoadOrStore(nodeID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 // scheduleCueActivations is ADR-049 decision 3's own entry point. For
 // every audio-bearing Activation in activations (outputs.Audio != nil,
 // resolved via [cueactivate.Authorize] exactly as [handlers.
-// dispatchOneCueActivation] independently re-resolves it per node — this
+// dispatchOneCueActivation] independently re-resolves it per node: this
 // never trusts a cached resolution any more than that file's own doc
 // comment already insists on): when more than one node is audio-bearing,
 // it obtains a fresh per-node media-clock reading (a throwaway apply-and-
@@ -130,7 +155,7 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 // identical UnalignedReason), so any one of them answers for the whole
 // batch. A Cue that never attempted scheduling at all (zero or one
 // audio-bearing node) reports aligned=true with no instant and no
-// reason — ADR-049's own "a Cue reaching one node behaves exactly as
+// reason, ADR-049's own "a Cue reaching one node behaves exactly as
 // today", never reported as an unaligned failure it never attempted.
 func cueActivationAlignment(activations map[string]cueactivation.Activation) (aligned bool, unalignedReason string, scheduledAtNs *int64) {
 	for _, act := range activations {
@@ -149,19 +174,24 @@ func cueActivationAlignment(activations map[string]cueactivation.Activation) (al
 // media-clock evidence map without touching nodeID's real show session
 // (which may already be Playing the PRECEDING Cue) or the prepare-ahead
 // staging session (which a concurrent tick may already be using for a
-// DIFFERENT, later Cue) — see [cueactivation.ScheduleProbeSessionID]'s own
+// DIFFERENT, later Cue), see [cueactivation.ScheduleProbeSessionID]'s own
 // doc comment. The probe apply carries only Media: no LTC start offset,
 // no mix policy, no announcement role, so it can never start LTC or
 // participate in a duck/interrupt relationship even if a caller later
-// mistakenly started it (which this function itself never does — Prepare
+// mistakenly started it (which this function itself never does, Prepare
 // only, never Start).
 //
-// The probe session is cleared on every path — evidence obtained,
-// refused, or never returned at all — via a deferred best-effort
-// audio.session.clear, so a probe never accumulates a loaded engine
-// handle nodeID's own asset directory has to carry for longer than this
-// one selection.
+// The whole apply-prepare-clear cycle runs under [scheduleProbeNodeLock],
+// so two concurrent scheduling attempts touching nodeID never interleave
+// on this one fixed session id. The probe session is cleared on every
+// path, evidence obtained, refused, or never returned at all, via a
+// deferred best-effort audio.session.clear, so a probe never accumulates
+// a loaded engine handle nodeID's own asset directory has to carry for
+// longer than this one selection.
 func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID string, media pkgaudio.MediaRef, issuer cueActivationIssuer) map[string]any {
+	mu := scheduleProbeNodeLock(nodeID)
+	mu.Lock()
+	defer mu.Unlock()
 	defer h.clearScheduleProbe(ctx, now, nodeID, issuer)
 
 	session := cueactivation.ScheduleProbeSessionID
@@ -216,7 +246,7 @@ func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID 
 }
 
 // clearScheduleProbe best-effort clears [cueactivation.ScheduleProbeSessionID]
-// on nodeID, unconditionally — see [handlers.readScheduleProbe]'s own doc
+// on nodeID, unconditionally: see [handlers.readScheduleProbe]'s own doc
 // comment for why this runs on every path. audio.session.clear is exempt
 // from stale-revision refusal ([audio.Manager.Clear]'s own doc comment),
 // so a fixed, always-fresh revision is sufficient; failure is logged and

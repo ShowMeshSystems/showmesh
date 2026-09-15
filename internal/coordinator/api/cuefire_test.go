@@ -188,7 +188,7 @@ func TestHandleActivateCueNoActiveShowRefused(t *testing.T) {
 // own TestScheduleCueActivations* tests exercise that step directly with
 // two real audio-bearing nodes; show.cue's audio output is still
 // single-target pre-merge, so a Fire click against ONE cueId can only
-// ever resolve ONE audio-bearing node — see that file's own doc comment).
+// ever resolve ONE audio-bearing node, see that file's own doc comment).
 // A single-audio-node Cue never attempted scheduling at all, so this
 // proves the trivial, wire-visible half of ADR-049 decision 5: Aligned
 // reports true with no instant and no reason, end to end through the real

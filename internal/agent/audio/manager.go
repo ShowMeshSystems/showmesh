@@ -438,7 +438,7 @@ func (m *Manager) StartAt(ctx context.Context, id pkgaudio.SessionID, invocation
 // zero position. A Start-then-Seek pair cannot present position at atNs:
 // Start always begins from the bookmark (or 0), and Seek only re-anchors
 // an ALREADY-STARTED handle, so between the two calls the engine has
-// already presented from the wrong position for one buffer — audible on
+// already presented from the wrong position for one buffer, audible on
 // a single node, and on a multi-node scheduled start (ADR-049 decision
 // 3) a different wrong position per node, since each reaches its own
 // Seek at a different wall-clock moment. position overrides whatever

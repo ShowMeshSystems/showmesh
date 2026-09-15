@@ -156,9 +156,9 @@ type cueActivationDispatchOutcome struct {
 // [dispatchCueActivationsConcurrently] directly, for the identical reason
 // its own doc comment already gives for never calling this function: it
 // must not also fire dispatchPrepareAheadAudio). It runs
-// [handlers.scheduleCueActivations] once over the whole batch — choosing
+// [handlers.scheduleCueActivations] once over the whole batch, choosing
 // one shared start instant for more than one audio-bearing Activation,
-// ADR-049 decision 3 — then authorizes and dispatches one cue.activate per
+// ADR-049 decision 3, then authorizes and dispatches one cue.activate per
 // (nodeID, Activation) in activations, one node at a time no longer:
 // every node dispatches CONCURRENTLY (ADR-049 decision 3's "one node
 // refusing... never stops... the others"), so one node's own up-to-
@@ -166,24 +166,23 @@ type cueActivationDispatchOutcome struct {
 // another's. See this file's own doc comment for why [cueactivate.
 // Authorize] runs again per node here, rather than trusting activations as
 // already-authorized. A node cueauth refuses is simply skipped (recorded
-// in its own outcome); it never blocks dispatch to the other nodes — H4's
+// in its own outcome); it never blocks dispatch to the other nodes: H4's
 // envelope is per-node, so a refusal for one node is not evidence about
 // any other.
 func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) []cueActivationDispatchOutcome {
 	h.scheduleCueActivations(ctx, now, activations, issuer, pin)
 	return dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
 		outcome := h.dispatchOneCueActivation(ctx, now, nodeID, act, issuer, pin)
-		// Best-effort, independent of cue N's own outcome above — see
+		// Best-effort, independent of cue N's own outcome above: see
 		// dispatchPrepareAheadAudio's own doc comment (cueactivationloop.go)
 		// for why a wrong or stale guess here costs nothing. Cue N's own
 		// activation, above, has already been dispatched (or refused) by
-		// the time this runs, so nothing past this point may affect it —
-		// including a panic: this call runs on its own per-node goroutine,
-		// itself launched from runTick's own detached goroutine
-		// (cueactivationloop.go's Run), so an unrecovered panic here would
-		// not just skip a prepare-ahead cycle, it would crash this entire
-		// coordinator process. h.safeDispatchPrepareAheadAudio makes
-		// best-effort mean genuinely total.
+		// the time this runs, so nothing past this point may affect it.
+		// h.safeDispatchPrepareAheadAudio carries its own recover; this
+		// whole closure is additionally wrapped by
+		// dispatchCueActivationsConcurrently's own recover, so a panic
+		// anywhere in either call becomes this one node's own Err, never a
+		// crash of the whole coordinator process.
 		h.safeDispatchPrepareAheadAudio(ctx, now, nodeID, act, issuer)
 		return outcome
 	})
@@ -191,11 +190,20 @@ func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, ac
 
 // dispatchCueActivationsConcurrently runs fn for every (nodeID, act) pair
 // in activations on its own goroutine and waits for all of them, so one
-// node's own dispatch never delays or blocks another's — ADR-049 decision
+// node's own dispatch never delays or blocks another's, ADR-049 decision
 // 3's own rule, which applies to every multi-node Cue dispatch (scheduled
 // or not: a render-only second node, or an unaligned audio one, must be
 // just as free of a slow sibling's delay). Order in the returned slice is
-// not meaningful — callers key results by NodeID, never by position.
+// not meaningful: callers key results by NodeID, never by position.
+//
+// fn is a large call doing JSON encoding, store writes, and an MQTT round
+// trip, on a goroutine this function itself launches: an unrecovered
+// panic there would take down the whole coordinator process, not just
+// this one node's own outcome, exactly the failure
+// safeDispatchPrepareAheadAudio (cueactivationloop.go) already exists to
+// prevent for its own narrower call. Recovering here gives every fn call
+// that same guarantee: a panic becomes this one node's own Err, and every
+// other node's own outcome is unaffected.
 func dispatchCueActivationsConcurrently(activations map[string]cueactivation.Activation, fn func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome) []cueActivationDispatchOutcome {
 	nodeIDs := make([]string, 0, len(activations))
 	for nodeID := range activations {
@@ -207,6 +215,11 @@ func dispatchCueActivationsConcurrently(activations map[string]cueactivation.Act
 		wg.Add(1)
 		go func(i int, nodeID string) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					out[i] = cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("panic dispatching cue activation for node %q: %v", nodeID, r)}
+				}
+			}()
 			out[i] = fn(nodeID, activations[nodeID])
 		}(i, nodeID)
 	}

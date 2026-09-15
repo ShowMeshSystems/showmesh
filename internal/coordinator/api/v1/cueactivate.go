@@ -20,7 +20,7 @@ type CueActivateResponse struct {
 	// it reached more than one and the coordinator chose one shared start
 	// instant for all of them. False only when more than one audio-
 	// bearing node was reached and no usable media-clock reading could be
-	// obtained — every one of those nodes still started, on arrival,
+	// obtained: every one of those nodes still started, on arrival,
 	// never reported as a synchronized success it did not reach.
 	Aligned bool `json:"aligned"`
 	// UnalignedReason is the concrete reason, non-empty only when Aligned

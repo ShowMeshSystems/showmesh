@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,7 +45,7 @@ func putAudioNodeNoLTCForTest(t *testing.T, st *store.Store, nodeID string) {
 }
 
 // putTargetedAudioCueForTest writes a show.cue whose audio output
-// explicitly targets nodeID — the one node this Cue resolves on,
+// explicitly targets nodeID, the one node this Cue resolves on,
 // pre-merge (assetsync.audioTargets.Owns's own single-target rule).
 func putTargetedAudioCueForTest(t *testing.T, st *store.Store, cueID, showID, nodeID string) {
 	t.Helper()
@@ -92,7 +94,7 @@ func twoNodeScheduleFixture(t *testing.T, setup *audioDispatchTestSetup, now tim
 	putAuthorizedAudioAssetForTest(t, setup.st, showID, "cue-second", "audio-second", now)
 	// A Cue only appears in a node's own resolved catalog once some
 	// show.playlist entry references it (assetsync's own referencedCueIDs
-	// scoping rule) — this playlist exists only to satisfy that, its
+	// scoping rule), this playlist exists only to satisfy that, its
 	// runner/entries are otherwise irrelevant to this test.
 	putPlaylistForTest(t, setup.st, "playlist-schedule", config.ShowPlaylistPayload{
 		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
@@ -181,8 +183,8 @@ func TestScheduleCueActivationsSelectsOneInstantForTwoLockedTargets(t *testing.T
 
 // TestScheduleCueActivationsUnalignedWhenNoHolderLocked proves ADR-049
 // decision 4: when the clock-holder node's own reading is invalid (its
-// provider is not locked), both nodes are left WITHOUT an instant — they
-// start on arrival — and the batch reports the concrete reason, never a
+// provider is not locked), both nodes are left WITHOUT an instant, they
+// start on arrival, and the batch reports the concrete reason, never a
 // synchronized success it did not reach.
 func TestScheduleCueActivationsUnalignedWhenNoHolderLocked(t *testing.T) {
 	now := testNow
@@ -221,7 +223,7 @@ func TestScheduleCueActivationsUnalignedWhenNoHolderLocked(t *testing.T) {
 
 // TestScheduleCueActivationsSkipsSingleAudioBearingNode proves the
 // untouched path: a single audio-bearing node never attempts a reading
-// round at all — no instant, no probe dispatch, nothing added to a
+// round at all: no instant, no probe dispatch, nothing added to a
 // single-node Cue's Activation, matching ADR-049's own "a Cue reaching
 // one node behaves exactly as today."
 func TestScheduleCueActivationsSkipsSingleAudioBearingNode(t *testing.T) {
@@ -252,7 +254,7 @@ func TestScheduleCueActivationsSkipsSingleAudioBearingNode(t *testing.T) {
 // direct, deterministic proof of dispatchCueActivationsConcurrently's own
 // contract: a node whose fn call is still blocked does not hold up
 // another node's fn call returning, or the other's outcome being
-// available, before the slow one unblocks — ADR-049 decision 3's "one
+// available, before the slow one unblocks: ADR-049 decision 3's "one
 // node refusing or failing never stops, cancels, or rolls back the
 // others."
 func TestDispatchCueActivationsConcurrentlyDoesNotLetOneNodeDelayAnother(t *testing.T) {
@@ -281,6 +283,39 @@ func TestDispatchCueActivationsConcurrentlyDoesNotLetOneNodeDelayAnother(t *test
 		t.Fatal("the fast node's own dispatch never returned; it is blocked behind the slow node's")
 	}
 	close(release)
+}
+
+// TestDispatchCueActivationsConcurrentlyRecoversAPanicPerNode proves a
+// panicking per-node fn call never takes the whole coordinator process
+// down (the process crashing is exactly what an unrecovered panic in a
+// launched goroutine does) and never corrupts another node's own outcome:
+// the panicking node's own result carries an Err, and the other node's
+// own dispatched/confirmed outcome comes back untouched.
+func TestDispatchCueActivationsConcurrentlyRecoversAPanicPerNode(t *testing.T) {
+	activations := map[string]cueactivation.Activation{
+		"panics": {ActivationID: "act-panics"},
+		"fine":   {ActivationID: "act-fine"},
+	}
+	out := dispatchCueActivationsConcurrently(activations, func(nodeID string, act cueactivation.Activation) cueActivationDispatchOutcome {
+		if nodeID == "panics" {
+			panic("boom")
+		}
+		return cueActivationDispatchOutcome{NodeID: nodeID, Dispatched: true, Confirmed: true}
+	})
+	byNode := map[string]cueActivationDispatchOutcome{}
+	for _, o := range out {
+		byNode[o.NodeID] = o
+	}
+	if len(byNode) != 2 {
+		t.Fatalf("outcomes = %+v, want exactly 2", out)
+	}
+	if byNode["panics"].Err == nil {
+		t.Fatalf("panicking node outcome = %+v, want a non-nil Err recovered from the panic", byNode["panics"])
+	}
+	fine := byNode["fine"]
+	if !fine.Dispatched || !fine.Confirmed || fine.Err != nil {
+		t.Fatalf("fine node outcome = %+v, want dispatched and confirmed, untouched by the other node's panic", fine)
+	}
 }
 
 // TestDispatchCueActivationsOneNodeRefusalDoesNotAffectTheOther proves
@@ -320,5 +355,111 @@ func TestDispatchCueActivationsOneNodeRefusalDoesNotAffectTheOther(t *testing.T)
 	}
 	if second.NodeOutcome != "stale-catalog" {
 		t.Fatalf("audio-second NodeOutcome = %q, want its own refusal reason, not silently dropped or merged with audio-holder's", second.NodeOutcome)
+	}
+}
+
+// TestDispatchCueActivationsScheduledStartInPastOnOneNodeDoesNotStopTheOther
+// covers MANAGER DECISION 2's own scenario: a scheduled multi-node
+// activation where one node's own StartAt refuses because the shared
+// instant has already passed on ITS clock (pkgaudio.ReasonScheduledStartInPast)
+// by the time the dispatch reaches it. That refusal is reported as this
+// one node's own outcome and reason; the other node still starts.
+func TestDispatchCueActivationsScheduledStartInPastOnOneNodeDoesNotStopTheOther(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	activations := twoNodeScheduleFixture(t, setup, now)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"audio-holder:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"audio-second:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+		"audio-holder:cue.activate":          cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized),
+		"audio-second:cue.activate":          cueActivationNodeResultPayload(false, pkgaudio.ReasonScheduledStartInPast),
+	}
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcomes := h.dispatchCueActivations(context.Background(), now, activations, issuer, nil)
+	byNode := map[string]cueActivationDispatchOutcome{}
+	for _, o := range outcomes {
+		byNode[o.NodeID] = o
+	}
+	holder := byNode["audio-holder"]
+	second := byNode["audio-second"]
+	if !holder.Dispatched || !holder.Confirmed {
+		t.Fatalf("audio-holder outcome = %+v, want dispatched and confirmed: one node's scheduled_start_in_past refusal must never stop the other", holder)
+	}
+	if second.Confirmed || second.NodeOutcome != pkgaudio.ReasonScheduledStartInPast {
+		t.Fatalf("audio-second outcome = %+v, want NOT confirmed with NodeOutcome %q", second, pkgaudio.ReasonScheduledStartInPast)
+	}
+}
+
+// TestReadScheduleProbeSerializesConcurrentAttemptsOnOneNode proves
+// MANAGER DECISION 3's own fix: two concurrent scheduling attempts (a
+// Playlist tick and an operator Fire, for example) that both resolve onto
+// ONE node never interleave their apply, prepare, and clear calls on
+// cueactivation.ScheduleProbeSessionID, that one fixed session id per
+// node. Each attempt's own three dispatches land as a contiguous block,
+// never interleaved with the other's, and both attempts still clear the
+// probe.
+func TestReadScheduleProbeSerializesConcurrentAttemptsOnOneNode(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:test"}
+
+	mediaA := pkgaudio.MediaRef{AssetID: "asset-a", RuntimeFilename: "a.wav"}
+	mediaB := pkgaudio.MediaRef{AssetID: "asset-b", RuntimeFilename: "b.wav"}
+	nowA := testNow
+	nowB := testNow.Add(time.Millisecond) // distinct so the two attempts' invocation keys never collide
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		h.readScheduleProbe(context.Background(), nowA, "shared-node", mediaA, issuer)
+	}()
+	go func() {
+		defer wg.Done()
+		h.readScheduleProbe(context.Background(), nowB, "shared-node", mediaB, issuer)
+	}()
+	wg.Wait()
+
+	var forNode []dispatchedAudioCommand
+	for _, d := range setup.pub.dispatched {
+		if d.NodeID == "shared-node" {
+			forNode = append(forNode, d)
+		}
+	}
+	if len(forNode) != 6 {
+		t.Fatalf("dispatched %d commands for shared-node, want 6 (apply, prepare, clear per attempt)", len(forNode))
+	}
+	labelOf := func(d dispatchedAudioCommand) byte {
+		key, _ := d.Params["invocationId"].(string)
+		switch {
+		case strings.Contains(key, nowA.Format(time.RFC3339Nano)):
+			return 'A'
+		case strings.Contains(key, nowB.Format(time.RFC3339Nano)):
+			return 'B'
+		default:
+			return '?'
+		}
+	}
+	var sequence []byte
+	clears := 0
+	for _, d := range forNode {
+		sequence = append(sequence, labelOf(d))
+		if d.Action == "audio.session.clear" {
+			clears++
+		}
+	}
+	got := string(sequence)
+	if got != "AAABBB" && got != "BBBAAA" {
+		t.Fatalf("dispatch order = %q, want AAABBB or BBBAAA: one attempt's whole apply-prepare-clear cycle must complete before the other's begins", got)
+	}
+	if clears != 2 {
+		t.Fatalf("audio.session.clear dispatched %d times, want 2: both attempts must clear the probe", clears)
 	}
 }

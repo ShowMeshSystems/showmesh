@@ -464,6 +464,7 @@ describe('Live Control', () => {
         serverTime: '2026-08-10T21:14:22Z',
         cueId,
         nodes: [{ nodeId: 'audio-01', dispatched: true, confirmed: true, outcome: 'confirmed' }],
+        aligned: true,
       }),
     )
     await renderAnnouncements()
@@ -476,6 +477,44 @@ describe('Live Control', () => {
     expect(stubs.activateCue).toHaveBeenCalledExactlyOnceWith('welcome')
     expect(await screen.findByText('Accepted')).toBeInTheDocument()
     expect(screen.getByText(/audio-01: confirmed/)).toBeInTheDocument()
+  })
+
+  it('shows a multi-node Fire as aligned to the shared instant it reports', async () => {
+    stubs.activateCue = vi.fn(() =>
+      Promise.resolve({
+        serverTime: '2026-08-10T21:14:22Z',
+        cueId: 'welcome',
+        nodes: [
+          { nodeId: 'audio-01', dispatched: true, confirmed: true, outcome: 'confirmed' },
+          { nodeId: 'audio-02', dispatched: true, confirmed: true, outcome: 'confirmed' },
+        ],
+        aligned: true,
+        scheduledAtNs: 1_789_012_345_678_901_234,
+      }),
+    )
+    await renderAnnouncements()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Fire' })[0]!)
+    expect(await screen.findByText('Aligned')).toBeInTheDocument()
+    expect(screen.getByText(/same shared instant/)).toBeInTheDocument()
+  })
+
+  it('shows a multi-node Fire as unaligned with the concrete reason, never a synchronized success it did not reach', async () => {
+    stubs.activateCue = vi.fn(() =>
+      Promise.resolve({
+        serverTime: '2026-08-10T21:14:22Z',
+        cueId: 'welcome',
+        nodes: [
+          { nodeId: 'audio-01', dispatched: true, confirmed: true, outcome: 'confirmed' },
+          { nodeId: 'audio-02', dispatched: true, confirmed: true, outcome: 'confirmed' },
+        ],
+        aligned: false,
+        unalignedReason: 'started on arrival, NOT aligned to a shared instant: no target holds the shared media clock',
+      }),
+    )
+    await renderAnnouncements()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Fire' })[0]!)
+    expect(await screen.findByText('Unaligned')).toBeInTheDocument()
+    expect(screen.getByText(/no target holds the shared media clock/)).toBeInTheDocument()
   })
 
   it('reports a refusal with its reason when POST /cues/{id}/activate fails, never a claimed success', async () => {
