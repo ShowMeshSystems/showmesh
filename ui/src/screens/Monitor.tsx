@@ -388,19 +388,40 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   const [ackError, setAckError] = useState<string | null>(null)
   const [clearingObservation, setClearingObservation] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
-  const [reconciliation, setReconciliation] = useState<FPPPlaylistEntryReconciliationResponse | null>(null)
-  const [reconciliationError, setReconciliationError] = useState<string | null>(null)
+  // Tied to the instanceUuid each was fetched for, so switching the
+  // selected instance never shows a stale verdict or error under the
+  // newly selected one while its own fetch is still in flight (render
+  // filters both against instance.instanceUuid below).
+  const [reconciliation, setReconciliation] = useState<{ instanceUuid: string; response: FPPPlaylistEntryReconciliationResponse } | null>(null)
+  const [reconciliationError, setReconciliationError] = useState<{ instanceUuid: string; message: string } | null>(null)
   // Keyed on the numeric sequence, not the observation object: it is a
   // new identity every snapshot.
   const latestObservationSequence =
     model.fppPlaylistEntryObservations.find((o) => o.instanceUuid === instance.instanceUuid)?.sequence ?? null
   useEffect(() => {
-    if (instance.instanceUuid === null) { setReconciliation(null); return }
+    if (instance.instanceUuid === null) {
+      setReconciliation(null)
+      setReconciliationError(null)
+      return
+    }
+    const instanceUuid = instance.instanceUuid
     let cancelled = false
     setReconciliationError(null)
-    getFPPPlaylistEntryReconciliation(instance.instanceUuid).then((response) => { if (!cancelled) setReconciliation(response) }).catch((err: unknown) => { if (!cancelled) setReconciliationError(describeApiError(err)) })
+    getFPPPlaylistEntryReconciliation(instanceUuid)
+      .then((response) => {
+        if (!cancelled) setReconciliation({ instanceUuid, response })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        // A failed refetch must not leave the previous success showing
+        // beside the failure strip.
+        setReconciliation(null)
+        setReconciliationError({ instanceUuid, message: describeApiError(err) })
+      })
     return () => { cancelled = true }
   }, [instance.instanceUuid, latestObservationSequence])
+  const currentReconciliation = reconciliation?.instanceUuid === instance.instanceUuid ? reconciliation.response : null
+  const currentReconciliationError = reconciliationError?.instanceUuid === instance.instanceUuid ? reconciliationError.message : null
   const acknowledge = () => {
     setAcknowledging(true)
     setAckError(null)
@@ -454,14 +475,14 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
       </div>
       {ackError !== null && <RuledStrip absence="failed" label="Acknowledgement refused" fact={ackError} />}
       {clearError !== null && <RuledStrip absence="failed" label="Observation reset refused" fact={clearError} />}
-      {reconciliation !== null && (
+      {currentReconciliation !== null && (
         <div className="sm-outcome">
-          <StatusPair tone={reconciliation.outcome === 'resolved' ? 'good' : 'warn'} label={reconciliation.outcome.replaceAll('-', ' ')} />
-          <p className="sm-outcome__detail">{reconciliation.reason}</p>
-          <p className="sm-small sm-faint">{`Checked ${formatClock(reconciliation.serverTime) ?? 'at an unrecorded time'}`}</p>
+          <StatusPair tone={currentReconciliation.outcome === 'resolved' ? 'good' : 'warn'} label={currentReconciliation.outcome.replaceAll('-', ' ')} />
+          <p className="sm-outcome__detail">{currentReconciliation.reason}</p>
+          <p className="sm-small sm-faint">{`Checked ${formatClock(currentReconciliation.serverTime) ?? 'at an unrecorded time'}`}</p>
         </div>
       )}
-      {reconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={reconciliationError} />}
+      {currentReconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={currentReconciliationError} />}
     </div>
   )
 }

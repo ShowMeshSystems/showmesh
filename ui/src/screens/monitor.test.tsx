@@ -5,6 +5,7 @@ import { ApiError } from '../api'
 import type { Event, FPPInstance, FPPPlaylistEntryObservation, Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
+import { formatClock } from '../domain/time'
 import { Monitor } from './Monitor'
 import { activityRows, facetCounts, fleetRows, fleetSummary } from './monitorModel'
 
@@ -418,7 +419,7 @@ describe('Monitor · Fleet · FPP inspector · playlist-entry reconciliation', (
     return result
   }
 
-  it('refetches the reconciliation verdict when the selected instance’s observation sequence advances (fails on unmodified code: times out waiting for a second fetch)', async () => {
+  it('refetches the reconciliation verdict when the selected instance’s observation sequence advances', async () => {
     let calls = 0
     reconciliationStubs.getFPPPlaylistEntryReconciliation = () => {
       calls += 1
@@ -493,10 +494,9 @@ describe('Monitor · Fleet · FPP inspector · playlist-entry reconciliation', (
   })
 
   it('renders only "Checked <clock>", never an age, when the response serverTime is later than the inspector’s nowIso', async () => {
-    // screenWith's nowIso is derived from serverTime '2026-09-01T00:07:00Z'
-    // captured at Date.now(); a response serverTime after that (the
-    // coordinator's clock advancing between the inspector's render and the
-    // fetch resolving) must never read as a negative age.
+    // A response serverTime after screenWith's nowIso (the coordinator's
+    // clock advancing between render and fetch resolution) must never
+    // read as a negative age.
     reconciliationStubs.getFPPPlaylistEntryReconciliation = () => Promise.resolve(reconciliationAt('2026-09-01T00:07:05Z'))
 
     renderWithObservations([observationAt('barn-uuid', 5)])
@@ -505,5 +505,120 @@ describe('Monitor · Fleet · FPP inspector · playlist-entry reconciliation', (
     expect(checkedLine.textContent).toContain('Checked')
     expect(checkedLine.textContent).not.toMatch(/ago/)
     expect(checkedLine.textContent).not.toMatch(/in the future/)
+  })
+
+  it('renders the response’s own serverTime as the Checked clock, not nowIso’s', async () => {
+    // screenWith's nowIso comes from serverTime '2026-09-01T00:07:00Z'; a
+    // response serverTime hours later must render ITS clock, an exact
+    // match that only passes if the template reads response.serverTime.
+    const responseServerTime = '2026-09-01T03:45:00Z'
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => Promise.resolve(reconciliationAt(responseServerTime))
+
+    renderWithObservations([observationAt('barn-uuid', 5)])
+
+    const checkedLine = await screen.findByText(/^Checked /)
+    expect(checkedLine.textContent).toBe(`Checked ${formatClock(responseServerTime)}`)
+  })
+
+  it('clears a stale reconciliation error once a later refetch for the same instance succeeds', async () => {
+    let calls = 0
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => {
+      calls += 1
+      if (calls === 1) return Promise.reject(new ApiError('server error', 500))
+      return Promise.resolve(reconciliationAt('2026-09-01T00:07:00Z', 'resolved', 'Recovered verdict.'))
+    }
+
+    const { rerender } = renderWithObservations([observationAt('barn-uuid', 5)])
+    await waitFor(() => expect(screen.getByText('Reconciliation unavailable')).toBeInTheDocument())
+
+    rerender(screenWith([observationAt('barn-uuid', 6)]))
+
+    await waitFor(() => expect(screen.getByText('Recovered verdict.')).toBeInTheDocument())
+    expect(screen.queryByText('Reconciliation unavailable')).not.toBeInTheDocument()
+  })
+
+  it('clears the previous verdict when a refetch fails after an earlier success, so only the failure strip shows', async () => {
+    let calls = 0
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => {
+      calls += 1
+      if (calls === 1) return Promise.resolve(reconciliationAt('2026-09-01T00:07:00Z', 'resolved', 'First, good verdict.'))
+      return Promise.reject(new ApiError('server error', 500))
+    }
+
+    const { rerender } = renderWithObservations([observationAt('barn-uuid', 5)])
+    await waitFor(() => expect(screen.getByText('First, good verdict.')).toBeInTheDocument())
+
+    rerender(screenWith([observationAt('barn-uuid', 6)]))
+
+    await waitFor(() => expect(screen.getByText('Reconciliation unavailable')).toBeInTheDocument())
+    expect(screen.queryByText('First, good verdict.')).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Checked /)).not.toBeInTheDocument()
+  })
+
+  it('clears a reconciliation error once the selected instance has no instanceUuid', async () => {
+    const instanceNoUuid = { ...fpp('shed-player', 'healthy'), instanceUuid: null } as FPPInstance
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => Promise.reject(new ApiError('server error', 500))
+
+    render(
+      <ModelContext.Provider
+        value={{
+          ...initialModel(),
+          fpp: [withUuid, instanceNoUuid],
+          fppPlaylistEntryObservations: [observationAt('barn-uuid', 5)],
+          serverTime: '2026-09-01T00:07:00Z',
+          serverTimeReceivedAt: Date.now(),
+        }}
+      >
+        <MemoryRouter initialEntries={['/monitor/fleet']}>
+          <Routes>
+            <Route path="/monitor/fleet" element={<Monitor />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+
+    fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
+    await waitFor(() => expect(screen.getByText('Reconciliation unavailable')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('row', { name: 'View shed-player' }))
+
+    expect(screen.queryByText('Reconciliation unavailable')).not.toBeInTheDocument()
+  })
+
+  it('hides A’s verdict and Checked line the instant B is selected, before B’s own fetch returns', async () => {
+    const instanceB = { ...fpp('shed-player', 'healthy'), instanceUuid: 'shed-uuid' } as FPPInstance
+    let callIndex = 0
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => {
+      const index = callIndex++
+      if (index === 0) return Promise.resolve(reconciliationAt('2026-09-01T00:07:00Z', 'resolved', 'A’s verdict.'))
+      return new Promise(() => {})
+    }
+
+    render(
+      <ModelContext.Provider
+        value={{
+          ...initialModel(),
+          fpp: [withUuid, instanceB],
+          fppPlaylistEntryObservations: [observationAt('barn-uuid', 5)],
+          serverTime: '2026-09-01T00:07:00Z',
+          serverTimeReceivedAt: Date.now(),
+        }}
+      >
+        <MemoryRouter initialEntries={['/monitor/fleet']}>
+          <Routes>
+            <Route path="/monitor/fleet" element={<Monitor />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+
+    fireEvent.click(screen.getByRole('row', { name: 'View barn-player' }))
+    await waitFor(() => expect(screen.getByText('A’s verdict.')).toBeInTheDocument())
+    expect(screen.getByText(/^Checked /)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('row', { name: 'View shed-player' }))
+
+    expect(screen.queryByText('A’s verdict.')).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Checked /)).not.toBeInTheDocument()
   })
 })
