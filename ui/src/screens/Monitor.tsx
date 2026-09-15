@@ -390,11 +390,8 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   const [clearError, setClearError] = useState<string | null>(null)
   const [reconciliation, setReconciliation] = useState<FPPPlaylistEntryReconciliationResponse | null>(null)
   const [reconciliationError, setReconciliationError] = useState<string | null>(null)
-  // Keyed on the numeric sequence, not the observation object (a new
-  // identity every snapshot) or its receivedAt: FPP advancing entries
-  // moves this instance's model.fppPlaylistEntryObservations entry, and
-  // the verdict must follow it live instead of only fetching once per
-  // selection.
+  // Keyed on the numeric sequence, not the observation object: it is a
+  // new identity every snapshot.
   const latestObservationSequence =
     model.fppPlaylistEntryObservations.find((o) => o.instanceUuid === instance.instanceUuid)?.sequence ?? null
   useEffect(() => {
