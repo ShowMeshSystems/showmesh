@@ -388,10 +388,8 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   const [ackError, setAckError] = useState<string | null>(null)
   const [clearingObservation, setClearingObservation] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
-  // Tied to the instanceUuid each was fetched for, so switching the
-  // selected instance never shows a stale verdict or error under the
-  // newly selected one while its own fetch is still in flight (render
-  // filters both against instance.instanceUuid below).
+  // Tied to the instanceUuid each was fetched for, so another instance's
+  // verdict or error never renders under a newly selected one.
   const [reconciliation, setReconciliation] = useState<{ instanceUuid: string; response: FPPPlaylistEntryReconciliationResponse } | null>(null)
   const [reconciliationError, setReconciliationError] = useState<{ instanceUuid: string; message: string } | null>(null)
   // Keyed on the numeric sequence, not the observation object: it is a
