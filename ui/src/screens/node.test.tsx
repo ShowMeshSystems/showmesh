@@ -427,6 +427,24 @@ describe('Node detail', () => {
     expect(stubs.declareNode).toHaveBeenCalledWith('media-garage', 'New label', '')
   })
 
+  it('declares an undeclared node from the Declared row without a label edit', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    stubs.declareNode = vi.fn().mockResolvedValue({})
+    const undeclared = node()
+    renderScreen([{ ...undeclared, declaration: { ...undeclared.declaration, declared: false, declaredAt: null, declaredByPrincipalId: null, declaredByPrincipalName: null } }])
+    expect(screen.getByText('Not declared')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Declare node' }))
+    await waitFor(() => expect(stubs.declareNode).toHaveBeenCalledWith('media-garage', 'Garage bay projector host', ''))
+  })
+
+  it('shows no Declare button on a declared node', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [] })
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    renderScreen([node()])
+    expect(screen.queryByRole('button', { name: 'Declare node' })).not.toBeInTheDocument()
+  })
+
   it('renders surfaces assigned to this node with their own geometry and rendering state', async () => {
     stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
     stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
