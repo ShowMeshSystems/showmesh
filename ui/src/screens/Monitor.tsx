@@ -16,7 +16,7 @@ import {
   type Connection,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
-import { ageMs, effectiveServerTimeIso, formatClock, formatDuration } from '../domain/time'
+import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import {
   acknowledgeFPPInstanceUUIDChange,
   ApiError,
@@ -458,11 +458,7 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
         <div className="sm-outcome">
           <StatusPair tone={reconciliation.outcome === 'resolved' ? 'good' : 'warn'} label={reconciliation.outcome.replaceAll('-', ' ')} />
           <p className="sm-outcome__detail">{reconciliation.reason}</p>
-          <p className="sm-small sm-faint">
-            {`Checked ${formatClock(reconciliation.serverTime) ?? 'at an unrecorded time'}${
-              ageMs(reconciliation.serverTime, nowIso) === null ? '' : ` · ${formatDuration(ageMs(reconciliation.serverTime, nowIso)!)} ago`
-            }`}
-          </p>
+          <p className="sm-small sm-faint">{`Checked ${formatClock(reconciliation.serverTime) ?? 'at an unrecorded time'}`}</p>
         </div>
       )}
       {reconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={reconciliationError} />}

@@ -491,4 +491,19 @@ describe('Monitor · Fleet · FPP inspector · playlist-entry reconciliation', (
     expect(screen.getByText('Second, newer response.')).toBeInTheDocument()
     expect(screen.queryByText('First, stale response.')).not.toBeInTheDocument()
   })
+
+  it('renders only "Checked <clock>", never an age, when the response serverTime is later than the inspector’s nowIso', async () => {
+    // screenWith's nowIso is derived from serverTime '2026-09-01T00:07:00Z'
+    // captured at Date.now(); a response serverTime after that (the
+    // coordinator's clock advancing between the inspector's render and the
+    // fetch resolving) must never read as a negative age.
+    reconciliationStubs.getFPPPlaylistEntryReconciliation = () => Promise.resolve(reconciliationAt('2026-09-01T00:07:05Z'))
+
+    renderWithObservations([observationAt('barn-uuid', 5)])
+
+    const checkedLine = await screen.findByText(/^Checked /)
+    expect(checkedLine.textContent).toContain('Checked')
+    expect(checkedLine.textContent).not.toMatch(/ago/)
+    expect(checkedLine.textContent).not.toMatch(/in the future/)
+  })
 })
