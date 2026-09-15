@@ -487,6 +487,7 @@ func (e *Engine) buildPipeline() error {
 	if err := linkInterleaveToSink(bin, interleave, sink, e.cfg.ChannelCount, positionBits); err != nil {
 		return err
 	}
+	dropLeakedQosEvents(interleave)
 
 	programSet := make(map[int]int, len(e.cfg.ProgramChannels)) // channel index -> position in ProgramChannels
 	for pos, ch := range e.cfg.ProgramChannels {
@@ -895,6 +896,26 @@ func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCoun
 		return errors.New("could not link interleave's format adaptation chain to sink")
 	}
 	return nil
+}
+
+// dropLeakedQosEvents drops each GST_EVENT_QOS on interleave's src pad
+// because interleave.c (GStreamer 1.26.2) refuses an upstream QOS event
+// without unreffing it; the sink's own bus QOS message is unaffected.
+func dropLeakedQosEvents(interleave gst.Element) {
+	interleave.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventUpstream,
+		func(pad gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+			ev := info.GetEvent()
+			if ev == nil {
+				return gst.PadProbeOK
+			}
+			// Must drop this reference ourselves rather than wait on GC.
+			isQos := ev.GetType() == gst.EventQos
+			gst.UnsafeEventUnref(ev)
+			if isQos {
+				return gst.PadProbeDrop
+			}
+			return gst.PadProbeOK
+		})
 }
 
 // addMixerKeepAlive gives mixer one permanently connected silent sink pad,
