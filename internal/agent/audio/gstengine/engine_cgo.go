@@ -898,14 +898,9 @@ func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCoun
 	return nil
 }
 
-// dropLeakedQosEvents frees the GST_EVENT_QOS the sink's qos=true posts
-// upstream on every render before it reaches interleave's own src-pad
-// event handler: that handler (gst-plugins-good's interleave.c, GStreamer
-// 1.26.2, "QoS might be tricky") refuses the event without ever calling
-// gst_event_unref on it, leaking one GstEvent per render indefinitely.
-// Dropping it here, on interleave's own pad, does not touch the sink's
-// bus-level QOS message, which watchBus's GlitchCounts.QosEvents already
-// counts independently and unaffected by this.
+// dropLeakedQosEvents drops each GST_EVENT_QOS on interleave's src pad
+// because interleave.c (GStreamer 1.26.2) refuses an upstream QOS event
+// without unreffing it; the sink's own bus QOS message is unaffected.
 func dropLeakedQosEvents(interleave gst.Element) {
 	interleave.GetStaticPad("src").AddProbe(gst.PadProbeTypeEventUpstream,
 		func(pad gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
@@ -913,14 +908,10 @@ func dropLeakedQosEvents(interleave gst.Element) {
 			if ev == nil {
 				return gst.PadProbeOK
 			}
-			// info.GetEvent() takes its own reference (go-gst's "transfer
-			// none" wrapper, released only when Go's GC finalizes it), so
-			// this probe must drop that reference itself rather than wait
-			// on GC, or every QOS event stays retained until a collection
-			// happens to run.
-			hasName := ev.HasName("GstEventQOS")
+			// Must drop this reference ourselves rather than wait on GC.
+			isQos := ev.GetType() == gst.EventQos
 			gst.UnsafeEventUnref(ev)
-			if hasName {
+			if isQos {
 				return gst.PadProbeDrop
 			}
 			return gst.PadProbeOK

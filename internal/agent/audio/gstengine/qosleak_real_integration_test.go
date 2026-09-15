@@ -9,12 +9,9 @@ import (
 )
 
 // TestSinkQosEventIsFreedByInterleave proves a GST_EVENT_QOS reaching
-// interleave's src pad (what the output sink's qos=true posts upstream
-// on every render, see buildPipeline) is actually freed rather than
-// leaked. gst-plugins-good's interleave.c (GStreamer 1.26.2) refuses a
-// QOS event in its src-pad event handler without ever calling
-// gst_event_unref on it; without [dropLeakedQosEvents] this test fails
-// because the event's reference count never drops back to 1.
+// interleave's src pad is actually freed rather than leaked, since
+// interleave.c refuses the event without unreffing it. Without
+// [dropLeakedQosEvents], the event's reference count never drops back to 1.
 func TestSinkQosEventIsFreedByInterleave(t *testing.T) {
 	e := newTestEngine(t)
 
@@ -37,7 +34,9 @@ func TestSinkQosEventIsFreedByInterleave(t *testing.T) {
 	gst.UnsafeEventRef(ev)
 	raw := gst.UnsafeEventToGlibNone(ev)
 
-	srcPad.SendEvent(ev)
+	if !srcPad.SendEvent(ev) {
+		t.Fatal("srcPad.SendEvent returned false: the event was not accepted, so this test cannot tell a leaked event from a freed one")
+	}
 
 	mo := gst.UnsafeMiniObjectFromGlibBorrow(raw)
 	writable := mo.IsWritable()
