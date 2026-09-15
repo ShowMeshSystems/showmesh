@@ -75,6 +75,19 @@ function isRfc3339(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s) && !Number.isNaN(Date.parse(s))
 }
 
+const LTC_CHANNEL_CHOICES = 8
+
+// No channel inventory is advertised, so offer 1-8 minus program channels, keeping any stored value.
+function ltcChannelOptions(programChannels: number[], current: string): number[] {
+  const options = new Set<number>()
+  for (let ch = 1; ch <= LTC_CHANNEL_CHOICES; ch++) {
+    if (!programChannels.includes(ch)) options.add(ch)
+  }
+  const stored = Number(current)
+  if (current.trim() !== '' && Number.isInteger(stored) && stored >= 1) options.add(stored)
+  return [...options].sort((a, b) => a - b)
+}
+
 export function SettingsNodeRouting() {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -267,7 +280,8 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
         setSinkBackend(response.payload.sinkBackend ?? DEFAULT_SINK_BACKEND)
         setPipewireTargetNode(response.payload.pipewireTargetNode ?? '')
         const ol = response.payload.outputLatency
-        setOutputLatencyMethod(ol?.method ?? DEFAULT_OUTPUT_LATENCY_METHOD)
+        // The coordinator returns method "" for a node saved before outputLatency existed.
+        setOutputLatencyMethod(ol?.method || DEFAULT_OUTPUT_LATENCY_METHOD)
         setOutputLatencyValueUsText(ol?.valueUs !== undefined ? String(ol.valueUs) : '')
         setOutputLatencyMeasuredAt(ol?.measuredAt ?? '')
         setOutputLatencyReference(ol?.reference ?? '')
@@ -325,7 +339,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
     setSinkBackend(state.response.payload.sinkBackend ?? DEFAULT_SINK_BACKEND)
     setPipewireTargetNode(state.response.payload.pipewireTargetNode ?? '')
     const ol = state.response.payload.outputLatency
-    setOutputLatencyMethod(ol?.method ?? DEFAULT_OUTPUT_LATENCY_METHOD)
+    setOutputLatencyMethod(ol?.method || DEFAULT_OUTPUT_LATENCY_METHOD)
     setOutputLatencyValueUsText(ol?.valueUs !== undefined ? String(ol.valueUs) : '')
     setOutputLatencyMeasuredAt(ol?.measuredAt ?? '')
     setOutputLatencyReference(ol?.reference ?? '')
@@ -563,19 +577,26 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
               label="Channel"
               help={
                 ltcRoutesAdvertised === null
-                  ? '1-based, and not one of the program channels above. No inventory is advertised, so this is entered too.'
+                  ? '1-based, and not one of the program channels above. No channel inventory is advertised, so pick one the interface has.'
                   : '1-based, and not one of the program channels above.'
               }
             >
               {(props) => (
-                <Input
+                <Select
                   {...props}
                   value={ltcChannelText}
                   onChange={(e) => {
                     setLtcChannelText(e.target.value)
                     setDirty(true)
                   }}
-                />
+                >
+                  {ltcChannelText === '' && <option value="">Select a channel</option>}
+                  {ltcChannelOptions(programChannels, ltcChannelText).map((ch) => (
+                    <option key={ch} value={String(ch)}>
+                      {ch}
+                    </option>
+                  ))}
+                </Select>
               )}
             </Field>
           </div>

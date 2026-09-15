@@ -514,6 +514,11 @@ const realAudioSinkFactory = "alsasink"
 // route resolves to; see [audioEngineSinkFactoryAndProps].
 const pipewireAudioSinkFactory = "pipewiresink"
 
+const (
+	pipewireStreamPropertiesKey     = "stream-properties"
+	pipewireStreamPropertiesNoRemix = "props,stream.dont-remix=(string)true"
+)
+
 // audioEngineSinkFactoryAndProps reports the GStreamer sink factory this
 // node builds against and the sink properties naming its output route.
 // [envGstAudioSinkOverride] wins outright when set (test-only, no
@@ -533,7 +538,9 @@ func audioEngineSinkFactoryAndProps(node audioNodeConfig) (factory string, props
 		return v, map[string]any{}
 	}
 	if node.SinkBackend == pipewireAudioSinkFactory {
-		props := map[string]any{}
+		// Without dont-remix, WirePlumber gives the stream stereo ports and
+		// PipeWire downmixes channels 3+ into 1-2. Must be the string "true".
+		props := map[string]any{pipewireStreamPropertiesKey: pipewireStreamPropertiesNoRemix}
 		if node.PipewireTargetNode != "" {
 			props["target-object"] = node.PipewireTargetNode
 		}

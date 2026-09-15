@@ -811,6 +811,11 @@ var newSinkFactoryElement = func(cfg Config) (gst.Element, error) {
 		return nil, fmt.Errorf("could not create sink %q", cfg.SinkFactory)
 	}
 	for k, v := range cfg.SinkProperties {
+		// A GstStructure property only takes its serialized string form.
+		if s, ok := v.(string); ok && k == "stream-properties" {
+			gst.UtilSetObjectArg(sink, k, s)
+			continue
+		}
 		sink.SetObjectProperty(k, v)
 	}
 	return sink, nil
