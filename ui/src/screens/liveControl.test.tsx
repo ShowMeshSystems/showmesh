@@ -489,7 +489,7 @@ describe('Live Control', () => {
           { nodeId: 'audio-02', dispatched: true, confirmed: true, outcome: 'confirmed' },
         ],
         aligned: true,
-        scheduledAtNs: 1_789_012_345_678_901_234,
+        scheduledAtNs: 1_700_000_000_000,
       }),
     )
     await renderAnnouncements()
