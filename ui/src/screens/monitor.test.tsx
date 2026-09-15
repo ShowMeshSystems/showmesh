@@ -432,6 +432,12 @@ describe('Monitor · Fleet · FPP inspector · playlist-entry reconciliation', (
     rerender(screenWith([observationAt('barn-uuid', 6)]))
 
     await waitFor(() => expect(calls).toBe(2))
+
+    // Let any further effect runs settle, so a dependency that keeps
+    // retriggering the fetch (e.g. on the observation object instead of
+    // its sequence) is caught rather than passing on the first count-2 tick.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls).toBe(2)
   })
 
   it('does not refetch on a re-render whose observation is a new object with the same sequence', async () => {
