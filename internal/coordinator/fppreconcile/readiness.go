@@ -500,13 +500,14 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return report, nil
 	}
 
-	// Condition 12: ADR-049 decision 5's clock-alignment warning: every
-	// node a Cue's audio/announcement outputs target holds the SAME
-	// clock-provider lock state internal/agent/audio.Manager.StartAt
-	// honors when it decides whether a scheduled multi-node start is
-	// usable. Never a failure (see [audioTargetClockReadiness]'s own doc
-	// comment): it runs after condition 11 so an asset failure is always
-	// reported on its own terms, never silently replaced by a warning.
+	// Condition 12: ADR-049 decision 5's clock-alignment warning: once a
+	// Cue's audio and announcement outputs, together, target more than one
+	// node, every node they reach is checked for the SAME clock-provider
+	// lock state internal/agent/audio.Manager.StartAt honors when it
+	// decides whether a scheduled multi-node start is usable. Never a
+	// failure (see [audioTargetClockReadiness]'s own doc comment): it runs
+	// after condition 11 so an asset failure is always reported on its own
+	// terms, never silently replaced by a warning.
 	if warning, err := audioTargetClockReadiness(ctx, st, logger, clock, time.Now(), p); err != nil {
 		return Report{}, err
 	} else if warning != "" {

@@ -257,6 +257,36 @@ func TestAudioTargetReadinessNoWarningWhenAudioAndAnnouncementTogetherIncludePro
 	}
 }
 
+// TestAudioTargetReadinessWarnsDistinctlyWhenNoNodeHoldsProgramLTC proves
+// the warning text is honest about WHY a multi-node Cue cannot align: with
+// no audio.node holding role program+ltc at all, "excludes the program+ltc
+// node" would be false (there is none to exclude), so this case gets its
+// own wording saying no such node exists.
+func TestAudioTargetReadinessWarnsDistinctlyWhenNoNodeHoldsProgramLTC(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putProgramOnlyAudioNode(t, st, "a")
+	putProgramOnlyAudioNode(t, st, "b")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio:        &config.ShowCueAudioOutput{Asset: "x", Targets: []string{"a"}},
+		Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyDuck, Targets: []string{"b"}},
+	})
+
+	cond, _, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q, want ready: an unaligned start is a warning, never a failure", cond)
+	}
+	if !strings.Contains(warning, "cue-1") || !strings.Contains(warning, "no audio.node holds the installation's program+ltc role") {
+		t.Errorf("warning = %q, want it to name the cue and say no node holds the program+ltc role", warning)
+	}
+	if strings.Contains(warning, "exclude the installation's program+ltc node") {
+		t.Errorf("warning = %q, want it distinct from the excludes-the-program+ltc-node wording: there is no such node to exclude", warning)
+	}
+}
+
 // TestAudioTargetReadinessEmptyTargetsResolveToTheSoleAudioNode proves the
 // empty-list default rule's OTHER branch (TestAudioTargetReadinessPassesTheReferenceInstallation
 // covers the program+ltc branch): with no node holding program+ltc at

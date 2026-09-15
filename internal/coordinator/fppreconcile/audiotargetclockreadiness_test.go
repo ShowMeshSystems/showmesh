@@ -274,26 +274,41 @@ func TestAudioTargetClockReadinessCollectsEveryOffendingNodeAcrossCues(t *testin
 }
 
 // TestAudioTargetClockReadinessIgnoresLTCOutput proves outputs.ltc's own
-// single target is exempt: ADR-045 decision 2 keeps it single-node, so
-// there is no cross-node alignment question for it, and its clock is
-// never checked here even when it would otherwise warn.
+// single target is exempt even when the SAME Cue's audio outputs make it a
+// genuinely multi-node Cue this condition does scan: audio targets m4 and
+// pi (pi deliberately unlocked, so a real finding is provable), plus an
+// LTC target on a third, offline node whose own state would warn if it
+// were not exempt. The offline LTC node must never be named.
 func TestAudioTargetClockReadinessIgnoresLTCOutput(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "show-1", "Show One")
 	putAudioNode(t, st, "m4")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putProgramOnlyAudioNode(t, st, "ltc-only")
 	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
-		LTC: &config.ShowCueLTCOutput{Target: "m4"},
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"m4", "pi"}},
+		LTC:   &config.ShowCueLTCOutput{Target: "ltc-only"},
 	})
 	declareNode(t, st, "m4")
-	putNodeOffline(t, st, "m4")
+	declareNode(t, st, "pi")
+	declareNode(t, st, "ltc-only")
+	putNodeOnline(t, st, "m4")
+	putNodeOnline(t, st, "pi")
+	putNodeOffline(t, st, "ltc-only")
 	now := time.Now()
-	clock := fakeClockLister{}
+	clock := fakeClockLister{
+		"m4": {clockStateObservation(t, "m4", clockLockedValue, now, 45*time.Second)},
+		"pi": {clockStateObservation(t, "pi", "unsynchronized", now, 45*time.Second)},
+	}
 
 	warning, err := audioTargetClockReadiness(context.Background(), st, nil, clock, now, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetClockReadiness: %v", err)
 	}
-	if warning != "" {
-		t.Errorf("warning = %q, want empty: outputs.ltc is exempt from this check", warning)
+	if !strings.Contains(warning, "pi") || !strings.Contains(warning, "not locked") {
+		t.Errorf("warning = %q, want it to name pi and say its clock is not locked: the audio targets are evaluated", warning)
+	}
+	if strings.Contains(warning, "ltc-only") {
+		t.Errorf("warning = %q, want it to NOT name ltc-only: outputs.ltc is exempt from this check even though it is offline", warning)
 	}
 }

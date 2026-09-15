@@ -108,7 +108,15 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 		// union below is safe to compute against already-valid targets.
 		if warning == "" {
 			union := cueAudioAnnouncementNodes(payload, defaultTarget)
-			if len(union) > 1 && !containsID(union, programLTC) {
+			switch {
+			case len(union) <= 1:
+				// A Cue reaching at most one node has nothing for
+				// decision 3's one-instant selection to disagree about.
+			case programLTC == "":
+				warning = fmt.Sprintf(
+					"cue %q's audio and announcement outputs together reach %v, and no audio.node holds the installation's program+ltc role; a scheduled multi-node start has no node's clock to select an instant from (ADR-049), so this Cue can never start aligned",
+					entry.Cue, union)
+			case !containsID(union, programLTC):
 				warning = fmt.Sprintf(
 					"cue %q's audio and announcement outputs together reach %v, which exclude the installation's program+ltc node; a Cue reaching more than one node starts at one instant read from that node's clock (ADR-049), so this Cue can never start aligned",
 					entry.Cue, union)
