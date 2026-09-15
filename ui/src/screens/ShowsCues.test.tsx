@@ -532,10 +532,15 @@ describe('Shows · Cues tab', () => {
       setupWithTargets(cue)
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioGroup = await screen.findByRole('group', { name: 'Audio target nodes' })
-      const ltcTarget = await screen.findByRole('combobox', { name: 'LTC target node' })
-      expect(within(audioGroup).getByRole('checkbox', { name: 'Node A' })).toBeChecked()
-      expect(within(audioGroup).getByRole('checkbox', { name: 'Node B' })).not.toBeChecked()
+      const ltcTarget = (await screen.findByRole('combobox', { name: 'LTC target node' })) as HTMLSelectElement
+      expect(within(audioGroup).getByRole('checkbox', { name: 'node-a Node A' })).toBeChecked()
+      expect(within(audioGroup).getByRole('checkbox', { name: 'node-b Node B' })).not.toBeChecked()
       expect(ltcTarget).toHaveValue('node-a')
+      // Two nodes can advertise the identical route as their label; the option text
+      // must name the id too, or an operator cannot tell them apart (same defect
+      // ChoiceGroup's secondary text fixes for the audio/announcement checkboxes).
+      expect(within(ltcTarget).getByRole('option', { name: 'node-a, Node A' })).toBeInTheDocument()
+      expect(within(ltcTarget).getByRole('option', { name: 'node-b, Node B' })).toBeInTheDocument()
 
       let sent: unknown = null
       stubs.putShowCue = (_id: string, payload: unknown) => {
@@ -558,8 +563,8 @@ describe('Shows · Cues tab', () => {
       setupWithTargets(cue)
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioGroup = await screen.findByRole('group', { name: 'Audio target nodes' })
-      expect(within(audioGroup).getByRole('checkbox', { name: 'Node A' })).toBeChecked()
-      expect(within(audioGroup).getByRole('checkbox', { name: 'Node B' })).toBeChecked()
+      expect(within(audioGroup).getByRole('checkbox', { name: 'node-a Node A' })).toBeChecked()
+      expect(within(audioGroup).getByRole('checkbox', { name: 'node-b Node B' })).toBeChecked()
 
       let sent: unknown = null
       stubs.putShowCue = (_id: string, payload: unknown) => {
@@ -578,8 +583,8 @@ describe('Shows · Cues tab', () => {
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioGroup = await screen.findByRole('group', { name: 'Audio target nodes' })
       expect(screen.getByText('No nodes selected: plays on the program+ltc node.')).toBeInTheDocument()
-      fireEvent.click(within(audioGroup).getByRole('checkbox', { name: 'Node A' }))
-      fireEvent.click(within(audioGroup).getByRole('checkbox', { name: 'Node B' }))
+      fireEvent.click(within(audioGroup).getByRole('checkbox', { name: 'node-a Node A' }))
+      fireEvent.click(within(audioGroup).getByRole('checkbox', { name: 'node-b Node B' }))
       expect(screen.queryByText('No nodes selected: plays on the program+ltc node.')).not.toBeInTheDocument()
 
       let sent: unknown = null
@@ -598,7 +603,7 @@ describe('Shows · Cues tab', () => {
       setupWithTargets(cue)
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioGroup = await screen.findByRole('group', { name: 'Audio target nodes' })
-      const nodeA = within(audioGroup).getByRole('checkbox', { name: 'Node A' })
+      const nodeA = within(audioGroup).getByRole('checkbox', { name: 'node-a Node A' })
       expect(nodeA).toBeChecked()
       expect(screen.queryByText('No nodes selected: plays on the program+ltc node.')).not.toBeInTheDocument()
       fireEvent.click(nodeA)
@@ -767,10 +772,10 @@ describe('Shows · Cues tab', () => {
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioGroup = await screen.findByRole('group', { name: 'Audio target nodes' })
       const announcementGroup = await screen.findByRole('group', { name: 'Announcement target nodes' })
-      expect(within(audioGroup).getByRole('checkbox', { name: 'Node A' })).toBeChecked()
-      expect(within(audioGroup).getByRole('checkbox', { name: 'Node B' })).not.toBeChecked()
-      expect(within(announcementGroup).getByRole('checkbox', { name: 'Node B' })).toBeChecked()
-      expect(within(announcementGroup).getByRole('checkbox', { name: 'Node A' })).not.toBeChecked()
+      expect(within(audioGroup).getByRole('checkbox', { name: 'node-a Node A' })).toBeChecked()
+      expect(within(audioGroup).getByRole('checkbox', { name: 'node-b Node B' })).not.toBeChecked()
+      expect(within(announcementGroup).getByRole('checkbox', { name: 'node-b Node B' })).toBeChecked()
+      expect(within(announcementGroup).getByRole('checkbox', { name: 'node-a Node A' })).not.toBeChecked()
 
       let sent: unknown = null
       stubs.putShowCue = (_id: string, payload: unknown) => {

@@ -242,6 +242,27 @@
   min-height: var(--ctrl-h-gloved);
 }
 
+/* A choice whose label carries a muted secondary line under it (ChoiceGroup's `secondary`): align the box to the first line, not the block's centre. */
+.sm-choice--stacked {
+  align-items: flex-start;
+  min-height: 0;
+}
+
+.sm-choice--stacked input {
+  margin-top: 3px;
+}
+
+.sm-choice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sm-choice__secondary {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
 .sm-choice-row {
   display: flex;
   flex-wrap: wrap;

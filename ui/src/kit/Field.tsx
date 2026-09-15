@@ -63,7 +63,7 @@ export function ChoiceRow({ children }: { children: ReactNode }) {
   return <div className="sm-choice-row">{children}</div>
 }
 
-export type ChoiceGroupOption = { value: string; label: ReactNode }
+export type ChoiceGroupOption = { value: string; label: ReactNode; /** Muted context under the label, e.g. a route or a role: never the only way to tell two options apart. */ secondary?: ReactNode }
 
 type ChoiceGroupProps = {
   /** Label the outcome of the choice, not the field. */
@@ -91,9 +91,16 @@ export function ChoiceGroup({ label, help, error, options, value, onChange, unkn
       <fieldset className="sm-choice-group" aria-describedby={describedBy} aria-invalid={error === undefined ? undefined : true}>
         <legend className="sm-field__label">{label}</legend>
         {options.map((option) => (
-          <label key={option.value} className="sm-choice">
+          <label key={option.value} className={option.secondary === undefined ? 'sm-choice' : 'sm-choice sm-choice--stacked'}>
             <input type="checkbox" checked={value.includes(option.value)} onChange={() => toggle(option.value)} />
-            <span>{option.label}</span>
+            {option.secondary === undefined ? (
+              <span>{option.label}</span>
+            ) : (
+              <span className="sm-choice__text">
+                <span>{option.label}</span>
+                <span className="sm-choice__secondary">{option.secondary}</span>
+              </span>
+            )}
           </label>
         ))}
         {unknown.map((v) => (

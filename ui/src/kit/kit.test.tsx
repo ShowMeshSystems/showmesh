@@ -250,6 +250,42 @@ describe('ChoiceGroup', () => {
     const helpText = screen.getByText('No nodes selected: plays on the program+ltc node.')
     expect(group.getAttribute('aria-describedby')).toBe(helpText.id)
   })
+
+  it('renders a muted secondary line under the label, so two options sharing one label stay distinguishable', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        options={[
+          { value: 'node-a', label: 'node-a', secondary: 'hw:CARD=Loopback,DEV=0' },
+          { value: 'node-b', label: 'node-b', secondary: 'hw:CARD=Loopback,DEV=0' },
+        ]}
+        value={[]}
+        onChange={() => {}}
+      />,
+    )
+    const a = screen.getByRole('checkbox', { name: 'node-a hw:CARD=Loopback,DEV=0' })
+    const b = screen.getByRole('checkbox', { name: 'node-b hw:CARD=Loopback,DEV=0' })
+    expect(a).not.toBe(b)
+    expect(screen.getAllByText('hw:CARD=Loopback,DEV=0')).toHaveLength(2)
+  })
+
+  it('marks the group invalid and describes it by the error text', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        error="node-a is not a configured audio.node"
+        options={[{ value: 'node-a', label: 'Node A' }]}
+        value={['node-a']}
+        onChange={() => {}}
+      />,
+    )
+    const group = screen.getByRole('group', { name: 'Audio target nodes' })
+    expect(group.getAttribute('aria-invalid')).toBe('true')
+    const describedBy = group.getAttribute('aria-describedby')
+    expect(describedBy).not.toBeNull()
+    const errorEl = describedBy === null ? null : document.getElementById(describedBy)
+    expect(errorEl?.textContent).toContain('node-a is not a configured audio.node')
+  })
 })
 
 describe('Segmented', () => {

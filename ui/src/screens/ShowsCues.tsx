@@ -393,7 +393,7 @@ function TargetNodeField({
           <option value="">Resolve to the program+ltc node</option>
           {nodesState.nodes.map((node) => (
             <option key={node.id} value={node.id}>
-              {node.label}
+              {node.id}, {node.label}
             </option>
           ))}
           {notDeclared && <option value={value}>{value} (not declared)</option>}
@@ -441,7 +441,7 @@ function TargetNodesField({
     <ChoiceGroup
       label={label}
       help={help}
-      options={nodesState.nodes.map((node) => ({ value: node.id, label: node.label }))}
+      options={nodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: node.label }))}
       value={value}
       onChange={onChange}
     />
