@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // audioTargetReadiness evaluates ADR-045's two authoring-time audio rules
@@ -28,15 +31,28 @@ import (
 // Cue that cannot be decoded here has already been reported as
 // cue-not-ready and reporting it a second time under an audio condition
 // would name the wrong cause.
-func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (ReadinessCondition, string, error) {
+//
+// The returned warning is ADR-049 decision 5's second readiness rule: a
+// multi-node Cue (more than one listed audio/announcement target) whose
+// targets exclude the installation's program+ltc node can never start
+// aligned (decision 3's one-instant selection has no program+ltc reading to
+// choose from), which is worth surfacing even though decision 4 still plays
+// the audio unaligned. Only the FIRST such Cue is named, matching this
+// function's own failure-reporting determinism; it never overrides an
+// actual failure found later in the same scan.
+func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (ReadinessCondition, string, string, error) {
 	declared, ltcEmitters, err := audioNodeRoles(ctx, st)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if len(ltcEmitters) > 1 {
 		return ReadinessAudioLTCEmitterAmbiguous, fmt.Sprintf(
 			"audio.node %q and %q both hold role %q; exactly one node may be the installation's LTC emitter (ADR-018's one clock domain, ADR-045)",
-			ltcEmitters[0], ltcEmitters[1], config.AudioNodeRoleProgramLTC), nil
+			ltcEmitters[0], ltcEmitters[1], config.AudioNodeRoleProgramLTC), "", nil
+	}
+	programLTC := ""
+	if len(ltcEmitters) == 1 {
+		programLTC = ltcEmitters[0]
 	}
 
 	// The node an output naming no target resolves to: the sole
@@ -52,10 +68,11 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 		defaultTarget = declared[0]
 	}
 
+	warning := ""
 	for _, entry := range p.Entries {
 		payload, ok, err := decodeCueForAudioTargets(ctx, st, logger, entry.Cue)
 		if err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		if !ok || payload.Show != p.Show {
 			continue
@@ -83,7 +100,7 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 				if len(declared) > 1 && defaultTarget == "" {
 					return ReadinessAudioTargetUnresolved, fmt.Sprintf(
 						"cue %q's %s names no target and this installation has no node for it to resolve to: %d audio.node objects exist and none holds role %q",
-						entry.Cue, out.name, len(declared), config.AudioNodeRoleProgramLTC), nil
+						entry.Cue, out.name, len(declared), config.AudioNodeRoleProgramLTC), "", nil
 				}
 				continue
 			}
@@ -95,12 +112,25 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 				if !containsID(declared, target) {
 					return ReadinessAudioTargetUnbound, fmt.Sprintf(
 						"cue %q's %s targets node %q, which holds no audio.node object, so that output would reach nobody",
-						entry.Cue, out.name, target), nil
+						entry.Cue, out.name, target), "", nil
 				}
+			}
+			// ADR-049 decision 5's second readiness rule: a Cue reaching
+			// more than one node starts at ONE instant read off the
+			// program+ltc node's media clock (decision 3); a targets list
+			// that excludes it (or names none at all, when no node holds
+			// the role) leaves nothing for that selection to read, so this
+			// Cue can never start aligned. outputs.ltc is exempt: it names
+			// only one node by construction (ADR-045 decision 2), so the
+			// "multi-node" premise never applies to it.
+			if warning == "" && out.name != "outputs.ltc" && len(out.targets) > 1 && !containsID(out.targets, programLTC) {
+				warning = fmt.Sprintf(
+					"cue %q's %s targets %v, which exclude the installation's program+ltc node; a Cue reaching more than one node starts at one instant read from that node's clock (ADR-049), so this Cue can never start aligned",
+					entry.Cue, out.name, out.targets)
 			}
 		}
 	}
-	return "", "", nil
+	return "", "", warning, nil
 }
 
 func targetsOf(o *config.ShowCueAudioOutput) []string {
@@ -199,3 +229,138 @@ func decodeCueForAudioTargets(ctx context.Context, st *store.Store, logger *slog
 	}
 	return payload, true, nil
 }
+
+// clockLockedValue is the wire value [pkg/mqttproto.ClockPayload.State]
+// carries when a node's clock provider is locked -- internal/agent/clock's
+// own StateLocked, copied as a literal rather than imported (the
+// coordinator never imports internal/agent, matching every other
+// wire-vocabulary literal this package copies, e.g. audioClockAlignmentStateWithin
+// in internal/coordinator/api/nightaudioreadiness.go).
+const clockLockedValue = "locked"
+
+// ClockObservationsLister is the caller-supplied source of a node's most
+// recently reported PTP clock status (node.clock.ptp.* signals,
+// internal/coordinator/collector/nodeclock's own vocabulary). Declared
+// here, structurally identical to api.NodeClockLister, because this
+// package is imported BY internal/coordinator/api and must not import it
+// back; the production nodeclock.Store already satisfies this with no
+// adapter (the same "the real dependency already has this method set"
+// pattern that package's own wiring uses elsewhere).
+type ClockObservationsLister interface {
+	// NodeClockObservations returns every node.clock.ptp.* observation
+	// currently held for nodeID's most recently reported clock status, or
+	// nil if none has ever been received.
+	NodeClockObservations(nodeID string) []observation.Observation
+}
+
+// noClockObservationsLister is [ClockObservationsLister]'s nil-safe
+// default: a node that never reported a clock status looks identical to
+// one this dependency was never wired for, so audioTargetClockReadiness
+// treats it as "no clock evidence yet" rather than panicking.
+type noClockObservationsLister struct{}
+
+func (noClockObservationsLister) NodeClockObservations(string) []observation.Observation { return nil }
+
+// audioTargetClockReadiness is ADR-049 decision 5's clock-alignment
+// warning: every node a Cue's outputs.audio or outputs.announcement
+// Targets names is checked for the SAME clock-provider lock state
+// internal/agent/audio.Manager.StartAt honors when it decides whether a
+// scheduled multi-node start is actually usable
+// (internal/agent/audio/timeline.go's resolveScheduleLocked, gated on
+// agentclock.StateLocked) -- reported to the coordinator verbatim as
+// node.clock.ptp.state (internal/agent/clockreport.go's
+// clockPayloadFromStatus, internal/coordinator/collector/nodeclock's own
+// SignalState). outputs.ltc is exempt, matching [audioTargetReadiness]'s
+// identical exemption: ADR-045 decision 2 keeps it single-target, so
+// there is no cross-node alignment question for it to answer.
+//
+// This never fails readiness -- decision 4 still plays the audio
+// unaligned when a target's clock is not locked -- and reports at most
+// ONE node's problem, the first found in playlist-entry order then
+// output order then target order, matching this package's other
+// first-found determinism. locked contributes no warning at all; every
+// other outcome (unlocked, no evidence yet, stale evidence, node
+// unavailable/offline) gets its own distinct text, per MANAGER DECISION 2,
+// so an operator is never told a missing reading looks the same as a
+// locked one.
+func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, clock ClockObservationsLister, now time.Time, p config.ShowPlaylistPayload) (string, error) {
+	if clock == nil {
+		clock = noClockObservationsLister{}
+	}
+	liveness, err := nodeLivenessLookup(ctx, st, now)
+	if err != nil {
+		return "", err
+	}
+
+	for _, entry := range p.Entries {
+		payload, ok, err := decodeCueForAudioTargets(ctx, st, logger, entry.Cue)
+		if err != nil {
+			return "", err
+		}
+		if !ok || payload.Show != p.Show {
+			continue
+		}
+		for _, out := range []struct {
+			name    string
+			targets []string
+			set     bool
+		}{
+			{"outputs.audio", targetsOf(payload.Outputs.Audio), payload.Outputs.Audio != nil},
+			{"outputs.announcement", targetsOfAnnouncement(payload.Outputs.Announcement), payload.Outputs.Announcement != nil},
+		} {
+			if !out.set {
+				continue
+			}
+			for _, target := range out.targets {
+				if warning := nodeClockWarning(clock, liveness, now, target); warning != "" {
+					return fmt.Sprintf("cue %q's %s targets node %q: %s", entry.Cue, out.name, target, warning), nil
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+// nodeClockWarning reports nodeID's clock-lock problem, or "" when it is
+// locked. Checked in this order: liveness first (a node that is not
+// reporting at all cannot have its clock evidence trusted regardless of
+// what it last said), then the clock evidence itself.
+func nodeClockWarning(clock ClockObservationsLister, liveness map[string]nodeLivenessInfo, now time.Time, nodeID string) string {
+	if info := livenessOrUnknown(liveness, nodeID); info.liveness != inventory.LivenessOnline {
+		return fmt.Sprintf("its clock cannot be confirmed locked: the node itself is not currently reporting (%s)", info.reason)
+	}
+
+	var stateObs *observation.Observation
+	for _, o := range clock.NodeClockObservations(nodeID) {
+		if o.Signal == nodeClockStateSignal {
+			o := o
+			stateObs = &o
+			break
+		}
+	}
+	if stateObs == nil {
+		return "no node.clock.ptp.state evidence has ever been reported for it"
+	}
+	switch state := stateObs.StateAt(now); state {
+	case observation.StateStale:
+		detail := "clock evidence"
+		if stateObs.ObservedAt != nil {
+			detail = fmt.Sprintf("clock evidence last observed at %s", stateObs.ObservedAt.Format(time.RFC3339))
+		}
+		return fmt.Sprintf("its most recent %s is stale, so its clock cannot be confirmed locked right now", detail)
+	case observation.StateCurrent:
+		value, _ := stateObs.Value.(string)
+		if value == clockLockedValue {
+			return ""
+		}
+		return fmt.Sprintf("its clock provider reports %q, not locked, so a scheduled multi-node start would ignore the shared instant on this node (ADR-046)", value)
+	default:
+		return fmt.Sprintf("its node.clock.ptp.state evidence is %s rather than current or stale, so its clock cannot be confirmed locked", state)
+	}
+}
+
+// nodeClockStateSignal is internal/coordinator/collector/nodeclock.SignalState,
+// copied as a literal for the same reason [clockLockedValue] is: this
+// package must not import a collector (TestPackageNeverImportsACollector's
+// rule, stated for the api package and followed here identically).
+const nodeClockStateSignal observation.SignalID = "node.clock.ptp.state"

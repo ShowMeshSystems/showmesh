@@ -51,7 +51,7 @@ func TestAudioTargetReadinessRefusesTwoLTCEmitters(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a"},
 	})
 
-	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAudioTargetReadinessRefusesUnboundTarget(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"pi"}},
 	})
 
-	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAudioTargetReadinessRefusesUnresolvableUntargetedOutput(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a"},
 	})
 
-	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestAudioTargetReadinessPassesTheReferenceInstallation(t *testing.T) {
 		LTC:   &config.ShowCueLTCOutput{},
 	})
 
-	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
@@ -140,12 +140,90 @@ func TestAudioTargetReadinessIgnoresACueWithNoAudioOutputs(t *testing.T) {
 		Render: &config.ShowCueRenderOutput{Sequence: "seq"},
 	})
 
-	cond, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, _, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}
 	if cond != "" {
 		t.Fatalf("condition = %q, want ready: this cue declares no audio, LTC or announcement output", cond)
+	}
+}
+
+// TestAudioTargetReadinessWarnsWhenMultiNodeTargetsExcludeProgramLTC proves
+// ADR-049 decision 5's second readiness rule: a Cue naming more than one
+// audio target that does not include the installation's program+ltc node
+// can never start aligned (decision 3's one instant is read off that
+// node's clock), so it warns naming the cue rather than either failing
+// readiness or staying silent.
+func TestAudioTargetReadinessWarnsWhenMultiNodeTargetsExcludeProgramLTC(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putAudioNode(t, st, "m4")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putProgramOnlyAudioNode(t, st, "zone")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"pi", "zone"}},
+	})
+
+	cond, _, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q, want ready: an unaligned start is a warning, never a failure", cond)
+	}
+	if !strings.Contains(warning, "cue-1") {
+		t.Errorf("warning = %q, want it to name the cue", warning)
+	}
+}
+
+// TestAudioTargetReadinessNoWarningWhenMultiNodeTargetsIncludeProgramLTC
+// proves the warning is specific to excluding the program+ltc node: the
+// same two-target shape, with the program+ltc node as one of the targets,
+// stays silent.
+func TestAudioTargetReadinessNoWarningWhenMultiNodeTargetsIncludeProgramLTC(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putAudioNode(t, st, "m4")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"m4", "pi"}},
+	})
+
+	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q (%s), want ready", cond, reason)
+	}
+	if warning != "" {
+		t.Errorf("warning = %q, want empty: the targets include the program+ltc node m4", warning)
+	}
+}
+
+// TestAudioTargetReadinessEmptyTargetsResolveToTheSoleAudioNode proves the
+// empty-list default rule's OTHER branch (TestAudioTargetReadinessPassesTheReferenceInstallation
+// covers the program+ltc branch): with no node holding program+ltc at
+// all, an installation with exactly one declared audio.node still
+// resolves an untargeted output to it, and stays ready.
+func TestAudioTargetReadinessEmptyTargetsResolveToTheSoleAudioNode(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a"},
+	})
+
+	cond, reason, warning, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q (%s), want ready: pi is the sole audio.node, so the untargeted output resolves to it", cond, reason)
+	}
+	if warning != "" {
+		t.Errorf("warning = %q, want empty", warning)
 	}
 }
 
@@ -161,7 +239,7 @@ func TestAudioTargetReadinessChecksEveryListedTarget(t *testing.T) {
 		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"m4", "pi"}},
 	})
 
-	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	cond, reason, _, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
 	if err != nil {
 		t.Fatalf("audioTargetReadiness: %v", err)
 	}

@@ -157,6 +157,36 @@ func TestTwoTargetAudioReachesBothNodes(t *testing.T) {
 	}
 }
 
+// TestTwoTargetAudioExcludesAThirdUndeclaredNode extends
+// TestTwoTargetAudioReachesBothNodes with a third declared audio.node this
+// Cue never names: ADR-049 widens placement to every listed target, not to
+// every node connectivity or asset presence might otherwise suggest, so a
+// node holding an audio.node object but absent from targets must get
+// neither a catalog entry nor a manifest obligation for this Cue's asset.
+func TestTwoTargetAudioExcludesAThirdUndeclaredNode(t *testing.T) {
+	st, ctx := twoAudioNodeShow(t)
+	putProgramOnlyAudioNode(t, st, "zone")
+	putCue(t, st, "both", "halloween-2026", config.ShowCuePayload{
+		Name: "Both nodes",
+		Outputs: config.ShowCueOutputs{
+			Audio: &config.ShowCueAudioOutput{Asset: "both-audio", Targets: []string{"m4", "pi"}},
+		},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "both"))
+	putActiveShow(t, st, "halloween-2026")
+
+	if zone, ok := cueOutputsByID(resolveFor(t, ctx, st, "zone").Entries, "both"); ok && zone.Audio != nil {
+		t.Errorf("zone outputs = %+v, want no audio: zone is not one of the cue's listed targets", zone)
+	}
+	seqs, err := NodeCueSequenceIDs(ctx, st, "halloween-2026", "zone")
+	if err != nil {
+		t.Fatalf("NodeCueSequenceIDs (zone): %v", err)
+	}
+	if seqs["both-audio"] {
+		t.Errorf("zone sequences = %v, want no both-audio obligation: zone is not one of the cue's listed targets", seqs)
+	}
+}
+
 // TestNodeCueSequenceIDsCoversOnlyThisNodesOwnOutputs proves the asset
 // manifest follows the same resolution: pi must not be asked to hold, or
 // be refused for missing, an asset only m4's outputs name.
