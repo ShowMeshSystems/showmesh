@@ -277,7 +277,7 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 		if payload.Outputs.Render != nil && nodeHasSurface {
 			seqs[payload.Outputs.Render.Sequence] = true
 		}
-		if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Audio.Target) {
+		if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.OwnsAny(payload.Outputs.Audio.Targets) {
 			seqs[payload.Outputs.Audio.Asset] = true
 		}
 	}
