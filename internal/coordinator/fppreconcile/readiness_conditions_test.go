@@ -40,7 +40,7 @@ func TestPlaylistReadinessNodeCatalogStale(t *testing.T) {
 
 	// node-1 NEVER acknowledges any cue-catalog revision at all.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestPlaylistReadinessNodeCatalogStaleWrongAcknowledgedRevision(t *testing.T
 		t.Fatalf("put node cue catalog ack: %v", err)
 	}
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestPlaylistReadinessNodeCatalogCurrentPasses(t *testing.T) {
 	obs.EntryKey = entryKeyFor(t, p, "entry-1")
 	putObservation(t, st, obs)
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestPlaylistReadinessNodeCatalogStaleSkippedWhenPlaylistShowNotActive(t *te
 	p2 := simpleFPPPlaylist("show-2", "inst-2", hash64("a2"), "cue-2")
 	putPlaylist(t, st, "playlist-2", p2)
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestPlaylistReadinessExclusiveClaimConflict(t *testing.T) {
 	}
 	putPlaylist(t, st, "playlist-2", p2)
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestPlaylistReadinessExclusiveClaimConflictExemptedWithinOnePlaylist(t *tes
 	}
 	putPlaylist(t, st, "playlist-1", p)
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestPlaylistReadinessUndecodableCueDoesNotFailUnrelatedPlaylist(t *testing.
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
-	report, err := PlaylistReadiness(ctx, st, logger, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(ctx, st, logger, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v, want no error -- one corrupted cue in an unrelated Show must not fail every OTHER playlist's readiness", err)
 	}
@@ -458,7 +458,7 @@ func TestPlaylistReadinessAssetsMissingNodeHoldsEverythingPasses(t *testing.T) {
 		t.Fatalf("replace node asset inventory: %v", err)
 	}
 
-	report, err := PlaylistReadiness(ctx, st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(ctx, st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}

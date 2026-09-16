@@ -266,7 +266,7 @@ func TestPlaylistReadinessEveryClosedVocabularyConditionFires(t *testing.T) {
 // stay one expression per case.
 func mustReadiness(t *testing.T, st *store.Store, p config.ShowPlaylistPayload) Report {
 	t.Helper()
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}

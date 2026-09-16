@@ -146,7 +146,7 @@ func TestPlaylistReadinessDefinitionMissing(t *testing.T) {
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
 	// Deliberately no definition stored.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestPlaylistReadinessEntryNotInDefinition(t *testing.T) {
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 5, "", "")
 	putDefinitionWithEntries(t, st, "inst-1", hash, "Thriller.fseq", "")
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestPlaylistReadinessEntryFilenameMismatch(t *testing.T) {
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
 	putDefinitionWithEntries(t, st, "inst-1", hash, "SomethingElse.fseq", "")
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestPlaylistReadinessCueNotReady(t *testing.T) {
 	}
 	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestPlaylistReadinessReportsTombstonedCueBeforeDispatch(t *testing.T) {
 		t.Fatalf("tombstone show.cue: %v", err)
 	}
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestPlaylistReadinessCorruptedCueRevisionLogsWarnAndStillReportsCueNotReady
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
-	report, err := PlaylistReadiness(ctx, st, logger, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(ctx, st, logger, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestPlaylistReadinessObservationHashMismatchIsFailureWhenObservationExists(
 	obs.EntryKey = entryKeyFor(t, p, "entry-1")
 	putObservation(t, st, obs)
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestPlaylistReadinessObservationHashMismatchIsWarningWhenNoObservationRecei
 	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
 	// Deliberately no observation stored: the normal afternoon state.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestPlaylistReadinessDetectsEditedPlaylistWhileFPPIdle(t *testing.T) {
 	// since the edit. This is the exact case the issue names: "without
 	// anything having to be played first."
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestPlaylistReadinessDefinitionSupersededIgnoresOlderOrOtherPlaylistName(t 
 	putDefinitionAt(t, st, "inst-1", boundHash, "Main", time.Unix(1000, 0).UTC())
 	putDefinitionAt(t, st, "inst-1", otherNameHash, "SomeOtherPlaylist", time.Unix(9000, 0).UTC())
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestPlaylistReadinessDefinitionSupersededMatchesOnTheDefinitionsOwnName(t *
 	putDefinitionAt(t, st, "inst-1", boundHash, "Main", time.Unix(1000, 0).UTC())
 	putDefinitionAt(t, st, "inst-1", newHash, "Main", time.Unix(2000, 0).UTC())
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestPlaylistReadinessDefinitionSupersededComparesReceivedAtNotCapturedAt(t 
 	// plugin timestamp collision); only ReceivedAt shows it arrived later.
 	putDefinitionAtTimes(t, st, "inst-1", newHash, "Main", sameTick, sameTick.Add(time.Second))
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestPlaylistReadinessObservationUnavailableIsFailureNotWarning(t *testing.T
 	obs.Unavailable = "missing_playlist_name"
 	putObservation(t, st, obs)
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestPlaylistReadinessAllConditionsPass(t *testing.T) {
 	obs.EntryKey = entryKeyFor(t, p, "entry-1")
 	putObservation(t, st, obs)
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestPlaylistReadinessNodeRenderUnassignedDefect(t *testing.T) {
 	putSurface(t, st, "wall-1", "show-1", "node-1")
 	// Deliberately no surface.pipeline.state observation for node-1/wall-1.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestPlaylistReadinessNodeRenderAssignedPasses(t *testing.T) {
 	putSurface(t, st, "wall-1", "show-1", "node-1")
 	putSurfacePipelineState(t, st, "wall-1", "node-1", "running", time.Unix(1000, 0).UTC())
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -621,7 +621,7 @@ func TestPlaylistReadinessNodeRenderDroppedFails(t *testing.T) {
 		t.Fatalf("upsert absence observation: %v", err)
 	}
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestPlaylistReadinessNodeRenderWrongNodeSourceFails(t *testing.T) {
 	// configured node-1 (e.g. stale evidence from a since-reassigned node).
 	putSurfacePipelineState(t, st, "wall-1", "node-2", "running", time.Unix(1000, 0).UTC())
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -675,7 +675,7 @@ func TestPlaylistReadinessNodeRenderOtherShowSurfaceIgnored(t *testing.T) {
 	// must not matter, since wall-2 belongs to show-2, not this
 	// Playlist's show-1.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -715,7 +715,7 @@ func TestPlaylistReadinessNoRenderOutputSkipsNodeRenderCheck(t *testing.T) {
 	// Deliberately no surface.pipeline.state observation for wall-1: this
 	// must not matter, because no Cue here declares outputs.render.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -746,7 +746,7 @@ func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeNeverReported(t *tes
 	// Deliberately no surface.pipeline.state observation, and no hello/
 	// LWT/health evidence of any kind for node-1.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -784,7 +784,7 @@ func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOnline(t *testing.T)
 	putNodeOnline(t, st, "node-1")
 	// Deliberately no surface.pipeline.state observation for node-1/wall-1.
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -813,7 +813,7 @@ func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOffline(t *testing.T
 	putSurface(t, st, "wall-1", "show-1", "node-1")
 	putNodeOffline(t, st, "node-1")
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -861,7 +861,7 @@ func TestPlaylistReadinessNodeRenderStaleAssignmentFails(t *testing.T) {
 		t.Fatalf("upsert stale surface.pipeline.state observation: %v", err)
 	}
 
-	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		// Nothing at all is stored for (inst-1, hash): every later condition
 		// is unreachable from here, which is exactly the point.
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}
@@ -926,7 +926,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		// No observation and no show.surface at all: left broken too, though
 		// an absent observation is only ever a warning, never a hard failure.
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}
@@ -952,7 +952,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		// No newer definition is stored: definition-superseded (ordered
 		// before this one) does not fire, isolating this condition.
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}
@@ -969,7 +969,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		p.Entries[0].Cue = "cue-missing"
 		putDefinitionWithEntries(t, st, "inst-1", hash, "WrongName.fseq", "")
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}
@@ -991,7 +991,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		// evidence-unavailable (ordered after this one) would also fire if
 		// reached.
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}
@@ -1013,7 +1013,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		// No render-assignment evidence for wall-1: node-render-unassigned
 		// (ordered after this one) would also fire if reached.
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}
@@ -1035,7 +1035,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		// No render-assignment evidence for wall-1: node-render-unassigned
 		// (ordered after this one) would also fire if reached.
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}
@@ -1060,7 +1060,7 @@ func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
 		// prove it isn't preempted by; TestPlaylistReadinessNodeRenderUnassignedDefect
 		// already covers this same shape on its own.
 
-		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
 		if err != nil {
 			t.Fatalf("PlaylistReadiness: %v", err)
 		}

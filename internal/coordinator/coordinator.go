@@ -765,8 +765,12 @@ func Run() int {
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
-		// refusing default (unlike AssetManifests above).
-		FPPReconciliation: api.StoreFPPReconciliation{Store: st, Logger: logger},
+		// refusing default (unlike AssetManifests above). Clock is the
+		// SAME clockStore Dependencies.Clock above is wired from
+		// (ADR-049 decision 5's own clock-alignment readiness warning),
+		// so a Playlist's readiness route and GET /api/v1/nodes can
+		// never disagree about one node's reported clock status.
+		FPPReconciliation: api.StoreFPPReconciliation{Store: st, Logger: logger, Clock: clockStore},
 		// AssetSettings is Track G seam G-4's live, no-restart view of the
 		// assets.settings configuration kind (ADR-039 decision 6): the SAME
 		// *assetsync.Service constructed above straight in. It already
