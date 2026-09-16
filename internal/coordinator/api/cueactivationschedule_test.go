@@ -28,9 +28,17 @@ import (
 // audio-bearing, so this is indistinguishable from its own code's
 // perspective from the shared-CueID case ADR-049 decision 1 also enables.
 
-// putAudioNodeNoLTCForTest declares nodeID's own audio.node WITHOUT an
-// LTC route: [handlers.nodeHoldsMediaClock] reports false for it, unlike
-// putAudioNodeForTest's own fixed LTCRoute.
+// putAudioNodeNoLTCForTest declares nodeID's own audio.node with role
+// "program", not "program+ltc": [handlers.nodeHoldsMediaClock] reports
+// false for it on that basis alone, unlike putAudioNodeForTest's own
+// fixed "program+ltc" role. It also carries no LTC route, matching a
+// program-only node's real shape (ValidateAudioNodePlacement never allows
+// an ltcRoute the node's own advertised routes don't support), but the
+// missing LTCRoute is incidental to this fixture's own purpose now: role
+// alone is what nodeHoldsMediaClock reads. An explicit Role is required
+// here specifically because absent Role decodes to
+// [config.AudioNodeRoleDefault] ("program+ltc"), which would silently
+// make this node a SECOND holder alongside putAudioNodeForTest's.
 func putAudioNodeNoLTCForTest(t *testing.T, st *store.Store, nodeID string) {
 	t.Helper()
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
@@ -38,6 +46,7 @@ func putAudioNodeNoLTCForTest(t *testing.T, st *store.Store, nodeID string) {
 		ProgramChannels:       []int{1, 2},
 		ClockDomain:           "single-interface",
 		ClockDomainProvenance: "single interface, both routes on it",
+		Role:                  config.AudioNodeRoleProgram,
 	})
 	if err != nil {
 		t.Fatalf("encode audio.node payload: %v", err)

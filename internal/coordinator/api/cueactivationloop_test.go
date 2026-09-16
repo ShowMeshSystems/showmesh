@@ -167,6 +167,11 @@ func TestCueActivationLoopNudgeFloorBoundsBackToBackTicks(t *testing.T) {
 
 // --- blackAndSilence audio half ----------------------------------------
 
+// putAudioNodeForTest declares nodeID as the installation's program+ltc
+// node, explicit rather than relying on the wire default: [handlers.
+// nodeHoldsMediaClock] decides the clock holder by this Role field alone,
+// not by LTCRoute's presence, so a fixture standing in for "the holder"
+// states it outright.
 func putAudioNodeForTest(t *testing.T, st *store.Store, nodeID string) {
 	t.Helper()
 	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
@@ -174,6 +179,7 @@ func putAudioNodeForTest(t *testing.T, st *store.Store, nodeID string) {
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
 		ClockDomain:           "single-interface",
 		ClockDomainProvenance: "single interface, both routes on it",
+		Role:                  config.AudioNodeRoleProgramLTC,
 	})
 	if err != nil {
 		t.Fatalf("encode audio.node payload: %v", err)

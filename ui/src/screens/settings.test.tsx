@@ -936,6 +936,7 @@ describe('Settings › Node routing › PTP clock', () => {
       hardwareTimestamping: boolean
       externalUdsAddress: string
       fppBaseUrl: string
+      phcDevice: string
       revision: number
     }> = {},
   ) {
@@ -950,6 +951,7 @@ describe('Settings › Node routing › PTP clock', () => {
     if (overrides.hardwareTimestamping !== undefined) payload.hardwareTimestamping = overrides.hardwareTimestamping
     if (overrides.externalUdsAddress !== undefined) payload.externalUdsAddress = overrides.externalUdsAddress
     if (overrides.fppBaseUrl !== undefined) payload.fppBaseUrl = overrides.fppBaseUrl
+    if (overrides.phcDevice !== undefined) payload.phcDevice = overrides.phcDevice
     return {
       serverTime: '2026-09-12T21:00:00Z',
       kind: 'node.clock',
@@ -1108,6 +1110,52 @@ describe('Settings › Node routing › PTP clock', () => {
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
     expect(sentPayload).toMatchObject({ provider: 'external', interface: 'eth2', externalUdsAddress: '/var/run/ptp/ptp4lro' })
+  })
+
+  it('round-trips phcDevice unchanged for an external node with no control of its own on this screen', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () =>
+      Promise.resolve(nodeClockConfig({ provider: 'external', externalUdsAddress: '/var/run/ptp/ptp4lro', phcDevice: '/dev/ptp0' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putNodeClock = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeClockConfig({ provider: 'external', interface: 'eth2', phcDevice: '/dev/ptp0' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ provider: 'external', interface: 'eth2', phcDevice: '/dev/ptp0' })
+  })
+
+  it('drops phcDevice when switching an external node to managed', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () =>
+      Promise.resolve(nodeClockConfig({ provider: 'external', externalUdsAddress: '/var/run/ptp/ptp4lro', phcDevice: '/dev/ptp0' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+    let sentPayload: Record<string, unknown> | null = null
+    stubs.putNodeClock = (_id: string, payload: unknown) => {
+      sentPayload = payload as Record<string, unknown>
+      return Promise.resolve(nodeClockConfig({ provider: 'managed' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Managed' }))
+    await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ provider: 'managed' })
+    expect(sentPayload && 'phcDevice' in sentPayload).toBe(false)
   })
 
   it('refuses save when holdover limit or priority1 fails the server rule, even though provider/interface/domain are valid', async () => {

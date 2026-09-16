@@ -101,6 +101,9 @@ func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.
 	if payload.FPPBaseURL != "" {
 		params["fppBaseUrl"] = payload.FPPBaseURL
 	}
+	if payload.PHCDevice != "" {
+		params["phcDevice"] = payload.PHCDevice
+	}
 
 	idempotencyKey := fmt.Sprintf("node.clock.configure/%s/rev-%d", nodeID, obj.CurrentRevision)
 	if err := publish(ctx, pub, now, nodeID, "node.clock.configure", idempotencyKey, params); err != nil {

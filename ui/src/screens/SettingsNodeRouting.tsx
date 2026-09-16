@@ -876,6 +876,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
       else delete payload.priority1
       delete payload.externalUdsAddress
       delete payload.fppBaseUrl
+      delete payload.phcDevice
     } else if (provider === 'external') {
       if (externalUdsAddress.trim() !== '') payload.externalUdsAddress = externalUdsAddress
       else delete payload.externalUdsAddress
@@ -883,12 +884,17 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
       delete payload.priority1
       delete payload.hardwareTimestamping
       delete payload.fppBaseUrl
+      // phcDevice has no control on this screen yet; the ...base spread
+      // above already carries it through unchanged for an external node,
+      // so a save that touches no other external field still round-trips
+      // it rather than silently dropping it.
     } else {
       payload.fppBaseUrl = fppBaseUrl
       delete payload.clientOnly
       delete payload.priority1
       delete payload.hardwareTimestamping
       delete payload.externalUdsAddress
+      delete payload.phcDevice
     }
     return payload
   }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,6 +37,15 @@ type ExternalConfig struct {
 	// only as good as whatever the caller already knows, e.g. the
 	// agent's configured asset directory.
 	LocalSocketDir string
+
+	// PHCDevice is the operator's own declaration of which PTP hardware
+	// clock (e.g. "/dev/ptp0") the externally-owned ptp4l this provider
+	// observes keeps disciplined to PTP time. Empty means no declaration:
+	// [ExternalProvider.Now] keeps refusing to read a PHC exactly as it
+	// did before this field existed. See [ExternalProvider.Now]'s own doc
+	// comment for why an operator declaration, rather than a live
+	// protocol read, is what this provider acts on.
+	PHCDevice string
 }
 
 // ExternalProvider observes an externally-owned ptp4l instance's
@@ -59,40 +70,95 @@ func (p *ExternalProvider) Kind() ProviderKind { return ProviderExternal }
 func (p *ExternalProvider) Interface() string  { return p.cfg.Interface }
 func (p *ExternalProvider) Close() error       { return nil }
 
-// Now serves media time only in the one case this provider can establish
-// from evidence: an interface with no PHC at all.
+// Now serves media time from an interface with no PHC at all (necessarily
+// software timestamped) or from a PHC the operator has explicitly
+// declared in [ExternalConfig.PHCDevice] and that matches the interface's
+// own PHC. Every other case is refused.
 //
 // RES-019 section 5.3 gives this provider two time sources, the PHC in
 // hardware timestamping mode and "the disciplined system clock in
 // software mode". Which of the two applies depends on the timestamping
 // mode the OBSERVED ptp4l actually reached, and nothing on the read-only
-// management socket reports that mode, which is why the hardware case
-// stays refused here: an interface that HAS a PHC may still be running an
-// externally-owned ptp4l that fell back to software timestamping, and a
-// provider that read that undisciplined PHC would be confidently wrong.
-// Reading a PHC device is [ReadPHC], a separate concern from which
-// component owns the PTP protocol traffic, and this provider does not
-// assume it also owns PHC access.
+// management socket reports that mode: PORT_PROPERTIES_NP is the one
+// linuxptp management set that carries a timestamping field, and it is
+// refused on any socket but ptp4l's own read-write one (verified against
+// linuxptp 4.2's clock_manage(), which checks the request came in on
+// c->uds_rw_port before answering PORT_PROPERTIES_NP, and confirmed live
+// against a real ptp4l instance: the identical query returns
+// MANAGEMENT_ERROR_STATUS on the read-only socket and the real fields on
+// the read-write one). This provider is deliberately never handed the
+// read-write socket (RES-019 section 5.3: it only ever observes, never
+// touches, the ptp4l it does not own), so no in-protocol signal is
+// available to it at all.
 //
-// An interface with NO PHC settles the question: ptp4l cannot reach
-// hardware timestamping without one, so the instance being observed is
+// PHCDevice is the answer: an explicit, narrowly-scoped operator
+// attestation, the same trust model audio.node's own clockDomain/
+// clockDomainProvenance already uses in this codebase for a fact ShowMesh
+// cannot verify itself. Left empty, this provider refuses exactly as it
+// did before this field existed — a PHC-bearing interface with no
+// declaration is still refused, never inferred from the PHC merely
+// existing or from the port being locked.
+//
+// An interface with NO PHC settles the hardware-vs-software question on
+// its own regardless of any declaration: ptp4l cannot reach hardware
+// timestamping without a PHC, so the instance being observed is
 // necessarily software timestamped, and a software-timestamped ptp4l
 // disciplines CLOCK_REALTIME itself (linuxptp ptp4l.8, and the identical
-// case [ManagedProvider.Now] already serves). The reading carries that
-// reasoning as its own Reason, so a consumer can see what it rests on.
+// case [ManagedProvider.Now] already serves). A PHCDevice declared
+// against such an interface is a misconfiguration — the device this
+// provider was told to trust does not exist here — and is refused rather
+// than silently ignored.
 func (p *ExternalProvider) Now(context.Context) MediaTime {
-	_, hasPHC, err := PHCIndexForInterface(p.cfg.Interface)
+	index, hasPHC, err := phcIndexForInterface(p.cfg.Interface)
 	if err != nil {
 		return MediaTime{Valid: false, Reason: fmt.Sprintf("cannot tell whether %s has a PHC, so which clock the observed ptp4l disciplines is unknown: %v", p.cfg.Interface, err)}
 	}
-	if hasPHC {
+	if !hasPHC {
+		if p.cfg.PHCDevice != "" {
+			return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s is declared for %s, but %s has no PHC at all (ETHTOOL_GET_TS_INFO reports none): remove phcDevice or fix the declaration", p.cfg.PHCDevice, p.cfg.Interface, p.cfg.Interface)}
+		}
+		return MediaTime{
+			Time:   time.Now(),
+			Valid:  true,
+			Reason: fmt.Sprintf("%s has no PHC, so the observed ptp4l is necessarily software timestamped and disciplines CLOCK_REALTIME directly", p.cfg.Interface),
+		}
+	}
+	if p.cfg.PHCDevice == "" {
 		return MediaTime{Valid: false, Reason: fmt.Sprintf("%s has a PHC, and this provider cannot tell whether the ptp4l it observes reached hardware timestamping; wire a PHC device explicitly for media time", p.cfg.Interface)}
 	}
-	return MediaTime{
-		Time:   time.Now(),
-		Valid:  true,
-		Reason: fmt.Sprintf("%s has no PHC, so the observed ptp4l is necessarily software timestamped and disciplines CLOCK_REALTIME directly", p.cfg.Interface),
+	declaredIndex, ok := phcDeviceIndex(p.cfg.PHCDevice)
+	if !ok {
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %q does not name a PTP hardware clock device (want a form like \"/dev/ptp0\")", p.cfg.PHCDevice)}
 	}
+	if declaredIndex != index {
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s names PTP clock index %d, but %s's own PHC is /dev/ptp%d: fix phcDevice or the interface", p.cfg.PHCDevice, declaredIndex, p.cfg.Interface, index)}
+	}
+	t, err := readPHC(index)
+	if err != nil {
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("reading %s: %v (distributions ship this device root:root 0600; this agent may need a udev rule or group membership)", p.cfg.PHCDevice, err)}
+	}
+	return MediaTime{
+		Time:   t,
+		Valid:  true,
+		Reason: fmt.Sprintf("media time from the operator-declared PHC %s on %s: this is an attested reading, never a verified hardware-timestamping read", p.cfg.PHCDevice, p.cfg.Interface),
+	}
+}
+
+// phcDeviceIndex parses "/dev/ptpN" into N. ok is false for anything
+// else, including a value [config.DecodeNodeClockPayload]'s own pattern
+// should already have refused before this ever reaches an agent — this
+// provider re-checks rather than trusting the wire, since a malformed
+// declaration must be an honest refusal, never a panic or a wrong index.
+func phcDeviceIndex(device string) (int, bool) {
+	const prefix = "/dev/ptp"
+	if !strings.HasPrefix(device, prefix) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(device, prefix))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // Poll reads TIME_STATUS_NP, PORT_DATA_SET, TIME_PROPERTIES_DATA_SET, and

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
 
 // This file is the per-node kind (ADR-039, IDENTIFIER-REGISTER.md's
@@ -53,7 +54,15 @@ var nodeClockTopLevelKeys = map[string]bool{
 	"clientOnly": true, "holdoverLimitSeconds": true,
 	"priority1": true, "hardwareTimestamping": true,
 	"externalUdsAddress": true, "fppBaseUrl": true,
+	"phcDevice": true,
 }
+
+// phcDevicePattern is the only shape [DecodeNodeClockPayload] accepts for
+// phcDevice: a Linux PTP hardware clock device node. Anything else (a
+// symlink, a udev alias, a bare interface name) is refused rather than
+// guessed at, matching every PTP hardware clock this codebase already
+// reads ([clock.PHCIndexForInterface]'s own "/dev/ptp%d" construction).
+var phcDevicePattern = regexp.MustCompile(`^/dev/ptp[0-9]+$`)
 
 // NodeClockPayload is config_revisions.payload_json's decoded, VALIDATED
 // shape for [NodeClockConfigKind].
@@ -106,6 +115,28 @@ type NodeClockPayload struct {
 	// FPPBaseURL is the FPP 10 host's own base URL — required when
 	// Provider is [NodeClockProviderFPP].
 	FPPBaseURL string `json:"fppBaseUrl,omitempty"`
+
+	// PHCDevice is the operator-declared PTP hardware clock device (e.g.
+	// "/dev/ptp0") that the externally-owned ptp4l (or phc2sys) this node
+	// observes keeps disciplined to PTP time. External only.
+	//
+	// This exists because linuxptp's read-only management socket cannot
+	// answer "did the observed ptp4l reach hardware timestamping":
+	// PORT_PROPERTIES_NP, the one management set that carries a
+	// timestamping field, is refused on any socket but ptp4l's read-write
+	// one (verified against linuxptp 4.2's clock_manage(), which checks
+	// `p != c->uds_rw_port` before answering it, and confirmed live
+	// against a real ptp4l instance: the identical query returns
+	// MANAGEMENT_ERROR_STATUS on uds_ro_address and the real fields on
+	// uds_rw_address). The external provider is deliberately never handed
+	// the read-write socket (RES-019 section 5.3: it only ever observes),
+	// so this is the one signal ShowMesh can act on instead: an explicit
+	// operator declaration, matching audio.node's own clockDomain/
+	// clockDomainProvenance precedent for a fact this codebase cannot
+	// verify itself. The agent refuses media time outright whenever this
+	// does not match the interface's own PHC (ETHTOOL_GET_TS_INFO),
+	// rather than silently ignoring the mismatch.
+	PHCDevice string `json:"phcDevice,omitempty"`
 }
 
 // EncodeNodeClockPayload marshals p into config_revisions.payload_json's
@@ -214,10 +245,30 @@ func DecodeNodeClockPayload(raw string) (NodeClockPayload, *ValidationError) {
 		}
 	}
 
+	phcDevice, verr := decodeOptionalString(top, "phcDevice", "phcDevice")
+	if verr != nil {
+		return NodeClockPayload{}, verr
+	}
+	if phcDevice != "" {
+		if provider != NodeClockProviderExternal {
+			return NodeClockPayload{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "phcDevice",
+				Detail: fmt.Sprintf("phcDevice must be absent unless provider is %q: an ignored field would read as an applied one", NodeClockProviderExternal),
+			}
+		}
+		if !phcDevicePattern.MatchString(phcDevice) {
+			return NodeClockPayload{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "phcDevice",
+				Detail: fmt.Sprintf("phcDevice %q must match %s (a PTP hardware clock device path, e.g. \"/dev/ptp0\")", phcDevice, phcDevicePattern.String()),
+			}
+		}
+	}
+
 	return NodeClockPayload{
 		Provider: provider, Interface: iface, Domain: domain,
 		ClientOnly: clientOnly, HoldoverLimitSeconds: holdoverLimitSeconds,
 		Priority1: priority1, HardwareTimestamping: hardwareTimestamping,
 		ExternalUDSAddress: externalUDS, FPPBaseURL: fppBaseURL,
+		PHCDevice: phcDevice,
 	}, nil
 }

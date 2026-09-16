@@ -1,12 +1,167 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
+
+// TestNodeHoldsMediaClockUsesDeclaredRoleNotLTCRoute proves the fix: a
+// node carrying "program+ltc" with NO ltcRoute at all still holds the
+// media clock (the shape the swapped-holder failure needed and
+// ValidateAudioNodePlacement will never let a real Pi author, since it
+// lacks a discrete LTC-capable route -- but nodeHoldsMediaClock itself
+// must not require one), and a node carrying "program" with an ltcRoute
+// coincidentally present does NOT -- role decides this alone.
+func TestNodeHoldsMediaClockUsesDeclaredRoleNotLTCRoute(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	ctx := context.Background()
+
+	holderNoLTC, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
+		ProgramRoute:          "usb-interface",
+		ProgramChannels:       []int{1, 2},
+		ClockDomain:           "single-interface",
+		ClockDomainProvenance: "program+ltc role, ltc route not yet declared",
+		Role:                  config.AudioNodeRoleProgramLTC,
+	})
+	if err != nil {
+		t.Fatalf("encode holder-no-ltc payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.AudioNodeConfigKind, "holder-no-ltc", holderNoLTC)
+
+	holds, err := api.h.nodeHoldsMediaClock(ctx, "holder-no-ltc")
+	if err != nil {
+		t.Fatalf("nodeHoldsMediaClock: %v", err)
+	}
+	if !holds {
+		t.Error("holds = false, want true: role program+ltc holds the clock with no ltcRoute at all")
+	}
+
+	nonHolderWithLTC, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
+		ProgramRoute: "usb-interface", LTCRoute: "usb-interface",
+		ProgramChannels: []int{1, 2}, LTCChannel: 3,
+		ClockDomain:           "single-interface",
+		ClockDomainProvenance: "role program, ltcRoute set anyway",
+		Role:                  config.AudioNodeRoleProgram,
+	})
+	if err != nil {
+		t.Fatalf("encode non-holder-with-ltc payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.AudioNodeConfigKind, "non-holder-with-ltc", nonHolderWithLTC)
+
+	holds, err = api.h.nodeHoldsMediaClock(ctx, "non-holder-with-ltc")
+	if err != nil {
+		t.Fatalf("nodeHoldsMediaClock: %v", err)
+	}
+	if holds {
+		t.Error("holds = true, want false: role program never holds the clock, whatever ltcRoute says")
+	}
+}
+
+// TestNodeHoldsMediaClockDefaultRoleIsProgramLTC proves a stored payload
+// with no "role" key at all -- a pre-ADR-045 object, or any payload
+// literal built without setting Role -- resolves to the default role
+// "program+ltc", the identical default [config.DecodeAudioNodePayload]
+// applies on every fresh write.
+func TestNodeHoldsMediaClockDefaultRoleIsProgramLTC(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	ctx := context.Background()
+
+	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
+		ProgramRoute: "usb-interface", LTCRoute: "usb-interface",
+		ProgramChannels: []int{1, 2}, LTCChannel: 3,
+		ClockDomain:           "single-interface",
+		ClockDomainProvenance: "single interface, both routes on it",
+		// Role deliberately left unset.
+	})
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.AudioNodeConfigKind, "no-role-node", raw)
+
+	holds, err := api.h.nodeHoldsMediaClock(ctx, "no-role-node")
+	if err != nil {
+		t.Fatalf("nodeHoldsMediaClock: %v", err)
+	}
+	if !holds {
+		t.Error("holds = false, want true: an absent role key must default to program+ltc")
+	}
+}
+
+// TestProgramLTCNodeWithoutLTCRouteIsSelectedAsClockHolderByAudiosched
+// proves the fix end to end through the aligned-start path's own two real
+// production functions together: [handlers.nodeHoldsMediaClock] (this
+// file) decides who holds the role, and [audiosched.Select]
+// (internal/coordinator/audiosched/select.go) is still the one that
+// actually picks the start instant from that holder's reading. A
+// program+ltc node with no ltcRoute must be the ClockNodeID audiosched
+// selects, exactly as it must be for the real installation's node-01
+// before any ltcRoute discovery has run.
+func TestProgramLTCNodeWithoutLTCRouteIsSelectedAsClockHolderByAudiosched(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	ctx := context.Background()
+
+	holder, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
+		ProgramRoute:          "usb-interface",
+		ProgramChannels:       []int{1, 2},
+		ClockDomain:           "single-interface",
+		ClockDomainProvenance: "program+ltc role, ltc route not yet declared",
+		Role:                  config.AudioNodeRoleProgramLTC,
+	})
+	if err != nil {
+		t.Fatalf("encode holder payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.AudioNodeConfigKind, "holder-no-ltc", holder)
+
+	second, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
+		ProgramRoute:          "scarlett",
+		ProgramChannels:       []int{1, 2},
+		ClockDomain:           "scarlett-domain",
+		ClockDomainProvenance: "two-channel interface, program only",
+		Role:                  config.AudioNodeRoleProgram,
+	})
+	if err != nil {
+		t.Fatalf("encode second-node payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.AudioNodeConfigKind, "second-node", second)
+
+	var readiness []audiosched.Readiness
+	for _, nodeID := range []string{"holder-no-ltc", "second-node"} {
+		holds, err := api.h.nodeHoldsMediaClock(ctx, nodeID)
+		if err != nil {
+			t.Fatalf("nodeHoldsMediaClock(%s): %v", nodeID, err)
+		}
+		r := audiosched.Readiness{NodeID: nodeID, HoldsMediaClock: holds}
+		if holds {
+			r.MediaClockValid = true
+			r.MediaClockNowNs = 1_000_000_000
+		} else {
+			r.MediaClockValid = true
+			r.MediaClockNowNs = 2_000_000_000
+		}
+		readiness = append(readiness, r)
+	}
+
+	sel, err := audiosched.Select(readiness, 0, 0)
+	if err != nil {
+		t.Fatalf("audiosched.Select: %v", err)
+	}
+	if sel.ClockNodeID != "holder-no-ltc" {
+		t.Errorf("ClockNodeID = %q, want %q: the program+ltc role holds the clock even with no ltcRoute declared",
+			sel.ClockNodeID, "holder-no-ltc")
+	}
+	if sel.ScheduledAtNs != 1_000_000_000 {
+		t.Errorf("ScheduledAtNs = %d, want the holder's own reading (1e9), not the other node's (2e9)", sel.ScheduledAtNs)
+	}
+}
 
 // TestReadinessFromEvidencePreservesANanosecondReading is the defect this
 // whole path exists to prevent: a UnixNano-scale reading that goes through

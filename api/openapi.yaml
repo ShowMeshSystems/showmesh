@@ -14848,9 +14848,18 @@ components:
         60 when omitted. `priority1` and `hardwareTimestamping` apply to
         `managed` only. `externalUdsAddress` applies to `external` only,
         defaulting to linuxptp's own `/var/run/ptp/ptp4lro`.
-        `fppBaseUrl` is required exactly when `provider` is `fpp`. A node
-        with no node.clock object reports `unsynchronized` and behaves
-        exactly as it did before this seam existed.
+        `fppBaseUrl` is required exactly when `provider` is `fpp`.
+        `phcDevice` applies to `external` only: it declares which PTP
+        hardware clock (e.g. `/dev/ptp0`) the externally run ptp4l (or
+        phc2sys) keeps on PTP time. linuxptp's read-only management
+        socket cannot itself report which timestamping mode an observed
+        ptp4l reached, so the agent refuses to read media time from a
+        PHC-bearing interface unless this declaration matches the
+        interface's own PHC; a mismatch, or a declaration against an
+        interface with no PHC at all, is refused rather than silently
+        ignored. A node with no node.clock object reports
+        `unsynchronized` and behaves exactly as it did before this seam
+        existed.
       required: [provider, interface, domain]
       properties:
         provider:
@@ -14876,6 +14885,8 @@ components:
         externalUdsAddress:
           type: string
         fppBaseUrl:
+          type: string
+        phcDevice:
           type: string
     NodeClockConfigResponse:
       type: object

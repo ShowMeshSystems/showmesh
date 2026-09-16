@@ -68,6 +68,7 @@ func putAudioNode(t *testing.T, st *store.Store, nodeID string) {
 		ProgramChannels: []int{1, 2}, LTCChannel: 3,
 		ClockDomain:           "single-interface",
 		ClockDomainProvenance: "single interface, both routes on it",
+		Role:                  config.AudioNodeRoleProgramLTC,
 	})
 	if err != nil {
 		t.Fatalf("encode audio.node payload: %v", err)
@@ -85,6 +86,7 @@ func putProgramOnlyAudioNode(t *testing.T, st *store.Store, nodeID string) {
 		ProgramChannels:       []int{1, 2},
 		ClockDomain:           "single-interface",
 		ClockDomainProvenance: "two-output interface, program only",
+		Role:                  config.AudioNodeRoleProgram,
 	})
 	if err != nil {
 		t.Fatalf("encode program-only audio.node payload: %v", err)

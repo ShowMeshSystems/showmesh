@@ -141,6 +141,53 @@ func TestToNodePushesManagedConfig(t *testing.T) {
 	}
 }
 
+// TestToNodePushesExternalConfigWithPHCDevice proves the operator's own
+// PHC declaration reaches the node exactly as every other node.clock
+// field already does.
+func TestToNodePushesExternalConfigWithPHCDevice(t *testing.T) {
+	cs := newFakeConfigStore()
+	payload, err := config.EncodeNodeClockPayload(config.NodeClockPayload{
+		Provider: "external", Interface: "eno2", Domain: 0,
+		ExternalUDSAddress: "/run/ptp/ro", PHCDevice: "/dev/ptp0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs.put(config.NodeClockConfigKind, "node-1", 1, payload)
+
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	cmd := pub.published[0]
+	if cmd.Params["phcDevice"] != "/dev/ptp0" {
+		t.Fatalf("phcDevice = %v, want /dev/ptp0 in params: %+v", cmd.Params["phcDevice"], cmd.Params)
+	}
+}
+
+// TestToNodeOmitsPHCDeviceWhenUndeclared proves an installation that has
+// never set phcDevice keeps publishing exactly the params it did before
+// this field existed.
+func TestToNodeOmitsPHCDeviceWhenUndeclared(t *testing.T) {
+	cs := newFakeConfigStore()
+	payload, err := config.EncodeNodeClockPayload(config.NodeClockPayload{
+		Provider: "external", Interface: "eno2", Domain: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs.put(config.NodeClockConfigKind, "node-1", 1, payload)
+
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	cmd := pub.published[0]
+	if _, present := cmd.Params["phcDevice"]; present {
+		t.Fatalf("phcDevice present in params = %+v, want absent when never declared", cmd.Params)
+	}
+}
+
 func TestToNodePushesFPPConfigWithBaseURL(t *testing.T) {
 	cs := newFakeConfigStore()
 	payload, err := config.EncodeNodeClockPayload(config.NodeClockPayload{

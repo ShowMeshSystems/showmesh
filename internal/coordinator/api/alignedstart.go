@@ -206,11 +206,25 @@ func alignedStartIssuerID(ac authContext) string {
 	return ac.result.Principal.ID
 }
 
-// nodeHoldsMediaClock reports whether nodeID carries the program plus LTC
-// role: its audio.node configuration declares an LTC route, which is what
-// makes it the node RES-019 section 6 takes the shared clock from. A node
-// with no audio.node configuration at all holds no clock and is not an
-// error: it is simply not the clock holder.
+// nodeHoldsMediaClock reports whether nodeID carries ADR-045's
+// "program+ltc" role, the node RES-019 section 6 takes the shared clock
+// from. This is the declared ROLE alone: audio routing (programRoute) and
+// LTC capability (ltcRoute) are separate, independently varying facts
+// about a node (a program+ltc node need not have an ltcRoute yet declared,
+// and a node with an ltcRoute is not the holder unless its role says so),
+// and PTP lock state or connectivity are evidence about whether the
+// holder's OWN reading is usable (audiosched.pickClock), never about which
+// node holds the role in the first place.
+//
+// Decoded with [config.DecodeAudioNodePayload], not a raw unmarshal, so a
+// payload stored before ADR-045 existed (or a test fixture that omits
+// "role" entirely) resolves to [config.AudioNodeRoleDefault]
+// ("program+ltc") exactly as a fresh write already does — the same
+// default resolution every other reader of this role (fppreconcile's own
+// audioNodeRoles, assetsync's audiotarget.go) already applies.
+//
+// A node with no audio.node configuration at all holds no clock and is
+// not an error: it is simply not the clock holder.
 func (h *handlers) nodeHoldsMediaClock(ctx context.Context, nodeID string) (bool, error) {
 	rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.AudioNodeConfigKind, nodeID)
 	if err != nil {
@@ -219,11 +233,11 @@ func (h *handlers) nodeHoldsMediaClock(ctx context.Context, nodeID string) (bool
 	if problem != nil {
 		return false, nil
 	}
-	var payload config.AudioNodePayload
-	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
-		return false, err
+	payload, verr := config.DecodeAudioNodePayload(rev.PayloadJSON)
+	if verr != nil {
+		return false, fmt.Errorf("nodeHoldsMediaClock: stored audio.node %q does not decode: %s", nodeID, verr.Detail)
 	}
-	return payload.LTCRoute != "", nil
+	return payload.Role == config.AudioNodeRoleProgramLTC, nil
 }
 
 // readinessFromEvidence decodes one prepare result's media-clock fields

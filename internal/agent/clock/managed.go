@@ -266,14 +266,14 @@ func (p *ManagedProvider) Now(ctx context.Context) MediaTime {
 	if reached != TimestampingHardware {
 		return MediaTime{Time: time.Now(), Valid: true, Reason: "software timestamping: reading CLOCK_REALTIME, which this node's ptp4l disciplines directly"}
 	}
-	index, ok, err := PHCIndexForInterface(p.cfg.Interface)
+	index, ok, err := phcIndexForInterface(p.cfg.Interface)
 	if err != nil {
 		return MediaTime{Valid: false, Reason: fmt.Sprintf("PHC lookup for %s failed: %v", p.cfg.Interface, err)}
 	}
 	if !ok {
 		return MediaTime{Valid: false, Reason: fmt.Sprintf("interface %s has no associated PHC despite hardware timestamping being reached", p.cfg.Interface)}
 	}
-	t, err := ReadPHC(index)
+	t, err := readPHC(index)
 	if err != nil {
 		return MediaTime{Valid: false, Reason: fmt.Sprintf("reading /dev/ptp%d: %v (distributions ship this device root:root 0600; this agent may need a udev rule or group membership)", index, err)}
 	}

@@ -37,6 +37,9 @@ type Config struct {
 	// neither RUNTIME_DIRECTORY nor STATE_DIRECTORY — see
 	// [ExternalConfig.LocalSocketDir].
 	LocalSocketDir string
+
+	// PHCDevice is external-only: see [ExternalConfig.PHCDevice].
+	PHCDevice string
 }
 
 // Manager owns this node's current [Provider]/[Tracker] pair (or none, for
@@ -121,7 +124,7 @@ func buildProvider(cfg Config, logger Logger) (Provider, error) {
 	case ProviderExternal:
 		return NewExternalProvider(ExternalConfig{
 			Interface: cfg.Interface, Domain: cfg.Domain, UDSAddress: cfg.ExternalUDSAddress,
-			LocalSocketDir: cfg.LocalSocketDir,
+			LocalSocketDir: cfg.LocalSocketDir, PHCDevice: cfg.PHCDevice,
 		}), nil
 	case ProviderFPP:
 		return NewFPPProvider(FPPConfig{Interface: cfg.Interface, BaseURL: cfg.FPPBaseURL}), nil

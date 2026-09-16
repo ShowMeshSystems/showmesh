@@ -42,6 +42,7 @@ type clockNodeConfig struct {
 	HardwareTimestamping bool   `json:"hardwareTimestamping,omitempty"`
 	ExternalUDSAddress   string `json:"externalUdsAddress,omitempty"`
 	FPPBaseURL           string `json:"fppBaseUrl,omitempty"`
+	PHCDevice            string `json:"phcDevice,omitempty"`
 	Revision             int64  `json:"revision"`
 }
 
@@ -98,6 +99,7 @@ func (b *clockBinding) applyConfig(ctx context.Context, p clockNodeConfig) error
 		HardwareTimestamping: p.HardwareTimestamping,
 		ExternalUDSAddress:   p.ExternalUDSAddress,
 		FPPBaseURL:           p.FPPBaseURL,
+		PHCDevice:            p.PHCDevice,
 		LocalSocketDir:       b.localSocketDir,
 	}
 	if err := b.mgr.SetConfig(ctx, cfg); err != nil {
@@ -131,7 +133,7 @@ var clockConfigureKnownKeys = map[string]bool{
 	"schema": true, "provider": true, "interface": true, "domain": true,
 	"clientOnly": true, "holdoverLimitSeconds": true, "priority1": true,
 	"hardwareTimestamping": true, "externalUdsAddress": true, "fppBaseUrl": true,
-	"revision": true,
+	"phcDevice": true, "revision": true,
 }
 
 // decodeClockNodeConfig validates params' shape against
