@@ -146,17 +146,6 @@ type audioBearing struct {
 	out    pkgaudio.MediaRef
 }
 
-// nodeIDsOfBearing projects bearing's own node ids, in order, for a
-// caller (markNodesUnaligned, SelectAudioStartInstant) that only needs
-// the ids.
-func nodeIDsOfBearing(bearing []audioBearing) []string {
-	out := make([]string, 0, len(bearing))
-	for _, b := range bearing {
-		out = append(out, b.nodeID)
-	}
-	return out
-}
-
 // cueActivationRecordedSchedule is one bearing node's own ADR-049
 // decision 3 scheduling outcome, read back from ITS OWN command row (the
 // same [act.ActivationID] idempotency key [handlers.
