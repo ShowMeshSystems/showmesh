@@ -1040,6 +1040,9 @@ func TestAudioEngineSinkFactoryAndPropsPipeWire(t *testing.T) {
 	if _, has := props["device"]; has {
 		t.Errorf("props carries device for a pipewiresink binding")
 	}
+	if props["stream-properties"] != "props,stream.dont-remix=(string)true" {
+		t.Errorf("props[stream-properties] = %v, want stream.dont-remix as the string true so channels 3+ are not downmixed", props["stream-properties"])
+	}
 }
 
 // TestAudioEngineSinkFactoryAndPropsPipeWireNoTarget proves a pipewiresink

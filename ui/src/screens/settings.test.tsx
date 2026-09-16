@@ -592,6 +592,34 @@ describe('Settings › Node routing', () => {
     expect(screen.getByLabelText('Program channels')).not.toBeDisabled()
   })
 
+  it('enables save after an LTC channel change on a node whose stored outputLatency method is empty', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    const loaded = nodeConfig({ ltcRoute: 'hw:CARD=USB,DEV=0', ltcChannel: 4 })
+    loaded.payload.outputLatency = { method: '' as 'unmeasured' }
+    stubs.getAudioNode = () => Promise.resolve(loaded)
+    stubs.getAudioNodeConfigRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', revisions: [] })
+    let sentPayload: Record<string, unknown> | null = null
+    stubs.putAudioNode = (_id: string, payload: Record<string, unknown>) => {
+      sentPayload = payload
+      return Promise.resolve(nodeConfig({ ltcRoute: 'hw:CARD=USB,DEV=0', ltcChannel: 3 }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
+    await waitFor(() => expect(screen.getByText(/Will be accepted/)).toBeInTheDocument())
+    const channel = screen.getByRole('combobox', { name: 'Channel' })
+    expect(Array.from((channel as HTMLSelectElement).options).map((o) => o.value)).toEqual(['3', '4', '5', '6', '7', '8'])
+    fireEvent.change(channel, { target: { value: '3' } })
+    const save = screen.getByRole('button', { name: 'Save routing' })
+    expect(save).not.toBeDisabled()
+    fireEvent.click(save)
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ ltcChannel: 3 })
+    expect(sentPayload).not.toHaveProperty('outputLatency')
+  })
+
   it('loads role and zone from the payload', async () => {
     stubs.listConfigObjects = () =>
       Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
