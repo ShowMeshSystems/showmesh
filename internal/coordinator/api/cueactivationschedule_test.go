@@ -3,7 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -479,22 +480,21 @@ func TestDispatchCueActivationsScheduledStartInPastOnOneNodeDoesNotStopTheOther(
 	}
 }
 
-// TestReadScheduleProbeReportsBusyRatherThanWaitingForAConcurrentAttempt
-// proves finding 3's own fix: a second scheduling attempt that resolves
-// onto a node whose probe lock is already held by an in-flight attempt (a
-// Playlist tick landing while an operator Fire's own attempt is still
-// running, for example) must not block waiting for that lock. Waiting
-// would pay back the very delay scheduleProbeStepTimeout exists to bound,
-// and a hung node would wedge every later tick behind it. It must instead
-// return immediately, reporting that node as having no reading for THIS
-// activation, never touch the wire for it, and never disturb the
-// in-flight attempt.
+// TestReadScheduleProbeWaitsBrieflyForAHealthyOverlappingAttempt proves
+// finding 2's own tightened rule: a second scheduling attempt that lands
+// while a healthy first attempt on the SAME node is still finishing (a
+// Playlist tick and an operator Fire within a few hundred milliseconds,
+// for example) waits for it, bounded by scheduleProbeStepTimeout, and
+// succeeds once the first attempt releases the lock. Reporting the
+// second attempt unaligned over a lock it only needed to wait a moment
+// for would be a worse show than the wait itself.
 //
-// Attempt A's own apply is held mid-flight (via the fake publisher's
-// onAwaitResponse hook, which fires BEFORE Publish, so nothing of A's is
-// recorded yet) so B is guaranteed to observe the lock still held, not a
-// lucky non-overlapping run.
-func TestReadScheduleProbeReportsBusyRatherThanWaitingForAConcurrentAttempt(t *testing.T) {
+// Attempt A's own apply is held for 50ms, well under
+// scheduleProbeStepTimeout, modeling a healthy attempt rather than a
+// hang; the fake publisher's onAwaitResponse hook fires BEFORE Publish,
+// so B is guaranteed to start while A still holds the lock, not a lucky
+// non-overlapping run.
+func TestReadScheduleProbeWaitsBrieflyForAHealthyOverlappingAttempt(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:test"}
@@ -503,6 +503,71 @@ func TestReadScheduleProbeReportsBusyRatherThanWaitingForAConcurrentAttempt(t *t
 	mediaB := pkgaudio.MediaRef{AssetID: "asset-b", RuntimeFilename: "b.wav"}
 	nowA := testNow
 	nowB := testNow.Add(time.Millisecond) // distinct so the two attempts' invocation keys never collide
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"shared-node:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+	}
+
+	var awaitCount atomic.Int64
+	aEnteredApply := make(chan struct{})
+	setup.pub.onAwaitResponse = func() {
+		if awaitCount.Add(1) == 1 {
+			close(aEnteredApply)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		if _, _, err := h.readScheduleProbe(context.Background(), nowA, "shared-node", mediaA, issuer); err != nil {
+			t.Errorf("attempt A's own readScheduleProbe = %v, want nil", err)
+		}
+	}()
+
+	select {
+	case <-aEnteredApply:
+	case <-time.After(2 * time.Second):
+		t.Fatal("attempt A's own apply dispatch never reached AwaitResponse")
+	}
+
+	start := time.Now()
+	evidence, _, err := h.readScheduleProbe(context.Background(), nowB, "shared-node", mediaB, issuer)
+	took := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("readScheduleProbe for B = (%v, _, %v), want nil: a brief wait for a healthy overlapping attempt must still succeed", evidence, err)
+	}
+	if evidence == nil {
+		t.Fatal("readScheduleProbe for B returned nil evidence alongside a nil error")
+	}
+	if took >= scheduleProbeStepTimeout {
+		t.Fatalf("readScheduleProbe for B took %s, want well under scheduleProbeStepTimeout (%s): it should succeed once A releases, not wait out the whole bound", took, scheduleProbeStepTimeout)
+	}
+
+	select {
+	case <-aDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("attempt A never completed")
+	}
+}
+
+// TestReadScheduleProbeReportsBusyForAGenuinelyStuckNodeWithinTheBound
+// proves the other half of finding 2's own tightened rule: a node whose
+// first attempt never finishes, a genuine hang rather than a brief
+// overlap, still costs a second attempt at most scheduleProbeStepTimeout
+// before it is reported busy, never an unbounded wait for a lock nothing
+// will release in time.
+func TestReadScheduleProbeReportsBusyForAGenuinelyStuckNodeWithinTheBound(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:test"}
+
+	mediaA := pkgaudio.MediaRef{AssetID: "asset-a", RuntimeFilename: "a.wav"}
+	mediaB := pkgaudio.MediaRef{AssetID: "asset-b", RuntimeFilename: "b.wav"}
+	nowA := testNow
+	nowB := testNow.Add(time.Millisecond)
 
 	var awaitCount atomic.Int64
 	aEnteredApply := make(chan struct{})
@@ -527,27 +592,24 @@ func TestReadScheduleProbeReportsBusyRatherThanWaitingForAConcurrentAttempt(t *t
 	}
 
 	start := time.Now()
-	evidence, elapsed, err := h.readScheduleProbe(context.Background(), nowB, "shared-node", mediaB, issuer)
+	_, _, err := h.readScheduleProbe(context.Background(), nowB, "shared-node", mediaB, issuer)
 	took := time.Since(start)
 	close(holdA)
 
 	if err == nil {
-		t.Fatalf("readScheduleProbe for B = (%v, %v, nil), want a busy error while attempt A still holds the lock", evidence, elapsed)
+		t.Fatal("readScheduleProbe for B = nil error, want busy while attempt A is genuinely stuck")
 	}
-	if took > 100*time.Millisecond {
-		t.Fatalf("readScheduleProbe for B took %s, want near-instant: a busy node's lock must be tried, never waited on", took)
+	if took < scheduleProbeStepTimeout {
+		t.Fatalf("readScheduleProbe for B took %s, want at least scheduleProbeStepTimeout (%s): it must actually wait, not fail immediately", took, scheduleProbeStepTimeout)
+	}
+	if took > scheduleProbeStepTimeout+2*time.Second {
+		t.Fatalf("readScheduleProbe for B took %s, want close to scheduleProbeStepTimeout (%s): the wait must stay bounded", took, scheduleProbeStepTimeout)
 	}
 
 	select {
 	case <-aDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("attempt A never completed after being released")
-	}
-
-	for _, d := range setup.pub.dispatchedSnapshot() {
-		if d.NodeID == "shared-node" && strings.Contains(fmt.Sprint(d.Params["invocationId"]), nowB.Format(time.RFC3339Nano)) {
-			t.Fatalf("node %q dispatched %q for busy attempt B, want nothing dispatched for it", d.NodeID, d.Action)
-		}
 	}
 }
 
@@ -591,16 +653,19 @@ func TestDispatchProbeStepRecoversAPanicInTheUnderlyingDispatch(t *testing.T) {
 }
 
 // TestReadScheduleProbeLockIsAcquirableAfterAPanicInTheLockedSection
-// proves finding 2's own fix: a panic anywhere in readScheduleProbe's own
-// synchronous body between TryLock succeeding and any return must still
-// release nodeID's own lock during unwinding, through the SAME deferred,
-// handedOff-guarded unlock every ordinary return path uses. Before this
+// proves round 3's own fix: a panic anywhere in readScheduleProbe's own
+// synchronous body between acquiring nodeID's own token and any return
+// must still release it during unwinding, through the SAME deferred,
+// handedOff-guarded release every ordinary return path uses. Before this
 // fix, explicit unlocks on each path meant a panic between the lock and
-// its matching unlock left that node's mutex locked forever, and because
+// its matching unlock left that node's token held forever, and because
 // finding 1's own recover keeps the process alive, every later
-// scheduling attempt for that node would then block on mu.Lock() with no
-// timeout, wedging the Playlist activation loop for that node
-// permanently.
+// scheduling attempt for that node would then wait out the full bound
+// and still report busy, wedging the Playlist activation loop for that
+// node permanently.
+//
+// This check's own acquire must release what it took: it only proves the
+// token is free, it does not need to hold it afterward.
 //
 // Finding 1's own fix means a dispatch-side panic (broker, store, audit)
 // can no longer reach this far: dispatchProbeStep's own goroutine recovers
@@ -626,8 +691,65 @@ func TestReadScheduleProbeLockIsAcquirableAfterAPanicInTheLockedSection(t *testi
 		_, _, _ = h.readScheduleProbe(context.Background(), testNow, "panicking-node", media, issuer)
 	}()
 
-	if !scheduleProbeNodeLock("panicking-node").TryLock() {
+	lock := scheduleProbeNodeLock("panicking-node")
+	select {
+	case lock <- struct{}{}:
+		<-lock
+	default:
 		t.Fatal("panicking-node's own probe lock is still held after the panic unwound past readScheduleProbe: a later scheduling attempt for this node would block forever")
+	}
+}
+
+// panicOnWarnHandler is a slog.Handler whose Handle panics on its first
+// record only, then succeeds: a way to force a genuine panic inside one
+// real logWarn call, without a nil-by-default test-only hook in
+// production code, while still letting the recover's OWN follow-up
+// logWarn call succeed rather than compounding into a second panic.
+type panicOnWarnHandler struct{ fired atomic.Bool }
+
+func (h *panicOnWarnHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *panicOnWarnHandler) Handle(context.Context, slog.Record) error {
+	if !h.fired.Swap(true) {
+		panic("simulated logging panic")
+	}
+	return nil
+}
+func (h *panicOnWarnHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *panicOnWarnHandler) WithGroup(_ string) slog.Handler      { return h }
+
+// TestFinishScheduleProbeAfterRecoversAPanic proves this round's own
+// fix: finishScheduleProbeAfter is started with a bare go statement, the
+// identical shape dispatchProbeStep had before its own round 3 fix, so a
+// panic anywhere in its own body, its logging call or a revision helper,
+// not only the dispatch that dispatchProbeStep's own recover already
+// shields, must not kill the coordinator process, and must still release
+// nodeID's own lock.
+//
+// A panicking slog.Handler forces clearScheduleProbe's own logWarn call
+// to panic for real, exercising the actual call chain rather than a
+// stand-in. Calling finishScheduleProbeAfter directly, not via go, is
+// equivalent: recover() catches a panic anywhere in its own goroutine's
+// call stack regardless of how that goroutine was started, and a
+// synchronous call keeps this test simple to reason about.
+func TestFinishScheduleProbeAfterRecoversAPanic(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: slog.New(&panicOnWarnHandler{})}
+	issuer := cueActivationIssuer{PrincipalID: "system:test"}
+
+	setup.pub.awaitErr = errors.New("simulated broker failure")
+
+	pending := make(chan audioDispatchOutcome, 1)
+	pending <- audioDispatchOutcome{}
+	mu := make(chan struct{}, 1)
+	mu <- struct{}{} // the token this caller already holds, being handed off
+
+	h.finishScheduleProbeAfter(context.Background(), testNow, "panicking-node", issuer, pending, mu)
+
+	select {
+	case mu <- struct{}{}:
+		<-mu
+	default:
+		t.Fatal("panicking-node's own probe lock is still held after finishScheduleProbeAfter panicked: a later scheduling attempt for this node would wait out the full bound and still report busy")
 	}
 }
 

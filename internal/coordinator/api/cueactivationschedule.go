@@ -58,24 +58,41 @@ const scheduleProbeMaxDeliveryContribution = scheduleProbeStepTimeout
 // (cueactivationloop.go's NewCueActivationLoop) and the direct-fire HTTP
 // route each build their OWN *handlers, so a struct field could not be
 // shared between the two paths this lock must actually serialize.
-var scheduleProbeNodeLocks sync.Map // nodeID string -> *sync.Mutex
+var scheduleProbeNodeLocks sync.Map // nodeID string -> chan struct{}, a buffered-1 token
 
-// scheduleProbeNodeLock returns the one *sync.Mutex every scheduling
-// attempt touching nodeID's own probe session must hold, creating it on
-// first use. Never released back: a node is a small, bounded set for the
-// life of this process, so this never grows unbounded the way a lock per
-// ACTIVATION would.
+// scheduleProbeNodeLock returns the one token channel every scheduling
+// attempt touching nodeID's own probe session must acquire (send a token
+// in) and release (receive it back out), creating it on first use. Never
+// removed from the map: a node is a small, bounded set for the life of
+// this process, so this never grows unbounded the way one per ACTIVATION
+// would.
 //
-// The lock is held for as long as nodeID's own probe session might still
-// be affected by THIS attempt's dispatches, including a step this
-// attempt gave up WAITING for but did not cancel: see
-// finishScheduleProbeAfter's own doc comment for why releasing early,
-// while an abandoned apply or prepare may still be in flight, would let
-// a second attempt's own dispatches interleave with the first's late
-// arrival.
-func scheduleProbeNodeLock(nodeID string) *sync.Mutex {
-	v, _ := scheduleProbeNodeLocks.LoadOrStore(nodeID, &sync.Mutex{})
-	return v.(*sync.Mutex)
+// A channel, not a *sync.Mutex: [acquireScheduleProbeNodeLock] needs a
+// bounded wait, and a plain sync.Mutex has no timed Lock. The token is
+// held for as long as nodeID's own probe session might still be affected
+// by THIS attempt's dispatches, including a step this attempt gave up
+// WAITING for but did not cancel: see finishScheduleProbeAfter's own doc
+// comment for why releasing early, while an abandoned apply or prepare
+// may still be in flight, would let a second attempt's own dispatches
+// interleave with the first's late arrival.
+func scheduleProbeNodeLock(nodeID string) chan struct{} {
+	v, _ := scheduleProbeNodeLocks.LoadOrStore(nodeID, make(chan struct{}, 1))
+	return v.(chan struct{})
+}
+
+// acquireScheduleProbeNodeLock waits up to timeout to place a token in
+// lock, never longer: a hung node's own finishScheduleProbeAfter can hold
+// this token in the background for up to the dispatch's own much longer
+// deadline, and this bound is what keeps a second attempt's own wait from
+// paying that full cost. On a false return, no token was placed, so the
+// caller owns nothing and must not release it.
+func acquireScheduleProbeNodeLock(lock chan struct{}, timeout time.Duration) bool {
+	select {
+	case lock <- struct{}{}:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // scheduleCueActivations is ADR-049 decision 3's own entry point. For
@@ -331,8 +348,19 @@ func awaitProbeStep(pending <-chan audioDispatchOutcome) (out audioDispatchOutco
 // later apply overwrites it. Accepted, not fixed: a probe session is a
 // throwaway resource by construction, and a clean restart already loses
 // every other in-flight command's own follow-up the identical way.
-func (h *handlers) finishScheduleProbeAfter(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, pending <-chan audioDispatchOutcome, mu *sync.Mutex) {
-	defer mu.Unlock()
+//
+// Started with a bare go statement, exactly like dispatchProbeStep's own
+// goroutine: there is no caller left to recover a panic here once
+// readScheduleProbe has already returned, so the recover below is this
+// function's own, logging nodeID rather than letting it take down the
+// coordinator process over a logging or revision-helper defect.
+func (h *handlers) finishScheduleProbeAfter(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, pending <-chan audioDispatchOutcome, mu chan struct{}) {
+	defer func() { <-mu }()
+	defer func() {
+		if r := recover(); r != nil {
+			h.logWarn("cue activation schedule: panic finishing an abandoned probe step", "nodeId", nodeID, "panic", r)
+		}
+	}()
 	<-pending
 	h.clearScheduleProbe(ctx, now, nodeID, issuer)
 }
@@ -365,21 +393,27 @@ var scheduleProbeLockedSectionPanicForTest func()
 // mistakenly started it (which this function itself never does, Prepare
 // only, never Start).
 //
-// nodeID's own [scheduleProbeNodeLock] is acquired with TryLock, never a
-// blocking Lock: a hung node can keep that lock held in the background
-// (via finishScheduleProbeAfter) for up to the dispatch's own much
-// longer deadline, and waiting on it would pay the very delay this whole
-// step timeout scheme exists to remove, with repeated hangs queuing
-// behind each other. A busy lock is reported as this node having no
-// reading for THIS activation, not as a reason to wait.
+// nodeID's own [scheduleProbeNodeLock] is acquired with a wait bounded by
+// [scheduleProbeStepTimeout], never an unbounded Lock: a hung node can
+// keep that token held in the background (via finishScheduleProbeAfter)
+// for up to the dispatch's own much longer deadline, and waiting past
+// this bound would pay the very delay this whole step timeout scheme
+// exists to remove. Within the bound, though, waiting is the point: two
+// healthy overlapping attempts on one node (a Playlist tick and an
+// operator Fire within a few hundred milliseconds, for example) are
+// common and harmless, and reporting the second one unaligned when it
+// only needed to wait a moment is a worse show than the wait itself. A
+// node still busy after the full bound is reported as having no reading
+// for THIS activation.
 //
-// Every return path unlocks through the SAME deferred call, guarded by
-// handedOff: a panic anywhere in this function's own body, not only an
-// explicit early return, still runs that defer during unwinding, so the
-// lock is never left held by an interrupted synchronous path. The only
-// case the defer must NOT unlock is a handoff to finishScheduleProbeAfter,
-// which takes ownership of the lock (and the eventual unlock) for as
-// long as it waits on an abandoned step.
+// Every return path releases the token through the SAME deferred call,
+// guarded by handedOff: a panic anywhere in this function's own body,
+// not only an explicit early return, still runs that defer during
+// unwinding, so the token is never left held by an interrupted
+// synchronous path. The only case the defer must NOT release it is a
+// handoff to finishScheduleProbeAfter, which takes ownership of the
+// token (and its eventual release) for as long as it waits on an
+// abandoned step.
 //
 // Each of apply and prepare is given [scheduleProbeStepTimeout] to
 // answer; a step that does not is abandoned, not canceled (see that
@@ -398,13 +432,13 @@ var scheduleProbeLockedSectionPanicForTest func()
 // itself, not of the round trip that fetched or discarded it.
 func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID string, media pkgaudio.MediaRef, issuer cueActivationIssuer) (map[string]any, time.Duration, error) {
 	mu := scheduleProbeNodeLock(nodeID)
-	if !mu.TryLock() {
+	if !acquireScheduleProbeNodeLock(mu, scheduleProbeStepTimeout) {
 		return nil, 0, errScheduleProbeBusy(nodeID)
 	}
 	handedOff := false
 	defer func() {
 		if !handedOff {
-			mu.Unlock()
+			<-mu
 		}
 	}()
 	if scheduleProbeLockedSectionPanicForTest != nil {
