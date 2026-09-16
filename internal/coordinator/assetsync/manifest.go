@@ -113,8 +113,29 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 	if err != nil {
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: list show-wide assets: %w", nodeID, err)
 	}
+	showAssets = preferNodeOverShowAudioAssets(nodeAssets, showAssets)
 
-	combined := append(append([]store.AssetRecord{}, nodeAssets...), showAssets...)
+	covered := make(map[string]bool, len(nodeAssets)+len(showAssets))
+	for _, rec := range nodeAssets {
+		if rec.MediaType == audioMediaType {
+			covered[rec.SequenceID] = true
+		}
+	}
+	for _, rec := range showAssets {
+		if rec.MediaType == audioMediaType {
+			covered[rec.SequenceID] = true
+		}
+	}
+	// ADR-049 decision 5's third precedence tier: a sequence this node is
+	// itself a Cue's listed audio/announcement target for, but holds
+	// neither its own row nor a show-scoped one, borrows another listed
+	// target's node-scoped row instead of resolving to nothing.
+	fallbackAssets, err := audioFallbackAssets(ctx, st, showID, nodeID, covered)
+	if err != nil {
+		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
+	}
+
+	combined := append(append(append([]store.AssetRecord{}, nodeAssets...), showAssets...), fallbackAssets...)
 	assets := make([]ExpectedAsset, 0, len(combined))
 	coveredSequences := make(map[string]bool, len(combined))
 	for _, rec := range combined {
