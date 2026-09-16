@@ -90,6 +90,57 @@ func TestAutoDeployCueCatalog_HeldWhenActivationRunning(t *testing.T) {
 	}
 }
 
+// TestCueCatalogAutoDeployHold_FPPUnavailableDoesNotHold is a regression
+// test for a live-rehearsal defect: an FPP instance with no usable
+// playlist (status "unavailable", e.g. reason "missing_playlist_name")
+// cannot possibly be playing a Cue, so it must not hold every audio node's
+// deploy the way a merely stale-but-maybe-playing FPP run correctly does.
+func TestCueCatalogAutoDeployHold_FPPUnavailableDoesNotHold(t *testing.T) {
+	tests := []struct {
+		name                  string
+		run                   currentrun.Run
+		wantHold              bool
+		wantEvidenceUncertain bool
+	}{
+		{
+			name: "unavailable with stale freshness does not hold",
+			run: currentrun.Run{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+				Status: "unavailable", StatusReason: "missing_playlist_name",
+				Playback:  currentrun.Playback{State: "unavailable", Reason: "missing_playlist_name"},
+				Freshness: currentrun.Freshness{State: "stale"}},
+			wantHold: false,
+		},
+		{
+			name: "stale but not unavailable still holds as uncertain",
+			run: currentrun.Run{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+				Status:    "idle",
+				Playback:  currentrun.Playback{State: "idle"},
+				Freshness: currentrun.Freshness{State: "stale"}},
+			wantHold: true, wantEvidenceUncertain: true,
+		},
+		{
+			name: "playing holds and is not uncertain",
+			run: currentrun.Run{ID: "fpp:player-01", Runner: currentrun.RunnerFPP,
+				Status:    "playing",
+				Playback:  currentrun.Playback{State: "playing"},
+				Freshness: currentrun.Freshness{State: "current"}},
+			wantHold: true, wantEvidenceUncertain: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api, _, _, _ := newCueCatalogAutoDeployFixture(t, []currentrun.Run{tt.run})
+			got := api.h.cueCatalogAutoDeployHold(context.Background(), testNow, "render-01")
+			if got.Hold != tt.wantHold {
+				t.Errorf("Hold = %v, want %v", got.Hold, tt.wantHold)
+			}
+			if got.EvidenceUncertain != tt.wantEvidenceUncertain {
+				t.Errorf("EvidenceUncertain = %v, want %v", got.EvidenceUncertain, tt.wantEvidenceUncertain)
+			}
+		})
+	}
+}
+
 // TestAutoDeployCueCatalog_HeldWhenPlaybackEvidenceIsStale is a regression
 // test for a real reviewed defect: a run whose LAST REPORTED state reads
 // idle must still hold when that evidence itself is not fresh, because a
