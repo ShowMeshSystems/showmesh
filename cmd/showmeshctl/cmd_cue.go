@@ -560,6 +560,15 @@ func resolvedTargets(target string, targets []string) []string {
 	return nil
 }
 
+// targetLineWidth is the field width the three target lines share, one more
+// than "Announcement targets:" (21 characters), the longest of the three:
+// wide enough to hold every one of them plus a separating space, so they
+// align with each other. This is deliberately its own gutter, not
+// printCueDetail's 14-character one: 14 cannot hold "Announcement
+// targets:" at all, and gluing a value to the colon on the lines that do
+// fit would read worse than the misalignment it was meant to fix.
+const targetLineWidth = len("Announcement targets:") + 1
+
 // printCueOutputTargets prints one readable line per output kind the cue
 // declares, naming every target node in its list, or that it resolves to the
 // installation's program+ltc node when the list is empty. Malformed Outputs
@@ -569,24 +578,25 @@ func printCueOutputTargets(w io.Writer, outputs json.RawMessage) {
 	if err := json.Unmarshal(outputs, &t); err != nil {
 		return
 	}
+	format := fmt.Sprintf("%%-%ds%%s\n", targetLineWidth)
 	describeList := func(label string, targets []string) {
 		if len(targets) == 0 {
-			_, _ = fmt.Fprintf(w, "%s: (resolves to the program+ltc node)\n", label)
+			_, _ = fmt.Fprintf(w, format, label, "(resolves to the program+ltc node)")
 			return
 		}
-		_, _ = fmt.Fprintf(w, "%s: %s\n", label, strings.Join(targets, ", "))
+		_, _ = fmt.Fprintf(w, format, label, strings.Join(targets, ", "))
 	}
 	if t.Audio != nil {
-		describeList("Audio targets", resolvedTargets(t.Audio.Target, t.Audio.Targets))
+		describeList("Audio targets:", resolvedTargets(t.Audio.Target, t.Audio.Targets))
 	}
 	if t.Announcement != nil {
-		describeList("Announcement targets", resolvedTargets(t.Announcement.Target, t.Announcement.Targets))
+		describeList("Announcement targets:", resolvedTargets(t.Announcement.Target, t.Announcement.Targets))
 	}
 	if t.LTC != nil {
 		if t.LTC.Target == "" {
-			_, _ = fmt.Fprintln(w, "LTC target: (resolves to the program+ltc node)")
+			_, _ = fmt.Fprintf(w, format, "LTC target:", "(resolves to the program+ltc node)")
 		} else {
-			_, _ = fmt.Fprintf(w, "LTC target: %s\n", t.LTC.Target)
+			_, _ = fmt.Fprintf(w, format, "LTC target:", t.LTC.Target)
 		}
 	}
 }
