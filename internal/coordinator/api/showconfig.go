@@ -1126,15 +1126,16 @@ var showConfigValidationProblemTypes = map[string]string{
 	config.ValidationCodeFieldUnknownKey:       ProblemBaseURI + "show-config-field-unknown-key",
 
 	// Track F seam F1's own additions (nightsession.go/showaction.go).
-	config.ValidationCodeCalendarFieldRejected:     ProblemBaseURI + "show-config-calendar-field-rejected",
-	config.ValidationCodeDuplicateRestDuration:     ProblemBaseURI + "show-config-duplicate-rest-duration",
-	config.ValidationCodeNotImplemented:            ProblemBaseURI + "show-config-not-implemented",
-	config.ValidationCodeBackgroundAudioItemsEmpty: ProblemBaseURI + "show-config-background-audio-items-empty",
-	config.ValidationCodeItemIDDuplicate:           ProblemBaseURI + "show-config-item-id-duplicate",
-	config.ValidationCodeCueNameDuplicate:          ProblemBaseURI + "show-config-cue-name-duplicate",
-	config.ValidationCodeAudioNodeChannelDuplicate: ProblemBaseURI + "audio-node-channel-duplicate",
-	config.ValidationCodeAudioNodeChannelOverlap:   ProblemBaseURI + "audio-node-channel-overlap",
-	config.ValidationCodeAudioNodeRouteMismatch:    ProblemBaseURI + "audio-node-route-mismatch",
+	config.ValidationCodeCalendarFieldRejected:               ProblemBaseURI + "show-config-calendar-field-rejected",
+	config.ValidationCodeDuplicateRestDuration:               ProblemBaseURI + "show-config-duplicate-rest-duration",
+	config.ValidationCodeNotImplemented:                      ProblemBaseURI + "show-config-not-implemented",
+	config.ValidationCodeBackgroundAudioItemsEmpty:           ProblemBaseURI + "show-config-background-audio-items-empty",
+	config.ValidationCodeItemIDDuplicate:                     ProblemBaseURI + "show-config-item-id-duplicate",
+	config.ValidationCodeCueNameDuplicate:                    ProblemBaseURI + "show-config-cue-name-duplicate",
+	config.ValidationCodeNightBackgroundAudioTargetDuplicate: ProblemBaseURI + "show-config-night-background-audio-target-duplicate",
+	config.ValidationCodeAudioNodeChannelDuplicate:           ProblemBaseURI + "audio-node-channel-duplicate",
+	config.ValidationCodeAudioNodeChannelOverlap:             ProblemBaseURI + "audio-node-channel-overlap",
+	config.ValidationCodeAudioNodeRouteMismatch:              ProblemBaseURI + "audio-node-route-mismatch",
 
 	// Track F seam F6's own additions (nightsitecontrol.go).
 	config.ValidationCodeInterlockNameDuplicate:                 ProblemBaseURI + "show-config-interlock-name-duplicate",
