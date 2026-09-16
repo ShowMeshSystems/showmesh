@@ -499,8 +499,10 @@ func Run() int {
 	// the identical reason renderStore's does (see noderender's own
 	// comment above) — no per-node dynamic list to seed here (engine/
 	// device/program/ltc are fixed, one-per-node signals), so this needs
-	// no known-surfaces-style restart bookkeeping.
-	fppRunner.Add(nodeaudio.New(audioStore), nodeaudio.DefaultPollInterval)
+	// no known-surfaces-style restart bookkeeping. WithSessionDeleter wires
+	// st in so a session dropped between polls, or stranded before this
+	// option existed, is deleted rather than left as a permanent row.
+	fppRunner.Add(nodeaudio.New(audioStore, nodeaudio.WithSessionDeleter(st)), nodeaudio.DefaultPollInterval)
 
 	// Track I seam I1: clockStore's own read side, sharing fppRunner for
 	// the identical reason audioStore's does — no per-node dynamic list
