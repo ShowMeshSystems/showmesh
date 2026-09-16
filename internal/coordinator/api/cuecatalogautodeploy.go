@@ -33,6 +33,11 @@ const (
 	cueCatalogAutoDeploySystemPrincipalName = "ShowMesh automatic cue-catalog deploy"
 )
 
+// fppRunStatusUnavailable mirrors the literal currentruns.go's
+// fppRunStatus returns as Run.Status when the FPP observation itself
+// reports no usable playlist (contracts section 1.4's unavailable field).
+const fppRunStatusUnavailable = "unavailable"
+
 // AutoDeployCueCatalog implements fallbackreconcile.CatalogDeployer. It is
 // called once per node whose cue-catalog acknowledgement is not current
 // (fallbackreconcile resolves that candidate set itself, reusing
@@ -127,6 +132,12 @@ func (h *handlers) cueCatalogAutoDeployHold(ctx context.Context, now time.Time, 
 	for _, run := range snap.Runs {
 		switch run.Runner {
 		case currentrun.RunnerFPP:
+			// Status unavailable (no usable playlist) means this run
+			// structurally cannot be playing, unlike a merely stale one:
+			// that is a fact, not evidence this coordinator failed to refresh.
+			if run.Status == fppRunStatusUnavailable {
+				continue
+			}
 			if run.Freshness.State != string(observation.StateCurrent) {
 				return cueCatalogAutoDeployHoldResult{Hold: true, EvidenceUncertain: true,
 					Reason: fmt.Sprintf("fpp run %q's playback evidence is %s rather than current, so its reported state cannot be trusted", run.ID, run.Freshness.State)}
