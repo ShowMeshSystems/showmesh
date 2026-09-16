@@ -175,6 +175,9 @@ func decodeClockNodeConfig(params map[string]any) (clockNodeConfig, error) {
 	if p.Provider == "fpp" && p.FPPBaseURL == "" {
 		return clockNodeConfig{}, fmt.Errorf("%s: params.fppBaseUrl is required when provider is \"fpp\"", action)
 	}
+	if p.PHCDevice != "" && p.Provider != "external" {
+		return clockNodeConfig{}, fmt.Errorf("%s: params.phcDevice must be absent unless provider is \"external\": an ignored field would read as an applied one", action)
+	}
 	if p.Revision < 0 {
 		return clockNodeConfig{}, fmt.Errorf("%s: params.revision must not be negative", action)
 	}

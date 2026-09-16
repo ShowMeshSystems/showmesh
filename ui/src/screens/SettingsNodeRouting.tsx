@@ -884,10 +884,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
       delete payload.priority1
       delete payload.hardwareTimestamping
       delete payload.fppBaseUrl
-      // phcDevice has no control on this screen yet; the ...base spread
-      // above already carries it through unchanged for an external node,
-      // so a save that touches no other external field still round-trips
-      // it rather than silently dropping it.
+      // phcDevice has no control here yet; the base spread round-trips it unchanged.
     } else {
       payload.fppBaseUrl = fppBaseUrl
       delete payload.clientOnly

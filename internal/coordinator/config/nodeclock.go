@@ -117,25 +117,9 @@ type NodeClockPayload struct {
 	FPPBaseURL string `json:"fppBaseUrl,omitempty"`
 
 	// PHCDevice is the operator-declared PTP hardware clock device (e.g.
-	// "/dev/ptp0") that the externally-owned ptp4l (or phc2sys) this node
-	// observes keeps disciplined to PTP time. External only.
-	//
-	// This exists because linuxptp's read-only management socket cannot
-	// answer "did the observed ptp4l reach hardware timestamping":
-	// PORT_PROPERTIES_NP, the one management set that carries a
-	// timestamping field, is refused on any socket but ptp4l's read-write
-	// one (verified against linuxptp 4.2's clock_manage(), which checks
-	// `p != c->uds_rw_port` before answering it, and confirmed live
-	// against a real ptp4l instance: the identical query returns
-	// MANAGEMENT_ERROR_STATUS on uds_ro_address and the real fields on
-	// uds_rw_address). The external provider is deliberately never handed
-	// the read-write socket (RES-019 section 5.3: it only ever observes),
-	// so this is the one signal ShowMesh can act on instead: an explicit
-	// operator declaration, matching audio.node's own clockDomain/
-	// clockDomainProvenance precedent for a fact this codebase cannot
-	// verify itself. The agent refuses media time outright whenever this
-	// does not match the interface's own PHC (ETHTOOL_GET_TS_INFO),
-	// rather than silently ignoring the mismatch.
+	// "/dev/ptp0") that the externally-owned ptp4l this node observes
+	// keeps disciplined to PTP time. External only; see
+	// [clock.ExternalProvider.Now] for why this must be declared.
 	PHCDevice string `json:"phcDevice,omitempty"`
 }
 

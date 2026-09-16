@@ -206,25 +206,9 @@ func alignedStartIssuerID(ac authContext) string {
 	return ac.result.Principal.ID
 }
 
-// nodeHoldsMediaClock reports whether nodeID carries ADR-045's
-// "program+ltc" role, the node RES-019 section 6 takes the shared clock
-// from. This is the declared ROLE alone: audio routing (programRoute) and
-// LTC capability (ltcRoute) are separate, independently varying facts
-// about a node (a program+ltc node need not have an ltcRoute yet declared,
-// and a node with an ltcRoute is not the holder unless its role says so),
-// and PTP lock state or connectivity are evidence about whether the
-// holder's OWN reading is usable (audiosched.pickClock), never about which
-// node holds the role in the first place.
-//
-// Decoded with [config.DecodeAudioNodePayload], not a raw unmarshal, so a
-// payload stored before ADR-045 existed (or a test fixture that omits
-// "role" entirely) resolves to [config.AudioNodeRoleDefault]
-// ("program+ltc") exactly as a fresh write already does — the same
-// default resolution every other reader of this role (fppreconcile's own
-// audioNodeRoles, assetsync's audiotarget.go) already applies.
-//
-// A node with no audio.node configuration at all holds no clock and is
-// not an error: it is simply not the clock holder.
+// nodeHoldsMediaClock reports whether nodeID's audio.node configuration
+// declares ADR-045's "program+ltc" role, the node RES-019 section 6 takes
+// the shared clock from. No configuration means no clock, not an error.
 func (h *handlers) nodeHoldsMediaClock(ctx context.Context, nodeID string) (bool, error) {
 	rev, _, problem, err := h.getActiveShowConfigRevision(ctx, config.AudioNodeConfigKind, nodeID)
 	if err != nil {

@@ -78,12 +78,9 @@ const (
 	ProviderNone     ProviderKind = "none"
 )
 
-// phcIndexForInterface and readPHC are package-level indirections over
-// [PHCIndexForInterface] and [ReadPHC] (phc.go on Linux, phc_other.go
-// elsewhere), used by every provider's PHC-trust branch instead of the
-// package functions directly. A test overrides them to exercise "this
-// interface has a PHC" and "reading it fails" without a real PTP hardware
-// clock, which this build (and most CI/dev hosts) has none of.
+// phcIndexForInterface and readPHC indirect [PHCIndexForInterface] and
+// [ReadPHC] so tests can fake "has a PHC" and "read fails" without real
+// PTP hardware.
 var (
 	phcIndexForInterface = PHCIndexForInterface
 	readPHC              = ReadPHC
