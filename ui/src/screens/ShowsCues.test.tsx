@@ -520,6 +520,31 @@ describe('Shows · Cues tab', () => {
       return renderWorkspace({ session: signedIn(['config:write']) })
     }
 
+    it('collapses the identity text to a bare id when the configured label is just the id, in both the checkbox group and the LTC select', async () => {
+      const cue = cueResponse(
+        cuePayload({
+          outputs: {
+            audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, targets: ['node-c'] },
+            ltc: { startOffsetMillis: 0, target: 'node-c' },
+          },
+        }),
+      )
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => {
+        if (kind === 'audio.node') return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [audioNodeSummary('node-c', 'node-c')] })
+        return withContents(kind, [cueSummary()], [])
+      }
+      stubs.listAssets = assetsEmpty
+      stubs.getShowCue = () => Promise.resolve(cue)
+      renderWorkspace({ session: signedIn(['config:write']) })
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      const audioGroup = await screen.findByRole('group', { name: 'Audio target nodes' })
+      const checkbox = within(audioGroup).getByRole('checkbox', { name: 'node-c' })
+      expect(checkbox.closest('label')).not.toHaveClass('sm-choice--stacked')
+      const ltcTarget = (await screen.findByRole('combobox', { name: 'LTC target node' })) as HTMLSelectElement
+      expect(within(ltcTarget).getByRole('option', { name: 'node-c' })).toBeInTheDocument()
+    })
+
     it('a loaded cue with targets round-trips them unchanged', async () => {
       const cue = cueResponse(
         cuePayload({
@@ -539,8 +564,8 @@ describe('Shows · Cues tab', () => {
       // Two nodes can advertise the identical route as their label; the option text
       // must name the id too, or an operator cannot tell them apart (same defect
       // ChoiceGroup's secondary text fixes for the audio/announcement checkboxes).
-      expect(within(ltcTarget).getByRole('option', { name: 'node-a, Node A' })).toBeInTheDocument()
-      expect(within(ltcTarget).getByRole('option', { name: 'node-b, Node B' })).toBeInTheDocument()
+      expect(within(ltcTarget).getByRole('option', { name: 'node-a · Node A' })).toBeInTheDocument()
+      expect(within(ltcTarget).getByRole('option', { name: 'node-b · Node B' })).toBeInTheDocument()
 
       let sent: unknown = null
       stubs.putShowCue = (_id: string, payload: unknown) => {
@@ -621,24 +646,21 @@ describe('Shows · Cues tab', () => {
       expect(payload.outputs.audio).not.toHaveProperty('targets')
     })
 
-    it('a stored target naming an undeclared node renders it as selected-but-unknown, deselectable, and keeps saving it', async () => {
+    it('a stored target naming an undeclared node renders it as selected-but-unknown and deselectable, and names the save refusal honestly', async () => {
       const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0, targets: ['node-x'] } } }))
       setupWithTargets(cue)
       fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
       const audioGroup = await screen.findByRole('group', { name: 'Audio target nodes' })
       const unknown = within(audioGroup).getByRole('checkbox', { name: 'node-x (not declared)' })
       expect(unknown).toBeChecked()
-      expect(screen.getByText(/node-x is not declared; readiness will report it as unbound/)).toBeInTheDocument()
+      expect(screen.getByText(/node-x is not a configured audio\.node; saving is refused until it is deselected\./)).toBeInTheDocument()
 
-      let sent: unknown = null
-      stubs.putShowCue = (_id: string, payload: unknown) => {
-        sent = payload
-        return Promise.resolve(cueResponse(payload as ConfigShowCue, 'cue-1', 2))
-      }
+      // The real coordinator refuses this exact payload with a 422; a save must show
+      // that refusal, not a fabricated success, and must not silently drop the id.
+      stubs.putShowCue = () => Promise.reject(new ApiError('outputs.audio.targets[0]: target "node-x" is not a configured audio.node', 422, 'unprocessable'))
       fireEvent.click(await screen.findByRole('button', { name: 'Save cue' }))
-      await waitFor(() => expect(sent).not.toBeNull())
-      const payload = sent as ConfigShowCue
-      expect(payload.outputs.audio?.targets).toEqual(['node-x'])
+      expect(await screen.findByText('outputs.audio.targets[0]: target "node-x" is not a configured audio.node')).toBeInTheDocument()
+      expect(unknown).toBeChecked()
     })
 
     it('deselecting an unknown stored target drops it instead of silently keeping it hidden', async () => {
@@ -787,6 +809,14 @@ describe('Shows · Cues tab', () => {
       const payload = sent as ConfigShowCue
       expect(payload.outputs.audio?.targets).toEqual(['node-a'])
       expect(payload.outputs.announcement?.targets).toEqual(['node-b'])
+    })
+
+    it('an LTC target naming an undeclared node names the same save refusal the audio/announcement groups do', async () => {
+      const cue = cueResponse(cuePayload({ outputs: { audio: { asset: 'house-preshow-loop', startOffsetMillis: 0 }, ltc: { startOffsetMillis: 0, target: 'node-x' } } }))
+      setupWithTargets(cue)
+      fireEvent.click(await screen.findByRole('row', { name: 'Edit House Preshow Loop' }))
+      await screen.findByRole('combobox', { name: 'LTC target node' })
+      expect(await screen.findByText('node-x is not a configured audio.node; saving is refused until you deselect it.')).toBeInTheDocument()
     })
   })
 })

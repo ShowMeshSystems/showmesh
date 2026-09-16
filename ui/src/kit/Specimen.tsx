@@ -262,15 +262,16 @@ export function Specimen() {
             label="Audio target nodes"
             help={choiceGroupValue.length === 0 ? 'No nodes selected: plays on the program+ltc node.' : undefined}
             options={[
-              { value: 'node-a', label: 'node-a', secondary: 'hw:CARD=Loopback,DEV=0' },
-              { value: 'node-b', label: 'node-b', secondary: 'hw:CARD=Loopback,DEV=0' },
+              { value: 'node-a', label: 'node-a', secondary: 'alsa_output.usb-Focusrite_Scarlett_2i2_USB-00.analog-stereo' },
+              { value: 'node-b', label: 'node-b', secondary: 'alsa_output.usb-Focusrite_Scarlett_2i2_USB-00.analog-stereo' },
             ]}
             value={choiceGroupValue}
             onChange={setChoiceGroupValue}
           />
           <p className="sm-small sm-muted">
             Two nodes sharing one route: the identity is the primary line, the route a muted secondary one, so the
-            same route on two hosts never reads as one option.
+            same route on two hosts never reads as one option. The route itself is a real, unbreakable device
+            string on purpose, to prove the choice wraps rather than pushing the page wide at phone width.
           </p>
         </SpecSection>
 

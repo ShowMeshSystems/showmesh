@@ -285,6 +285,25 @@ describe('ChoiceGroup', () => {
     expect(describedBy).not.toBeNull()
     const errorEl = describedBy === null ? null : document.getElementById(describedBy)
     expect(errorEl?.textContent).toContain('node-a is not a configured audio.node')
+
+    // A screen reader announces a group's accessible name on entry but not always its
+    // description, so each input carries the same wiring the fieldset does.
+    const checkbox = screen.getByRole('checkbox', { name: 'Node A' })
+    expect(checkbox.getAttribute('aria-invalid')).toBe('true')
+    expect(checkbox.getAttribute('aria-describedby')).toBe(describedBy)
+  })
+
+  it('treats an empty-string secondary as absent, never a blank muted line', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        options={[{ value: 'node-a', label: 'node-a', secondary: '' }]}
+        value={[]}
+        onChange={() => {}}
+      />,
+    )
+    const checkbox = screen.getByRole('checkbox', { name: 'node-a' })
+    expect(checkbox.closest('label')).not.toHaveClass('sm-choice--stacked')
   })
 })
 

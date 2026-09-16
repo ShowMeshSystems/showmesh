@@ -73,40 +73,48 @@ type ChoiceGroupProps = {
   options: readonly ChoiceGroupOption[]
   value: readonly string[]
   onChange: (value: string[]) => void
-  /** A value with no matching option renders checked and deselectable, next to the declared ones, never dropped silently. */
-  unknownLabel?: (value: string) => ReactNode
 }
 
 /** A checkbox group for picking any number of a known option set. */
-export function ChoiceGroup({ label, help, error, options, value, onChange, unknownLabel }: ChoiceGroupProps) {
+export function ChoiceGroup({ label, help, error, options, value, onChange }: ChoiceGroupProps) {
   const id = useId()
   const helpId = help === undefined ? undefined : `${id}-help`
   const errorId = error === undefined ? undefined : `${id}-error`
   const describedBy = [helpId, errorId].filter(Boolean).join(' ') || undefined
+  const invalid = error === undefined ? undefined : true
   const known = new Set(options.map((option) => option.value))
   const unknown = value.filter((v) => !known.has(v))
   const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v])
   return (
     <div className="sm-field">
-      <fieldset className="sm-choice-group" aria-describedby={describedBy} aria-invalid={error === undefined ? undefined : true}>
+      <fieldset className="sm-choice-group" aria-describedby={describedBy} aria-invalid={invalid}>
         <legend className="sm-field__label">{label}</legend>
-        {options.map((option) => (
-          <label key={option.value} className={option.secondary === undefined ? 'sm-choice' : 'sm-choice sm-choice--stacked'}>
-            <input type="checkbox" checked={value.includes(option.value)} onChange={() => toggle(option.value)} />
-            {option.secondary === undefined ? (
-              <span>{option.label}</span>
-            ) : (
-              <span className="sm-choice__text">
+        {options.map((option) => {
+          const hasSecondary = option.secondary !== undefined && option.secondary !== ''
+          return (
+            <label key={option.value} className={hasSecondary ? 'sm-choice sm-choice--stacked' : 'sm-choice'}>
+              <input
+                type="checkbox"
+                checked={value.includes(option.value)}
+                onChange={() => toggle(option.value)}
+                aria-describedby={describedBy}
+                aria-invalid={invalid}
+              />
+              {hasSecondary ? (
+                <span className="sm-choice__text">
+                  <span>{option.label}</span>
+                  <span className="sm-choice__secondary">{option.secondary}</span>
+                </span>
+              ) : (
                 <span>{option.label}</span>
-                <span className="sm-choice__secondary">{option.secondary}</span>
-              </span>
-            )}
-          </label>
-        ))}
+              )}
+            </label>
+          )
+        })}
         {unknown.map((v) => (
           <label key={v} className="sm-choice">
-            <input type="checkbox" checked onChange={() => toggle(v)} />
-            <span>{unknownLabel ? unknownLabel(v) : `${v} (not declared)`}</span>
+            <input type="checkbox" checked onChange={() => toggle(v)} aria-describedby={describedBy} aria-invalid={invalid} />
+            <span>{`${v} (not declared)`}</span>
           </label>
         ))}
       </fieldset>

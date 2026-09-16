@@ -544,8 +544,12 @@ type cueOutputTargets struct {
 }
 
 // resolvedTargets folds the deprecated singular "target" into the "targets"
-// list form ADR-049 also accepts, for display only; a cue naming both is a
-// server-side refusal, never reached here.
+// list form ADR-049 also accepts, for display only. The coordinator itself
+// always normalizes a stored "target" into "targets" (showcue.go's own
+// UnmarshalJSON), so a GET response reaching this function with target set
+// and targets empty is not a shape this CLI can actually observe over the
+// API today; this helper stays for a raw or hand-built outputs document
+// that has not gone through that normalization.
 func resolvedTargets(target string, targets []string) []string {
 	if len(targets) > 0 {
 		return targets
@@ -567,22 +571,22 @@ func printCueOutputTargets(w io.Writer, outputs json.RawMessage) {
 	}
 	describeList := func(label string, targets []string) {
 		if len(targets) == 0 {
-			_, _ = fmt.Fprintf(w, "%s (resolves to the program+ltc node)\n", label)
+			_, _ = fmt.Fprintf(w, "%s: (resolves to the program+ltc node)\n", label)
 			return
 		}
-		_, _ = fmt.Fprintf(w, "%s %s\n", label, strings.Join(targets, ", "))
+		_, _ = fmt.Fprintf(w, "%s: %s\n", label, strings.Join(targets, ", "))
 	}
 	if t.Audio != nil {
-		describeList("Audio targets:       ", resolvedTargets(t.Audio.Target, t.Audio.Targets))
+		describeList("Audio targets", resolvedTargets(t.Audio.Target, t.Audio.Targets))
 	}
 	if t.Announcement != nil {
-		describeList("Announcement targets:", resolvedTargets(t.Announcement.Target, t.Announcement.Targets))
+		describeList("Announcement targets", resolvedTargets(t.Announcement.Target, t.Announcement.Targets))
 	}
 	if t.LTC != nil {
 		if t.LTC.Target == "" {
-			_, _ = fmt.Fprintln(w, "LTC target:           (resolves to the program+ltc node)")
+			_, _ = fmt.Fprintln(w, "LTC target: (resolves to the program+ltc node)")
 		} else {
-			_, _ = fmt.Fprintf(w, "LTC target:           %s\n", t.LTC.Target)
+			_, _ = fmt.Fprintf(w, "LTC target: %s\n", t.LTC.Target)
 		}
 	}
 }

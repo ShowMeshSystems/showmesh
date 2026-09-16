@@ -357,6 +357,16 @@ function offsetHelp(frameRateState: LtcFrameRateState): string {
   return frameRateState.kind === 'loaded' ? `hh:mm:ss.ff at ${frameRateState.fps} fps.` : 'hh:mm:ss. Frame rate unavailable.'
 }
 
+/** LiveControl.tsx's node picker and monitorModel.ts's capabilityGroups share this convention: id and label joined by a middle dot, collapsed to the bare id when the label is just the id. */
+function nodeIdentityText(node: { id: string; label: string }): string {
+  return node.label !== '' && node.label !== node.id ? `${node.id} · ${node.label}` : node.id
+}
+
+/** The label as ChoiceGroup's muted secondary context: omitted (not merely blank) when it adds nothing beyond the id already shown as the primary text. */
+function nodeSecondaryText(node: { id: string; label: string }): string | undefined {
+  return node.label !== '' && node.label !== node.id ? node.label : undefined
+}
+
 function TargetNodeField({
   label,
   value,
@@ -386,14 +396,18 @@ function TargetNodeField({
   return (
     <Field
       label={label}
-      help={notDeclared ? `${value} is not declared; readiness will report it as unbound.` : "Empty resolves to the installation's single program+ltc node."}
+      help={
+        notDeclared
+          ? `${value} is not a configured audio.node; saving is refused until you deselect it.`
+          : "Empty resolves to the installation's single program+ltc node."
+      }
     >
       {(props) => (
         <Select {...props} value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="">Resolve to the program+ltc node</option>
           {nodesState.nodes.map((node) => (
             <option key={node.id} value={node.id}>
-              {node.id}, {node.label}
+              {nodeIdentityText(node)}
             </option>
           ))}
           {notDeclared && <option value={value}>{value} (not declared)</option>}
@@ -433,7 +447,7 @@ function TargetNodesField({
   const unknown = value.filter((id) => !known.has(id))
   const help =
     unknown.length > 0
-      ? `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not declared; readiness will report ${unknown.length === 1 ? 'it' : 'them'} as unbound.`
+      ? `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not a configured audio.node; saving is refused until ${unknown.length === 1 ? 'it is' : 'they are'} deselected.`
       : value.length === 0
         ? 'No nodes selected: plays on the program+ltc node.'
         : undefined
@@ -441,7 +455,7 @@ function TargetNodesField({
     <ChoiceGroup
       label={label}
       help={help}
-      options={nodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: node.label }))}
+      options={nodesState.nodes.map((node) => ({ value: node.id, label: node.id, secondary: nodeSecondaryText(node) }))}
       value={value}
       onChange={onChange}
     />

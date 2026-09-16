@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,7 +44,10 @@ func TestCmdCueSetRoundTripsTargetsList(t *testing.T) {
 		t.Fatalf("decoding request body: %v; body: %s", err, gotBody)
 	}
 	if !strings.Contains(string(decoded.Outputs), `"targets":["node-a","node-b"]`) {
-		t.Errorf("outputs = %s, want targets to round-trip unchanged", decoded.Outputs)
+		t.Errorf("outputs sent = %s, want the request body to carry targets unchanged", decoded.Outputs)
+	}
+	if !strings.Contains(stdout.String(), "Audio targets: node-a, node-b") {
+		t.Errorf("stdout = %q, want the response's display output to list both targets readably, not just round-trip the raw JSON", stdout.String())
 	}
 }
 
@@ -67,13 +71,13 @@ func TestCmdCueGetDisplaysTargetsReadably(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "Audio targets:        node-a, node-b") {
+	if !strings.Contains(out, "Audio targets: node-a, node-b") {
 		t.Errorf("stdout = %q, want it to list both audio targets readably", out)
 	}
 	if !strings.Contains(out, "Announcement targets: node-b") {
 		t.Errorf("stdout = %q, want it to list the announcement target readably", out)
 	}
-	if !strings.Contains(out, "LTC target:           node-a") {
+	if !strings.Contains(out, "LTC target: node-a") {
 		t.Errorf("stdout = %q, want it to name the LTC target readably", out)
 	}
 }
@@ -97,10 +101,10 @@ func TestCmdCueGetDisplaysEmptyTargetsAsResolvingToProgramLTCNode(t *testing.T) 
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "Audio targets:        (resolves to the program+ltc node)") {
+	if !strings.Contains(out, "Audio targets: (resolves to the program+ltc node)") {
 		t.Errorf("stdout = %q, want an absent targets list to say it resolves to the program+ltc node", out)
 	}
-	if !strings.Contains(out, "LTC target:           (resolves to the program+ltc node)") {
+	if !strings.Contains(out, "LTC target: (resolves to the program+ltc node)") {
 		t.Errorf("stdout = %q, want an absent LTC target to say it resolves to the program+ltc node", out)
 	}
 	if strings.Contains(out, "Announcement targets:") {
@@ -108,26 +112,31 @@ func TestCmdCueGetDisplaysEmptyTargetsAsResolvingToProgramLTCNode(t *testing.T) 
 	}
 }
 
-func TestCmdCueGetDisplaysDeprecatedSingularTargetAsOneElementList(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("ShowMesh-API-Version", "1")
-		_, _ = fmt.Fprint(w, `{"serverTime":"2026-09-15T21:00:00Z","kind":"show.cue","id":"thriller","revision":1,
-			"payload":{"show":"halloween-2026","name":"Thriller","outputs":{
-				"audio":{"asset":"thriller","startOffsetMillis":0,"target":"node-a"}
-			}},
-			"updatedAt":"2026-09-15T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
-	}))
-	defer ts.Close()
-
-	var stdout, stderr bytes.Buffer
-	code := cmdCue([]string{"get", "--server", ts.URL, "thriller"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-09-15T21:00:00Z")))
-	if code != exitOK {
-		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+// TestResolvedTargetsFoldsDeprecatedSingularIntoOneElementList tests
+// resolvedTargets directly as the pure helper it is. A show.cue GET can
+// never actually return the singular-only shape this exercises: the
+// coordinator's own decode normalizes a stored "target" into "targets"
+// before it is ever written (internal/coordinator/config/showcue.go), so
+// simulating that shape via a fake httptest response would assert a
+// server behavior that does not exist.
+func TestResolvedTargetsFoldsDeprecatedSingularIntoOneElementList(t *testing.T) {
+	cases := []struct {
+		name    string
+		target  string
+		targets []string
+		want    []string
+	}{
+		{name: "targets present wins", target: "node-a", targets: []string{"node-b", "node-c"}, want: []string{"node-b", "node-c"}},
+		{name: "singular target folds to a one-element list", target: "node-a", targets: nil, want: []string{"node-a"}},
+		{name: "neither present yields nil", target: "", targets: nil, want: nil},
 	}
-	out := stdout.String()
-	if !strings.Contains(out, "Audio targets:        node-a") {
-		t.Errorf("stdout = %q, want the old-form singular target to read as a one-element list", out)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := resolvedTargets(c.target, c.targets)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("resolvedTargets(%q, %v) = %v, want %v", c.target, c.targets, got, c.want)
+			}
+		})
 	}
 }
 

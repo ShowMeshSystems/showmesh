@@ -256,6 +256,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .sm-choice__secondary {
@@ -279,6 +281,7 @@
   border: 0;
   padding: 0;
   margin: 0;
+  min-inline-size: 0;
 }
 
 .sm-choice-group > legend {
