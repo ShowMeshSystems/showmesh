@@ -11,6 +11,7 @@ import {
   ChromeBar,
   ChromeProgress,
   ClockSkewStrip,
+  ConfirmDialog,
   ConnectionPill,
   DefinitionStrip,
   Drawer,
@@ -124,6 +125,7 @@ export function Specimen() {
   const [theme, setTheme] = useState<Theme>('dark')
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
 
   return (
@@ -490,8 +492,27 @@ export function Specimen() {
           </Drawer>
         </SpecSection>
 
+        <SpecSection number="11 · Confirm dialog" id="specimen-confirm" title="A real modal, for the rare choice that must not slip past" detail="Replaces window.confirm. Names the real risk instead of a generic 'Are you sure?', and the destructive action sits on the danger button, never the default focus.">
+          <ButtonRow>
+            <Button variant="danger" onClick={() => setConfirmOpen(true)}>Deploy anyway</Button>
+          </ButtonRow>
+          <ConfirmDialog
+            open={confirmOpen}
+            title="Deploy anyway?"
+            detail={
+              <>
+                <p className="sm-body">Cues &ldquo;cue-a&rdquo; and &ldquo;cue-b&rdquo; both hold the exclusive claim &ldquo;program-audio-route:media-garage:usb-interface&rdquo;.</p>
+                <p className="sm-small sm-muted">This records you as having accepted the conflict for the deployed revision.</p>
+              </>
+            }
+            confirmLabel="Deploy anyway"
+            onConfirm={() => setConfirmOpen(false)}
+            onCancel={() => setConfirmOpen(false)}
+          />
+        </SpecSection>
+
         <SpecSection
-          number="11 · Lifecycle commands"
+          number="12 · Lifecycle commands"
           id="specimen-lifecycle"
           title="One element, two layouts"
           detail="An untitled group renders Show Night's flat grid; a titled group renders Live Control's subsection. Start night's option renders under its own consequence line, never beside the button."

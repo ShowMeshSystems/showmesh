@@ -12,5 +12,6 @@
 @import './shell.css';
 @import './popover.css';
 @import './drawer.css';
+@import './confirm-dialog.css';
 @import './node-drawer.css';
 @import './live-control.css';
