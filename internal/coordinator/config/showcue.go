@@ -59,9 +59,9 @@ var showCueTopLevelKeys = map[string]bool{
 var (
 	showCueOutputsKeys      = map[string]bool{"render": true, "audio": true, "ltc": true, "announcement": true}
 	showCueRenderKeys       = map[string]bool{"sequence": true}
-	showCueAudioKeys        = map[string]bool{"asset": true, "startOffsetMillis": true, "target": true}
+	showCueAudioKeys        = map[string]bool{"asset": true, "startOffsetMillis": true, "target": true, "targets": true}
 	showCueLTCKeys          = map[string]bool{"startOffsetMillis": true, "target": true}
-	showCueAnnouncementKeys = map[string]bool{"policy": true, "duckGainDb": true, "fadeMillis": true, "target": true}
+	showCueAnnouncementKeys = map[string]bool{"policy": true, "duckGainDb": true, "fadeMillis": true, "target": true, "targets": true}
 )
 
 // ShowCuePayload is config_revisions.payload_json's decoded, VALIDATED
@@ -98,25 +98,117 @@ type ShowCueRenderOutput struct {
 // audio asset; this seam does not validate its existence (not in
 // TRACK-H-H1-SPEC.md section 4's refused list). StartOffsetMillis is where
 // inside that asset the Cue begins, default 0, must be >= 0, and is
-// bounded at 24 hours like outputs.ltc.startOffsetMillis. Target is
-// ADR-045's optional target node, mirroring show.surface.node's "node"
-// field: absent means resolve later to the installation's single
-// program+ltc audio.node, exactly the one-node behavior this Cue had
-// before ADR-045. Present, it must name an existing audio.node object
-// (DecodeShowCuePayload's audioNodeExists callback) — the same "refused
-// against what actually exists" posture show.surface.node's nodeDeclared
-// check uses.
+// bounded at 24 hours like outputs.ltc.startOffsetMillis. Targets is
+// ADR-049's list of target audio.node ids (superseding ADR-045's single
+// "target"): an empty list means resolve later to the installation's
+// single program+ltc audio.node, exactly the one-node behavior this Cue
+// had before ADR-045. Each present id must name an existing audio.node
+// object (DecodeShowCuePayload's audioNodeExists callback), the same
+// "refused against what actually exists" posture show.surface.node's
+// nodeDeclared check uses. The wire form accepts the deprecated singular
+// "target" as a one-element Targets and always re-encodes as "targets":
+// see this type's own UnmarshalJSON for the stored-row read-back path
+// DecodeShowCuePayload's validating decode never touches.
 type ShowCueAudioOutput struct {
-	Asset             string `json:"asset"`
-	StartOffsetMillis int    `json:"startOffsetMillis"`
-	Target            string `json:"target,omitempty"`
+	Asset             string   `json:"asset"`
+	StartOffsetMillis int      `json:"startOffsetMillis"`
+	Targets           []string `json:"targets,omitempty"`
+}
+
+// UnmarshalJSON accepts a legacy "target" string or a "targets" array for
+// outputs.audio, so a row stored before ADR-049 still reads through the
+// non-validating paths (api/showcue.go's jsonUnmarshalStrict GET,
+// fallbackcompile, fppreconcile) that call plain json.Unmarshal against
+// [ShowCuePayload] directly rather than DecodeShowCuePayload. See
+// [decodeStoredShowCueTargets] for exactly which of
+// [decodeShowCueTargets]'s refusals this path shares, and which it
+// deliberately leaves to the validating decoder.
+func (o *ShowCueAudioOutput) UnmarshalJSON(b []byte) error {
+	var wire struct {
+		Asset             string `json:"asset"`
+		StartOffsetMillis int    `json:"startOffsetMillis"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return err
+	}
+	targets, err := decodeStoredShowCueTargets(fields, "outputs.audio")
+	if err != nil {
+		return err
+	}
+	o.Asset = wire.Asset
+	o.StartOffsetMillis = wire.StartOffsetMillis
+	o.Targets = targets
+	return nil
+}
+
+// decodeStoredShowCueTargets is [decodeShowCueTargets]'s own compatibility
+// twin for UnmarshalJSON's non-validating, stored-row read-back path
+// (ADR-049). It shares three of that function's refusals: both keys
+// present (including a present, null "targets", alongside "target"), a
+// repeated id in "targets", and an empty string inside "targets". It
+// leaves two refusals to the validating decoder alone: a present, null,
+// or empty "target" reads as absent here (impossible from this package's
+// own encoder, which omits an empty Target, but not impossible in older
+// or hand-edited rows), resolving to the installation's default node
+// exactly as the pre-ADR-049 plain string field's own empty value did,
+// rather than becoming a one-element list matching no node; and a
+// present, null "targets" alone reads as absent the same way, rather than
+// the validating decoder's own refusal of that shape. It also never
+// checks that an id names a configured audio.node, because that check
+// needs a live audioNodeExists callback this read-back path has no
+// access to.
+func decodeStoredShowCueTargets(fields map[string]json.RawMessage, path string) ([]string, error) {
+	targetRaw, targetPresent := fields["target"]
+	_, targetsPresent := fields["targets"]
+	if targetPresent && targetsPresent {
+		return nil, fmt.Errorf("%s must not declare both %q and %q", path, "target", "targets")
+	}
+
+	if targetPresent {
+		if isJSONNull(targetRaw) {
+			return nil, nil
+		}
+		var target string
+		if err := json.Unmarshal(targetRaw, &target); err != nil {
+			return nil, fmt.Errorf("%s.target must be a string: %w", path, err)
+		}
+		if target == "" {
+			return nil, nil
+		}
+		return []string{target}, nil
+	}
+
+	targetsRaw, present := fields["targets"]
+	if !present || isJSONNull(targetsRaw) {
+		return nil, nil
+	}
+	var targets []string
+	if err := json.Unmarshal(targetsRaw, &targets); err != nil {
+		return nil, fmt.Errorf("%s.targets must be a JSON array of strings: %w", path, err)
+	}
+	seen := make(map[string]bool, len(targets))
+	for _, id := range targets {
+		if id == "" {
+			return nil, fmt.Errorf("%s.targets must not contain an empty string", path)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("%s.targets must not repeat %q", path, id)
+		}
+		seen[id] = true
+	}
+	return targets, nil
 }
 
 // ShowCueLTCOutput is show.cue.outputs.ltc. StartOffsetMillis is H0.3's
 // single LTC offset; its runtime meaning ("Cue LTC start offset + current
 // Cue position") is H4's arithmetic, not this seam's. Target is ADR-045's
-// optional target node — see [ShowCueAudioOutput.Target]'s doc comment;
-// the same absent/present rule applies here.
+// optional target node; ADR-049 widened outputs.audio/announcement to a
+// Targets list but deliberately kept outputs.ltc singular, see
+// [decodeShowCueTarget]'s doc comment.
 type ShowCueLTCOutput struct {
 	StartOffsetMillis int    `json:"startOffsetMillis"`
 	Target            string `json:"target,omitempty"`
@@ -124,14 +216,40 @@ type ShowCueLTCOutput struct {
 
 // ShowCueAnnouncementOutput is show.cue.outputs.announcement. DuckGainDb is
 // non-nil only when Policy is "duck" — refused on "mix" and "interrupt" at
-// decode time, since an ignored field reads as an applied one. Target is
-// ADR-045's optional target node — see [ShowCueAudioOutput.Target]'s doc
-// comment; the same absent/present rule applies here.
+// decode time, since an ignored field reads as an applied one. Targets is
+// ADR-049's list of target audio.node ids, see
+// [ShowCueAudioOutput.Targets]'s doc comment; the same rules apply here.
 type ShowCueAnnouncementOutput struct {
 	Policy     string   `json:"policy"`
 	DuckGainDb *float64 `json:"duckGainDb,omitempty"`
 	FadeMillis int      `json:"fadeMillis"`
-	Target     string   `json:"target,omitempty"`
+	Targets    []string `json:"targets,omitempty"`
+}
+
+// UnmarshalJSON is [ShowCueAudioOutput.UnmarshalJSON]'s sibling for
+// outputs.announcement, see that method's doc comment.
+func (o *ShowCueAnnouncementOutput) UnmarshalJSON(b []byte) error {
+	var wire struct {
+		Policy     string   `json:"policy"`
+		DuckGainDb *float64 `json:"duckGainDb"`
+		FadeMillis int      `json:"fadeMillis"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return err
+	}
+	targets, err := decodeStoredShowCueTargets(fields, "outputs.announcement")
+	if err != nil {
+		return err
+	}
+	o.Policy = wire.Policy
+	o.DuckGainDb = wire.DuckGainDb
+	o.FadeMillis = wire.FadeMillis
+	o.Targets = targets
+	return nil
 }
 
 // EncodeShowCuePayload marshals p into config_revisions.payload_json's
@@ -303,11 +421,10 @@ func decodeShowCueRenderOutput(raw json.RawMessage) (ShowCueRenderOutput, *Valid
 	return ShowCueRenderOutput{Sequence: sequence}, nil
 }
 
-// decodeShowCueTarget decodes and validates the optional "target" field
-// shared by outputs.audio, outputs.ltc, and outputs.announcement
-// (ADR-045). Absent means "" — resolve later to the installation's single
-// program+ltc audio.node, the pre-ADR-045 behavior unchanged; explicit
-// null and an explicit empty string are refused by
+// decodeShowCueTarget decodes and validates outputs.ltc's optional
+// "target" field (ADR-045; ADR-049 keeps outputs.ltc singular). Absent
+// means "", resolve later to the installation's single program+ltc
+// audio.node; explicit null and an explicit empty string are refused by
 // [decodeOptionalNonEmptyString], and a present, non-empty value must name
 // an existing audio.node object.
 func decodeShowCueTarget(fields map[string]json.RawMessage, path string, audioNodeExists func(string) bool) (string, *ValidationError) {
@@ -325,6 +442,84 @@ func decodeShowCueTarget(fields map[string]json.RawMessage, path string, audioNo
 		}
 	}
 	return target, nil
+}
+
+// ValidationCodeShowCueTargetDuplicate: the same audio.node id appears
+// more than once in one output's own "targets" list (ADR-049). Its own
+// code, on ValidationCodeEmergencyStopActionDuplicate's precedent, so a
+// caller can tell "duplicate" apart from "unknown" without parsing prose.
+const ValidationCodeShowCueTargetDuplicate = "show-cue-target-duplicate"
+
+// decodeShowCueTargets decodes and validates the "target"/"targets" pair
+// shared by outputs.audio and outputs.announcement (ADR-049, superseding
+// ADR-045's single outputs.audio/announcement "target"; outputs.ltc keeps
+// [decodeShowCueTarget]'s singular form unchanged). Exactly one of the two
+// keys may be present: "target" (a non-empty string) decodes as a
+// one-element list, "targets" (a JSON array of non-empty strings, which
+// may be empty) decodes as given; both present is refused naming both
+// keys. Absent, or an empty "targets", returns a nil slice, resolved later
+// to the installation's default node, the pre-ADR-045 one-node behavior.
+// A repeated id, or one naming no configured audio.node, is refused.
+func decodeShowCueTargets(fields map[string]json.RawMessage, path string, audioNodeExists func(string) bool) ([]string, *ValidationError) {
+	_, targetPresent := fields["target"]
+	_, targetsPresent := fields["targets"]
+	if targetPresent && targetsPresent {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: path,
+			Detail: fmt.Sprintf(`%s must not declare both "target" and "targets": "target" is the deprecated one-element form of "targets"`, path),
+		}
+	}
+
+	if targetPresent {
+		// decodeShowCueTarget always errors on an absent-shaped result
+		// here: "target" is known present, so it either refuses (null,
+		// empty, unknown) or returns a non-empty, resolvable id.
+		target, verr := decodeShowCueTarget(fields, path, audioNodeExists)
+		if verr != nil {
+			return nil, verr
+		}
+		return []string{target}, nil
+	}
+
+	targetsField := path + ".targets"
+	raw, present := fields["targets"]
+	if !present {
+		return nil, nil
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldNull, Field: targetsField,
+			Detail: targetsField + " must not be null; omit it, or use an empty array, to resolve the default target",
+		}
+	}
+	var targets []string
+	if err := json.Unmarshal(raw, &targets); err != nil {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: targetsField,
+			Detail: targetsField + " must be a JSON array of audio.node ids",
+		}
+	}
+	seen := make(map[string]bool, len(targets))
+	for i, id := range targets {
+		itemField := fmt.Sprintf("%s[%d]", targetsField, i)
+		if id == "" {
+			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: itemField, Detail: itemField + " must not be empty"}
+		}
+		if seen[id] {
+			return nil, &ValidationError{
+				Code: ValidationCodeShowCueTargetDuplicate, Field: itemField,
+				Detail: fmt.Sprintf("target %q is already listed earlier in %s", id, targetsField),
+			}
+		}
+		seen[id] = true
+		if !audioNodeExists(id) {
+			return nil, &ValidationError{
+				Code: ValidationCodeFieldUnknownReference, Field: itemField,
+				Detail: fmt.Sprintf("target %q is not a configured audio.node", id),
+			}
+		}
+	}
+	return targets, nil
 }
 
 func decodeShowCueAudioOutput(raw json.RawMessage, audioNodeExists func(string) bool) (ShowCueAudioOutput, *ValidationError) {
@@ -352,11 +547,11 @@ func decodeShowCueAudioOutput(raw json.RawMessage, audioNodeExists func(string) 
 			Detail: fmt.Sprintf("startOffsetMillis must be at most %d (24 hours)", maxLTCStartOffsetMillis),
 		}
 	}
-	target, verr := decodeShowCueTarget(fields, "outputs.audio", audioNodeExists)
+	targets, verr := decodeShowCueTargets(fields, "outputs.audio", audioNodeExists)
 	if verr != nil {
 		return ShowCueAudioOutput{}, verr
 	}
-	return ShowCueAudioOutput{Asset: asset, StartOffsetMillis: startOffsetMillis, Target: target}, nil
+	return ShowCueAudioOutput{Asset: asset, StartOffsetMillis: startOffsetMillis, Targets: targets}, nil
 }
 
 // decodeDefaultedNonNegativeInt is [decodeRequiredNonNegativeInt] with a
@@ -448,12 +643,12 @@ func decodeShowCueAnnouncementOutput(raw json.RawMessage, audioNodeExists func(s
 		}
 	}
 
-	target, verr := decodeShowCueTarget(fields, "outputs.announcement", audioNodeExists)
+	targets, verr := decodeShowCueTargets(fields, "outputs.announcement", audioNodeExists)
 	if verr != nil {
 		return ShowCueAnnouncementOutput{}, verr
 	}
 
-	return ShowCueAnnouncementOutput{Policy: policy, DuckGainDb: duckGainDb, FadeMillis: fadeMillis, Target: target}, nil
+	return ShowCueAnnouncementOutput{Policy: policy, DuckGainDb: duckGainDb, FadeMillis: fadeMillis, Targets: targets}, nil
 }
 
 // decodeRequiredObjectFromRaw is decodeRequiredObject for a

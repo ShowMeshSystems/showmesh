@@ -72,3 +72,19 @@ func (t audioTargets) Owns(target string) bool {
 	}
 	return t.defaultNode != "" && t.defaultNode == t.nodeID
 }
+
+// OwnsAny is [Owns] widened to ADR-049's targets list, for outputs.audio
+// and outputs.announcement: this node is owned when it appears anywhere in
+// targets, and an empty targets list resolves to the same sole
+// program+ltc default Owns applies to an empty single target.
+func (t audioTargets) OwnsAny(targets []string) bool {
+	if len(targets) == 0 {
+		return t.defaultNode != "" && t.defaultNode == t.nodeID
+	}
+	for _, target := range targets {
+		if target == t.nodeID {
+			return true
+		}
+	}
+	return false
+}

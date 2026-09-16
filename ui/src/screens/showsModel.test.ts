@@ -156,9 +156,9 @@ describe('cueActivationSummary', () => {
   it('narrates a single audio-plus-announcement cue matching the mock', () => {
     const draft: CueActivationDraft = {
       render: null,
-      audio: { asset: 'thank-you.wav', startOffsetMillis: 0, target: '' },
+      audio: { asset: 'thank-you.wav', startOffsetMillis: 0, targets: [] },
       ltc: null,
-      announcement: { policy: 'duck', duckGainDb: -18, fadeMillis: 400, target: '' },
+      announcement: { policy: 'duck', duckGainDb: -18, fadeMillis: 400, targets: [] },
       ltcFps: null,
     }
     expect(cueActivationSummary(draft)).toBe(
@@ -169,7 +169,7 @@ describe('cueActivationSummary', () => {
   it('states a positive start offset as timecode and a target node as facts', () => {
     const draft: CueActivationDraft = {
       render: null,
-      audio: { asset: 'carol-bells.wav', startOffsetMillis: 250, target: 'node-a' },
+      audio: { asset: 'carol-bells.wav', startOffsetMillis: 250, targets: ['node-a'] },
       ltc: null,
       announcement: null,
       ltcFps: 30,
@@ -177,10 +177,21 @@ describe('cueActivationSummary', () => {
     expect(cueActivationSummary(draft)).toBe('On activation this cue will play carol-bells.wav at 00:00:00.08 on node-a and leave FPP untouched.')
   })
 
+  it('joins several target nodes as a fact', () => {
+    const draft: CueActivationDraft = {
+      render: null,
+      audio: { asset: 'carol-bells.wav', startOffsetMillis: 0, targets: ['node-a', 'node-b'] },
+      ltc: null,
+      announcement: null,
+      ltcFps: null,
+    }
+    expect(cueActivationSummary(draft)).toBe('On activation this cue will play carol-bells.wav on node-a, node-b and leave FPP untouched.')
+  })
+
   it('narrates render, audio, and ltc together without the "leave FPP untouched" fact', () => {
     const draft: CueActivationDraft = {
       render: { sequence: 'wizards-winter' },
-      audio: { asset: 'wizards-winter.wav', startOffsetMillis: 0, target: '' },
+      audio: { asset: 'wizards-winter.wav', startOffsetMillis: 0, targets: [] },
       ltc: { startOffsetMillis: 0, target: '' },
       announcement: null,
       ltcFps: null,
@@ -193,7 +204,7 @@ describe('cueActivationSummary', () => {
   it('states an unnamed sequence and an unselected asset literally, never inventing a value', () => {
     const draft: CueActivationDraft = {
       render: { sequence: '' },
-      audio: { asset: '', startOffsetMillis: 0, target: '' },
+      audio: { asset: '', startOffsetMillis: 0, targets: [] },
       ltc: null,
       announcement: null,
       ltcFps: null,

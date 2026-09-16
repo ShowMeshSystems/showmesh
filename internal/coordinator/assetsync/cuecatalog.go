@@ -256,7 +256,7 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 			AssetHashes: hashes,
 		}
 	}
-	if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Audio.Target) {
+	if payload.Outputs.Audio != nil && nodeHasAudioNode && targets.OwnsAny(payload.Outputs.Audio.Targets) {
 		// assetsBySequence is keyed by AssetRecord.SequenceID, and
 		// payload.Outputs.Audio.Asset IS that same identity, not
 		// AssetRecord.ID: every asset, audio or render, is uploaded
@@ -277,7 +277,7 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 	if payload.Outputs.LTC != nil && nodeHasLTC && targets.Owns(payload.Outputs.LTC.Target) {
 		out.LTC = &cuecatalog.LTCOutput{StartOffsetMillis: payload.Outputs.LTC.StartOffsetMillis}
 	}
-	if payload.Outputs.Announcement != nil && nodeHasAudioNode && targets.Owns(payload.Outputs.Announcement.Target) {
+	if payload.Outputs.Announcement != nil && nodeHasAudioNode && targets.OwnsAny(payload.Outputs.Announcement.Targets) {
 		out.Announcement = &cuecatalog.AnnouncementOutput{
 			Policy:     payload.Outputs.Announcement.Policy,
 			DuckGainDb: payload.Outputs.Announcement.DuckGainDb,
@@ -345,10 +345,10 @@ func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, n
 	if !nodeHasSurface {
 		scoped.Outputs.Render = nil
 	}
-	if scoped.Outputs.Audio != nil && (!nodeHasAudioNode || !targets.Owns(scoped.Outputs.Audio.Target)) {
+	if scoped.Outputs.Audio != nil && (!nodeHasAudioNode || !targets.OwnsAny(scoped.Outputs.Audio.Targets)) {
 		scoped.Outputs.Audio = nil
 	}
-	if scoped.Outputs.Announcement != nil && (!nodeHasAudioNode || !targets.Owns(scoped.Outputs.Announcement.Target)) {
+	if scoped.Outputs.Announcement != nil && (!nodeHasAudioNode || !targets.OwnsAny(scoped.Outputs.Announcement.Targets)) {
 		scoped.Outputs.Announcement = nil
 	}
 	if scoped.Outputs.LTC != nil && (!nodeHasLTC || !targets.Owns(scoped.Outputs.LTC.Target)) {

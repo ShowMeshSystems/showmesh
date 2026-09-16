@@ -17194,11 +17194,15 @@ components:
     ConfigShowCueAudioOutput:
       type: object
       description: >-
-        show.cue.outputs.audio (Track H seam H1). target (ADR-045) is an
-        optional target node id, mirroring show.surface.node; absent
-        resolves later to the installation's single program+ltc
-        audio.node. Present, it must name an existing audio.node object —
-        enforced server-side.
+        show.cue.outputs.audio (Track H seam H1). targets (ADR-049,
+        superseding ADR-045's single "target") is a list of target
+        audio.node ids: the Cue's audio plays on every listed node. An
+        absent or empty list resolves later to the installation's single
+        program+ltc audio.node, the pre-ADR-045 behavior. Each id must
+        name an existing audio.node object, and a repeated id is refused;
+        both enforced server-side. The deprecated singular "target" is
+        still accepted as a one-element form of targets; declaring both
+        target and targets on one output is refused, naming both keys.
       required: [asset, startOffsetMillis]
       properties:
         asset:
@@ -17207,16 +17211,28 @@ components:
         startOffsetMillis:
           type: integer
           minimum: 0
+        targets:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          uniqueItems: true
         target:
           type: string
           minLength: 1
+          deprecated: true
+          description: >-
+            Deprecated one-element compatibility form of targets (ADR-049).
+            Declaring both target and targets on one output is refused.
     ConfigShowCueLTCOutput:
       type: object
       description: >-
         show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours;
         requires outputs.audio to also be present (ADR-018's one clock
         domain) — enforced server-side. target (ADR-045) is the same
-        optional target node as outputs.audio.target.
+        optional target node as outputs.audio's deprecated target form;
+        ADR-049 deliberately kept outputs.ltc on a single node and did not
+        widen it to a targets list.
       required: [startOffsetMillis]
       properties:
         startOffsetMillis:
@@ -17232,8 +17248,10 @@ components:
         show.cue.outputs.announcement (Track H seam H1, H0.4). Requires
         outputs.audio to also be present. duckGainDb is required when
         policy is "duck" and refused otherwise — enforced server-side.
-        target (ADR-045) is the same optional target node as
-        outputs.audio.target.
+        targets (ADR-049, superseding ADR-045's single "target") is the
+        same list of target audio.node ids as outputs.audio.targets,
+        including its deprecated singular target compatibility form and
+        the both-forms refusal.
       required: [policy, fadeMillis]
       properties:
         policy:
@@ -17247,9 +17265,19 @@ components:
           type: integer
           minimum: 0
           maximum: 60000
+        targets:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          uniqueItems: true
         target:
           type: string
           minLength: 1
+          deprecated: true
+          description: >-
+            Deprecated one-element compatibility form of targets (ADR-049).
+            Declaring both target and targets on one output is refused.
     ConfigShowCueOutputs:
       type: object
       description: >-

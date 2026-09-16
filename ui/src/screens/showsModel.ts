@@ -223,9 +223,9 @@ export function cueRows(
 
 export type CueActivationDraft = {
   render: { sequence: string } | null
-  audio: { asset: string; startOffsetMillis: number; target: string } | null
+  audio: { asset: string; startOffsetMillis: number; targets: string[] } | null
   ltc: { startOffsetMillis: number; target: string } | null
-  announcement: { policy: 'duck' | 'mix' | 'interrupt'; duckGainDb: number; fadeMillis: number; target: string } | null
+  announcement: { policy: 'duck' | 'mix' | 'interrupt'; duckGainDb: number; fadeMillis: number; targets: string[] } | null
   /** The installation's LTC frame rate, for formatting audio/ltc start offsets as timecode. Null when it has not been read. */
   ltcFps: number | null
 }
@@ -256,7 +256,7 @@ export function cueActivationSummary(draft: CueActivationDraft): string {
   if (draft.audio !== null) {
     const asset = draft.audio.asset.trim() === '' ? 'an unselected asset' : draft.audio.asset
     const offset = draft.audio.startOffsetMillis > 0 ? ` at ${millisToTimecode(draft.audio.startOffsetMillis, draft.ltcFps)}` : ''
-    const target = draft.audio.target !== '' ? ` on ${draft.audio.target}` : ''
+    const target = draft.audio.targets.length > 0 ? ` on ${draft.audio.targets.join(', ')}` : ''
     parts.push(`play ${asset}${offset}${target}`)
   }
 
@@ -266,7 +266,7 @@ export function cueActivationSummary(draft: CueActivationDraft): string {
   }
 
   if (draft.announcement !== null) {
-    const target = draft.announcement.target !== '' ? ` on ${draft.announcement.target}` : ''
+    const target = draft.announcement.targets.length > 0 ? ` on ${draft.announcement.targets.join(', ')}` : ''
     if (draft.announcement.policy === 'duck') {
       parts.push(`duck the background bed to ${draft.announcement.duckGainDb} dB over ${draft.announcement.fadeMillis} ms${target}`)
     } else if (draft.announcement.policy === 'mix') {

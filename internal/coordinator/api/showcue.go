@@ -227,7 +227,7 @@ func mapConfigShowCueOutputs(o config.ShowCueOutputs) v1.ConfigShowCueOutputs {
 		out.Render = &v1.ConfigShowCueRenderOutput{Sequence: o.Render.Sequence}
 	}
 	if o.Audio != nil {
-		out.Audio = &v1.ConfigShowCueAudioOutput{Asset: o.Audio.Asset, StartOffsetMillis: o.Audio.StartOffsetMillis, Target: o.Audio.Target}
+		out.Audio = &v1.ConfigShowCueAudioOutput{Asset: o.Audio.Asset, StartOffsetMillis: o.Audio.StartOffsetMillis, Targets: o.Audio.Targets}
 	}
 	if o.LTC != nil {
 		out.LTC = &v1.ConfigShowCueLTCOutput{StartOffsetMillis: o.LTC.StartOffsetMillis, Target: o.LTC.Target}
@@ -235,7 +235,7 @@ func mapConfigShowCueOutputs(o config.ShowCueOutputs) v1.ConfigShowCueOutputs {
 	if o.Announcement != nil {
 		out.Announcement = &v1.ConfigShowCueAnnouncementOutput{
 			Policy: o.Announcement.Policy, DuckGainDb: o.Announcement.DuckGainDb, FadeMillis: o.Announcement.FadeMillis,
-			Target: o.Announcement.Target,
+			Targets: o.Announcement.Targets,
 		}
 	}
 	return out

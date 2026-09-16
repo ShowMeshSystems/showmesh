@@ -13,7 +13,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Callout, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Callout, Field, Input, NotWired, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { millisToTimecode, timecodeToMillis } from '../domain/time'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -403,6 +403,44 @@ function TargetNodeField({
   )
 }
 
+/**
+ * TargetNodeField edits one value. For a loaded output naming more than one
+ * target, wrapping it in that live Select would let a single touch narrow
+ * the whole list to targets[0]: showing targets[0] as the field's own value
+ * is itself a first-target selection, and writing back replaces the list a
+ * single-value control never fully represented. Until a multi-select
+ * lands, more than one target renders every listed node, inert, stamped
+ * NotWired, rather than risk that silent drop. Zero or one target keeps
+ * the ordinary, live Select unchanged.
+ */
+function TargetsField({
+  label,
+  targets,
+  onChange,
+  nodesState,
+}: {
+  label: string
+  targets: string[]
+  onChange: (value: string) => void
+  nodesState: AudioNodesState
+}) {
+  if (targets.length > 1) {
+    return (
+      <Field
+        label={label}
+        help="This cue targets more than one node. Editing it here needs a multi-select another lane is building, so this field is shown but does nothing."
+      >
+        {(props) => (
+          <NotWired>
+            <Input {...props} value={targets.join(', ')} readOnly />
+          </NotWired>
+        )}
+      </Field>
+    )
+  }
+  return <TargetNodeField label={label} value={targets[0] ?? ''} onChange={onChange} nodesState={nodesState} />
+}
+
 const OUTPUT_OPTIONS: readonly { kind: CueOutputKind; title: string; description: string }[] = [
   { kind: 'render', title: 'Render', description: 'Drive lighting and video from a sequence' },
   { kind: 'audio', title: 'Audience audio', description: 'Play an audio asset on the program bus' },
@@ -455,9 +493,13 @@ function CueEditor({
   const [announcementPolicy, setAnnouncementPolicy] = useState<'duck' | 'mix' | 'interrupt'>(cue?.payload.outputs.announcement?.policy ?? 'duck')
   const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
-  const [audioTarget, setAudioTarget] = useState(cue?.payload.outputs.audio?.target ?? '')
+  // audioTargets/announcementTargets carry the loaded targets list
+  // unchanged (ADR-049) until the operator edits it through TargetsField,
+  // which is inert for more than one target so a save never narrows a
+  // multi-target list it never let anyone touch.
+  const [audioTargets, setAudioTargets] = useState<string[]>(cue?.payload.outputs.audio?.targets ?? [])
   const [ltcTarget, setLtcTarget] = useState(cue?.payload.outputs.ltc?.target ?? '')
-  const [announcementTarget, setAnnouncementTarget] = useState(cue?.payload.outputs.announcement?.target ?? '')
+  const [announcementTargets, setAnnouncementTargets] = useState<string[]>(cue?.payload.outputs.announcement?.targets ?? [])
   const audioNodes = useAudioNodes()
   const ltcFrameRateState = useLtcFrameRate()
   const fps = ltcFrameRateState.kind === 'loaded' ? ltcFrameRateState.fps : null
@@ -513,10 +555,10 @@ function CueEditor({
 
   const activationDraft: CueActivationDraft = {
     render: kinds.has('render') ? { sequence: renderSequence } : null,
-    audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: audioOffsetMillis ?? 0, target: audioTarget } : null,
+    audio: kinds.has('audio') ? { asset: audioAsset, startOffsetMillis: audioOffsetMillis ?? 0, targets: audioTargets } : null,
     ltc: kinds.has('ltc') ? { startOffsetMillis: ltcOffsetMillis ?? 0, target: ltcTarget } : null,
     announcement: kinds.has('announcement')
-      ? { policy: announcementPolicy, duckGainDb: Number(duckGainDb) || 0, fadeMillis: Number(fadeMillis) || 0, target: announcementTarget }
+      ? { policy: announcementPolicy, duckGainDb: Number(duckGainDb) || 0, fadeMillis: Number(fadeMillis) || 0, targets: announcementTargets }
       : null,
     ltcFps: fps,
   }
@@ -530,7 +572,7 @@ function CueEditor({
             audio: {
               asset: audioAsset,
               startOffsetMillis: audioOffsetMillis ?? 0,
-              ...(audioTarget !== '' ? { target: audioTarget } : {}),
+              ...(audioTargets.length > 0 ? { targets: audioTargets } : {}),
             },
           }
         : {}),
@@ -548,7 +590,7 @@ function CueEditor({
               policy: announcementPolicy,
               fadeMillis: Number(fadeMillis),
               ...(announcementPolicy === 'duck' ? { duckGainDb: Number(duckGainDb) } : {}),
-              ...(announcementTarget !== '' ? { target: announcementTarget } : {}),
+              ...(announcementTargets.length > 0 ? { targets: announcementTargets } : {}),
             },
           }
         : {}),
@@ -690,7 +732,12 @@ function CueEditor({
               />
             )}
           </Field>
-          <TargetNodeField label="Audio target node" value={audioTarget} onChange={setAudioTarget} nodesState={audioNodes} />
+          <TargetsField
+            label="Audio target node"
+            targets={audioTargets}
+            onChange={(value) => setAudioTargets(value === '' ? [] : [value])}
+            nodesState={audioNodes}
+          />
         </div>
       )}
 
@@ -733,7 +780,12 @@ function CueEditor({
             </Field>
             <Field label="Fade (ms)">{(props) => <Input {...props} value={fadeMillis} onChange={(e) => setFadeMillis(e.target.value)} />}</Field>
           </div>
-          <TargetNodeField label="Announcement target node" value={announcementTarget} onChange={setAnnouncementTarget} nodesState={audioNodes} />
+          <TargetsField
+            label="Announcement target node"
+            targets={announcementTargets}
+            onChange={(value) => setAnnouncementTargets(value === '' ? [] : [value])}
+            nodesState={audioNodes}
+          />
         </div>
       )}
 

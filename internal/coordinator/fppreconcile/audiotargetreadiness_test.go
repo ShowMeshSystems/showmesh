@@ -70,7 +70,7 @@ func TestAudioTargetReadinessRefusesUnboundTarget(t *testing.T) {
 	putShow(t, st, "show-1", "Show One")
 	putAudioNode(t, st, "m4")
 	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
-		Audio: &config.ShowCueAudioOutput{Asset: "a", Target: "pi"},
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"pi"}},
 	})
 
 	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
@@ -118,8 +118,31 @@ func TestAudioTargetReadinessPassesTheReferenceInstallation(t *testing.T) {
 	putAudioNode(t, st, "m4")
 	putProgramOnlyAudioNode(t, st, "pi")
 	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
-		Audio: &config.ShowCueAudioOutput{Asset: "a", Target: "pi"},
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"pi"}},
 		LTC:   &config.ShowCueLTCOutput{},
+	})
+
+	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q (%s), want ready", cond, reason)
+	}
+}
+
+// TestAudioTargetReadinessExplicitEmptyTargetsResolvesToProgramLTCNode is
+// TestAudioTargetReadinessPassesTheReferenceInstallation's own proof that
+// an explicit "targets": [] on a two-node installation resolves to the
+// sole program+ltc node exactly like an absent targets list does, rather
+// than being read as "every node" or "no node".
+func TestAudioTargetReadinessExplicitEmptyTargetsResolvesToProgramLTCNode(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putAudioNode(t, st, "m4")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{}},
 	})
 
 	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
@@ -146,5 +169,29 @@ func TestAudioTargetReadinessIgnoresACueWithNoAudioOutputs(t *testing.T) {
 	}
 	if cond != "" {
 		t.Fatalf("condition = %q, want ready: this cue declares no audio, LTC or announcement output", cond)
+	}
+}
+
+// TestAudioTargetReadinessChecksEveryListedTarget is ADR-049's own proof:
+// a targets list naming a bound node first and an unbound one second is
+// still refused, naming the unbound one, rather than stopping at the first
+// element that happens to check out.
+func TestAudioTargetReadinessChecksEveryListedTarget(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putAudioNode(t, st, "m4")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{"m4", "pi"}},
+	})
+
+	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != ReadinessAudioTargetUnbound {
+		t.Fatalf("condition = %q, want %q", cond, ReadinessAudioTargetUnbound)
+	}
+	if !strings.Contains(reason, "pi") || !strings.Contains(reason, "cue-1") {
+		t.Errorf("reason = %q, want it to name the cue and the unbound target node", reason)
 	}
 }

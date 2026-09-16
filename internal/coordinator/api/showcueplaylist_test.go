@@ -479,6 +479,84 @@ func TestPutShowCueRoundTripPreservesEveryField(t *testing.T) {
 	}
 }
 
+// TestPutShowCueRoundTripPreservesTwoAudioTargets proves ADR-049's own
+// list-valued outputs.audio.targets round-trips through PUT and GET in the
+// order it was authored.
+func TestPutShowCueRoundTripPreservesTwoAudioTargets(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeForTest(t, st, "node-b")
+
+	body := `{
+		"show": "halloween-2026",
+		"name": "Two Targets",
+		"outputs": {
+			"audio": {"asset": "thriller-audience", "startOffsetMillis": 0, "targets": ["node-a", "node-b"]}
+		}
+	}`
+	want := v1.ConfigShowCue{
+		Show: "halloween-2026", Name: "Two Targets",
+		Outputs: v1.ConfigShowCueOutputs{
+			Audio: &v1.ConfigShowCueAudioOutput{Asset: "thriller-audience", Targets: []string{"node-a", "node-b"}},
+		},
+	}
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.cue/two-targets", body,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, putBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: status = %d, want 200; body: %s", resp.StatusCode, putBody)
+	}
+	var putResp v1.ShowCueConfigResponse
+	if err := json.Unmarshal(putBody, &putResp); err != nil {
+		t.Fatalf("decode PUT response: %v; body: %s", err, putBody)
+	}
+	if !reflect.DeepEqual(putResp.Payload, want) {
+		t.Errorf("PUT response payload = %+v, want %+v", putResp.Payload, want)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.cue/two-targets", map[string]string{"Authorization": "Bearer " + token})
+	var getResp v1.ShowCueConfigResponse
+	if err := json.Unmarshal(getBody, &getResp); err != nil {
+		t.Fatalf("decode GET response: %v; body: %s", err, getBody)
+	}
+	if !reflect.DeepEqual(getResp.Payload, want) {
+		t.Errorf("GET response payload = %+v, want %+v", getResp.Payload, want)
+	}
+}
+
+// TestGetShowCuePreSeededOldFormTargetRow proves a row stored before
+// ADR-049 (the deprecated singular "target") still reads through GET:
+// api/showcue.go's handleGetShowCue uses jsonUnmarshalStrict, the
+// non-validating path DecodeShowCuePayload never touches, and reports it
+// as a one-element "targets", never a 500.
+func TestGetShowCuePreSeededOldFormTargetRow(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	oldFormRow := `{"show":"halloween-2026","name":"Legacy Cue","outputs":{"audio":{"asset":"a","startOffsetMillis":0,"target":"node-a"}}}`
+	putConfigForTest(t, st, config.ShowCueConfigKind, "legacy", oldFormRow)
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/show.cue/legacy", map[string]string{"Authorization": "Bearer " + token})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	var getResp v1.ShowCueConfigResponse
+	if err := json.Unmarshal(body, &getResp); err != nil {
+		t.Fatalf("decode GET response: %v; body: %s", err, body)
+	}
+	if getResp.Payload.Outputs.Audio == nil || !reflect.DeepEqual(getResp.Payload.Outputs.Audio.Targets, []string{"node-a"}) {
+		t.Fatalf("GET payload audio = %+v, want targets [node-a]", getResp.Payload.Outputs.Audio)
+	}
+}
+
 // TestPutShowCueRoundTripPreservesAnnouncementFields is
 // TestPutShowCueRoundTripPreservesEveryField's own announcement-output
 // sibling, split out because a Cue must not declare both ltc and
