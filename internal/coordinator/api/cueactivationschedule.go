@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,7 +10,9 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 )
@@ -36,7 +39,24 @@ import (
 // abandoned step keeps running in the background exactly as it would for
 // any other caller who stopped waiting, and dispatchProbeStep's own
 // channel still eventually receives its real outcome.
-const scheduleProbeStepTimeout = 400 * time.Millisecond
+//
+// ADR-049 decision 6: on the rehearsal rig on 2026-09-16, preparing a
+// real show MP3 took about 1.4s on the program+ltc node and 2.4s on a
+// Raspberry Pi 3B+. The former 400ms bound was shorter than every real
+// prepare measured, so it never once let a multi-node Cue start aligned;
+// this value is sized to clear the slower of those two measurements with
+// real margin.
+//
+// A plain const, deliberately, NOT a var a test can shrink the way
+// cueActivationConfirmDeadline is (cueactivationdispatch.go): a step this
+// bound gives up on keeps its own dispatch goroutine running in the
+// background, by design (see this comment's own second paragraph above),
+// and that goroutine can legitimately outlive the test that started it.
+// A mutable package var a later, unrelated test's own cleanup then
+// restores would race against that still-running goroutine's read of it
+// — caught by go test -race. A test that needs a node to exceed this
+// bound pays the real cost of doing so.
+const scheduleProbeStepTimeout = 5 * time.Second
 
 // scheduleProbeMaxDeliveryContribution is the ceiling MANAGER DECISION 2
 // clamps the clock holder's own measured probe span to before it is
@@ -95,6 +115,180 @@ func acquireScheduleProbeNodeLock(lock chan struct{}, timeout time.Duration) boo
 	}
 }
 
+// awaitScheduleProbeIdle bounded-waits, up to scheduleProbeStepTimeout,
+// for nodeID's own [scheduleProbeNodeLock] to be free — idle, meaning no
+// probe apply, prepare, or clear from any scheduling attempt (this tick's
+// own, a concurrent one, or one this tick abandoned and handed off to
+// finishScheduleProbeAfter) is still outstanding — then immediately
+// releases it again. It is a readiness gate, never a hold: the real
+// dispatch that follows owns no exclusion against some FUTURE probe
+// attempt, only this one wait against whatever probe already started.
+//
+// [handlers.dispatchOneCueActivation] calls this for every audio-bearing
+// node right before its own real cue.activate reaches the wire, so that
+// dispatch is never published while nodeID's own probe session might
+// still be loading media in the background. A single-node activation, or
+// a node scheduleCueActivations never touched this tick, finds the lock
+// uncontended and returns immediately — an unmeasurable cost, matching
+// ADR-049's own "a Cue reaching one node behaves exactly as today."
+func awaitScheduleProbeIdle(nodeID string) {
+	lock := scheduleProbeNodeLock(nodeID)
+	if acquireScheduleProbeNodeLock(lock, scheduleProbeStepTimeout) {
+		<-lock
+	}
+}
+
+// audioBearing is one node this activation batch resolved an audio
+// output for, with the media reference [handlers.readScheduleProbe]
+// applies onto the probe session.
+type audioBearing struct {
+	nodeID string
+	out    pkgaudio.MediaRef
+}
+
+// nodeIDsOfBearing projects bearing's own node ids, in order, for a
+// caller (markNodesUnaligned, SelectAudioStartInstant) that only needs
+// the ids.
+func nodeIDsOfBearing(bearing []audioBearing) []string {
+	out := make([]string, 0, len(bearing))
+	for _, b := range bearing {
+		out = append(out, b.nodeID)
+	}
+	return out
+}
+
+// cueActivationRecordedSchedule is one bearing node's own ADR-049
+// decision 3 scheduling outcome, read back from ITS OWN command row (the
+// same [act.ActivationID] idempotency key [handlers.
+// dispatchOneCueActivation] dispatches under) rather than a fresh probe.
+type cueActivationRecordedSchedule struct {
+	nodeID          string
+	scheduledAtNs   *int64
+	unalignedReason string
+	// createdAt is the coordinator's own wall-clock moment this row was
+	// inserted (store.CommandRecord.CreatedAt, stamped from the store's
+	// own clock at InsertCommand time) — see
+	// [extendRecordedScheduleToLateNodes]'s own doc comment for what it is
+	// used for.
+	createdAt time.Time
+}
+
+// decodeCueActivationRecordedSchedule reads ScheduledAtNs and
+// UnalignedReason back off rec's own stored params: rec.ParamsJSON is
+// exactly [json.Marshal] of the dispatched Activation (canonicalParamsJSON,
+// cueactivationdispatch.go), so it decodes straight back into one. ok is
+// false only when the stored row is somehow not a decodable Activation, a
+// caller treats that identically to "never recorded" — probing again
+// costs time, never correctness, where trusting a malformed row would
+// cost correctness.
+func decodeCueActivationRecordedSchedule(rec store.CommandRecord) (scheduledAtNs *int64, unalignedReason string, ok bool) {
+	var act cueactivation.Activation
+	if err := json.Unmarshal([]byte(rec.ParamsJSON), &act); err != nil {
+		return nil, "", false
+	}
+	return act.ScheduledAtNs, act.UnalignedReason, true
+}
+
+// splitCueActivationReplayStatus partitions bearing into nodes whose
+// cue.activate was already recorded for THIS activation (recorded, by
+// act.ActivationID — the identical idempotency key [handlers.
+// dispatchOneCueActivation] uses) and nodes seeing this activation for
+// the first time (toProbe). ADR-049 decision 6: the clock reading behind
+// a shared instant is taken once per activation and never again, so a
+// recorded node's own outcome is read back, never re-derived.
+//
+// A node whose lookup itself fails — a genuine store error, never
+// [store.ErrCommandNotFound] — is treated as unrecorded: probing it again
+// costs time, never correctness, while wrongly skipping its probe over a
+// transient read failure would.
+func (h *handlers) splitCueActivationReplayStatus(ctx context.Context, activations map[string]cueactivation.Activation, bearing []audioBearing) (recorded []cueActivationRecordedSchedule, toProbe []audioBearing) {
+	for _, b := range bearing {
+		act := activations[b.nodeID]
+		rec, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, act.ActivationID)
+		if err != nil {
+			toProbe = append(toProbe, b)
+			continue
+		}
+		scheduledAtNs, unalignedReason, ok := decodeCueActivationRecordedSchedule(rec)
+		if !ok {
+			toProbe = append(toProbe, b)
+			continue
+		}
+		recorded = append(recorded, cueActivationRecordedSchedule{
+			nodeID: b.nodeID, scheduledAtNs: scheduledAtNs, unalignedReason: unalignedReason, createdAt: rec.CreatedAt,
+		})
+	}
+	return recorded, toProbe
+}
+
+// applyRecordedCueActivationSchedule writes every recorded node's own
+// already-known ScheduledAtNs/UnalignedReason back onto activations, with
+// no clock read and no probe dispatch of any kind.
+func applyRecordedCueActivationSchedule(activations map[string]cueactivation.Activation, recorded []cueActivationRecordedSchedule) {
+	for _, r := range recorded {
+		act := activations[r.nodeID]
+		act.ScheduledAtNs = r.scheduledAtNs
+		act.UnalignedReason = r.unalignedReason
+		activations[r.nodeID] = act
+	}
+}
+
+// extendRecordedScheduleToLateNodes gives every node in toProbe — one
+// this activation never reached before, for example a node that was
+// offline on the tick a peer of the SAME activation was already scheduled
+// and dispatched — the identical ScheduledAtNs that peer already carries,
+// never a fresh probe: ADR-049 decision 6's "never again" applies to the
+// ACTIVATION, not to each node individually, so a late-arriving node must
+// still share the one instant its peers already committed to rather than
+// start on its own unaligned schedule.
+//
+// Whether that instant is still usable is judged without reading any
+// clock. peer.createdAt is the coordinator's own wall-clock moment the
+// peer's own reading was taken (store's InsertCommand, immediately after
+// the scheduling call that chose it), and that original selection is
+// guaranteed to have placed the instant at least
+// settings.ScheduledStartDeliveryBoundMs+ScheduledStartMarginMs — "the
+// configured lead" — past the reading it was derived from
+// (audiosched.Select's own LeadNs sums that with preroll and the clock
+// error bound, both additional and never negative). A late node is given
+// the recorded instant only while that guaranteed FLOOR has not yet
+// elapsed in wall-clock time; past it, this function cannot tell how much
+// real headroom actually remains (the true lead may have included a
+// preroll measurement this function never has access to), so the safe
+// direction is to report the node unaligned rather than risk handing it a
+// start already behind it.
+func (h *handlers) extendRecordedScheduleToLateNodes(now time.Time, settings config.AudioSettingsPayload, activations map[string]cueactivation.Activation, recorded []cueActivationRecordedSchedule, toProbe []audioBearing) {
+	if len(recorded) == 0 || len(toProbe) == 0 {
+		return
+	}
+	// Every recorded peer of one activation carries the identical
+	// ScheduledAtNs/UnalignedReason (scheduleCueActivations writes it
+	// identically across nodeIDs on every path below), so any one of them
+	// answers for the whole batch — mirrors cueActivationAlignment's own
+	// "any one of them answers" reasoning.
+	peer := recorded[0]
+	configuredLead := time.Duration(settings.ScheduledStartDeliveryBoundMs+settings.ScheduledStartMarginMs) * time.Millisecond
+	stillUsable := peer.scheduledAtNs != nil && !peer.createdAt.IsZero() && now.Before(peer.createdAt.Add(configuredLead))
+	for _, b := range toProbe {
+		act := activations[b.nodeID]
+		if stillUsable {
+			at := *peer.scheduledAtNs
+			act.ScheduledAtNs = &at
+			act.UnalignedReason = ""
+		} else {
+			act.ScheduledAtNs = nil
+			reason := peer.unalignedReason
+			if reason == "" {
+				reason = fmt.Sprintf(
+					"node %q joined this activation after its shared start instant was already chosen (on node %q); no clock is read again for an activation already dispatched, and the configured lead has since elapsed",
+					b.nodeID, peer.nodeID)
+			}
+			act.UnalignedReason = reason
+		}
+		activations[b.nodeID] = act
+	}
+}
+
 // scheduleCueActivations is ADR-049 decision 3's own entry point. For
 // every audio-bearing Activation in activations (outputs.Audio != nil,
 // resolved via [cueactivate.Authorize] exactly as [handlers.
@@ -107,6 +301,16 @@ func acquireScheduleProbeNodeLock(lock chan struct{}, timeout time.Duration) boo
 // ONE instant with [SelectAudioStartInstant], then writes that instant
 // (or, on refusal, the concrete reason) back onto every audio-bearing
 // Activation in activations, in place.
+//
+// ADR-049 decision 6: a node whose OWN cue.activate is already recorded
+// for this activation (splitCueActivationReplayStatus, by
+// act.ActivationID) is never probed again — its own recorded outcome is
+// read back instead (applyRecordedCueActivationSchedule). When every
+// bearing node is already recorded, this returns having read no clock and
+// dispatched nothing at all. When only some are (a late-joining node —
+// extendRecordedScheduleToLateNodes), the fresh probe is still skipped
+// entirely for the whole batch; only a genuinely first-seen activation (no
+// bearing node recorded at all) runs the probe round below.
 //
 // activations is mutated in place; there is no separate return value for
 // the chosen instant because every caller (the Playlist loop and the
@@ -140,10 +344,6 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
 	reconnectedAt := h.deps.BrokerConnection.ConnectedSince()
 
-	type audioBearing struct {
-		nodeID string
-		out    pkgaudio.MediaRef
-	}
 	var bearing []audioBearing
 	for nodeID, act := range activations {
 		_, _, outputs, _, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, reconnectedAt, nodeID, act, pin)
@@ -162,9 +362,21 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 		return
 	}
 
-	mediaByNode := make(map[string]pkgaudio.MediaRef, len(bearing))
-	nodeIDs := make([]string, 0, len(bearing))
-	for _, b := range bearing {
+	recorded, toProbe := h.splitCueActivationReplayStatus(ctx, activations, bearing)
+	// Applied unconditionally and first: never depends on audio.settings
+	// or a fresh clock reading, so a later failure below (an unreadable
+	// audio.settings, for instance) must never overwrite what a recorded
+	// node already legitimately carries.
+	applyRecordedCueActivationSchedule(activations, recorded)
+	if len(toProbe) == 0 {
+		// Every bearing node's own cue.activate is already recorded for
+		// this activation: no clock is read, nothing is dispatched.
+		return
+	}
+
+	mediaByNode := make(map[string]pkgaudio.MediaRef, len(toProbe))
+	nodeIDs := make([]string, 0, len(toProbe))
+	for _, b := range toProbe {
 		mediaByNode[b.nodeID] = b.out
 		nodeIDs = append(nodeIDs, b.nodeID)
 	}
@@ -173,6 +385,16 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 	if err != nil {
 		h.logWarn("cue activation schedule: read audio.settings failed; every node starts on arrival", "error", err)
 		markNodesUnaligned(activations, nodeIDs, "could not read audio.settings to select a shared start instant: "+err.Error())
+		return
+	}
+
+	if len(recorded) > 0 {
+		// A partial replay (some bearing nodes already recorded, at least
+		// one not): never probe again for this activation, ADR-049
+		// decision 6 — extend the already-chosen instant to the
+		// newly-seen nodes instead, or report them unaligned with a
+		// concrete reason.
+		h.extendRecordedScheduleToLateNodes(now, settings, activations, recorded, toProbe)
 		return
 	}
 

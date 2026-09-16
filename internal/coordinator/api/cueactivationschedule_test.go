@@ -567,7 +567,11 @@ func TestReadScheduleProbeWaitsBrieflyForAHealthyOverlappingAttempt(t *testing.T
 // first attempt never finishes, a genuine hang rather than a brief
 // overlap, still costs a second attempt at most scheduleProbeStepTimeout
 // before it is reported busy, never an unbounded wait for a lock nothing
-// will release in time.
+// will release in time. scheduleProbeStepTimeout is a const, not a var a
+// test can shrink (see its own doc comment: a step this bound abandons
+// keeps its own goroutine running in the background, which can outlive
+// this test, so a shared mutable override would race against it), so
+// this genuinely pays the real bound.
 func TestReadScheduleProbeReportsBusyForAGenuinelyStuckNodeWithinTheBound(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
@@ -936,5 +940,377 @@ func TestScheduleCueActivationsWithARealMultiTargetCueStartsBothNodesTogether(t 
 	}
 	if holder.PositionMS != second.PositionMS {
 		t.Fatalf("PositionMS differ: holder=%d second=%d, want identical", holder.PositionMS, second.PositionMS)
+	}
+}
+
+// TestScheduleCueActivationsToleratesARealisticSlowPrepare proves ADR-049
+// decision 6's own bound fix directly: the fake publisher delays its
+// first four AwaitResponse calls (both nodes' own apply and prepare
+// steps, whichever specific step Go's own goroutine scheduling happens to
+// land them on) by 1500ms — past the FORMER 400ms bound, comfortably
+// under the new one — and the probe must still complete with one shared
+// ScheduledAtNs on both nodes rather than timing out. 1500ms sits between
+// the two rehearsal-rig measurements this bound is sized from (1.4s on
+// the program+ltc node, 2.4s on a Raspberry Pi 3B+, ADR-049 decision 6's
+// own doc comment).
+func TestScheduleCueActivationsToleratesARealisticSlowPrepare(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	activations := twoNodeScheduleFixture(t, setup, now)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"audio-holder:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"audio-second:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+	}
+	var awaitCount atomic.Int64
+	setup.pub.onAwaitResponse = func() {
+		if awaitCount.Add(1) <= 4 {
+			time.Sleep(1500 * time.Millisecond)
+		}
+	}
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	start := time.Now()
+	h.scheduleCueActivations(context.Background(), now, activations, issuer, nil)
+	took := time.Since(start)
+	if took >= scheduleProbeStepTimeout {
+		t.Fatalf("scheduleCueActivations took %s, want well under scheduleProbeStepTimeout (%s): a 1500ms step must not exhaust the bound", took, scheduleProbeStepTimeout)
+	}
+
+	holder := activations["audio-holder"]
+	second := activations["audio-second"]
+	if holder.ScheduledAtNs == nil || second.ScheduledAtNs == nil {
+		t.Fatalf("ScheduledAtNs = %v / %v, want both set: a 1500ms step must not fall back to unaligned", holder.ScheduledAtNs, second.ScheduledAtNs)
+	}
+	if *holder.ScheduledAtNs != *second.ScheduledAtNs {
+		t.Fatalf("ScheduledAtNs differ: holder=%d second=%d, want the identical shared instant", *holder.ScheduledAtNs, *second.ScheduledAtNs)
+	}
+	if holder.UnalignedReason != "" || second.UnalignedReason != "" {
+		t.Fatalf("UnalignedReason = %q / %q, want both empty", holder.UnalignedReason, second.UnalignedReason)
+	}
+}
+
+// TestScheduleCueActivationsProbesEachNodeExactlyOnce proves ADR-049
+// decision 6's "one media-clock probe sequence per activation": a
+// successful two-node scheduling attempt dispatches exactly one
+// audio.session.apply, one audio.session.prepare, and one
+// audio.session.clear against [cueactivation.ScheduleProbeSessionID] for
+// EACH node, never more.
+func TestScheduleCueActivationsProbesEachNodeExactlyOnce(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	activations := twoNodeScheduleFixture(t, setup, now)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"audio-holder:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"audio-second:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+	}
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.scheduleCueActivations(context.Background(), now, activations, issuer, nil)
+
+	counts := map[string]map[string]int{"audio-holder": {}, "audio-second": {}}
+	for _, d := range setup.pub.dispatchedSnapshot() {
+		if s, _ := d.Params["sessionId"].(string); s != cueactivation.ScheduleProbeSessionID {
+			continue
+		}
+		if _, ok := counts[d.NodeID]; !ok {
+			t.Fatalf("probe dispatch for unexpected node %q: %+v", d.NodeID, d)
+		}
+		counts[d.NodeID][d.Action]++
+	}
+	for _, nodeID := range []string{"audio-holder", "audio-second"} {
+		for _, action := range []string{"audio.session.apply", "audio.session.prepare", "audio.session.clear"} {
+			if got := counts[nodeID][action]; got != 1 {
+				t.Fatalf("node %q action %q dispatched %d times against the probe session, want exactly 1", nodeID, action, got)
+			}
+		}
+	}
+}
+
+// TestDispatchCueActivationsReplayTickProbesNothingAndDispatchesNothingNew
+// proves ADR-049 decision 6 at the full dispatchCueActivations level: a
+// second tick over the identical, unchanged activations map (the
+// Playlist loop's own every-1s replay while a Cue is still active)
+// dispatches no new probe command and no new cue.activate for either
+// node — it answers entirely from what the first tick already recorded.
+func TestDispatchCueActivationsReplayTickProbesNothingAndDispatchesNothingNew(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	activations := twoNodeScheduleFixture(t, setup, now)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"audio-holder:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"audio-second:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+		"audio-holder:cue.activate":          cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized),
+		"audio-second:cue.activate":          cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized),
+	}
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	first := h.dispatchCueActivations(context.Background(), now, activations, issuer, nil)
+	for _, o := range first {
+		if !o.Confirmed {
+			t.Fatalf("first tick outcome = %+v, want confirmed", o)
+		}
+	}
+	firstCount := len(setup.pub.dispatchedSnapshot())
+	if firstCount == 0 {
+		t.Fatal("first tick dispatched nothing at all")
+	}
+
+	second := h.dispatchCueActivations(context.Background(), now, activations, issuer, nil)
+	for _, o := range second {
+		if !o.Confirmed {
+			t.Fatalf("replay tick outcome = %+v, want confirmed (replayed from the recorded row)", o)
+		}
+	}
+	secondSnapshot := setup.pub.dispatchedSnapshot()
+	if len(secondSnapshot) != firstCount {
+		t.Fatalf("replay tick dispatched %d additional commands, want 0: %+v",
+			len(secondSnapshot)-firstCount, secondSnapshot[firstCount:])
+	}
+}
+
+// TestScheduleCueActivationsPartialReplayGivesLateNodeTheRecordedInstant
+// proves REQUIRED BEHAVIOR 1's late-joining-node case: "audio-holder" was
+// already scheduled and dispatched on an earlier tick (seeded directly,
+// standing in for a prior tick this test does not need to replay in
+// full); "audio-second" appears in the SAME activation for the first
+// time on this tick. scheduleCueActivations must not probe either node
+// again — it gives audio-second the identical ScheduledAtNs already
+// recorded for audio-holder, because the configured lead has not yet
+// elapsed since that row was created.
+func TestScheduleCueActivationsPartialReplayGivesLateNodeTheRecordedInstant(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	activations := twoNodeScheduleFixture(t, setup, now)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	holderAt := int64(1_700_000_005_000_000_000)
+	holder := activations["audio-holder"]
+	holder.ScheduledAtNs = &holderAt
+	activations["audio-holder"] = holder
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"audio-holder:cue.activate": cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized),
+	}
+	seed := h.dispatchOneCueActivation(context.Background(), now, "audio-holder", holder, issuer, nil)
+	if !seed.Confirmed {
+		t.Fatalf("seed dispatch for audio-holder = %+v, want confirmed", seed)
+	}
+	setup.pub.dispatched = nil // isolate what THIS tick's own scheduleCueActivations call dispatches
+
+	// Well within the default audio.settings lead (deliveryBound 2000ms +
+	// margin 1000ms = 3000ms): the recorded instant is still usable.
+	h.scheduleCueActivations(context.Background(), now.Add(200*time.Millisecond), activations, issuer, nil)
+
+	second := activations["audio-second"]
+	if second.ScheduledAtNs == nil || *second.ScheduledAtNs != holderAt {
+		t.Fatalf("audio-second ScheduledAtNs = %v, want %d (audio-holder's own recorded instant, reused without a fresh probe)", second.ScheduledAtNs, holderAt)
+	}
+	if second.UnalignedReason != "" {
+		t.Fatalf("audio-second UnalignedReason = %q, want empty", second.UnalignedReason)
+	}
+	if got := activations["audio-holder"].ScheduledAtNs; got == nil || *got != holderAt {
+		t.Fatalf("audio-holder ScheduledAtNs = %v, want unchanged at %d", got, holderAt)
+	}
+	if len(setup.pub.dispatchedSnapshot()) != 0 {
+		t.Fatalf("dispatched %d commands during the partial-replay schedule call, want 0: no probe for either node", len(setup.pub.dispatchedSnapshot()))
+	}
+}
+
+// TestScheduleCueActivationsPartialReplayLateNodeUnalignedAfterLeadElapses
+// is the same partial-replay case, past the point this function can still
+// vouch for the recorded instant: with no fresh clock read available
+// (ADR-049 decision 6), audio-second is reported unaligned with a
+// concrete reason naming it, rather than handed a start already behind
+// it.
+func TestScheduleCueActivationsPartialReplayLateNodeUnalignedAfterLeadElapses(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	activations := twoNodeScheduleFixture(t, setup, now)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	holderAt := int64(1_700_000_005_000_000_000)
+	holder := activations["audio-holder"]
+	holder.ScheduledAtNs = &holderAt
+	activations["audio-holder"] = holder
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"audio-holder:cue.activate": cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized),
+	}
+	seed := h.dispatchOneCueActivation(context.Background(), now, "audio-holder", holder, issuer, nil)
+	if !seed.Confirmed {
+		t.Fatalf("seed dispatch for audio-holder = %+v, want confirmed", seed)
+	}
+	setup.pub.dispatched = nil
+
+	h.scheduleCueActivations(context.Background(), now.Add(time.Hour), activations, issuer, nil)
+
+	second := activations["audio-second"]
+	if second.ScheduledAtNs != nil {
+		t.Fatalf("audio-second ScheduledAtNs = %v, want nil: the configured lead has long since elapsed", second.ScheduledAtNs)
+	}
+	if second.UnalignedReason == "" {
+		t.Fatalf("audio-second UnalignedReason is empty, want a concrete reason naming it")
+	}
+	if !strings.Contains(second.UnalignedReason, "audio-second") {
+		t.Fatalf("audio-second UnalignedReason = %q, want it to name the node", second.UnalignedReason)
+	}
+	if len(setup.pub.dispatchedSnapshot()) != 0 {
+		t.Fatalf("dispatched %d commands during the partial-replay schedule call, want 0: no probe for either node", len(setup.pub.dispatchedSnapshot()))
+	}
+}
+
+// TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch
+// proves REQUIRED BEHAVIOR 3's lifecycle rule directly: a probe step that
+// exceeds the bound leaves nodeID's own [scheduleProbeNodeLock] held by
+// [handlers.finishScheduleProbeAfter] until the abandoned step actually
+// resolves and audio.session.clear is sent. A real cue.activate dispatch
+// for that SAME node, started while the probe is still outstanding, must
+// not reach the wire until that clear has gone out (or the gate's own
+// bound expires) — proving the real session never races the probe's own
+// still-loading media. An unrelated second node, whose own probe was
+// never touched, dispatches immediately regardless.
+func TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:test"}
+
+	release := make(chan struct{})
+	var held atomic.Bool
+	setup.pub.onAwaitResponse = func() {
+		if held.CompareAndSwap(false, true) {
+			<-release
+		}
+	}
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	media := pkgaudio.MediaRef{AssetID: "asset-x", RuntimeFilename: "x.wav"}
+	probeDone := make(chan struct{})
+	go func() {
+		defer close(probeDone)
+		_, _, err := h.readScheduleProbe(context.Background(), now, nodeID, media, issuer)
+		if err == nil {
+			t.Errorf("readScheduleProbe = nil error, want a timeout: its own apply never answers within scheduleProbeStepTimeout")
+		}
+	}()
+	select {
+	case <-probeDone:
+	case <-time.After(scheduleProbeStepTimeout + 2*time.Second):
+		t.Fatal("readScheduleProbe never gave up on the hung apply")
+	}
+
+	// An unrelated node the gate never touches dispatches immediately
+	// regardless of nodeID's own outstanding probe:
+	// TestDispatchOneCueActivationSingleTargetUnaffectedByTheProbeGate
+	// already proves that near-zero cost directly; this test's own focus
+	// is nodeID's own gated wait below.
+
+	realDone := make(chan cueActivationDispatchOutcome, 1)
+	go func() {
+		realDone <- h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	}()
+
+	select {
+	case out := <-realDone:
+		t.Fatalf("the real dispatch for %q returned (%+v) before its own outstanding probe was released; it must wait for the clear or the bound", nodeID, out)
+	case <-time.After(50 * time.Millisecond):
+		// Still waiting, as required: the probe's own abandoned apply is
+		// still hung on <-release, so nodeID's own lock is still held.
+	}
+
+	close(release)
+
+	select {
+	case out := <-realDone:
+		if !out.Confirmed {
+			t.Fatalf("real dispatch for %q = %+v, want confirmed once the probe's own clear resolved", nodeID, out)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the real dispatch never completed after the outstanding probe was released")
+	}
+
+	var clearIdx, activateIdx = -1, -1
+	for i, d := range setup.pub.dispatchedSnapshot() {
+		if d.NodeID != nodeID {
+			continue
+		}
+		if d.Action == "audio.session.clear" && clearIdx == -1 {
+			clearIdx = i
+		}
+		if d.Action == "cue.activate" && activateIdx == -1 {
+			activateIdx = i
+		}
+	}
+	if clearIdx == -1 {
+		t.Fatalf("no audio.session.clear was ever dispatched for %q: the abandoned probe must still be cleared", nodeID)
+	}
+	if activateIdx == -1 {
+		t.Fatalf("no cue.activate was ever dispatched for %q", nodeID)
+	}
+	if clearIdx > activateIdx {
+		t.Fatalf("cue.activate (dispatch #%d) reached the wire before audio.session.clear (dispatch #%d) for %q", activateIdx, clearIdx, nodeID)
+	}
+}
+
+// TestDispatchOneCueActivationSingleTargetUnaffectedByTheProbeGate proves
+// REQUIRED BEHAVIOR 5: a single-target activation, which never triggers
+// scheduleCueActivations at all (len(activations) < 2), finds its own
+// [scheduleProbeNodeLock] uncontended and dispatches exactly as it did
+// before this seam's own gate was added — no measurable added latency.
+func TestDispatchOneCueActivationSingleTargetUnaffectedByTheProbeGate(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	start := time.Now()
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	took := time.Since(start)
+	if !outcome.Confirmed {
+		t.Fatalf("outcome = %+v, want confirmed", outcome)
+	}
+	// A generous ceiling, well under scheduleProbeStepTimeout (the gate's
+	// own bound), not a tight one: this only needs to prove the gate did
+	// not block, not bound ordinary dispatch latency under a slow or
+	// -race-instrumented test run.
+	if took >= scheduleProbeStepTimeout/2 {
+		t.Fatalf("dispatchOneCueActivation took %s, want well under scheduleProbeStepTimeout (%s): the probe-idle gate must be an uncontended, near-instant check for a node no probe ever touched", took, scheduleProbeStepTimeout)
 	}
 }
