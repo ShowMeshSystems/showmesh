@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useRef, useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
+import { BlankingPlate, Button, ChoiceGroup, ClockSkewStrip, Drawer, Field, Input, LifecycleCommands, NotWired, Panes, Popover, RuledStrip, Segmented, SelectableRow, StatusPair, Table } from './index'
 import { clampPopoverLeft } from './Popover'
 
 afterEach(cleanup)
@@ -193,6 +193,117 @@ describe('Field', () => {
     expect(document.getElementById(secondId)).toBe(error)
     // Label, control, help, error: never side by side.
     expect(container.querySelector('.sm-field')?.children.length).toBe(4)
+  })
+})
+
+describe('ChoiceGroup', () => {
+  function Harness({ initial = [] as string[] }: { initial?: string[] }) {
+    const [value, setValue] = useState<string[]>(initial)
+    return (
+      <ChoiceGroup
+        label="Audio target nodes"
+        options={[
+          { value: 'node-a', label: 'Node A' },
+          { value: 'node-b', label: 'Node B' },
+        ]}
+        value={value}
+        onChange={setValue}
+      />
+    )
+  }
+
+  it('toggles a value into and out of the selection, leaving the rest untouched', async () => {
+    render(<Harness initial={['node-a']} />)
+    const a = screen.getByRole('checkbox', { name: 'Node A' })
+    const b = screen.getByRole('checkbox', { name: 'Node B' })
+    expect(a).toBeChecked()
+    expect(b).not.toBeChecked()
+
+    await userEvent.click(b)
+    expect(a).toBeChecked()
+    expect(b).toBeChecked()
+
+    await userEvent.click(a)
+    expect(a).not.toBeChecked()
+    expect(b).toBeChecked()
+  })
+
+  it('renders a selected value with no matching option as checked and deselectable, never dropped', async () => {
+    render(<Harness initial={['node-x']} />)
+    const unknown = screen.getByRole('checkbox', { name: 'node-x (not declared)' })
+    expect(unknown).toBeChecked()
+    await userEvent.click(unknown)
+    expect(screen.queryByRole('checkbox', { name: /node-x/ })).toBeNull()
+  })
+
+  it('groups the checkboxes under one labelled fieldset, and wires help text to it', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        help="No nodes selected: plays on the program+ltc node."
+        options={[{ value: 'node-a', label: 'Node A' }]}
+        value={[]}
+        onChange={() => {}}
+      />,
+    )
+    const group = screen.getByRole('group', { name: 'Audio target nodes' })
+    const helpText = screen.getByText('No nodes selected: plays on the program+ltc node.')
+    expect(group.getAttribute('aria-describedby')).toBe(helpText.id)
+  })
+
+  it('renders a muted secondary line under the label, so two options sharing one label stay distinguishable', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        options={[
+          { value: 'node-a', label: 'node-a', secondary: 'hw:CARD=Loopback,DEV=0' },
+          { value: 'node-b', label: 'node-b', secondary: 'hw:CARD=Loopback,DEV=0' },
+        ]}
+        value={[]}
+        onChange={() => {}}
+      />,
+    )
+    const a = screen.getByRole('checkbox', { name: 'node-a hw:CARD=Loopback,DEV=0' })
+    const b = screen.getByRole('checkbox', { name: 'node-b hw:CARD=Loopback,DEV=0' })
+    expect(a).not.toBe(b)
+    expect(screen.getAllByText('hw:CARD=Loopback,DEV=0')).toHaveLength(2)
+  })
+
+  it('marks the group invalid and describes it by the error text', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        error="node-a is not a configured audio.node"
+        options={[{ value: 'node-a', label: 'Node A' }]}
+        value={['node-a']}
+        onChange={() => {}}
+      />,
+    )
+    const group = screen.getByRole('group', { name: 'Audio target nodes' })
+    expect(group.getAttribute('aria-invalid')).toBe('true')
+    const describedBy = group.getAttribute('aria-describedby')
+    expect(describedBy).not.toBeNull()
+    const errorEl = describedBy === null ? null : document.getElementById(describedBy)
+    expect(errorEl?.textContent).toContain('node-a is not a configured audio.node')
+
+    // A screen reader announces a group's accessible name on entry but not always its
+    // description, so each input carries the same wiring the fieldset does.
+    const checkbox = screen.getByRole('checkbox', { name: 'Node A' })
+    expect(checkbox.getAttribute('aria-invalid')).toBe('true')
+    expect(checkbox.getAttribute('aria-describedby')).toBe(describedBy)
+  })
+
+  it('treats an empty-string secondary as absent, never a blank muted line', () => {
+    render(
+      <ChoiceGroup
+        label="Audio target nodes"
+        options={[{ value: 'node-a', label: 'node-a', secondary: '' }]}
+        value={[]}
+        onChange={() => {}}
+      />,
+    )
+    const checkbox = screen.getByRole('checkbox', { name: 'node-a' })
+    expect(checkbox.closest('label')).not.toHaveClass('sm-choice--stacked')
   })
 })
 

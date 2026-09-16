@@ -242,11 +242,51 @@
   min-height: var(--ctrl-h-gloved);
 }
 
+/* A choice whose label carries a muted secondary line under it (ChoiceGroup's `secondary`): align the box to the first line, not the block's centre. */
+.sm-choice--stacked {
+  align-items: flex-start;
+  min-height: 0;
+}
+
+.sm-choice--stacked input {
+  margin-top: 3px;
+}
+
+.sm-choice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sm-choice__secondary {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
 .sm-choice-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--s-5);
+}
+
+/* A checkbox group: a fieldset laid out like .sm-choice-row, its own legend as the field label. */
+.sm-choice-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-5);
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-inline-size: 0;
+}
+
+.sm-choice-group > legend {
+  width: 100%;
+  padding: 0;
 }
 
 /* A checkbox option list drawn as one joined card, hairline dividers between rows. */

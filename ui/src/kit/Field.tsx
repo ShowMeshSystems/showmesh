@@ -62,3 +62,69 @@ export function Choice({ label, ...props }: ChoiceProps) {
 export function ChoiceRow({ children }: { children: ReactNode }) {
   return <div className="sm-choice-row">{children}</div>
 }
+
+export type ChoiceGroupOption = { value: string; label: ReactNode; /** Muted context under the label, e.g. a route or a role: never the only way to tell two options apart. */ secondary?: ReactNode }
+
+type ChoiceGroupProps = {
+  /** Label the outcome of the choice, not the field. */
+  label: string
+  help?: ReactNode
+  error?: ReactNode
+  options: readonly ChoiceGroupOption[]
+  value: readonly string[]
+  onChange: (value: string[]) => void
+}
+
+/** A checkbox group for picking any number of a known option set. */
+export function ChoiceGroup({ label, help, error, options, value, onChange }: ChoiceGroupProps) {
+  const id = useId()
+  const helpId = help === undefined ? undefined : `${id}-help`
+  const errorId = error === undefined ? undefined : `${id}-error`
+  const describedBy = [helpId, errorId].filter(Boolean).join(' ') || undefined
+  const invalid = error === undefined ? undefined : true
+  const known = new Set(options.map((option) => option.value))
+  const unknown = value.filter((v) => !known.has(v))
+  const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v])
+  return (
+    <div className="sm-field">
+      <fieldset className="sm-choice-group" aria-describedby={describedBy} aria-invalid={invalid}>
+        <legend className="sm-field__label">{label}</legend>
+        {options.map((option) => {
+          const hasSecondary = option.secondary !== undefined && option.secondary !== ''
+          return (
+            <label key={option.value} className={hasSecondary ? 'sm-choice sm-choice--stacked' : 'sm-choice'}>
+              <input
+                type="checkbox"
+                checked={value.includes(option.value)}
+                onChange={() => toggle(option.value)}
+                aria-describedby={describedBy}
+                aria-invalid={invalid}
+              />
+              {hasSecondary ? (
+                <span className="sm-choice__text">
+                  <span>{option.label}</span>
+                  <span className="sm-choice__secondary">{option.secondary}</span>
+                </span>
+              ) : (
+                <span>{option.label}</span>
+              )}
+            </label>
+          )
+        })}
+        {unknown.map((v) => (
+          <label key={v} className="sm-choice">
+            <input type="checkbox" checked onChange={() => toggle(v)} aria-describedby={describedBy} aria-invalid={invalid} />
+            <span>{`${v} (not declared)`}</span>
+          </label>
+        ))}
+      </fieldset>
+      {help !== undefined && <span className="sm-field__help" id={helpId}>{help}</span>}
+      {error !== undefined && (
+        <span className="sm-field__error" id={errorId}>
+          <span aria-hidden="true">✕</span>
+          {error}
+        </span>
+      )}
+    </div>
+  )
+}
