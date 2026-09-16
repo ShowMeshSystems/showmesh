@@ -233,6 +233,15 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 	// is exactly what this path also does, with StartAtPosition in place
 	// of Start.
 	if act.ScheduledAtNs != nil {
+		if announcement == nil {
+			// Never Promoted from on this path, above, so the
+			// Promote-refusal cleanup below never runs for it either:
+			// without this, a prepare-ahead round that staged this same
+			// Cue in advance would leave that stage loaded and
+			// unreleased until some future, unrelated Cue's own
+			// prepare-ahead cycle happens to overwrite it.
+			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(act, activationStepStart))
+		}
 		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
 		if audioOutcomeFailed(prepOutcome) {
 			return fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)

@@ -451,6 +451,73 @@ func TestActivateAudioClearsStaleStagedSessionWhenContentDoesNotMatch(t *testing
 	}
 }
 
+// TestActivateAudioScheduledBranchAlsoClearsAStaleStagedSession proves
+// finding 7's own fix: the scheduled branch never Promotes from
+// PrepareStagingSessionID (it bypasses Promote entirely, see
+// activateAudio's own doc comment on that branch), so without its own
+// explicit clear a stage a prepare-ahead cycle loaded in advance for this
+// same Cue would be left loaded, unreleased, until some unrelated future
+// Cue's own prepare-ahead cycle happened to overwrite it.
+func TestActivateAudioScheduledBranchAlsoClearsAStaleStagedSession(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+
+	stagedContent := []byte("staged content, never used")
+	stagedHash := writeAssetFixture(t, dir, "staged-song.wav", stagedContent)
+	stagedRef := pkgaudio.MediaRef{
+		AssetID: "staged-song-asset", ContentHash: stagedHash,
+		SizeBytes: int64(len(stagedContent)), RuntimeFilename: "staged-song.wav",
+	}
+	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
+	if r := mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(stagedRef)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging prepare refused: %+v", r)
+	}
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-sched-stale-stage", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-sched-stale-stage", "cue-sched-stale-stage", 1, "halloween-2026", 3, "rev-a", 0)
+	at := int64(1_700_000_000_000_000_000)
+	act.ScheduledAtNs = &at
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm: %+v", result)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	var sawShowPlaying, sawStaging bool
+	for _, s := range snaps {
+		if s.ID == cueActivationAudioSessionID && s.State == pkgaudio.StatePlaying {
+			sawShowPlaying = true
+		}
+		if s.ID == stagingID {
+			sawStaging = true
+		}
+	}
+	if !sawShowPlaying {
+		t.Fatalf("show session is not playing after activate: %+v", snaps)
+	}
+	if sawStaging {
+		t.Fatalf("stale staging session is still present after a scheduled activate; it should have been cleared: %+v", snaps)
+	}
+}
+
 // TestBlackAndSilenceStopRevisionIsNotRefusedAsStale is defect 2's own
 // regression test: H0.2's blackAndSilence policy must actually be able to
 // silence a Cue's audio session. It activates audio exactly as

@@ -210,6 +210,28 @@ const PrepareStagingSessionID = "cue-activation:prepare-staging"
 // reading its own audio.session.prepare result carries.
 const ScheduleProbeSessionID = "cue-activation:schedule-probe"
 
+// ScheduleProbeSessionStepApply, ScheduleProbeSessionStepPrepare and
+// ScheduleProbeSessionStepClear are [ScheduleProbeSessionID]'s own three
+// steps. That session never shares a revision ledger with any other
+// session (its own agent-side RevisionState is keyed by this id alone),
+// so unlike [PrepareStagingSessionStepApply] these do not need to sort
+// past another session's own step range; they exist only so this
+// derivation, like every other in this package, stays additive, never a
+// timestamp multiplied by a step count, which overflows uint64 well
+// before this century ends.
+const (
+	ScheduleProbeSessionStepApply = iota
+	ScheduleProbeSessionStepPrepare
+	ScheduleProbeSessionStepClear
+)
+
+// ScheduleProbeSessionRevision derives [ScheduleProbeSessionID]'s own
+// pkg/audio.Revision-shaped uint64 from t and step, via the identical
+// additive rule [AudioSessionRevision] already uses.
+func ScheduleProbeSessionRevision(t time.Time, step int) uint64 {
+	return AudioSessionRevision(t, step)
+}
+
 // PrepareStagingSessionStepApply and PrepareStagingSessionStepPrepare are
 // [PrepareStagingSessionID]'s own two steps — Apply then Prepare, never
 // Start or Seek: a staged session is loaded and left Ready, never started

@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -24,17 +26,26 @@ import (
 // reading round, no instant, dispatch proceeds exactly as it always has
 // (ADR-049's own "a Cue reaching one node behaves exactly as today").
 
-// scheduleProbeApplyStep and scheduleProbePrepareStep are two small,
-// strictly-increasing revisions for [cueactivation.ScheduleProbeSessionID].
-// Every attempt serializes on [scheduleProbeNodeLock] before it touches
-// that session, so unlike [cueactivation.AudioSessionRevision] this
-// derivation owes no other caller's own step numbering; it only has to
-// increase between this function's own two calls on the SAME (fresh,
-// per-attempt) timestamp.
-const (
-	scheduleProbeApplyStep   = 0
-	scheduleProbePrepareStep = 1
-)
+// scheduleProbeStepTimeout bounds how long readScheduleProbe waits for
+// any ONE of its dispatches (apply, prepare, clear) before giving up on
+// it. executeAudioSessionDispatch moves to a context.WithoutCancel'd
+// context before its own wire wait, deliberately, so an abandoned caller
+// can never abort a command already durably recorded; that means a
+// shortened context passed in here would NOT itself bound the wait. This
+// timeout instead bounds how long THIS function waits for a result: an
+// abandoned step keeps running in the background exactly as it would for
+// any other caller who stopped waiting, and dispatchProbeStep's own
+// channel still eventually receives its real outcome.
+const scheduleProbeStepTimeout = 400 * time.Millisecond
+
+// scheduleProbeMaxDeliveryContribution is the ceiling MANAGER DECISION 2
+// clamps the clock holder's own measured probe span to before it is
+// folded into the delivery bound (SelectAudioStartInstant). It equals
+// scheduleProbeStepTimeout deliberately: that timeout already upper-
+// bounds the measured span by construction, and this is defense in depth
+// against any measurement slop, never a value a well-behaved probe read
+// could exceed on its own.
+const scheduleProbeMaxDeliveryContribution = scheduleProbeStepTimeout
 
 // scheduleProbeNodeLocks serializes [cueactivation.ScheduleProbeSessionID]
 // access per node, across every concurrent scheduling attempt: the
@@ -50,10 +61,18 @@ const (
 var scheduleProbeNodeLocks sync.Map // nodeID string -> *sync.Mutex
 
 // scheduleProbeNodeLock returns the one *sync.Mutex every scheduling
-// attempt touching nodeID's own probe session must hold for the whole
-// apply-prepare-clear cycle, creating it on first use. Never released
-// back: a node is a small, bounded set for the life of this process, so
-// this never grows unbounded the way a lock per ACTIVATION would.
+// attempt touching nodeID's own probe session must hold, creating it on
+// first use. Never released back: a node is a small, bounded set for the
+// life of this process, so this never grows unbounded the way a lock per
+// ACTIVATION would.
+//
+// The lock is held for as long as nodeID's own probe session might still
+// be affected by THIS attempt's dispatches, including a step this
+// attempt gave up WAITING for but did not cancel: see
+// finishScheduleProbeAfter's own doc comment for why releasing early,
+// while an abandoned apply or prepare may still be in flight, would let
+// a second attempt's own dispatches interleave with the first's late
+// arrival.
 func scheduleProbeNodeLock(nodeID string) *sync.Mutex {
 	v, _ := scheduleProbeNodeLocks.LoadOrStore(nodeID, &sync.Mutex{})
 	return v.(*sync.Mutex)
@@ -78,8 +97,27 @@ func scheduleProbeNodeLock(nodeID string) *sync.Mutex {
 // Activation, and ADR-049's own per-node-attributable-outcome rule means
 // the instant belongs on the thing every other per-node fact already
 // lives on.
+//
+// The frozen rule ("an unaligned fallback is never reported as
+// synchronized success") applies to this function's own early returns
+// too: a return that leaves activations untouched reports aligned=true
+// by default (cueActivationAlignment's own zero case), so both bail-out
+// paths below that follow a CONFIRMED multi-audio-node batch set a
+// concrete UnalignedReason before returning, rather than silently
+// leaving one.
 func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, activations map[string]cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) {
-	if len(activations) < 2 || h.deps.AssetManifests == nil {
+	if len(activations) < 2 {
+		return
+	}
+	if h.deps.AssetManifests == nil {
+		// Whether this batch is even audio-bearing cannot be determined
+		// without AssetManifests (Authorize needs it), so every
+		// Activation is marked, not only the ones that would turn out to
+		// be audio-bearing: a real misconfiguration reaching this branch
+		// at all is not expected to happen, and over-reporting unaligned
+		// here is the safe direction to be wrong in.
+		h.logWarn("cue activation schedule: no asset manifest store configured; every node starts on arrival")
+		markAllUnaligned(activations, "no asset manifest store is configured on this coordinator, so no start instant could be selected")
 		return
 	}
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
@@ -107,12 +145,6 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 		return
 	}
 
-	settings, err := h.alignedStartSettings(ctx)
-	if err != nil {
-		h.logWarn("cue activation schedule: read audio.settings failed; every node starts on arrival", "error", err)
-		return
-	}
-
 	mediaByNode := make(map[string]pkgaudio.MediaRef, len(bearing))
 	nodeIDs := make([]string, 0, len(bearing))
 	for _, b := range bearing {
@@ -120,16 +152,40 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 		nodeIDs = append(nodeIDs, b.nodeID)
 	}
 
-	read := func(ctx context.Context, nodeID string) (AudioStartInstantReading, error) {
+	settings, err := h.alignedStartSettings(ctx)
+	if err != nil {
+		h.logWarn("cue activation schedule: read audio.settings failed; every node starts on arrival", "error", err)
+		markNodesUnaligned(activations, nodeIDs, "could not read audio.settings to select a shared start instant: "+err.Error())
+		return
+	}
+
+	read := func(ctx context.Context, nodeID string) (reading AudioStartInstantReading, err error) {
 		holdsClock, err := h.nodeHoldsMediaClock(ctx, nodeID)
 		if err != nil {
 			return AudioStartInstantReading{}, err
 		}
-		evidence := h.readScheduleProbe(ctx, now, nodeID, mediaByNode[nodeID], issuer)
-		return AudioStartInstantReading{HoldsMediaClock: holdsClock, Evidence: evidence}, nil
+		// Recovered here, not only in SelectAudioStartInstant's own
+		// outer recover: a panic inside readScheduleProbe would
+		// otherwise unwind straight through this closure's return,
+		// losing holdsClock (already known, above) along with it. That
+		// loss matters: if THIS node is the clock holder, losing
+		// HoldsMediaClock is what would make pickClock report "no
+		// target holds the shared media clock" instead of naming the
+		// holder's own panic.
+		defer func() {
+			if r := recover(); r != nil {
+				reading = AudioStartInstantReading{HoldsMediaClock: holdsClock}
+				err = fmt.Errorf("panic reading node %q: %v", nodeID, r)
+			}
+		}()
+		evidence, elapsed := h.readScheduleProbe(ctx, now, nodeID, mediaByNode[nodeID], issuer)
+		return AudioStartInstantReading{HoldsMediaClock: holdsClock, Evidence: evidence, ProbeElapsed: elapsed}, nil
 	}
 
-	sel, selErr := SelectAudioStartInstant(ctx, nodeIDs, settings, read)
+	sel, nodeErrs, selErr := SelectAudioStartInstant(ctx, nodeIDs, settings, read)
+	for _, ne := range nodeErrs {
+		h.logWarn("cue activation schedule: node's own reading failed", "nodeId", ne.NodeID, "error", ne.Err)
+	}
 	for _, nodeID := range nodeIDs {
 		act := activations[nodeID]
 		if selErr != nil {
@@ -144,6 +200,30 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 			act.ScheduledAtNs = &at
 			act.UnalignedReason = ""
 		}
+		activations[nodeID] = act
+	}
+}
+
+// markAllUnaligned sets ScheduledAtNs=nil and UnalignedReason=reason on
+// every Activation in activations, in place.
+func markAllUnaligned(activations map[string]cueactivation.Activation, reason string) {
+	for nodeID, act := range activations {
+		act.ScheduledAtNs = nil
+		act.UnalignedReason = reason
+		activations[nodeID] = act
+	}
+}
+
+// markNodesUnaligned is [markAllUnaligned] narrowed to nodeIDs: used once
+// the audio-bearing set has actually been resolved, so only the
+// Activations this scheduling attempt was ever about are marked, never a
+// render-only sibling in the same batch that never attempted scheduling
+// at all.
+func markNodesUnaligned(activations map[string]cueactivation.Activation, nodeIDs []string, reason string) {
+	for _, nodeID := range nodeIDs {
+		act := activations[nodeID]
+		act.ScheduledAtNs = nil
+		act.UnalignedReason = reason
 		activations[nodeID] = act
 	}
 }
@@ -169,38 +249,112 @@ func cueActivationAlignment(activations map[string]cueactivation.Activation) (al
 	return true, "", nil
 }
 
-// readScheduleProbe applies act's own media onto
-// [cueactivation.ScheduleProbeSessionID] and prepares it, to read a fresh
-// media-clock evidence map without touching nodeID's real show session
-// (which may already be Playing the PRECEDING Cue) or the prepare-ahead
-// staging session (which a concurrent tick may already be using for a
-// DIFFERENT, later Cue), see [cueactivation.ScheduleProbeSessionID]'s own
-// doc comment. The probe apply carries only Media: no LTC start offset,
-// no mix policy, no announcement role, so it can never start LTC or
-// participate in a duck/interrupt relationship even if a caller later
+// audioDispatchOutcome bundles executeAudioSessionDispatch's three
+// return values so a bounded wait can pass them through one channel.
+type audioDispatchOutcome struct {
+	result  v1.AudioSessionCommandResult
+	problem *v1.Problem
+	err     error
+}
+
+// dispatchProbeStep starts in on its own goroutine and returns a channel
+// that always eventually receives exactly one outcome, however long the
+// underlying dispatch actually takes: nothing here cancels it, since
+// executeAudioSessionDispatch moves to its own context.WithoutCancel
+// before the wire wait specifically so an abandoned caller can never
+// abort a command already durably recorded (see scheduleProbeStepTimeout's
+// own doc comment). This is what lets awaitProbeStep give up on the
+// channel without giving up on the dispatch itself.
+func (h *handlers) dispatchProbeStep(ctx context.Context, now time.Time, in AudioDispatchInput) <-chan audioDispatchOutcome {
+	out := make(chan audioDispatchOutcome, 1)
+	go func() {
+		result, problem, err := h.executeAudioSessionDispatch(ctx, now, in)
+		out <- audioDispatchOutcome{result, problem, err}
+	}()
+	return out
+}
+
+// awaitProbeStep waits up to scheduleProbeStepTimeout for pending's own
+// result. timedOut is true when the WAIT itself gave up; the underlying
+// dispatch is never canceled, and pending still eventually receives its
+// real outcome, see dispatchProbeStep's own doc comment.
+func awaitProbeStep(pending <-chan audioDispatchOutcome) (out audioDispatchOutcome, timedOut bool) {
+	select {
+	case out = <-pending:
+		return out, false
+	case <-time.After(scheduleProbeStepTimeout):
+		return audioDispatchOutcome{}, true
+	}
+}
+
+// finishScheduleProbeAfter is readScheduleProbe's own follow-up for an
+// apply or prepare step it gave up waiting for: it waits for that step's
+// real completion, however long that actually takes, and only THEN
+// dispatches audio.session.clear and releases nodeID's own
+// [scheduleProbeNodeLock].
+//
+// Skipping the wait and clearing immediately is exactly what would let
+// clear reach the agent BEFORE a since-delayed apply: [audio.Manager.
+// Clear] on a session that does not exist yet is a no-op (nothing to
+// destroy), so that ordering lets the late apply arrive afterward,
+// create a session nobody is left watching, and leave a permanently
+// loaded, never-cleared probe session on a real show node. MQTT delivery
+// order from this one coordinator process to one node is what the rest
+// of this file's own revision scheme, and [audio.Session.
+// dispatchExemptFromStaleRevision]'s own doc comment, already depend on;
+// this restores that ordering for the one path (a step this function
+// gave up waiting for) that would otherwise break it.
+//
+// The identical hazard does not apply to clear's OWN timeout: a clear
+// that lands late is [audio.Session.dispatchExemptFromStaleRevision]'s
+// own already-accepted, self-healing trade (it may tear down a NEWER
+// attempt's freshly-applied session, but never leaves an orphan, since
+// the next apply for this id always starts a fresh ledger), so
+// clearScheduleProbe's own timeout only logs and returns.
+func (h *handlers) finishScheduleProbeAfter(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, pending <-chan audioDispatchOutcome, mu *sync.Mutex) {
+	defer mu.Unlock()
+	<-pending
+	h.clearScheduleProbe(ctx, now, nodeID, issuer)
+}
+
+// readScheduleProbe applies media onto [cueactivation.
+// ScheduleProbeSessionID] and prepares it, to read a fresh media-clock
+// evidence map without touching nodeID's real show session (which may
+// already be Playing the PRECEDING Cue) or the prepare-ahead staging
+// session (which a concurrent tick may already be using for a
+// DIFFERENT, later Cue), see [cueactivation.ScheduleProbeSessionID]'s
+// own doc comment. The probe apply carries only Media: no LTC start
+// offset, no mix policy, no announcement role, so it can never start LTC
+// or participate in a duck/interrupt relationship even if a caller later
 // mistakenly started it (which this function itself never does, Prepare
 // only, never Start).
 //
-// The whole apply-prepare-clear cycle runs under [scheduleProbeNodeLock],
-// so two concurrent scheduling attempts touching nodeID never interleave
-// on this one fixed session id. The probe session is cleared on every
-// path, evidence obtained, refused, or never returned at all, via a
-// deferred best-effort audio.session.clear, so a probe never accumulates
-// a loaded engine handle nodeID's own asset directory has to carry for
-// longer than this one selection.
-func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID string, media pkgaudio.MediaRef, issuer cueActivationIssuer) map[string]any {
+// Each of apply and prepare is given [scheduleProbeStepTimeout] to
+// answer; a step that does not is abandoned, not canceled (see that
+// constant's own doc comment), and this returns (nil, 0) immediately
+// rather than wait out the dispatch's own much longer wire deadline, so
+// one silent node costs THIS attempt at most about two step timeouts,
+// never up to 30 seconds. finishScheduleProbeAfter is what still clears
+// the probe, correctly ordered after the abandoned step's real
+// completion, and releases nodeID's own lock, in that case.
+//
+// elapsed is how long the PREPARE step specifically took, measured only
+// on its own success: SelectAudioStartInstant folds only the clock
+// holder's own such span into the delivery bound (MANAGER DECISION 2),
+// never a failed or abandoned read's, and never apply's or clear's own
+// span, since the staleness that matters is the age of the reading
+// itself, not of the round trip that fetched or discarded it.
+func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID string, media pkgaudio.MediaRef, issuer cueActivationIssuer) (map[string]any, time.Duration) {
 	mu := scheduleProbeNodeLock(nodeID)
 	mu.Lock()
-	defer mu.Unlock()
-	defer h.clearScheduleProbe(ctx, now, nodeID, issuer)
 
 	session := cueactivation.ScheduleProbeSessionID
 	applyInvocation := "schedule-probe-apply:" + nodeID + ":" + now.Format(time.RFC3339Nano)
 	prepareInvocation := "schedule-probe-prepare:" + nodeID + ":" + now.Format(time.RFC3339Nano)
-	applyRevision := uint64(now.UnixNano())*10 + scheduleProbeApplyStep
-	prepareRevision := uint64(now.UnixNano())*10 + scheduleProbePrepareStep
+	applyRevision := cueactivation.ScheduleProbeSessionRevision(now, cueactivation.ScheduleProbeSessionStepApply)
+	prepareRevision := cueactivation.ScheduleProbeSessionRevision(now, cueactivation.ScheduleProbeSessionStepPrepare)
 
-	applyResult, applyProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+	applyPending := h.dispatchProbeStep(ctx, now, AudioDispatchInput{
 		Action: "audio.session.apply", NodeID: nodeID, SessionID: session,
 		Params: map[string]any{
 			"sessionId": session, "invocationId": applyInvocation, "revision": applyRevision,
@@ -213,20 +367,33 @@ func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID 
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
 	})
+	applyOut, applyTimedOut := awaitProbeStep(applyPending)
+	if applyTimedOut {
+		h.logWarn("cue activation schedule: probe apply dispatch timed out", "nodeId", nodeID, "timeout", scheduleProbeStepTimeout)
+		go h.finishScheduleProbeAfter(ctx, now, nodeID, issuer, applyPending, mu)
+		return nil, 0
+	}
 	switch {
-	case err != nil:
-		h.logWarn("cue activation schedule: probe apply dispatch failed", "nodeId", nodeID, "error", err)
-		return nil
-	case applyProblem != nil:
-		h.logWarn("cue activation schedule: probe apply dispatch refused", "nodeId", nodeID, "detail", applyProblem.Detail)
-		return nil
-	case applyResult.Outcome == "refused" || applyResult.Outcome == "failed":
-		h.logWarn("cue activation schedule: probe apply outcome", "nodeId", nodeID, "outcome", applyResult.Outcome, "reason", applyResult.Reason)
-		return nil
+	case applyOut.err != nil:
+		h.logWarn("cue activation schedule: probe apply dispatch failed", "nodeId", nodeID, "error", applyOut.err)
+		h.clearScheduleProbe(ctx, now, nodeID, issuer)
+		mu.Unlock()
+		return nil, 0
+	case applyOut.problem != nil:
+		h.logWarn("cue activation schedule: probe apply dispatch refused", "nodeId", nodeID, "detail", applyOut.problem.Detail)
+		h.clearScheduleProbe(ctx, now, nodeID, issuer)
+		mu.Unlock()
+		return nil, 0
+	case applyOut.result.Outcome == "refused" || applyOut.result.Outcome == "failed":
+		h.logWarn("cue activation schedule: probe apply outcome", "nodeId", nodeID, "outcome", applyOut.result.Outcome, "reason", applyOut.result.Reason)
+		h.clearScheduleProbe(ctx, now, nodeID, issuer)
+		mu.Unlock()
+		return nil, 0
 	}
 
 	var evidence map[string]any
-	_, prepareProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+	prepareStart := time.Now()
+	preparePending := h.dispatchProbeStep(ctx, now, AudioDispatchInput{
 		Action: "audio.session.prepare", NodeID: nodeID, SessionID: session,
 		Params:   map[string]any{"sessionId": session, "invocationId": prepareInvocation, "revision": prepareRevision},
 		Revision: prepareRevision, IdempotencyKey: prepareInvocation,
@@ -234,36 +401,58 @@ func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID 
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
 		OnEvidence: func(v map[string]any) { evidence = v },
 	})
-	switch {
-	case err != nil:
-		h.logWarn("cue activation schedule: probe prepare dispatch failed", "nodeId", nodeID, "error", err)
-		return nil
-	case prepareProblem != nil:
-		h.logWarn("cue activation schedule: probe prepare dispatch refused", "nodeId", nodeID, "detail", prepareProblem.Detail)
-		return nil
+	prepareOut, prepareTimedOut := awaitProbeStep(preparePending)
+	if prepareTimedOut {
+		h.logWarn("cue activation schedule: probe prepare dispatch timed out", "nodeId", nodeID, "timeout", scheduleProbeStepTimeout)
+		go h.finishScheduleProbeAfter(ctx, now, nodeID, issuer, preparePending, mu)
+		return nil, 0
 	}
-	return evidence
+	prepareElapsed := time.Since(prepareStart)
+	switch {
+	case prepareOut.err != nil:
+		h.logWarn("cue activation schedule: probe prepare dispatch failed", "nodeId", nodeID, "error", prepareOut.err)
+		h.clearScheduleProbe(ctx, now, nodeID, issuer)
+		mu.Unlock()
+		return nil, 0
+	case prepareOut.problem != nil:
+		h.logWarn("cue activation schedule: probe prepare dispatch refused", "nodeId", nodeID, "detail", prepareOut.problem.Detail)
+		h.clearScheduleProbe(ctx, now, nodeID, issuer)
+		mu.Unlock()
+		return nil, 0
+	}
+	h.clearScheduleProbe(ctx, now, nodeID, issuer)
+	mu.Unlock()
+	return evidence, prepareElapsed
 }
 
-// clearScheduleProbe best-effort clears [cueactivation.ScheduleProbeSessionID]
-// on nodeID, unconditionally: see [handlers.readScheduleProbe]'s own doc
-// comment for why this runs on every path. audio.session.clear is exempt
-// from stale-revision refusal ([audio.Manager.Clear]'s own doc comment),
-// so a fixed, always-fresh revision is sufficient; failure is logged and
-// swallowed; nothing about this Cue's own activation depends on it.
+// clearScheduleProbe bounded-waits (see scheduleProbeStepTimeout) to
+// clear [cueactivation.ScheduleProbeSessionID] on nodeID. audio.session.
+// clear is exempt from stale-revision refusal ([audio.Manager.Clear]'s
+// own doc comment), so a fixed, always-fresh revision is sufficient. A
+// timeout here is logged and left running in the background rather than
+// escalated to finishScheduleProbeAfter's own wait-then-follow-up
+// treatment: that treatment exists to stop a LATE APPLY from creating an
+// orphan clear could have prevented, and clear itself has no follow-up
+// dispatch that a late arrival could get out of order with.
 func (h *handlers) clearScheduleProbe(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer) {
 	session := cueactivation.ScheduleProbeSessionID
 	invocation := "schedule-probe-clear:" + nodeID + ":" + now.Format(time.RFC3339Nano)
-	_, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+	revision := cueactivation.ScheduleProbeSessionRevision(now, cueactivation.ScheduleProbeSessionStepClear)
+	pending := h.dispatchProbeStep(ctx, now, AudioDispatchInput{
 		Action: "audio.session.clear", NodeID: nodeID, SessionID: session,
-		Params:   map[string]any{"sessionId": session, "invocationId": invocation, "revision": uint64(now.UnixNano())},
-		Revision: uint64(now.UnixNano()), IdempotencyKey: invocation,
+		Params:   map[string]any{"sessionId": session, "invocationId": invocation, "revision": revision},
+		Revision: revision, IdempotencyKey: invocation,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
 	})
-	if err != nil {
-		h.logWarn("cue activation schedule: probe clear dispatch failed", "nodeId", nodeID, "error", err)
-	} else if problem != nil {
-		h.logWarn("cue activation schedule: probe clear dispatch refused", "nodeId", nodeID, "detail", problem.Detail)
+	out, timedOut := awaitProbeStep(pending)
+	if timedOut {
+		h.logWarn("cue activation schedule: probe clear dispatch timed out", "nodeId", nodeID, "timeout", scheduleProbeStepTimeout)
+		return
+	}
+	if out.err != nil {
+		h.logWarn("cue activation schedule: probe clear dispatch failed", "nodeId", nodeID, "error", out.err)
+	} else if out.problem != nil {
+		h.logWarn("cue activation schedule: probe clear dispatch refused", "nodeId", nodeID, "detail", out.problem.Detail)
 	}
 }

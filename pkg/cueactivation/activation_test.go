@@ -178,6 +178,28 @@ func TestScheduleProbeSessionIDIsNeverAnotherWellKnownSessionID(t *testing.T) {
 	}
 }
 
+// TestScheduleProbeSessionRevisionIsAdditiveNotMultiplicative guards the
+// exact overflow finding 5 exists to close: a timestamp multiplied by a
+// step count (rather than added to it) overflows uint64 well before this
+// century ends, and a wrap-around would put the probe session's own
+// revision out of reach of any plain nanosecond value a later real
+// activity might present.
+func TestScheduleProbeSessionRevisionIsAdditiveNotMultiplicative(t *testing.T) {
+	now := time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)
+	apply := ScheduleProbeSessionRevision(now, ScheduleProbeSessionStepApply)
+	prepare := ScheduleProbeSessionRevision(now, ScheduleProbeSessionStepPrepare)
+	clear := ScheduleProbeSessionRevision(now, ScheduleProbeSessionStepClear)
+
+	base := uint64(now.UnixNano())
+	if apply != base || prepare != base+1 || clear != base+2 {
+		t.Fatalf("revisions = (%d, %d, %d), want (%d, %d, %d): the derivation must add the step, never multiply the timestamp by it",
+			apply, prepare, clear, base, base+1, base+2)
+	}
+	if !(apply < prepare && prepare < clear) {
+		t.Fatalf("revisions are not strictly increasing: apply=%d prepare=%d clear=%d", apply, prepare, clear)
+	}
+}
+
 // TestPrepareStagingSessionIDIsNeverTheShowSessionID guards the identity
 // [audio.Manager.Promote]'s whole design depends on: a coordinator-scheduled
 // prepare-ahead must load media under a genuinely separate session from the
