@@ -6,6 +6,7 @@ import {
   ButtonRule,
   Callout,
   Choice,
+  ChoiceGroup,
   ChoiceRow,
   ChromeBar,
   ChromeProgress,
@@ -123,6 +124,7 @@ export function Specimen() {
   const [theme, setTheme] = useState<Theme>('dark')
   const [density, setDensity] = useState<Density>('default')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [choiceGroupValue, setChoiceGroupValue] = useState<string[]>(['node-a'])
 
   return (
     <div className="sm sm-spec" data-theme={theme} data-density={density}>
@@ -256,6 +258,21 @@ export function Specimen() {
             <Choice type="radio" name="specimen-mode" defaultChecked={true} label="Show mode" />
             <Choice type="radio" name="specimen-mode" label="Program mode" />
           </ChoiceRow>
+          <ChoiceGroup
+            label="Audio target nodes"
+            help={choiceGroupValue.length === 0 ? 'No nodes selected: plays on the program+ltc node.' : undefined}
+            options={[
+              { value: 'node-a', label: 'node-a', secondary: 'alsa_output.usb-Focusrite_Scarlett_2i2_USB-00.analog-stereo' },
+              { value: 'node-b', label: 'node-b', secondary: 'alsa_output.usb-Focusrite_Scarlett_2i2_USB-00.analog-stereo' },
+            ]}
+            value={choiceGroupValue}
+            onChange={setChoiceGroupValue}
+          />
+          <p className="sm-small sm-muted">
+            Two nodes sharing one route: the identity is the primary line, the route a muted secondary one, so the
+            same route on two hosts never reads as one option. The route itself is a real, unbreakable device
+            string on purpose, to prove the choice wraps rather than pushing the page wide at phone width.
+          </p>
         </SpecSection>
 
         <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">

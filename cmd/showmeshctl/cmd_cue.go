@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -204,9 +205,13 @@ func cmdCueSet(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: this command never reads the cue's current")
 		_, _ = fmt.Fprintln(stderr, "definition first. --outputs-json is the whole outputs object, e.g.:")
 		_, _ = fmt.Fprintln(stderr, `  '{"render":{"sequence":"thriller"},"audio":{"asset":"thriller-audience","startOffsetMillis":0}}'`)
-		_, _ = fmt.Fprintln(stderr, "\nEach of outputs.audio/ltc/announcement also accepts an optional \"target\"")
-		_, _ = fmt.Fprintln(stderr, "naming an audio.node id (ADR-045); omitted, it resolves later to the")
-		_, _ = fmt.Fprintln(stderr, "installation's single program+ltc audio.node.")
+		_, _ = fmt.Fprintln(stderr, "\noutputs.audio and outputs.announcement each accept \"targets\", a list of")
+		_, _ = fmt.Fprintln(stderr, "audio.node ids the cue's audio plays on at one aligned instant (ADR-049);")
+		_, _ = fmt.Fprintln(stderr, "omitted or empty, it resolves to the installation's program+ltc")
+		_, _ = fmt.Fprintln(stderr, "audio.node. The deprecated singular \"target\" is still accepted as a")
+		_, _ = fmt.Fprintln(stderr, "one-element list; a cue naming both on the same output is refused.")
+		_, _ = fmt.Fprintln(stderr, "outputs.ltc keeps its own single optional \"target\" naming one")
+		_, _ = fmt.Fprintln(stderr, "audio.node id: LTC always runs on exactly one node.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read of this cue), refusing with a")
 		_, _ = fmt.Fprintln(stderr, "409 if it changed since it was read.")
 		fs.PrintDefaults()
@@ -523,11 +528,89 @@ func printCueDetail(w io.Writer, resp showCueConfigResponse) {
 	_, _ = fmt.Fprintf(w, "Show:         %s\n", p.Show)
 	_, _ = fmt.Fprintf(w, "Name:         %s\n", p.Name)
 	_, _ = fmt.Fprintf(w, "Outputs:      %s\n", string(p.Outputs))
+	printCueOutputTargets(w, p.Outputs)
 	_, _ = fmt.Fprintf(w, "Revision:     %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:      %s\n", resp.UpdatedAt.Format(time.RFC3339))
 	if resp.CreatedByPrincipalName != nil {
 		_, _ = fmt.Fprintf(w, "Created by:   %s\n", *resp.CreatedByPrincipalName)
 	} else {
 		_, _ = fmt.Fprintf(w, "Created by:   (no principal recorded)\n")
+	}
+}
+
+// cueOutputTargets decodes only the target-bearing fields of a show.cue's
+// "outputs" object (ADR-049), for printCueDetail's readable summary. This is
+// a display-only decode: --outputs-json above stays raw JSON, matching this
+// file's own reasoning that a CLI-side struct per nested member would
+// duplicate what the JSON object already expresses directly.
+type cueOutputTargets struct {
+	Audio *struct {
+		Target  string   `json:"target"`
+		Targets []string `json:"targets"`
+	} `json:"audio"`
+	LTC *struct {
+		Target string `json:"target"`
+	} `json:"ltc"`
+	Announcement *struct {
+		Target  string   `json:"target"`
+		Targets []string `json:"targets"`
+	} `json:"announcement"`
+}
+
+// resolvedTargets folds the deprecated singular "target" into the "targets"
+// list form ADR-049 also accepts, for display only. The coordinator itself
+// always normalizes a stored "target" into "targets" (showcue.go's own
+// UnmarshalJSON), so a GET response reaching this function with target set
+// and targets empty is not a shape this CLI can actually observe over the
+// API today; this helper stays for a raw or hand-built outputs document
+// that has not gone through that normalization.
+func resolvedTargets(target string, targets []string) []string {
+	if len(targets) > 0 {
+		return targets
+	}
+	if target != "" {
+		return []string{target}
+	}
+	return nil
+}
+
+// targetLineWidth is the field width the three target lines share, one more
+// than "Announcement targets:" (21 characters), the longest of the three:
+// wide enough to hold every one of them plus a separating space, so they
+// align with each other. This is deliberately its own gutter, not
+// printCueDetail's 14-character one: 14 cannot hold "Announcement
+// targets:" at all, and gluing a value to the colon on the lines that do
+// fit would read worse than the misalignment it was meant to fix.
+const targetLineWidth = len("Announcement targets:") + 1
+
+// printCueOutputTargets prints one readable line per output kind the cue
+// declares, naming every target node in its list, or that it resolves to the
+// installation's program+ltc node when the list is empty. Malformed Outputs
+// prints nothing here; the raw "Outputs:" line above still shows it.
+func printCueOutputTargets(w io.Writer, outputs json.RawMessage) {
+	var t cueOutputTargets
+	if err := json.Unmarshal(outputs, &t); err != nil {
+		return
+	}
+	format := fmt.Sprintf("%%-%ds%%s\n", targetLineWidth)
+	describeList := func(label string, targets []string) {
+		if len(targets) == 0 {
+			_, _ = fmt.Fprintf(w, format, label, "(resolves to the program+ltc node)")
+			return
+		}
+		_, _ = fmt.Fprintf(w, format, label, strings.Join(targets, ", "))
+	}
+	if t.Audio != nil {
+		describeList("Audio targets:", resolvedTargets(t.Audio.Target, t.Audio.Targets))
+	}
+	if t.Announcement != nil {
+		describeList("Announcement targets:", resolvedTargets(t.Announcement.Target, t.Announcement.Targets))
+	}
+	if t.LTC != nil {
+		if t.LTC.Target == "" {
+			_, _ = fmt.Fprintf(w, format, "LTC target:", "(resolves to the program+ltc node)")
+		} else {
+			_, _ = fmt.Fprintf(w, format, "LTC target:", t.LTC.Target)
+		}
 	}
 }
