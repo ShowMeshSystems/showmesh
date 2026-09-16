@@ -460,6 +460,8 @@ export function NodeDetail() {
   const [labelValue, setLabelValue] = useState(node?.label ?? '')
   const [savingLabel, setSavingLabel] = useState(false)
   const [labelError, setLabelError] = useState<string | null>(null)
+  const [declaring, setDeclaring] = useState(false)
+  const [declareError, setDeclareError] = useState<string | null>(null)
 
   useEffect(() => {
     setLabelValue(node?.label ?? '')
@@ -524,6 +526,17 @@ export function NodeDetail() {
       .catch((err: unknown) => {
         setLabelError(describeApiError(err))
         setSavingLabel(false)
+      })
+  }
+
+  const declareClick = () => {
+    setDeclaring(true)
+    setDeclareError(null)
+    declareNode(node.nodeId, labelValue, node.declaration.notes ?? '')
+      .then(() => setDeclaring(false))
+      .catch((err: unknown) => {
+        setDeclareError(describeApiError(err))
+        setDeclaring(false)
       })
   }
 
@@ -635,9 +648,17 @@ export function NodeDetail() {
             },
             {
               term: 'Declared',
-              value: node.declaration.declared
-                ? `${formatDateClock(node.declaration.declaredAt) ?? 'an unrecorded time'} by ${node.declaration.declaredByPrincipalName ?? 'an unknown principal'}`
-                : 'Not declared',
+              value: node.declaration.declared ? (
+                `${formatDateClock(node.declaration.declaredAt) ?? 'an unrecorded time'} by ${node.declaration.declaredByPrincipalName ?? 'an unknown principal'}`
+              ) : (
+                <div className="sm-inline-row">
+                  <span>Not declared</span>
+                  <Button onClick={declareClick} disabled={declaring || !gate.allowed} title={gate.allowed ? undefined : gate.reason}>
+                    {declaring ? 'Declaring…' : 'Declare node'}
+                  </Button>
+                </div>
+              ),
+              detail: declareError !== null ? <span className="sm-field__error">{declareError}</span> : undefined,
             },
             {
               term: 'Agent build',
