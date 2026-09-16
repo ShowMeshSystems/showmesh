@@ -178,7 +178,10 @@ func (h *handlers) scheduleCueActivations(ctx context.Context, now time.Time, ac
 				err = fmt.Errorf("panic reading node %q: %v", nodeID, r)
 			}
 		}()
-		evidence, elapsed := h.readScheduleProbe(ctx, now, nodeID, mediaByNode[nodeID], issuer)
+		evidence, elapsed, probeErr := h.readScheduleProbe(ctx, now, nodeID, mediaByNode[nodeID], issuer)
+		if probeErr != nil {
+			return AudioStartInstantReading{HoldsMediaClock: holdsClock}, probeErr
+		}
 		return AudioStartInstantReading{HoldsMediaClock: holdsClock, Evidence: evidence, ProbeElapsed: elapsed}, nil
 	}
 
@@ -265,9 +268,20 @@ type audioDispatchOutcome struct {
 // abort a command already durably recorded (see scheduleProbeStepTimeout's
 // own doc comment). This is what lets awaitProbeStep give up on the
 // channel without giving up on the dispatch itself.
+//
+// A panic inside executeAudioSessionDispatch (store, audit or broker) is
+// recovered here, turned into this step's own error: this goroutine has
+// no caller left to recover it once dispatchProbeStep itself has
+// returned, so an unrecovered panic here would take down the whole
+// coordinator process mid show, not just this one node's own reading.
 func (h *handlers) dispatchProbeStep(ctx context.Context, now time.Time, in AudioDispatchInput) <-chan audioDispatchOutcome {
 	out := make(chan audioDispatchOutcome, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				out <- audioDispatchOutcome{err: fmt.Errorf("panic dispatching %s for node %q: %v", in.Action, in.NodeID, r)}
+			}
+		}()
 		result, problem, err := h.executeAudioSessionDispatch(ctx, now, in)
 		out <- audioDispatchOutcome{result, problem, err}
 	}()
@@ -311,11 +325,33 @@ func awaitProbeStep(pending <-chan audioDispatchOutcome) (out audioDispatchOutco
 // attempt's freshly-applied session, but never leaves an orphan, since
 // the next apply for this id always starts a fresh ledger), so
 // clearScheduleProbe's own timeout only logs and returns.
+//
+// If this coordinator shuts down or crashes while waiting on pending,
+// clear is never sent: the node keeps a loaded probe session until some
+// later apply overwrites it. Accepted, not fixed: a probe session is a
+// throwaway resource by construction, and a clean restart already loses
+// every other in-flight command's own follow-up the identical way.
 func (h *handlers) finishScheduleProbeAfter(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, pending <-chan audioDispatchOutcome, mu *sync.Mutex) {
 	defer mu.Unlock()
 	<-pending
 	h.clearScheduleProbe(ctx, now, nodeID, issuer)
 }
+
+// errScheduleProbeBusy is readScheduleProbe's own reason when nodeID's
+// [scheduleProbeNodeLock] is already held: a concrete node error, the
+// same as a panic or a failed dispatch, so it reaches SelectAudioStartInstant's
+// per-node failures and, when this node is the clock holder, the eventual
+// UnalignedReason names it rather than a generic "no evidence."
+func errScheduleProbeBusy(nodeID string) error {
+	return fmt.Errorf("node %q's own probe session is still busy with a previous scheduling attempt", nodeID)
+}
+
+// scheduleProbeLockedSectionPanicForTest, when set by a test, panics
+// immediately after readScheduleProbe acquires nodeID's own lock. Nil in
+// production; it exists only to prove the handedOff-guarded unlock below
+// survives a panic from anywhere in this function's own synchronous body,
+// not only from dispatchProbeStep's already-recovered goroutine.
+var scheduleProbeLockedSectionPanicForTest func()
 
 // readScheduleProbe applies media onto [cueactivation.
 // ScheduleProbeSessionID] and prepares it, to read a fresh media-clock
@@ -329,9 +365,25 @@ func (h *handlers) finishScheduleProbeAfter(ctx context.Context, now time.Time, 
 // mistakenly started it (which this function itself never does, Prepare
 // only, never Start).
 //
+// nodeID's own [scheduleProbeNodeLock] is acquired with TryLock, never a
+// blocking Lock: a hung node can keep that lock held in the background
+// (via finishScheduleProbeAfter) for up to the dispatch's own much
+// longer deadline, and waiting on it would pay the very delay this whole
+// step timeout scheme exists to remove, with repeated hangs queuing
+// behind each other. A busy lock is reported as this node having no
+// reading for THIS activation, not as a reason to wait.
+//
+// Every return path unlocks through the SAME deferred call, guarded by
+// handedOff: a panic anywhere in this function's own body, not only an
+// explicit early return, still runs that defer during unwinding, so the
+// lock is never left held by an interrupted synchronous path. The only
+// case the defer must NOT unlock is a handoff to finishScheduleProbeAfter,
+// which takes ownership of the lock (and the eventual unlock) for as
+// long as it waits on an abandoned step.
+//
 // Each of apply and prepare is given [scheduleProbeStepTimeout] to
 // answer; a step that does not is abandoned, not canceled (see that
-// constant's own doc comment), and this returns (nil, 0) immediately
+// constant's own doc comment), and this returns (nil, 0, nil) immediately
 // rather than wait out the dispatch's own much longer wire deadline, so
 // one silent node costs THIS attempt at most about two step timeouts,
 // never up to 30 seconds. finishScheduleProbeAfter is what still clears
@@ -344,9 +396,20 @@ func (h *handlers) finishScheduleProbeAfter(ctx context.Context, now time.Time, 
 // never a failed or abandoned read's, and never apply's or clear's own
 // span, since the staleness that matters is the age of the reading
 // itself, not of the round trip that fetched or discarded it.
-func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID string, media pkgaudio.MediaRef, issuer cueActivationIssuer) (map[string]any, time.Duration) {
+func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID string, media pkgaudio.MediaRef, issuer cueActivationIssuer) (map[string]any, time.Duration, error) {
 	mu := scheduleProbeNodeLock(nodeID)
-	mu.Lock()
+	if !mu.TryLock() {
+		return nil, 0, errScheduleProbeBusy(nodeID)
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			mu.Unlock()
+		}
+	}()
+	if scheduleProbeLockedSectionPanicForTest != nil {
+		scheduleProbeLockedSectionPanicForTest()
+	}
 
 	session := cueactivation.ScheduleProbeSessionID
 	applyInvocation := "schedule-probe-apply:" + nodeID + ":" + now.Format(time.RFC3339Nano)
@@ -370,25 +433,23 @@ func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID 
 	applyOut, applyTimedOut := awaitProbeStep(applyPending)
 	if applyTimedOut {
 		h.logWarn("cue activation schedule: probe apply dispatch timed out", "nodeId", nodeID, "timeout", scheduleProbeStepTimeout)
+		handedOff = true
 		go h.finishScheduleProbeAfter(ctx, now, nodeID, issuer, applyPending, mu)
-		return nil, 0
+		return nil, 0, fmt.Errorf("node %q's own probe apply did not answer within %s", nodeID, scheduleProbeStepTimeout)
 	}
 	switch {
 	case applyOut.err != nil:
 		h.logWarn("cue activation schedule: probe apply dispatch failed", "nodeId", nodeID, "error", applyOut.err)
 		h.clearScheduleProbe(ctx, now, nodeID, issuer)
-		mu.Unlock()
-		return nil, 0
+		return nil, 0, applyOut.err
 	case applyOut.problem != nil:
 		h.logWarn("cue activation schedule: probe apply dispatch refused", "nodeId", nodeID, "detail", applyOut.problem.Detail)
 		h.clearScheduleProbe(ctx, now, nodeID, issuer)
-		mu.Unlock()
-		return nil, 0
+		return nil, 0, fmt.Errorf("node %q's own probe apply was refused: %s", nodeID, applyOut.problem.Detail)
 	case applyOut.result.Outcome == "refused" || applyOut.result.Outcome == "failed":
 		h.logWarn("cue activation schedule: probe apply outcome", "nodeId", nodeID, "outcome", applyOut.result.Outcome, "reason", applyOut.result.Reason)
 		h.clearScheduleProbe(ctx, now, nodeID, issuer)
-		mu.Unlock()
-		return nil, 0
+		return nil, 0, fmt.Errorf("node %q's own probe apply reported %s: %s", nodeID, applyOut.result.Outcome, applyOut.result.Reason)
 	}
 
 	var evidence map[string]any
@@ -404,25 +465,23 @@ func (h *handlers) readScheduleProbe(ctx context.Context, now time.Time, nodeID 
 	prepareOut, prepareTimedOut := awaitProbeStep(preparePending)
 	if prepareTimedOut {
 		h.logWarn("cue activation schedule: probe prepare dispatch timed out", "nodeId", nodeID, "timeout", scheduleProbeStepTimeout)
+		handedOff = true
 		go h.finishScheduleProbeAfter(ctx, now, nodeID, issuer, preparePending, mu)
-		return nil, 0
+		return nil, 0, fmt.Errorf("node %q's own probe prepare did not answer within %s", nodeID, scheduleProbeStepTimeout)
 	}
 	prepareElapsed := time.Since(prepareStart)
 	switch {
 	case prepareOut.err != nil:
 		h.logWarn("cue activation schedule: probe prepare dispatch failed", "nodeId", nodeID, "error", prepareOut.err)
 		h.clearScheduleProbe(ctx, now, nodeID, issuer)
-		mu.Unlock()
-		return nil, 0
+		return nil, 0, prepareOut.err
 	case prepareOut.problem != nil:
 		h.logWarn("cue activation schedule: probe prepare dispatch refused", "nodeId", nodeID, "detail", prepareOut.problem.Detail)
 		h.clearScheduleProbe(ctx, now, nodeID, issuer)
-		mu.Unlock()
-		return nil, 0
+		return nil, 0, fmt.Errorf("node %q's own probe prepare was refused: %s", nodeID, prepareOut.problem.Detail)
 	}
 	h.clearScheduleProbe(ctx, now, nodeID, issuer)
-	mu.Unlock()
-	return evidence, prepareElapsed
+	return evidence, prepareElapsed, nil
 }
 
 // clearScheduleProbe bounded-waits (see scheduleProbeStepTimeout) to
