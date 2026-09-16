@@ -813,13 +813,44 @@ describe('Node detail · Cue catalog override', () => {
     expect(screen.getByText(new RegExp('program-audio-route:media-garage:usb-interface'))).toBeInTheDocument()
   })
 
-  // Acceptance: "Deploy anyway" confirms before it re-issues the deploy
-  // with override=true.
-  it('re-issues the deploy with override=true only after the risk confirmation is accepted', async () => {
+  // Acceptance: "Deploy anyway" opens an in-page confirmation naming the
+  // conflict, never a native window.confirm, and issues no deploy on cancel.
+  it('opens a kit confirmation naming the conflict and issues no deploy when cancelled', async () => {
+    stubs.getNodeCueCatalog = () => Promise.resolve(catalogResponse())
+    let deployCalls = 0
+    stubs.deployNodeCueCatalog = (_nodeId: string, override?: boolean) => {
+      deployCalls += 1
+      if (override === undefined) return Promise.reject(claimConflictError())
+      return Promise.resolve({
+        commandId: 'cmd-1', idempotencyKey: 'idem-1', node: 'media-garage', replay: false,
+        show: 'winter-ridge-2026', generation: 3, revision: 'rev-9', outcome: 'confirmed',
+        acknowledgedRevision: 'rev-9', dispatchedAt: '2026-08-30T21:07:00Z', resolvedAt: '2026-08-30T21:07:01Z',
+      })
+    }
+    const confirmSpy = vi.spyOn(window, 'confirm')
+
+    renderScreen([node()])
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy cue catalog' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy cue catalog' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy anyway' })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy anyway' }))
+    const dialog = await screen.findByRole('dialog', { name: /deploy anyway/i })
+    expect(within(dialog).getByText(new RegExp('cue-a.*cue-b', 's'))).toBeInTheDocument()
+    expect(confirmSpy).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(deployCalls).toBe(1)
+  })
+
+  // Acceptance: confirming in the dialog issues the deploy with
+  // override=true, and the dialog does not appear until it is clicked.
+  it('issues the deploy with override=true only after the dialog confirmation is accepted', async () => {
     stubs.getNodeCueCatalog = () => Promise.resolve(catalogResponse())
     let seenOverride: unknown
     stubs.deployNodeCueCatalog = (_nodeId: string, override?: boolean) => {
-      if (seenOverride === undefined && override === undefined) return Promise.reject(claimConflictError())
+      if (override === undefined) return Promise.reject(claimConflictError())
       seenOverride = override
       return Promise.resolve({
         commandId: 'cmd-1', idempotencyKey: 'idem-1', node: 'media-garage', replay: false,
@@ -832,15 +863,15 @@ describe('Node detail · Cue catalog override', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy cue catalog' })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Deploy cue catalog' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy anyway' })).toBeInTheDocument())
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     fireEvent.click(screen.getByRole('button', { name: 'Deploy anyway' }))
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining(conflictDetail))
+    const dialog = await screen.findByRole('dialog', { name: /deploy anyway/i })
     expect(seenOverride).toBeUndefined()
 
-    confirmSpy.mockReturnValue(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Deploy anyway' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Deploy anyway' }))
     await waitFor(() => expect(seenOverride).toBe(true))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
 

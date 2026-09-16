@@ -11,6 +11,7 @@ export { BlankingPlate, RuledStrip, type Absence } from './StateBlocks'
 export { NotWired, NotWiredBanner } from './NotWired'
 export { Popover } from './Popover'
 export { Drawer } from './Drawer'
+export { ConfirmDialog } from './ConfirmDialog'
 export { RevisionHistory } from './RevisionHistory'
 export {
   ChromeBar,
