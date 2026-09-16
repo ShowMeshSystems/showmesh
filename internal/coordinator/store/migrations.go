@@ -140,6 +140,12 @@ var migrations = []migration{
 	// runs against a store already stamped at it.
 	{version: 34, fn: migrateV34AudioSettingsBackfillScheduledStartFields},
 	{version: 35, sql: schemaV35},
+	// v36: adds node_cue_catalog_override, the operator's own recorded
+	// acceptance of an H0.5 exclusive-claim conflict for one node's one
+	// catalog revision (node_cue_catalog_override.go's own doc comment).
+	// A pure addition, like schemaV17/schemaV25/schemaV33: no existing
+	// table is touched.
+	{version: 36, sql: schemaV36},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

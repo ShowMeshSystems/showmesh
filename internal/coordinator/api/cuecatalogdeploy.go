@@ -109,10 +109,12 @@ type cueCatalogDeployWireParams struct {
 }
 
 // cueCatalogDeployRequestBody is POST .../cue-catalog/deploy's optional
-// body: only an idempotency key, the same shape render.surface.clear/
-// restart's own RenderSurfaceRequest carries.
+// body. Override accepts the one refusal this route allows bypassing (an
+// H0.5 exclusive-claim conflict, see [dispatchCueCatalogDeploy]); false
+// when omitted.
 type cueCatalogDeployRequestBody struct {
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	Override       bool   `json:"override,omitempty"`
 }
 
 func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +139,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 	// field must never decode silently as "absent".
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be a JSON object matching {"idempotencyKey":string?}`))
+		writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be a JSON object matching {"idempotencyKey":string?,"override":boolean?}`))
 		return
 	}
 
@@ -181,7 +183,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		}
 	}
 
-	res := h.dispatchCueCatalogDeploy(ctx, now, nodeID, idempotencyKey, cueCatalogDeployIssuer{
+	res := h.dispatchCueCatalogDeploy(ctx, now, nodeID, idempotencyKey, body.Override, cueCatalogDeployIssuer{
 		PrincipalID: issuerID, PrincipalName: issuerName, Form: ac.result.Form, CredentialID: ac.result.CredentialID,
 	})
 	switch {
@@ -226,9 +228,21 @@ type dispatchCueCatalogDeployResult struct {
 // and handles idempotency-key replay before calling this) and the
 // automatic-deploy trigger (AutoDeployCueCatalog, cuecatalogautodeploy.go)
 // share this one path; neither dispatches cuecatalog.deploy any other way.
-func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, nodeID, idempotencyKey string, issuer cueCatalogDeployIssuer) dispatchCueCatalogDeployResult {
+//
+// override accepts an H0.5 exclusive-claim conflict: when true and that
+// conflict is the only refusal, this dispatches anyway and records the
+// acceptance via [store.Store.PutNodeCueCatalogOverride]. It never
+// bypasses any other refusal. AutoDeployCueCatalog always passes false.
+func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, nodeID, idempotencyKey string, override bool, issuer cueCatalogDeployIssuer) dispatchCueCatalogDeployResult {
 	if h.deps.AssetManifests == nil || h.deps.Commands == nil {
 		return dispatchCueCatalogDeployResult{Err: errors.New("no asset manifest store or command store is configured on this coordinator")}
+	}
+	// An override must always be attributed to a real operator, never a
+	// background principal; AutoDeployCueCatalog never sets override, so
+	// this only trips for a genuinely missing caller identity.
+	if override && (issuer.PrincipalID == "" || issuer.PrincipalID == renderIssuerPrincipalIDMissing) {
+		p := invalidParameterProblem("override requires a real, authenticated operator identity; none was resolved for this request")
+		return dispatchCueCatalogDeployResult{Problem: &p}
 	}
 
 	// The catalog is resolved by THIS coordinator, never accepted from the
@@ -248,14 +262,16 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 	}
 	// TRACK-H-cues-and-playlists.md section H5 build item 2's own ruling: a
 	// claim conflict is DATA on the resolved catalog (assetsync.Catalog.
-	// Conflicts), never an error out of ResolveCueCatalog — but deployment
-	// itself still refuses outright rather than pushing a catalog it knows
-	// two Cues cannot both safely execute. Named, operator-visible, and
-	// reachable through this API (and showmeshctl, which prints a Problem's
-	// Detail verbatim), not only a log line.
+	// Conflicts), never an error out of ResolveCueCatalog, but deployment
+	// still refuses outright unless override accepts the risk. Named and
+	// operator-visible, not only a log line.
+	var overriddenConditions []v1.CueCatalogOverriddenCondition
 	if len(catalog.Conflicts) > 0 {
-		p := cueCatalogClaimConflictProblem(nodeID, catalog.Conflicts)
-		return dispatchCueCatalogDeployResult{Problem: &p}
+		if !override {
+			p := cueCatalogClaimConflictProblem(nodeID, catalog.Conflicts)
+			return dispatchCueCatalogDeployResult{Problem: &p}
+		}
+		overriddenConditions = cueCatalogOverriddenConditions(catalog.Conflicts)
 	}
 
 	raw, err := json.Marshal(cueCatalogDeployWireParams{
@@ -321,7 +337,11 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 		return dispatchCueCatalogDeployResult{Err: fmt.Errorf("marshal cmd envelope: %w", err)}
 	}
 
-	h.writeCueCatalogDeployAudit(ctx, now, identity.AuditDispatch, issuer, nodeID, commandID, idempotencyKey, catalog, "")
+	dispatchNote := ""
+	if len(overriddenConditions) > 0 {
+		dispatchNote = fmt.Sprintf("dispatched with operator override of %d exclusive-claim conflict(s)", len(overriddenConditions))
+	}
+	h.writeCueCatalogDeployAudit(ctx, now, identity.AuditDispatch, issuer, nodeID, commandID, idempotencyKey, catalog, dispatchNote)
 
 	// From here on, every write is on bgCtx: the command is already
 	// durably recorded and about to be dispatched, and a caller walking
@@ -372,7 +392,8 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 			CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
 			Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
 			Outcome: mqttproto.OutcomeUnconfirmed, Reason: reason,
-			DispatchedAt: strPtr(formatTime(dispatchedAt)),
+			OverriddenConditions: overriddenConditions,
+			DispatchedAt:         strPtr(formatTime(dispatchedAt)),
 		}}
 	}
 
@@ -393,7 +414,10 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 	}
 
 	resolvedAt := h.now()
-	resultJSON, _ := json.Marshal(cueCatalogDeployResultPayload{Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: acknowledgedRevision})
+	resultJSON, _ := json.Marshal(cueCatalogDeployResultPayload{
+		Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: acknowledgedRevision,
+		OverriddenConditions: overriddenConditions,
+	})
 	_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 		DispatchedAt: &dispatchedAt, ResolvedAt: &resolvedAt, State: strPtr("resolved"),
 		ResultJSON: strPtr(string(resultJSON)), OutcomeState: strPtr(res.Outcome), OutcomeReason: strPtr(res.Reason),
@@ -414,6 +438,24 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 			NodeID: nodeID, Revision: acknowledgedRevision, ShowID: catalog.Show, Generation: catalog.Generation, AcknowledgedAt: resolvedAt,
 		}); err != nil {
 			h.logWarn("failed to record cue catalog acknowledgement after a confirmed deploy", "node", nodeID, "error", err)
+		}
+		// Recorded only once the node has confirmed acknowledgedRevision,
+		// and scoped to exactly that revision, not the one this dispatch
+		// merely sent. Best-effort, matching the ack write above.
+		if len(overriddenConditions) > 0 {
+			storedConflicts := make([]store.StoredCatalogConflict, 0, len(overriddenConditions))
+			for _, c := range overriddenConditions {
+				storedConflicts = append(storedConflicts, store.StoredCatalogConflict{CueA: c.CueA, CueB: c.CueB, Claim: c.Claim})
+			}
+			if err := h.deps.AssetManifests.PutNodeCueCatalogOverride(bgCtx, store.NodeCueCatalogOverrideRecord{
+				NodeID: nodeID, Revision: acknowledgedRevision, ShowID: catalog.Show, Generation: catalog.Generation,
+				Conflicts:                 storedConflicts,
+				OverriddenByPrincipalID:   issuer.PrincipalID,
+				OverriddenByPrincipalName: issuer.PrincipalName,
+				OverriddenAt:              resolvedAt,
+			}); err != nil {
+				h.logWarn("failed to record cue catalog deploy override after a confirmed deploy", "node", nodeID, "error", err)
+			}
 		}
 		// TRACK-H-cues-and-playlists.md section H5 build item 1: a node that just proved it holds the
 		// active Show's authorized Cue catalog is exactly the node this
@@ -440,8 +482,21 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 		CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
 		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
 		Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: acknowledgedRevision,
-		DispatchedAt: strPtr(formatTime(dispatchedAt)), ResolvedAt: &resolvedFmt,
+		OverriddenConditions: overriddenConditions,
+		DispatchedAt:         strPtr(formatTime(dispatchedAt)), ResolvedAt: &resolvedFmt,
 	}}
+}
+
+// cueCatalogOverriddenConditions projects conflicts into the wire shape
+// a successful override=true deploy response names.
+func cueCatalogOverriddenConditions(conflicts []assetsync.CatalogConflict) []v1.CueCatalogOverriddenCondition {
+	conds := make([]v1.CueCatalogOverriddenCondition, 0, len(conflicts))
+	for _, c := range conflicts {
+		conds = append(conds, v1.CueCatalogOverriddenCondition{
+			Kind: v1.CueCatalogOverrideKindExclusiveClaimConflict, CueA: c.CueA, CueB: c.CueB, Claim: c.Claim.String(),
+		})
+	}
+	return conds
 }
 
 // cueCatalogDeployRequestIdentity is the caller's own unresolved request
@@ -463,6 +518,8 @@ type cueCatalogDeployResultPayload struct {
 	Outcome              string `json:"outcome"`
 	Reason               string `json:"reason"`
 	AcknowledgedRevision string `json:"acknowledgedRevision,omitempty"`
+
+	OverriddenConditions []v1.CueCatalogOverriddenCondition `json:"overriddenConditions,omitempty"`
 }
 
 // cueCatalogDeployResultCorrelates mirrors audioResultCorrelates
@@ -592,7 +649,8 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 		CommandID: existing.ID, IdempotencyKey: existing.IdempotencyKey, Node: nodeID, Replay: true,
 		Show: reqID.Show, Generation: reqID.Generation, Revision: reqID.Revision,
 		Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: res.AcknowledgedRevision,
-		DispatchedAt: dispatchedAt, ResolvedAt: resolvedAt,
+		OverriddenConditions: res.OverriddenConditions,
+		DispatchedAt:         dispatchedAt, ResolvedAt: resolvedAt,
 	}, nil
 }
 

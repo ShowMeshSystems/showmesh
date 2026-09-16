@@ -983,8 +983,8 @@ export function getNodeCueCatalog(nodeId: string): Promise<SchemaCueCatalogRespo
   return store.getNodeCueCatalog(nodeId)
 }
 
-export function deployNodeCueCatalog(nodeId: string): Promise<CueCatalogDeployResult> {
-  return store.deployNodeCueCatalog(nodeId)
+export function deployNodeCueCatalog(nodeId: string, override?: boolean): Promise<CueCatalogDeployResult> {
+  return store.deployNodeCueCatalog(nodeId, override)
 }
 
 // Track F seam F2/F1: the night-session lifecycle controller and the

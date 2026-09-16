@@ -858,3 +858,158 @@ func TestCueCatalogDeployRefusesOnClaimConflict(t *testing.T) {
 		t.Fatalf("publish count = %d, want 0 (a conflicting catalog must never be dispatched)", pub.count())
 	}
 }
+
+// newCueCatalogClaimConflictFixture reuses
+// TestCueCatalogDeployRefusesOnClaimConflict's own conflict scenario so
+// the override tests below need not duplicate its setup.
+func newCueCatalogClaimConflictFixture(t *testing.T) (api *API, st *store.Store, pub *fakeAudioPublisher, token string) {
+	t.Helper()
+	api, st, pub, token = newCueCatalogDeployFixture(t)
+
+	putAudioNodeForTest(t, st, "audio-01")
+	mustDeclareNode(t, st, "audio-01")
+
+	mustPutCue(t, api, token, "cue-a", `{
+		"show": "halloween-2026", "name": "A",
+		"outputs": {"audio": {"asset": "a-audio", "startOffsetMillis": 0}}
+	}`)
+	mustPutCue(t, api, token, "cue-b", `{
+		"show": "halloween-2026", "name": "B",
+		"outputs": {"audio": {"asset": "b-audio", "startOffsetMillis": 0}}
+	}`)
+	putPlaylistForTest(t, st, "playlist-a", config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "playlist-a", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "11111111-1111-1111-1111-111111111111", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries:        []config.ShowPlaylistEntry{{ID: "cue-a-entry", Cue: "cue-a", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}}},
+	})
+	putPlaylistForTest(t, st, "playlist-b", config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "playlist-b", Runner: config.ShowPlaylistRunnerShowmeshAudio,
+		ShowmeshAudio: &config.ShowPlaylistShowmeshAudio{Repeat: config.ShowPlaylistShowmeshAudioRepeatNone},
+		Entries:       []config.ShowPlaylistEntry{{ID: "cue-b-entry", Cue: "cue-b"}},
+	})
+	mustPutShowActive(t, api, token, "halloween-2026")
+	return api, st, pub, token
+}
+
+// TestCueCatalogDeployOverrideSucceedsAndRecordsOverride is acceptance
+// criterion (a): override=true dispatches instead of refusing, and once
+// confirmed records the override scoped to the confirmed revision.
+func TestCueCatalogDeployOverrideSucceedsAndRecordsOverride(t *testing.T) {
+	api, st, pub, token := newCueCatalogClaimConflictFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	revision := resolvedCueCatalogRevision(t, api, "audio-01", auth)
+	observedAt := testNow
+	pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.cuecatalog.revision", Value: revision,
+			ObservedAt: &observedAt, CollectedAt: observedAt,
+		},
+	}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/audio-01/cue-catalog/deploy", `{"override":true}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST cue-catalog/deploy with override=true: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	assertMatchesSchema(t, newOpenAPICompiler(t), "CueCatalogDeployResponse", body)
+
+	var result struct {
+		Command struct {
+			Outcome              string `json:"outcome"`
+			Revision             string `json:"revision"`
+			AcknowledgedRevision string `json:"acknowledgedRevision"`
+			OverriddenConditions []struct {
+				Kind  string `json:"kind"`
+				CueA  string `json:"cueA"`
+				CueB  string `json:"cueB"`
+				Claim string `json:"claim"`
+			} `json:"overriddenConditions"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("decode deploy response: %v", err)
+	}
+	if result.Command.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("deploy outcome = %q, want confirmed; body: %s", result.Command.Outcome, body)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("publish count = %d, want 1 (override must still dispatch)", pub.count())
+	}
+	if len(result.Command.OverriddenConditions) != 1 {
+		t.Fatalf("overriddenConditions = %+v, want exactly 1", result.Command.OverriddenConditions)
+	}
+	cond := result.Command.OverriddenConditions[0]
+	if cond.Kind != v1.CueCatalogOverrideKindExclusiveClaimConflict {
+		t.Fatalf("overridden condition kind = %q, want %q", cond.Kind, v1.CueCatalogOverrideKindExclusiveClaimConflict)
+	}
+	if cond.CueA != "cue-a" || cond.CueB != "cue-b" {
+		t.Fatalf("overridden condition cues = %q/%q, want cue-a/cue-b", cond.CueA, cond.CueB)
+	}
+	if !strings.Contains(cond.Claim, "program-audio-route") {
+		t.Fatalf("overridden condition claim = %q, want it to name program-audio-route", cond.Claim)
+	}
+
+	rec, err := st.GetNodeCueCatalogOverride(context.Background(), "audio-01")
+	if err != nil {
+		t.Fatalf("GetNodeCueCatalogOverride: %v", err)
+	}
+	if rec.Revision != revision {
+		t.Fatalf("stored override revision = %q, want %q", rec.Revision, revision)
+	}
+	if rec.OverriddenByPrincipalName != "admin-1" {
+		t.Fatalf("stored override principal name = %q, want admin-1", rec.OverriddenByPrincipalName)
+	}
+	if rec.OverriddenByPrincipalID == "" || rec.OverriddenByPrincipalID == cueCatalogAutoDeploySystemPrincipalID {
+		t.Fatalf("stored override principal id = %q, want a real operator id (never blank or the system auto-deploy principal)", rec.OverriddenByPrincipalID)
+	}
+	if len(rec.Conflicts) != 1 || rec.Conflicts[0].CueA != "cue-a" || rec.Conflicts[0].CueB != "cue-b" {
+		t.Fatalf("stored override conflicts = %+v, want exactly one naming cue-a/cue-b", rec.Conflicts)
+	}
+}
+
+// TestCueCatalogDeployWithoutOverrideStillRefusesOnClaimConflict is
+// acceptance criterion (b): no override field still refuses 409 with
+// ProblemTypeCueCatalogClaimConflict and records nothing.
+func TestCueCatalogDeployWithoutOverrideStillRefusesOnClaimConflict(t *testing.T) {
+	api, st, pub, token := newCueCatalogClaimConflictFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/audio-01/cue-catalog/deploy", `{}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("deploy with a claim conflict and no override: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	var problem v1.Problem
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Type != ProblemTypeCueCatalogClaimConflict {
+		t.Fatalf("problem type = %q, want %q", problem.Type, ProblemTypeCueCatalogClaimConflict)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0", pub.count())
+	}
+	if _, err := st.GetNodeCueCatalogOverride(context.Background(), "audio-01"); !errors.Is(err, store.ErrNodeCueCatalogOverrideNotFound) {
+		t.Fatalf("GetNodeCueCatalogOverride after a plain refusal: err = %v, want ErrNodeCueCatalogOverrideNotFound", err)
+	}
+}
+
+// TestCueCatalogDeployOverrideDoesNotBypassNoActiveShow is acceptance
+// criterion (c): override=true bypasses only the exclusive-claim
+// refusal; no active show configured still refuses as it always has.
+func TestCueCatalogDeployOverrideDoesNotBypassNoActiveShow(t *testing.T) {
+	api, _, pub, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy", `{"override":true}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("deploy override=true with no active show: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (nothing should have been dispatched)", pub.count())
+	}
+}

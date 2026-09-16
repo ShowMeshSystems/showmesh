@@ -827,6 +827,18 @@ func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.
 		return "", "", "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+
+	// A recorded override is always written against the REAL active show's
+	// generation; the generation-0 `active` above is synthetic (this
+	// function's own doc comment) so its catalog.Revision can never equal
+	// a real override's stored revision. Resolved once, outside the loop.
+	realActive, realActiveErr := assetsync.ResolveActiveShow(ctx, st)
+	if realActiveErr != nil {
+		return "", "", "", fmt.Errorf("fppreconcile: resolve active show: %w", realActiveErr)
+	}
+	realActiveMatches := realActive.Configured && realActive.ShowID == p.Show
+
+	var warnings []string
 	for _, n := range nodes {
 		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
 		if err != nil {
@@ -838,9 +850,30 @@ func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.
 			}
 			return "", "", "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
 		}
-		if len(catalog.Conflicts) > 0 {
-			return ReadinessExclusiveClaimConflict, catalog.Conflicts[0].Detail(), "", nil
+		if len(catalog.Conflicts) == 0 {
+			continue
 		}
+		// A recorded acceptance downgrades this to a warning only when it
+		// covers n's currently resolved conflict(s) at the real required
+		// revision; anything else still fails readiness outright.
+		if realActiveMatches {
+			realCatalog, err := assetsync.ResolveCueCatalog(ctx, st, realActive, n.NodeID)
+			if err != nil {
+				return "", "", "", fmt.Errorf("fppreconcile: resolve real cue catalog for node %q: %w", n.NodeID, err)
+			}
+			covered, overrideRec, overrideErr := CueCatalogOverrideStatus(ctx, st, n.NodeID, realCatalog)
+			if overrideErr != nil {
+				return "", "", "", overrideErr
+			}
+			if covered {
+				warnings = append(warnings, CueCatalogOverrideWarning(n.NodeID, realCatalog, overrideRec))
+				continue
+			}
+		}
+		return ReadinessExclusiveClaimConflict, catalog.Conflicts[0].Detail(), "", nil
+	}
+	if len(warnings) > 0 {
+		return "", "", strings.Join(warnings, "; "), nil
 	}
 	return "", "", "", nil
 }

@@ -23,6 +23,8 @@ const stubs = vi.hoisted(() => ({
   startAudioAlignmentRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioAlignmentRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   stopAudioAlignmentRun: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getNodeCueCatalog: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  deployNodeCueCatalog: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -44,6 +46,8 @@ vi.mock('../api', async () => {
     startAudioAlignmentRun: (...args: never[]) => stubs.startAudioAlignmentRun(...args),
     getAudioAlignmentRun: (...args: never[]) => stubs.getAudioAlignmentRun(...args),
     stopAudioAlignmentRun: (...args: never[]) => stubs.stopAudioAlignmentRun(...args),
+    getNodeCueCatalog: (...args: never[]) => stubs.getNodeCueCatalog(...args),
+    deployNodeCueCatalog: (...args: never[]) => stubs.deployNodeCueCatalog(...args),
   }
 })
 
@@ -755,6 +759,88 @@ describe('Node detail · Drift recording', () => {
 
     const expectedStart = formatDateClock('2026-08-30T20:00:00Z')
     await waitFor(() => expect(screen.getByText(new RegExp(expectedStart!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument())
+  })
+})
+
+describe('Node detail · Cue catalog override', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    stubs.listShowSurfacesForNode = () => new Promise(() => {})
+    stubs.getShowSurface = () => new Promise(() => {})
+    stubs.getNodeAssetManifest = () => new Promise(() => {})
+    stubs.getNodeCueCatalog = () => new Promise(() => {})
+    stubs.deployNodeCueCatalog = () => new Promise(() => {})
+  })
+
+  function catalogResponse() {
+    return {
+      serverTime: '2026-08-30T21:07:00Z',
+      node: 'media-garage',
+      configured: true,
+      show: 'winter-ridge-2026',
+      generation: 3,
+      revision: 'rev-9',
+      entries: [],
+      acknowledgedStatus: 'catalog-current',
+    }
+  }
+
+  const conflictDetail =
+    'the Cue catalog resolved for node "media-garage" cannot be deployed: cues "cue-a" and "cue-b" both hold exclusive claim ' +
+    '"program-audio-route:media-garage:usb-interface"; a concurrent claim is refused, never silently preempted (H0.5). Fix the ' +
+    'authoring conflict, or resend with override: true to deploy anyway and accept the conflict.'
+
+  function claimConflictError() {
+    return new ApiError(conflictDetail, 409, 'https://showmesh.dev/problems/cue-catalog-claim-conflict')
+  }
+
+  // Acceptance: "Deploy anyway" appears only after the overridable 409,
+  // showing the real conflict text from that response.
+  it('shows "Deploy anyway" naming the real conflict after an overridable 409', async () => {
+    stubs.getNodeCueCatalog = () => Promise.resolve(catalogResponse())
+    stubs.deployNodeCueCatalog = () => Promise.reject(claimConflictError())
+
+    renderScreen([node()])
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy cue catalog' })).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Deploy anyway' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy cue catalog' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy anyway' })).toBeInTheDocument())
+    expect(screen.getByText(new RegExp('cue-a.*cue-b', 's'))).toBeInTheDocument()
+    expect(screen.getByText(new RegExp('program-audio-route:media-garage:usb-interface'))).toBeInTheDocument()
+  })
+
+  // Acceptance: "Deploy anyway" confirms before it re-issues the deploy
+  // with override=true.
+  it('re-issues the deploy with override=true only after the risk confirmation is accepted', async () => {
+    stubs.getNodeCueCatalog = () => Promise.resolve(catalogResponse())
+    let seenOverride: unknown
+    stubs.deployNodeCueCatalog = (_nodeId: string, override?: boolean) => {
+      if (seenOverride === undefined && override === undefined) return Promise.reject(claimConflictError())
+      seenOverride = override
+      return Promise.resolve({
+        commandId: 'cmd-1', idempotencyKey: 'idem-1', node: 'media-garage', replay: false,
+        show: 'winter-ridge-2026', generation: 3, revision: 'rev-9', outcome: 'confirmed',
+        acknowledgedRevision: 'rev-9', dispatchedAt: '2026-08-30T21:07:00Z', resolvedAt: '2026-08-30T21:07:01Z',
+      })
+    }
+
+    renderScreen([node()])
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy cue catalog' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy cue catalog' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deploy anyway' })).toBeInTheDocument())
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy anyway' }))
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining(conflictDetail))
+    expect(seenOverride).toBeUndefined()
+
+    confirmSpy.mockReturnValue(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy anyway' }))
+    await waitFor(() => expect(seenOverride).toBe(true))
   })
 })
 

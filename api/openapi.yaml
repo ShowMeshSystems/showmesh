@@ -8990,7 +8990,11 @@ paths:
         /nodes/{nodeId}/cue-catalog` and its own acknowledge route can
         report `catalog-current` from a real deployment. `400` when no
         `show.active` is configured (there is nothing to deploy); `404`
-        when `nodeId` does not name a declared node.
+        when `nodeId` does not name a declared node; `409`
+        (`cue-catalog-claim-conflict`) when the resolved catalog carries
+        an H0.5 exclusive-claim conflict, unless the request's own
+        `override: true` accepts it, in which case this deploys anyway and
+        the response's `overriddenConditions` names what was accepted.
       parameters:
         - name: nodeId
           in: path
@@ -14948,6 +14952,13 @@ components:
         already in progress), and a `commands` idempotency key reused
         against a different action, target, or (as of Step 8) normalized
         params (Step 7 seam C, extended by Step 8) - `detail` names which.
+        One is "cue-catalog-claim-conflict": `POST
+        /nodes/{nodeId}/cue-catalog/deploy` refused because the resolved
+        catalog carries an H0.5 exclusive-claim conflict - kept distinct
+        from `conflict` because a client (an operator UI's "Deploy
+        anyway" affordance) resends the identical request with `override:
+        true` to accept it and deploy anyway, the one refusal this route
+        allows bypassing.
         Two are Step 8's own additions, both scoped to
         `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current"
         (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the
@@ -15024,6 +15035,7 @@ components:
             - https://showmesh.dev/problems/too-many-requests
             - https://showmesh.dev/problems/credential-in-url
             - https://showmesh.dev/problems/conflict
+            - https://showmesh.dev/problems/cue-catalog-claim-conflict
             - https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current
             - https://showmesh.dev/problems/fpp-start-playlist-busy
             - https://showmesh.dev/problems/fpp-transition-gain-write-failed
@@ -19340,8 +19352,9 @@ components:
       type: object
       description: >-
         The body of POST /nodes/{nodeId}/cue-catalog/deploy. Carries only
-        an idempotency key - the catalog itself is always THIS
-        coordinator's own current resolution, never a request field.
+        an idempotency key and an override flag - the catalog itself is
+        always THIS coordinator's own current resolution, never a request
+        field.
       additionalProperties: false
       properties:
         idempotencyKey:
@@ -19350,6 +19363,19 @@ components:
             Optional; a fresh key is minted server-side when omitted. A
             replayed key dispatches nothing and returns the original
             command's own result, flagged `replay: true`.
+        override:
+          type: boolean
+          default: false
+          description: >-
+            An operator's explicit acceptance of an H0.5 exclusive-claim
+            conflict on the resolved catalog: when true AND the only
+            refusal this deploy would otherwise give is that conflict, it
+            deploys anyway instead of returning `409`
+            (`cue-catalog-claim-conflict`), and records the acceptance
+            scoped to exactly the confirmed revision - a later revision
+            requires overriding again. It never bypasses any other
+            refusal (no active show configured, or a genuine resolution
+            error).
     CueCatalogDeployResponse:
       type: object
       description: The body of a successful (200) response from the deploy endpoint.
@@ -19410,6 +19436,15 @@ components:
           description: >-
             The revision the node reported holding after this deploy.
             Present only when outcome is "confirmed".
+        overriddenConditions:
+          type: array
+          description: >-
+            Non-empty exactly when this dispatch bypassed a refusal
+            because the request carried `override: true` - every
+            condition it accepted, so the operator sees exactly what they
+            overrode.
+          items:
+            $ref: "#/components/schemas/CueCatalogOverriddenCondition"
         dispatchedAt:
           type: [string, "null"]
           format: date-time
@@ -19419,6 +19454,26 @@ components:
         resolvedAt:
           type: [string, "null"]
           format: date-time
+    CueCatalogOverriddenCondition:
+      type: object
+      description: >-
+        One refusal condition an operator explicitly accepted via
+        `override: true`. `kind` is presently always
+        `exclusive-claim-conflict` - the only overridable refusal this
+        route wires today.
+      required: [kind, cueA, cueB, claim]
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: ["exclusive-claim-conflict"]
+        cueA:
+          type: string
+        cueB:
+          type: string
+        claim:
+          type: string
+          description: The exact H0.5 claim string both Cues held (config.ShowCueClaim.String()).
     UnusedAsset:
       type: object
       description: >-

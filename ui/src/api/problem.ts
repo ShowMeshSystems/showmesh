@@ -36,6 +36,10 @@ export const PROBLEM_TYPE = {
   // This entry exists so PROBLEM_TYPE stays what its own doc comment
   // claims: every class this coordinator currently produces.
   conflict: 'https://showmesh.dev/problems/conflict',
+  // The one 409 `POST .../cue-catalog/deploy` allows bypassing by
+  // resending with `override: true`. NodeDetail.tsx dispatches its
+  // "Deploy anyway" affordance on this, not on `detail` prose.
+  cueCatalogClaimConflict: 'https://showmesh.dev/problems/cue-catalog-claim-conflict',
   // Step 8's own three additions, all scoped to
   // POST /fpp/{instanceId}/commands. fppCommandRefusedAuditUnavailable
   // (503, ADR-024 decision 11's fail-closed default) has no dedicated

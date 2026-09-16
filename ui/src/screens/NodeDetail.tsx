@@ -18,6 +18,8 @@ import {
   runDiscovery,
   startAudioAlignmentRun,
   stopAudioAlignmentRun,
+  ApiError,
+  PROBLEM_TYPE,
   type AudioAlignmentRun,
   type AudioAlignmentRunSummary,
   type Capability,
@@ -252,13 +254,35 @@ function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; su
 function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
   const [catalog, setCatalog] = useState<CueCatalogResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // conflictDetail is the overridable 409's own `detail` text (the real
+  // claim conflict, never invented), set only while a deploy is refused on it.
+  const [conflictDetail, setConflictDetail] = useState<string | null>(null)
   const [result, setResult] = useState<CueCatalogDeployResult | null>(null)
   const [deploying, setDeploying] = useState(false)
   const reload = () => getNodeCueCatalog(nodeId).then(setCatalog).catch((err: unknown) => setError(describeApiError(err)))
   useEffect(() => { reload() }, [nodeId])
-  const deploy = () => { setDeploying(true); setError(null); deployNodeCueCatalog(nodeId).then((response) => { setResult(response); reload() }).catch((err: unknown) => setError(describeApiError(err))).finally(() => setDeploying(false)) }
+  const deploy = (override?: boolean) => {
+    setDeploying(true)
+    setError(null)
+    setConflictDetail(null)
+    deployNodeCueCatalog(nodeId, override)
+      .then((response) => { setResult(response); reload() })
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.cueCatalogClaimConflict) {
+          setConflictDetail(err.message)
+          return
+        }
+        setError(describeApiError(err))
+      })
+      .finally(() => setDeploying(false))
+  }
+  const deployAnyway = () => {
+    if (conflictDetail === null) return
+    if (!window.confirm(`Deploy anyway despite this conflict?\n\n${conflictDetail}\n\nThis records you as having accepted it for the deployed revision.`)) return
+    deploy(true)
+  }
   const label = result === null || result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)
-  return <div className="sm-stack-3"><h3 className="sm-subsection__title">Cue catalog</h3>{catalog === null ? <RuledStrip absence={error === null ? 'loading' : 'failed'} label={error === null ? 'Reading' : 'Read failed'} fact={error ?? 'Reading this node’s resolved cue catalog.'} /> : <><p className="sm-small sm-muted">{catalog.configured ? `${catalog.entries.length} entries · ${catalog.acknowledgedStatus.replace('catalog-', '').replace('-', ' ')}` : 'No active-show cue catalog is configured.'}</p><Button disabled={!gate.allowed || deploying || !catalog.configured} title={gate.allowed ? undefined : gate.reason} onClick={deploy}>{deploying ? 'Deploying…' : 'Deploy cue catalog'}</Button></>}{result !== null && <div className="sm-outcome"><StatusPair tone={result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : result.outcome === '' ? 'pending' : 'bad'} label={label} /><p className="sm-outcome__detail">{result.reason ?? `Catalog revision ${result.revision} was dispatched.`}</p></div>}</div>
+  return <div className="sm-stack-3"><h3 className="sm-subsection__title">Cue catalog</h3>{catalog === null ? <RuledStrip absence={error === null ? 'loading' : 'failed'} label={error === null ? 'Reading' : 'Read failed'} fact={error ?? 'Reading this node’s resolved cue catalog.'} /> : <><p className="sm-small sm-muted">{catalog.configured ? `${catalog.entries.length} entries · ${catalog.acknowledgedStatus.replace('catalog-', '').replace('-', ' ')}` : 'No active-show cue catalog is configured.'}</p><ButtonRow><Button disabled={!gate.allowed || deploying || !catalog.configured} title={gate.allowed ? undefined : gate.reason} onClick={() => deploy()}>{deploying ? 'Deploying…' : 'Deploy cue catalog'}</Button>{conflictDetail !== null && <Button variant="danger" disabled={!gate.allowed || deploying} title={gate.allowed ? undefined : gate.reason} onClick={deployAnyway}>Deploy anyway</Button>}</ButtonRow></>}{conflictDetail !== null && <p className="sm-outcome__detail">Refused: {conflictDetail}</p>}{result !== null && <div className="sm-outcome"><StatusPair tone={result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : result.outcome === '' ? 'pending' : 'bad'} label={label} /><p className="sm-outcome__detail">{result.reason ?? `Catalog revision ${result.revision} was dispatched.`}</p>{result.overriddenConditions !== undefined && result.overriddenConditions.length > 0 && <p className="sm-outcome__detail">Deployed with operator override: {result.overriddenConditions.map((c) => c.claim).join('; ')}</p>}</div>}</div>
 }
 
 type RunsState = { kind: 'loading' } | { kind: 'loaded'; runs: AudioAlignmentRun[] } | { kind: 'failed'; reason: string }

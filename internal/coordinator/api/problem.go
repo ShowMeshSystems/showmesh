@@ -134,6 +134,12 @@ const (
 	// rule out. See [fppStartPlaylistBusyProblem].
 	ProblemTypeFPPStartPlaylistBusy = problemBaseURI + "fpp-start-playlist-busy"
 
+	// ProblemTypeCueCatalogClaimConflict is [cueCatalogClaimConflictProblem]'s
+	// own type: an H0.5 exclusive-claim conflict on the resolved catalog.
+	// Split out of [ProblemTypeConflict] so a client can resend with
+	// `override: true` rather than parsing `detail` prose to tell it apart.
+	ProblemTypeCueCatalogClaimConflict = problemBaseURI + "cue-catalog-claim-conflict"
+
 	// ProblemTypeUnsupportedObservationSchemaVersion is FPP-PLUGIN-COORDINATOR-CONTRACTS.md's own §1.6
 	// step 5 refusal: POST /api/v1/integrations/fpp/playlist-entry-observations'
 	// schemaVersion is not 1. Distinct from [ProblemTypeInvalidParameter]
@@ -556,19 +562,21 @@ func principalLockoutProblem(detail string) v1.Problem {
 // conflict ([assetsync.Catalog.Conflicts]). Every conflict is named, not
 // only the first, so an operator sees the whole readiness problem in one
 // response rather than fixing one collision at a time by repeated deploy
-// attempts.
+// attempts. Its own [ProblemTypeCueCatalogClaimConflict] type lets a
+// caller resend with `override: true` to deploy anyway.
 func cueCatalogClaimConflictProblem(nodeID string, conflicts []assetsync.CatalogConflict) v1.Problem {
 	details := make([]string, 0, len(conflicts))
 	for _, c := range conflicts {
 		details = append(details, c.Detail())
 	}
 	return v1.Problem{
-		Type:   ProblemTypeConflict,
+		Type:   ProblemTypeCueCatalogClaimConflict,
 		Title:  "Cue catalog deploy refused: conflicting exclusive claims",
 		Status: http.StatusConflict,
 		Detail: fmt.Sprintf(
 			"the Cue catalog resolved for node %q cannot be deployed: %s. Fix the authoring conflict (change one "+
-				"Cue's outputs, or the Playlists that reference it) and retry.",
+				"Cue's outputs, or the Playlists that reference it), or resend with override: true to deploy anyway "+
+				"and accept the conflict.",
 			nodeID, strings.Join(details, "; ")),
 	}
 }

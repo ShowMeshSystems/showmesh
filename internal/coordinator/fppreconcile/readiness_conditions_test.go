@@ -232,6 +232,125 @@ func TestPlaylistReadinessExclusiveClaimConflict(t *testing.T) {
 	}
 }
 
+// TestPlaylistReadinessExclusiveClaimConflictOverriddenWarnsInsteadOfFailing:
+// a recorded operator acceptance downgrades this condition from
+// Ready=false to a named warning, for exactly the revision it names.
+func TestPlaylistReadinessExclusiveClaimConflictOverriddenWarnsInsteadOfFailing(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+
+	hash := hash64("a1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putCueWithAudio(t, st, "cue-1", "show-1")
+	putCueWithAudio(t, st, "cue-2", "show-1")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putPlaylist(t, st, "playlist-1", p)
+
+	p2 := config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Second", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Second", PlaylistHash: hash64("a2")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-2", Cue: "cue-2",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	putPlaylist(t, st, "playlist-2", p2)
+
+	ctx := context.Background()
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil || !active.Configured {
+		t.Fatalf("ResolveActiveShow: configured=%v err=%v", active.Configured, err)
+	}
+	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "node-1")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	if len(catalog.Conflicts) != 1 {
+		t.Fatalf("catalog.Conflicts = %+v, want exactly 1 (test fixture setup)", catalog.Conflicts)
+	}
+	if err := st.PutNodeCueCatalogOverride(ctx, store.NodeCueCatalogOverrideRecord{
+		NodeID: "node-1", Revision: catalog.Revision, ShowID: "show-1", Generation: active.Generation,
+		Conflicts: []store.StoredCatalogConflict{{
+			CueA: catalog.Conflicts[0].CueA, CueB: catalog.Conflicts[0].CueB, Claim: catalog.Conflicts[0].Claim.String(),
+		}},
+		OverriddenByPrincipalID: "admin-1", OverriddenByPrincipalName: "Admin One",
+	}); err != nil {
+		t.Fatalf("PutNodeCueCatalogOverride: %v", err)
+	}
+	// An overridden deploy still records an ack like an ordinary one;
+	// seeded here so condition 9 (node-catalog-stale) does not also fail.
+	if err := st.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
+		NodeID: "node-1", Revision: catalog.Revision, ShowID: "show-1", Generation: active.Generation,
+	}); err != nil {
+		t.Fatalf("PutNodeCueCatalogAck: %v", err)
+	}
+
+	report, err := PlaylistReadiness(ctx, st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("Ready = false (FailingCondition %q: %s), want true: an overridden conflict must warn, not fail", report.FailingCondition, report.Reason)
+	}
+	if !containsAll(report.Warning, "node-1", "operator override", "cue-1", "cue-2", "program-audio-route:node-1:usb-interface") {
+		t.Fatalf("Warning = %q, want it to name node-1, the operator override, both cues, and the exact claim", report.Warning)
+	}
+}
+
+// TestPlaylistReadinessExclusiveClaimConflictOverrideForDifferentRevisionStillFails:
+// an override naming a different revision must not suppress a current conflict.
+func TestPlaylistReadinessExclusiveClaimConflictOverrideForDifferentRevisionStillFails(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+
+	hash := hash64("a1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putCueWithAudio(t, st, "cue-1", "show-1")
+	putCueWithAudio(t, st, "cue-2", "show-1")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putPlaylist(t, st, "playlist-1", p)
+
+	p2 := config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Second", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Second", PlaylistHash: hash64("a2")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-2", Cue: "cue-2",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	putPlaylist(t, st, "playlist-2", p2)
+
+	ctx := context.Background()
+	// Recorded against a stale revision from before the conflicting Cues
+	// were authored, never the one this catalog now resolves to.
+	if err := st.PutNodeCueCatalogOverride(ctx, store.NodeCueCatalogOverrideRecord{
+		NodeID: "node-1", Revision: "a-prior-unrelated-revision", ShowID: "show-1", Generation: 1,
+		Conflicts:               []store.StoredCatalogConflict{{CueA: "cue-1", CueB: "cue-2", Claim: "program-audio-route:node-1:usb-interface"}},
+		OverriddenByPrincipalID: "admin-1", OverriddenByPrincipalName: "Admin One",
+	}); err != nil {
+		t.Fatalf("PutNodeCueCatalogOverride: %v", err)
+	}
+
+	report, err := PlaylistReadiness(ctx, st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: the recorded override names a different revision than the one currently resolved")
+	}
+	if report.FailingCondition != ReadinessExclusiveClaimConflict {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessExclusiveClaimConflict)
+	}
+}
+
 // TestPlaylistReadinessExclusiveClaimConflictExemptedWithinOnePlaylist
 // proves two Cues of the SAME Playlist (never concurrently active with
 // each other) do not falsely collide -- assetsync's own sameSinglePlaylist

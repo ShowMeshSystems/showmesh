@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +34,69 @@ func TestCmdCueCatalogDeployUsageNamesTheEnforcedScope(t *testing.T) {
 	if strings.Contains(stderr.String(), "asset:write") {
 		t.Errorf("usage output wrongly claims asset:write:\n%s", stderr.String())
 	}
+}
+
+// cueCatalogDeployConfirmedResponseBody is a successful deploy response
+// carrying overriddenConditions, the shape a real override=true dispatch
+// returns.
+const cueCatalogDeployConfirmedResponseBody = `{
+	"serverTime":"2026-08-16T21:00:00Z",
+	"command":{
+		"commandId":"cmd-1",
+		"idempotencyKey":"idem-1",
+		"node":"node-1",
+		"replay":false,
+		"show":"halloween-2026",
+		"generation":1,
+		"revision":"rev-1",
+		"outcome":"confirmed",
+		"acknowledgedRevision":"rev-1",
+		"overriddenConditions":[
+			{"kind":"exclusive-claim-conflict","cueA":"cue-a","cueB":"cue-b","claim":"program-audio-route:node-1:usb-interface"}
+		],
+		"dispatchedAt":"2026-08-16T21:00:00Z",
+		"resolvedAt":"2026-08-16T21:00:00Z"
+	}
+}`
+
+// TestCmdCueCatalogDeployOverrideSetsRequestField is acceptance
+// criterion (e): the --override flag sets the API request body's own
+// override field, and its absence leaves the field false/omitted.
+func TestCmdCueCatalogDeployOverrideSetsRequestField(t *testing.T) {
+	var capturedBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		capturedBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, cueCatalogDeployConfirmedResponseBody)
+	}))
+	defer ts.Close()
+
+	t.Run("with --override", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cmdCueCatalog([]string{"deploy", "--server", ts.URL, "--override", "node-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+		}
+		if !strings.Contains(capturedBody, `"override":true`) {
+			t.Errorf("request body = %q, want override:true", capturedBody)
+		}
+		if !strings.Contains(stdout.String(), "cue-a") || !strings.Contains(stdout.String(), "cue-b") {
+			t.Errorf("stdout = %q, want it to report the overridden conditions", stdout.String())
+		}
+	})
+
+	t.Run("without --override", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cmdCueCatalog([]string{"deploy", "--server", ts.URL, "node-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+		}
+		if strings.Contains(capturedBody, `"override":true`) {
+			t.Errorf("request body = %q, want no override:true without the flag", capturedBody)
+		}
+	})
 }
 
 // cueCatalogGetResponseBody is a GET .../cue-catalog body carrying all

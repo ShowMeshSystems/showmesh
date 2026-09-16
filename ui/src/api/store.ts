@@ -1802,11 +1802,17 @@ export class ApiStore {
     }
   }
 
-  /** `POST /nodes/{nodeId}/cue-catalog/deploy`. Requires cuecatalog:deploy (admin only). */
-  async deployNodeCueCatalog(nodeId: string): Promise<CueCatalogDeployResult> {
+  /**
+   * `POST /nodes/{nodeId}/cue-catalog/deploy`. Requires cuecatalog:deploy
+   * (admin only). `override` is an operator's explicit acceptance of an
+   * H0.5 exclusive-claim conflict (api/openapi.yaml's
+   * `CueCatalogDeployRequest.override`); omitted (false) for an ordinary
+   * deploy attempt.
+   */
+  async deployNodeCueCatalog(nodeId: string, override?: boolean): Promise<CueCatalogDeployResult> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaCueCatalogDeployRequest = { idempotencyKey: randomUUIDv4() }
+      const body: SchemaCueCatalogDeployRequest = { idempotencyKey: randomUUIDv4(), ...(override !== undefined && { override }) }
       const resp = await this.client.postJson<SchemaCueCatalogDeployResponse>(
         `/nodes/${encodeURIComponent(nodeId)}/cue-catalog/deploy`,
         body,
