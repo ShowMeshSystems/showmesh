@@ -7,6 +7,7 @@ import { CSRFRejectedError, TooManyRequestsError } from '../api'
 import type { Model, SessionResponse } from '../api'
 import { clearStoredToken, setStoredToken } from '../api/token'
 import { initialModel } from '../api/domain'
+import { makeCurrentRun, makeCurrentRuns, makeEvidence, makeFPPInstance } from '../api/test-support/fixtures'
 import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
 import { BootstrapBand, SignedOutBand, useSignedOutBand } from './SessionBand'
@@ -287,6 +288,65 @@ describe('app shell', () => {
       expect(screen.getAllByText(state.now).length).toBeGreaterThan(0)
       expect(screen.getAllByText(state.who).length).toBeGreaterThan(0)
     }
+  })
+
+  describe('the chrome bar now-playing name', () => {
+    it('shows the fpp sequence name from observations, not the itemId hash, when the runner is fpp', () => {
+      renderShell({
+        session: session({ authenticated: true }),
+        fpp: [
+          makeFPPInstance('fpp-main', {
+            observations: [makeEvidence({ signal: 'fpp.sequence.name', value: 'Neverender 2026 MH Test.fseq' })],
+          }),
+        ],
+        currentRuns: makeCurrentRuns({
+          runs: [
+            makeCurrentRun({
+              runner: 'fpp',
+              playback: {
+                state: 'playing',
+                reason: 'current item is playing',
+                itemId: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+                itemIndex: 2,
+                positionMs: 1200,
+                media: '',
+                evidence: [],
+              },
+            }),
+          ],
+        }),
+      })
+
+      expect(screen.getByText('Neverender 2026 MH Test.fseq')).toBeInTheDocument()
+      expect(screen.queryByText('a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2')).not.toBeInTheDocument()
+    })
+
+    it('falls back to the itemId hash for an fpp run when no name signal is observed', () => {
+      renderShell({
+        session: session({ authenticated: true }),
+        fpp: [makeFPPInstance('fpp-main', { observations: [] })],
+        currentRuns: makeCurrentRuns({
+          runs: [
+            makeCurrentRun({
+              runner: 'fpp',
+              playback: {
+                state: 'playing',
+                reason: 'current item is playing',
+                itemId: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+                itemIndex: 2,
+                positionMs: 1200,
+                media: '',
+                evidence: [],
+              },
+            }),
+          ],
+        }),
+      })
+
+      const item = screen.getByText('a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2')
+      expect(item).toBeInTheDocument()
+      expect(item).toHaveClass('sm-truncate')
+    })
   })
 
   it('maps an old address to its new home instead of redirecting', () => {

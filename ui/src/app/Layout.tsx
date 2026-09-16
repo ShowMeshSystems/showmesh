@@ -39,6 +39,7 @@ import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from '../screens/StaleWrite'
 import { liveCycle } from '../screens/settingsModel'
 import { fppElapsedFraction } from '../screens/liveControlModel'
+import { nowPlaying as fppNowPlaying } from '../screens/showNightModel'
 import { useModelContext } from './ModelContext'
 import { BootstrapBand, BootstrapPlate, ConnectingBand, SignedOutBand, SignedOutPlate, SignOutControl, useSignedOutBand } from './SessionBand'
 
@@ -100,7 +101,11 @@ function NowPlaying({ model, signInKind }: { model: Model; signInKind: SignInSta
       </>
     )
   }
-  const item = run.playback.media !== '' ? run.playback.media : run.playback.itemId
+  // An fpp run's human name comes from observation signals (Live Control and
+  // Show Night read the same way); run.playback.media is empty for it.
+  const name =
+    run.runner === 'fpp' ? (fppNowPlaying(model).state?.media ?? null) : run.playback.media !== '' ? run.playback.media : null
+  const item = name ?? run.playback.itemId
   return (
     <>
       <span className="sm-meta sm-faint">Now</span>
