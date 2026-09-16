@@ -5961,7 +5961,7 @@ export interface components {
         ConfigShowCueRenderOutput: {
             sequence: string;
         };
-        /** @description show.cue.outputs.audio (Track H seam H1). targets (ADR-049, superseding ADR-045's single "target") is a list of target audio.node ids: the Cue's audio plays on every listed node. An absent or empty list resolves later to the installation's single program+ltc audio.node, the pre-ADR-045 behavior. Each id must name an existing audio.node object and a repeated id is refused — both enforced server-side. The deprecated singular "target" is still accepted as a one-element form of targets; declaring both target and targets on one output is refused, naming both keys. */
+        /** @description show.cue.outputs.audio (Track H seam H1). targets (ADR-049, superseding ADR-045's single "target") is a list of target audio.node ids: the Cue's audio plays on every listed node. An absent or empty list resolves later to the installation's single program+ltc audio.node, the pre-ADR-045 behavior. Each id must name an existing audio.node object, and a repeated id is refused; both enforced server-side. The deprecated singular "target" is still accepted as a one-element form of targets; declaring both target and targets on one output is refused, naming both keys. */
         ConfigShowCueAudioOutput: {
             asset: string;
             startOffsetMillis: number;

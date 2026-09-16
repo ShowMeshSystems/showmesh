@@ -131,6 +131,29 @@ func TestAudioTargetReadinessPassesTheReferenceInstallation(t *testing.T) {
 	}
 }
 
+// TestAudioTargetReadinessExplicitEmptyTargetsResolvesToProgramLTCNode is
+// TestAudioTargetReadinessPassesTheReferenceInstallation's own proof that
+// an explicit "targets": [] on a two-node installation resolves to the
+// sole program+ltc node exactly like an absent targets list does, rather
+// than being read as "every node" or "no node".
+func TestAudioTargetReadinessExplicitEmptyTargetsResolvesToProgramLTCNode(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putAudioNode(t, st, "m4")
+	putProgramOnlyAudioNode(t, st, "pi")
+	putCueWithOutputs(t, st, "cue-1", "show-1", config.ShowCueOutputs{
+		Audio: &config.ShowCueAudioOutput{Asset: "a", Targets: []string{}},
+	})
+
+	cond, reason, err := audioTargetReadiness(context.Background(), st, nil, playlistWithCue("show-1", "cue-1"))
+	if err != nil {
+		t.Fatalf("audioTargetReadiness: %v", err)
+	}
+	if cond != "" {
+		t.Fatalf("condition = %q (%s), want ready", cond, reason)
+	}
+}
+
 // TestAudioTargetReadinessIgnoresACueWithNoAudioOutputs proves a
 // render-only Show is never failed by an audio condition.
 func TestAudioTargetReadinessIgnoresACueWithNoAudioOutputs(t *testing.T) {
