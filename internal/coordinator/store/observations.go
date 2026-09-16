@@ -306,6 +306,47 @@ func (s *Store) ReplaceObservations(ctx context.Context, observations []observat
 	return nil
 }
 
+// DeleteObservationsForResource removes every stored observation for
+// (resource_kind, resource_id), regardless of source or signal. Unlike
+// ReplaceObservations' prune-on-delivery, this is for a resource a caller
+// knows has ended with no freshly-delivered observation left to prune by.
+func (s *Store) DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id string) error {
+	guardNotInTx(ctx, "Store.DeleteObservationsForResource")
+	_, err := s.db.ExecContext(ctx, `DELETE FROM observations WHERE resource_kind = ? AND resource_id = ?`, string(kind), id)
+	if err != nil {
+		return fmt.Errorf("store: delete observations for %s/%s: %w", kind, id, err)
+	}
+	return nil
+}
+
+// DeleteOrphanedObservations removes every stored observation of kind whose
+// resource_id is not in liveIDs, and reports how many rows it removed. An
+// empty liveIDs deletes every row of kind.
+func (s *Store) DeleteOrphanedObservations(ctx context.Context, kind observation.ResourceKind, liveIDs map[string]struct{}) (int64, error) {
+	guardNotInTx(ctx, "Store.DeleteOrphanedObservations")
+
+	query := `DELETE FROM observations WHERE resource_kind = ?`
+	args := []any{string(kind)}
+	if len(liveIDs) > 0 {
+		placeholders := make([]string, 0, len(liveIDs))
+		for id := range liveIDs {
+			placeholders = append(placeholders, "?")
+			args = append(args, id)
+		}
+		query += fmt.Sprintf(" AND resource_id NOT IN (%s)", strings.Join(placeholders, ","))
+	}
+
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete orphaned %s observations: %w", kind, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: delete orphaned %s observations: %w", kind, err)
+	}
+	return n, nil
+}
+
 // ObservationFilter narrows [Store.ListObservations]. Every field is
 // optional (empty means "match any"); a zero-value ObservationFilter
 // matches every stored observation.

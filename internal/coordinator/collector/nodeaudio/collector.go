@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
@@ -196,37 +198,114 @@ func ltcFrameRateAbsentReason(generatorState string) string {
 // assertion.
 var _ collector.Collector = (*Collector)(nil)
 
+// SessionObservationDeleter is nodeaudio's own view onto *store.Store's
+// deletion surface for audio_session rows Poll already knows are gone.
+// *store.Store satisfies this directly, the same live-wiring precedent
+// [ClockDomainSource] already uses.
+type SessionObservationDeleter interface {
+	DeleteObservationsForResource(ctx context.Context, kind observation.ResourceKind, id string) error
+	DeleteOrphanedObservations(ctx context.Context, kind observation.ResourceKind, liveIDs map[string]struct{}) (int64, error)
+}
+
 // Collector renders [Store]'s current push cache into observations on a
 // collector.Runner's own cadence. The zero value is not usable; construct
 // with [New].
 type Collector struct {
-	store *Store
+	store   *Store
+	deleter SessionObservationDeleter
+
+	mu    sync.Mutex
+	known map[string]map[string]struct{} // nodeID -> session ids named by its last delivery
 }
 
-// New builds a Collector reading from store.
-func New(store *Store) *Collector {
-	return &Collector{store: store}
+// Option configures a [Collector] at construction. See [WithSessionDeleter].
+type Option func(*Collector)
+
+// WithSessionDeleter wires d as where Poll retires a session's observations
+// once it drops out of its node's report, and sweeps any audio_session row
+// no node currently reports. Omitting this leaves dead sessions
+// accumulating exactly as before this option existed.
+func WithSessionDeleter(d SessionObservationDeleter) Option {
+	return func(c *Collector) { c.deleter = d }
+}
+
+// New builds a Collector reading from store, applying opts in order.
+func New(store *Store, opts ...Option) *Collector {
+	c := &Collector{store: store, known: make(map[string]map[string]struct{})}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // ID returns [SourceName].
 func (c *Collector) ID() string { return SourceName }
 
-// Poll renders every node's currently stored report into observations. It
-// never touches the network, so it always returns complete=true — matching
-// noderender.Collector.Poll and fppmqtt.Collector.Poll.
-//
-// Unlike noderender, this package has no per-item list to diff against a
-// previous poll (engine/device/program/ltc are fixed, one-per-node
-// signals, never a dynamic set like surfaces), so it needs no dropped-item
-// absence bookkeeping.
+// Poll renders every node's currently stored report into observations, then
+// retires audio_session rows this poll knows are gone. A session present in
+// a node's PREVIOUS report but absent from its current one is deleted
+// outright, never restated as a single absence row the way noderender
+// retires a dropped surface, because a session ends and a new one starts
+// far more often than any resource that pattern was built for. A sweep
+// additionally removes any audio_session row no node currently reports at
+// all, catching a poll it was not running to see the drop of, or a row
+// stranded before this deletion existed. It never touches the network, so
+// it always returns complete=true, matching noderender.Collector.Poll and
+// fppmqtt.Collector.Poll.
 func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) {
 	snap := c.store.snapshot()
 	var obs []observation.Observation
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	liveIDs := make(map[string]struct{})
 	for nodeID, rep := range snap {
 		obs = append(obs, nodeObservations(ctx, nodeID, rep, c.store.clockSrc)...)
 		obs = append(obs, sessionObservations(nodeID, rep)...)
+
+		cur := make(map[string]struct{}, len(rep.payload.Sessions))
+		for _, sess := range rep.payload.Sessions {
+			cur[sess.SessionID] = struct{}{}
+			liveIDs[sess.SessionID] = struct{}{}
+		}
+		c.retireDroppedSessions(ctx, nodeID, cur)
+		c.known[nodeID] = cur
 	}
+
+	c.sweepOrphanedSessions(ctx, liveIDs)
+
 	return obs, true
+}
+
+// retireDroppedSessions deletes every audio_session row nodeID reported on
+// its LAST poll but not this one (cur). A no-op if no
+// [SessionObservationDeleter] is wired in.
+func (c *Collector) retireDroppedSessions(ctx context.Context, nodeID string, cur map[string]struct{}) {
+	if c.deleter == nil {
+		return
+	}
+	for id := range c.known[nodeID] {
+		if _, stillPresent := cur[id]; stillPresent {
+			continue
+		}
+		if err := c.deleter.DeleteObservationsForResource(ctx, observation.ResourceAudioSession, id); err != nil {
+			slog.Default().Error("nodeaudio: failed to retire a dropped session's observations",
+				"node_id", nodeID, "session_id", id, "error", err)
+		}
+	}
+}
+
+// sweepOrphanedSessions removes every stored audio_session row whose id is
+// not in liveIDs, the union of every session every node currently reports.
+// A no-op if no [SessionObservationDeleter] is wired in.
+func (c *Collector) sweepOrphanedSessions(ctx context.Context, liveIDs map[string]struct{}) {
+	if c.deleter == nil {
+		return
+	}
+	if _, err := c.deleter.DeleteOrphanedObservations(ctx, observation.ResourceAudioSession, liveIDs); err != nil {
+		slog.Default().Error("nodeaudio: failed to sweep orphaned audio_session observations", "error", err)
+	}
 }
 
 // NodeAudioObservations returns every node.audio.* observation this

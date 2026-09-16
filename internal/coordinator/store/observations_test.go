@@ -410,3 +410,95 @@ func TestListObservationsFilters(t *testing.T) {
 		t.Errorf("list by signal = %+v, want exactly node-a's observation", bySignal)
 	}
 }
+
+// TestDeleteObservationsForResourceRemovesEveryRow proves the method leaves
+// ZERO rows behind for the targeted resource, across multiple signals and
+// sources, while leaving an unrelated resource untouched.
+func TestDeleteObservationsForResourceRemovesEveryRow(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	at := mustTime(t, "2026-08-10T12:00:00Z")
+
+	dead := observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: "sess-dead"}
+	alive := observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: "sess-alive"}
+
+	mustUpsert := func(ref observation.ResourceRef, signal observation.SignalID, source string) {
+		obs, err := observation.Measured(ref, signal, "x", at, observation.WithSource(source))
+		if err != nil {
+			t.Fatalf("build observation: %v", err)
+		}
+		if err := st.UpsertObservation(ctx, obs); err != nil {
+			t.Fatalf("upsert observation: %v", err)
+		}
+	}
+	mustUpsert(dead, "audio_session.state", "nodeaudio:node-a:sess-dead")
+	mustUpsert(dead, "audio_session.fault_kind", "nodeaudio:node-a:sess-dead")
+	mustUpsert(alive, "audio_session.state", "nodeaudio:node-a:sess-alive")
+
+	if err := st.DeleteObservationsForResource(ctx, observation.ResourceAudioSession, "sess-dead"); err != nil {
+		t.Fatalf("delete observations for resource: %v", err)
+	}
+
+	got, err := st.ListObservations(ctx, ObservationFilter{ResourceKind: observation.ResourceAudioSession})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(got) != 1 || got[0].Resource.ID != "sess-alive" {
+		t.Fatalf("got %+v, want exactly sess-alive's single row surviving", got)
+	}
+}
+
+// TestDeleteOrphanedObservationsRemovesRowsNotInLiveSet proves the sweep
+// removes every row of kind whose resource id is not live, keeps every row
+// that is, and clears everything when liveIDs is empty.
+func TestDeleteOrphanedObservationsRemovesRowsNotInLiveSet(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	at := mustTime(t, "2026-08-10T12:00:00Z")
+
+	mustUpsert := func(id string) {
+		obs, err := observation.Measured(observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: id},
+			"audio_session.state", "x", at)
+		if err != nil {
+			t.Fatalf("build observation: %v", err)
+		}
+		if err := st.UpsertObservation(ctx, obs); err != nil {
+			t.Fatalf("upsert observation: %v", err)
+		}
+	}
+	mustUpsert("night-bg:2026-08-01")
+	mustUpsert("night-bg:2026-08-02")
+	mustUpsert("sess-live")
+
+	n, err := st.DeleteOrphanedObservations(ctx, observation.ResourceAudioSession, map[string]struct{}{"sess-live": {}})
+	if err != nil {
+		t.Fatalf("delete orphaned observations: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("rows removed = %d, want 2", n)
+	}
+
+	got, err := st.ListObservations(ctx, ObservationFilter{ResourceKind: observation.ResourceAudioSession})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(got) != 1 || got[0].Resource.ID != "sess-live" {
+		t.Fatalf("got %+v, want exactly sess-live surviving", got)
+	}
+
+	n, err = st.DeleteOrphanedObservations(ctx, observation.ResourceAudioSession, map[string]struct{}{})
+	if err != nil {
+		t.Fatalf("delete orphaned observations with empty live set: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("rows removed with empty live set = %d, want 1", n)
+	}
+
+	got, err = st.ListObservations(ctx, ObservationFilter{ResourceKind: observation.ResourceAudioSession})
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %+v, want none left after sweeping with an empty live set", got)
+	}
+}
