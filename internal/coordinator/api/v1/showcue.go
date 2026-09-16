@@ -11,7 +11,7 @@ type ConfigShowCueRenderOutput struct {
 
 // ConfigShowCueAudioOutput is show.cue.outputs.audio. Targets is ADR-049's
 // list of target audio.node ids (superseding ADR-045's single "target"
-// field, still accepted on the wire as a one-element form — config
+// field, still accepted on the wire as a one-element form: config
 // package's DecodeShowCuePayload/UnmarshalJSON): an empty list resolves
 // later to the installation's single program+ltc audio.node.
 type ConfigShowCueAudioOutput struct {
@@ -21,7 +21,7 @@ type ConfigShowCueAudioOutput struct {
 }
 
 // ConfigShowCueLTCOutput is show.cue.outputs.ltc. Target is ADR-045's
-// optional target node; ADR-049 kept this output singular — see
+// optional target node; ADR-049 kept this output singular, see
 // [ConfigShowCueAudioOutput.Targets].
 type ConfigShowCueLTCOutput struct {
 	StartOffsetMillis int    `json:"startOffsetMillis"`
@@ -30,7 +30,7 @@ type ConfigShowCueLTCOutput struct {
 
 // ConfigShowCueAnnouncementOutput is show.cue.outputs.announcement.
 // DuckGainDb is present only when Policy is "duck". Targets is ADR-049's
-// list of target audio.node ids — see [ConfigShowCueAudioOutput.Targets].
+// list of target audio.node ids, see [ConfigShowCueAudioOutput.Targets].
 type ConfigShowCueAnnouncementOutput struct {
 	Policy     string   `json:"policy"`
 	DuckGainDb *float64 `json:"duckGainDb,omitempty"`

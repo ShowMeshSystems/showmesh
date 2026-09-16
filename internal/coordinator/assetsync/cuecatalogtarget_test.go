@@ -187,6 +187,71 @@ func TestTwoTargetAudioExcludesAThirdUndeclaredNode(t *testing.T) {
 	}
 }
 
+// TestTwoTargetAnnouncementReachesBothNodes is
+// TestTwoTargetAudioReachesBothNodes's outputs.announcement sibling: an
+// announcement naming more than one node in its own targets is placed on
+// every listed node's catalog, not just the first.
+func TestTwoTargetAnnouncementReachesBothNodes(t *testing.T) {
+	st, ctx := twoAudioNodeShow(t)
+	putCue(t, st, "welcome", "halloween-2026", config.ShowCuePayload{
+		Name: "Welcome",
+		Outputs: config.ShowCueOutputs{
+			Audio:        &config.ShowCueAudioOutput{Asset: "welcome-audio", Targets: []string{"m4", "pi"}},
+			Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyMix, Targets: []string{"m4", "pi"}},
+		},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "welcome"))
+	putActiveShow(t, st, "halloween-2026")
+
+	for _, nodeID := range []string{"pi", "m4"} {
+		out, ok := cueOutputsByID(resolveFor(t, ctx, st, nodeID).Entries, "welcome")
+		if !ok || out.Announcement == nil {
+			t.Errorf("%s outputs = %+v, want an announcement output: %s is one of the two listed announcement targets", nodeID, out, nodeID)
+		}
+	}
+}
+
+// TestEmptyTargetsOnTwoAudioNodesResolvesToProgramLTCNode proves an
+// explicit "targets": [] behaves exactly like an absent targets list: on
+// an installation with more than one audio.node, it still resolves to the
+// sole program+ltc node in the catalog and the asset manifest, never to
+// every node and never to none.
+func TestEmptyTargetsOnTwoAudioNodesResolvesToProgramLTCNode(t *testing.T) {
+	st, ctx := twoAudioNodeShow(t)
+	putCue(t, st, "thriller", "halloween-2026", config.ShowCuePayload{
+		Name: "Thriller",
+		Outputs: config.ShowCueOutputs{
+			Audio: &config.ShowCueAudioOutput{Asset: "thriller-audio", Targets: []string{}},
+		},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "thriller"))
+	putActiveShow(t, st, "halloween-2026")
+
+	m4, ok := cueOutputsByID(resolveFor(t, ctx, st, "m4").Entries, "thriller")
+	if !ok || m4.Audio == nil {
+		t.Errorf("m4 outputs = %+v, want audio present: m4 is the program+ltc node", m4)
+	}
+	pi, ok := cueOutputsByID(resolveFor(t, ctx, st, "pi").Entries, "thriller")
+	if !ok || pi.Audio != nil {
+		t.Errorf("pi outputs = %+v, want no audio: an empty targets list resolves to the program+ltc node alone", pi)
+	}
+
+	m4Seqs, err := NodeCueSequenceIDs(ctx, st, "halloween-2026", "m4")
+	if err != nil {
+		t.Fatalf("NodeCueSequenceIDs (m4): %v", err)
+	}
+	if !m4Seqs["thriller-audio"] {
+		t.Errorf("m4 sequences = %v, want thriller-audio: m4 is the program+ltc node", m4Seqs)
+	}
+	piSeqs, err := NodeCueSequenceIDs(ctx, st, "halloween-2026", "pi")
+	if err != nil {
+		t.Fatalf("NodeCueSequenceIDs (pi): %v", err)
+	}
+	if piSeqs["thriller-audio"] {
+		t.Errorf("pi sequences = %v, want no thriller-audio: an empty targets list does not resolve to pi", piSeqs)
+	}
+}
+
 // TestNodeCueSequenceIDsCoversOnlyThisNodesOwnOutputs proves the asset
 // manifest follows the same resolution: pi must not be asked to hold, or
 // be refused for missing, an asset only m4's outputs name.

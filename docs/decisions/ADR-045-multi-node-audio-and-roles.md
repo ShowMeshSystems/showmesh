@@ -1,6 +1,6 @@
 # ADR-045: An Installation May Declare More Than One Audio Node, With Roles
 
-Status: Accepted (owner, 2026-08-26)
+Status: Accepted (owner, 2026-08-26); decision 1 superseded for audio and announcement outputs by [ADR-049](ADR-049-same-audio-on-several-nodes-at-one-instant.md) (2026-09-15)
 Date: 2026-08-26
 
 ## Context
