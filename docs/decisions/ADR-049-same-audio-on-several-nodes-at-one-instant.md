@@ -1,6 +1,6 @@
 # ADR-049: A Cue's Audio Plays on Several Nodes at One Instant
 
-Status: Accepted (owner, 2026-09-15)
+Status: Accepted (owner, 2026-09-15; decisions 6 to 9 added 2026-09-16)
 Date: 2026-09-15
 
 ## Context
@@ -72,6 +72,10 @@ announcement plays on every node in its bound `show.action`'s `audioNodeId`
 list. This record does not change either stored shape; ADR-045 decision 5's
 list-valued `night.session` shape remains unbuilt.
 
+Amended 2026-09-16: decisions 7 to 9 build that shape for the background bed,
+and extend the one-instant rule past the bed's first start to its item changes
+and to every resume after a show.
+
 ### 4. Failure degrades to playing, never to silence
 
 When no usable clock reading exists (no target holds `program+ltc`, or that
@@ -90,6 +94,66 @@ still plays the audio. A multi-node Cue whose targets exclude the
 `program+ltc` node is also a readiness warning naming the Cue, because it can
 never start aligned.
 
+### 6. The start instant is read once per activation (amended 2026-09-16)
+
+The clock reading behind decision 3 is taken when an activation is first
+dispatched, and never again for that activation. A later tick that replays an
+activation already sent reads no clock and dispatches nothing new.
+
+The wait for that reading covers a real prepare on the slowest target. A fixed
+wait shorter than the media's load time is not a bound on the start; it is a
+guaranteed unaligned start. On the rehearsal rig on 2026-09-16, preparing a show
+MP3 took about 1.4 s on the `program+ltc` node and 2.4 s on a Raspberry Pi 3B+,
+against a 400 ms wait, and no multi-node Cue that day started aligned.
+
+### 7. A night bed names its target nodes, and every listed node plays all of it (amended 2026-09-16)
+
+`night.session`'s background audio carries `targets`, a list of `audio.node`
+ids, whether its items are inline or come from a referenced `media.playlist`.
+Every listed node plays every item, in the same order, with the same repeat,
+resume, and transition settings. This is the list-valued shape ADR-045
+decision 5 called for, and it covers the preshow bed and the postshow resting
+bed alike.
+
+An item's asset still names the file. The node that file was registered for no
+longer decides where it plays. A listed node without its own copy receives the
+registered copy, the same rule decision 5 applies to a Cue, and Night readiness
+fails naming any listed node that still lacks an item's file.
+
+A bed without `targets` keeps its existing behavior: each node plays the items
+registered for it, and decisions 8 and 9 do not apply to it.
+
+### 8. A multi-node bed starts, changes items, and resumes together (amended 2026-09-16)
+
+When a bed's `targets` list more than one node:
+
+- Its first start, and every resume after a show, use one instant chosen as
+  decision 3 chooses one, from a reading taken for that start or resume.
+- Every item change lands at the same instant on every node. The next item
+  starts at the bed's shared start instant plus the durations of the items
+  before it, read on each node's own media clock, not when that node's decoder
+  happens to finish the previous item. A node that cannot have the next item
+  ready by then reports it, and does not wait silently.
+- On resume, every node resumes the same item at the same playback position:
+  the position of the `program+ltc` node's paused bed. A node whose own
+  bookmark differs starts from that item and position instead. A bed whose
+  `resume` setting restarts it starts every node from its first item.
+
+Pauses and fades into a show are not scheduled. They happen on arrival, and the
+next resume puts every node back together.
+
+Decision 4 applies unchanged. With no usable clock reading, or with a
+`targets` list that excludes the `program+ltc` node, every node still plays on
+arrival, and the report says the bed is unaligned and why.
+
+### 9. A night announcement on several nodes has its file everywhere and starts together (amended 2026-09-16)
+
+An announcement whose bound `show.action` lists more than one node in
+`audioNodeId` has its file delivered to every listed node under decision 7's
+registered-copy rule, fails Night readiness naming any listed node that lacks
+it, and starts at one instant chosen as decision 3 chooses one, with decision
+4's fallback. Each node's duck or interrupt of its own bed is unchanged.
+
 ## Consequences
 
 - A second node playing the show's audio in step with the M4 needs only the
@@ -99,6 +163,12 @@ never start aligned.
   added.
 - The Cue editor, `showmeshctl`, the OpenAPI description, the Cue catalog, and
   readiness change with the field.
+- The Night screen, `showmeshctl`, and the OpenAPI description gain the bed's
+  `targets`, and Night readiness checks every listed node's files.
+- A node keeps a multi-node bed together on its own between shows: item changes
+  follow the shared start instant on the node's media clock, so the bed does not
+  depend on the coordinator or the broker between one start or resume and the
+  next.
 
 ## Alternatives considered
 
@@ -109,6 +179,14 @@ activated.
 **Start each node on arrival and rely on the rate lock.** Rejected. Arrival
 times differ by network and broker delay, and the rate lock keeps that offset
 forever instead of removing it.
+
+**Play the same bed list on each node independently.** Rejected by the owner on
+2026-09-16. Each node loads files at its own speed, so nodes that start apart
+stay apart, and nodes that start together drift apart at every item change.
+
+**Have the coordinator start every bed item on every node.** Rejected. It puts
+the coordinator and the broker in the timing path for the whole preshow, and
+the show must keep playing when either is lost.
 
 ## Related decisions
 
