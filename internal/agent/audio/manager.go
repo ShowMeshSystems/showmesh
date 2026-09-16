@@ -414,7 +414,7 @@ func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation
 // Start prepares (if not already prepared) and starts the current item
 // from its bookmark position, or 0 with no bookmark, on arrival.
 func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
-	return m.start(ctx, id, invocation, revision, nil)
+	return m.start(ctx, id, invocation, revision, nil, nil)
 }
 
 // StartAt is [Manager.Start] against a media-clock start instant
@@ -430,10 +430,24 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 // starts on arrival exactly as [Manager.Start] does, and says so in the
 // outcome's own reason rather than silently discarding the schedule.
 func (m *Manager) StartAt(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64) pkgaudio.OutcomeResult {
-	return m.start(ctx, id, invocation, revision, &atNs)
+	return m.start(ctx, id, invocation, revision, &atNs, nil)
 }
 
-func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64) pkgaudio.OutcomeResult {
+// StartAtPosition is [Manager.StartAt] with the play head set to position
+// on the SAME engine call, rather than [Manager.Start]'s own bookmark-or-
+// zero position. A Start-then-Seek pair cannot present position at atNs:
+// Start always begins from the bookmark (or 0), and Seek only re-anchors
+// an ALREADY-STARTED handle, so between the two calls the engine has
+// already presented from the wrong position for one buffer, audible on
+// a single node, and on a multi-node scheduled start (ADR-049 decision
+// 3) a different wrong position per node, since each reaches its own
+// Seek at a different wall-clock moment. position overrides whatever
+// bookmark this session holds; it is never itself persisted as one.
+func (m *Manager) StartAtPosition(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64, position time.Duration) pkgaudio.OutcomeResult {
+	return m.start(ctx, id, invocation, revision, &atNs, &position)
+}
+
+func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64, explicitPosition *time.Duration) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
@@ -477,14 +491,20 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 			}
 		}
-		position, err := s.resolveBookmarkPositionLocked(item)
-		if err != nil {
-			// Visible and self-healing: the operator sees
-			// exactly why this Start was refused, and the stale bookmark
-			// is cleared so a subsequent Start is not refused forever by
-			// the same dead reference.
-			s.bookmark = nil
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+		var position time.Duration
+		if explicitPosition != nil {
+			position = *explicitPosition
+		} else {
+			var err error
+			position, err = s.resolveBookmarkPositionLocked(item)
+			if err != nil {
+				// Visible and self-healing: the operator sees
+				// exactly why this Start was refused, and the stale bookmark
+				// is cleared so a subsequent Start is not refused forever by
+				// the same dead reference.
+				s.bookmark = nil
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+			}
 		}
 		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, scheduledAtNs)
 		if refusal != nil {

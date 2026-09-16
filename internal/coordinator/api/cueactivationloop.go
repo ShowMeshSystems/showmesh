@@ -317,6 +317,19 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 		var outcomes []cueActivationDispatchOutcome
 		if len(dec.Activations) > 0 {
 			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer, pin)
+			// dispatchCueActivations's own scheduleCueActivations call has
+			// already mutated dec.Activations in place (ADR-049 decision
+			// 3): read the verdict back off it once per activation batch,
+			// alongside the identical per-node fields
+			// cueActivationAuditParams now also carries on every dispatch
+			// and outcome audit entry below.
+			if aligned, reason, scheduledAtNs := cueActivationAlignment(dec.Activations); !aligned {
+				h.logWarn("cue activation loop: multi-node activation started unaligned",
+					"instanceUuid", obs.InstanceUUID, "cueId", result.CueID, "reason", reason)
+			} else if scheduledAtNs != nil {
+				h.logDebug("cue activation loop: multi-node activation started at a shared instant",
+					"instanceUuid", obs.InstanceUUID, "cueId", result.CueID, "scheduledAtNs", *scheduledAtNs)
+			}
 			for _, outcome := range outcomes {
 				switch {
 				case outcome.Err != nil:

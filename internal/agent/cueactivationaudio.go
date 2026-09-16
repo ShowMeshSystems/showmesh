@@ -215,6 +215,44 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		return fmt.Errorf("cue.activate: audio.session.apply for Cue %q: %s: %s", act.CueID, applyOutcome.Outcome, applyOutcome.Reason)
 	}
 
+	position := time.Duration(act.PositionMS) * time.Millisecond
+
+	// ADR-049 decision 3: an activation the coordinator scheduled a
+	// shared multi-node start instant for must present position at
+	// act's own T0, on every node, in one engine call, a Start-then-
+	// Seek pair cannot do that (see [audio.Manager.StartAtPosition]'s
+	// own doc comment). This bypasses [audio.Manager.Promote]
+	// deliberately rather than teaching it to schedule too: Promote
+	// exists purely to skip a redundant media load when a coordinator-
+	// staged handle already matches, and a scheduled activation's own
+	// coordinator-side reading round (internal/coordinator/api's
+	// scheduleCueActivations) already pays for its own Prepare under a
+	// throwaway session, so there is no staged handle on
+	// [cueactivation.PrepareStagingSessionID] worth promoting from here.
+	// The ordinary Promote-refusal fallback below, Prepare then Start,
+	// is exactly what this path also does, with StartAtPosition in place
+	// of Start.
+	if act.ScheduledAtNs != nil {
+		if announcement == nil {
+			// Never Promoted from on this path, above, so the
+			// Promote-refusal cleanup below never runs for it either:
+			// without this, a prepare-ahead round that staged this same
+			// Cue in advance would leave that stage loaded and
+			// unreleased until some future, unrelated Cue's own
+			// prepare-ahead cycle happens to overwrite it.
+			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(act, activationStepStart))
+		}
+		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
+		if audioOutcomeFailed(prepOutcome) {
+			return fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
+		}
+		startOutcome := mgr.StartAtPosition(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart), *act.ScheduledAtNs, position)
+		if audioOutcomeFailed(startOutcome) {
+			return fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+		}
+		return nil
+	}
+
 	started := false
 	if announcement == nil {
 		// A coordinator-scheduled prepare-ahead may already have this Cue's
@@ -267,7 +305,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		}
 	}
 
-	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek"), activationRevision(act, activationStepSeek), time.Duration(act.PositionMS)*time.Millisecond)
+	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek"), activationRevision(act, activationStepSeek), position)
 	if audioOutcomeFailed(seekOutcome) {
 		return fmt.Errorf("cue.activate: audio.session.seek for Cue %q to position %dms: %s: %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
 	}

@@ -1,9 +1,11 @@
 package cueactivation
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 )
 
@@ -88,6 +90,113 @@ func TestDecodeParamsRejectsUnmarshalableValue(t *testing.T) {
 	params := map[string]any{"generation": make(chan int)}
 	if _, err := DecodeParams(params); err == nil {
 		t.Fatalf("DecodeParams accepted a value json.Marshal cannot encode")
+	}
+}
+
+// TestScheduledAtNsRoundTripsExactly proves a start instant near 1.79e18
+// (nanosecond-scale, past float64's exact integer range) survives
+// DecodeParams exactly: the identical exact-integer round trip
+// mqttproto's own exactIntegerParams gives audio.session.start's
+// scheduledAtNs param, since this field deliberately shares that wire
+// name (see [Activation.ScheduledAtNs]'s own doc comment).
+func TestScheduledAtNsRoundTripsExactly(t *testing.T) {
+	const exact = "1789012345678901234"
+	params := map[string]any{
+		"runner": "fpp", "runnerInstance": "fpp-01", "activationId": "act-1",
+		"show": "halloween-2026", "generation": float64(3), "catalogRevision": "rev-a",
+		"cueId": "cue-1", "cueRevision": float64(2), "positionMs": float64(1500),
+		"evidenceAt":    "2026-08-23T20:00:00Z",
+		"scheduledAtNs": json.Number(exact),
+	}
+	got, err := DecodeParams(params)
+	if err != nil {
+		t.Fatalf("DecodeParams: %v", err)
+	}
+	if got.ScheduledAtNs == nil {
+		t.Fatalf("ScheduledAtNs = nil, want %s", exact)
+	}
+	if *got.ScheduledAtNs != 1789012345678901234 {
+		t.Errorf("ScheduledAtNs = %d, want 1789012345678901234: the value was rounded", *got.ScheduledAtNs)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("decoded Activation with ScheduledAtNs failed Validate: %v", err)
+	}
+}
+
+// TestScheduledAtNsWireKeyMatchesAudioParamScheduledAtNs pins the reason
+// the exact round trip above works at all: mqttproto's own
+// exactIntegerParams treats this exact string as an exact-integer param,
+// so a drift in either name would silently stop preserving precision.
+func TestScheduledAtNsWireKeyMatchesAudioParamScheduledAtNs(t *testing.T) {
+	at := int64(5)
+	raw, err := json.Marshal(Activation{ScheduledAtNs: &at})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := m[pkgaudio.ParamScheduledAtNs]; !ok {
+		t.Fatalf("Activation's JSON has no key %q; ScheduledAtNs's json tag must match pkgaudio.ParamScheduledAtNs", pkgaudio.ParamScheduledAtNs)
+	}
+}
+
+// TestScheduledAtNsOmittedWhenNil proves an activation with no scheduled
+// instant carries no scheduledAtNs key at all, never a JSON null: an
+// agent decoding params with a present-but-null key would take a
+// different path than one where the key is simply absent.
+func TestScheduledAtNsOmittedWhenNil(t *testing.T) {
+	raw, err := json.Marshal(baseActivation())
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := m["scheduledAtNs"]; ok {
+		t.Errorf("scheduledAtNs present in JSON with ScheduledAtNs nil, want omitted")
+	}
+	if _, ok := m["unalignedReason"]; ok {
+		t.Errorf("unalignedReason present in JSON with UnalignedReason empty, want omitted")
+	}
+}
+
+// TestScheduleProbeSessionIDIsNeverAnotherWellKnownSessionID guards the
+// identity ADR-049 decision 3's coordinator-side reading round depends on:
+// a fresh per-node clock reading must never be taken against the live show
+// session (which may already be Playing the preceding Cue) or the
+// prepare-ahead staging session (which a concurrent tick may already be
+// using for a different, later Cue), see [ScheduleProbeSessionID]'s own
+// doc comment.
+func TestScheduleProbeSessionIDIsNeverAnotherWellKnownSessionID(t *testing.T) {
+	for _, other := range []string{AudioSessionID, AnnouncementSessionID, PrepareStagingSessionID, BackgroundSessionID} {
+		if ScheduleProbeSessionID == other {
+			t.Fatalf("ScheduleProbeSessionID (%q) must never equal %q", ScheduleProbeSessionID, other)
+		}
+	}
+}
+
+// TestScheduleProbeSessionRevisionIsAdditiveNotMultiplicative guards the
+// exact overflow finding 5 exists to close: a timestamp multiplied by a
+// step count (rather than added to it) overflows uint64 well before this
+// century ends, and a wrap-around would put the probe session's own
+// revision out of reach of any plain nanosecond value a later real
+// activity might present.
+func TestScheduleProbeSessionRevisionIsAdditiveNotMultiplicative(t *testing.T) {
+	now := time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)
+	apply := ScheduleProbeSessionRevision(now, ScheduleProbeSessionStepApply)
+	prepare := ScheduleProbeSessionRevision(now, ScheduleProbeSessionStepPrepare)
+	clear := ScheduleProbeSessionRevision(now, ScheduleProbeSessionStepClear)
+
+	base := uint64(now.UnixNano())
+	if apply != base || prepare != base+1 || clear != base+2 {
+		t.Fatalf("revisions = (%d, %d, %d), want (%d, %d, %d): the derivation must add the step, never multiply the timestamp by it",
+			apply, prepare, clear, base, base+1, base+2)
+	}
+	if apply >= prepare || prepare >= clear {
+		t.Fatalf("revisions are not strictly increasing: apply=%d prepare=%d clear=%d", apply, prepare, clear)
 	}
 }
 

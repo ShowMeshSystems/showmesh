@@ -880,7 +880,7 @@ type AnnouncementCue = {
 /** One cue row's own Fire attempt: in flight, or its own reported per-node outcomes, or a refusal before any node was ever reached. */
 type AnnouncementFireState =
   | { kind: 'firing' }
-  | { kind: 'reported'; nodes: CueActivationNodeOutcome[] }
+  | { kind: 'reported'; nodes: CueActivationNodeOutcome[]; aligned: boolean; unalignedReason: string; scheduledAtNs: number | null }
   | { kind: 'refused'; message: string }
 
 function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | undefined }) {
@@ -897,6 +897,18 @@ function AnnouncementFireOutcome({ state }: { state: AnnouncementFireState | und
     <div className="sm-outcome">
       <StatusPair tone="warn" label="Accepted" />
       <p className="sm-outcome__detail">Each node reports its own outcome below; this is not a report that it finished playing.</p>
+      {state.aligned && state.scheduledAtNs !== null && (
+        <p className="sm-small">
+          <StatusPair tone="good" label="Aligned" />
+          {' Every node was started at the same shared instant.'}
+        </p>
+      )}
+      {!state.aligned && (
+        <p className="sm-small">
+          <StatusPair tone="warn" label="Unaligned" />
+          {state.unalignedReason !== '' ? `: ${state.unalignedReason}` : ' Started on arrival, not to a shared instant.'}
+        </p>
+      )}
       {state.nodes.map((n) => (
         <p key={n.nodeId} className="sm-small">
           <StatusPair tone={instanceOutcomeTone(n.outcome)} label={`${n.nodeId}: ${n.outcome}`} />
@@ -916,7 +928,16 @@ function Announcements({ show }: { show: string | null }) {
     setFireState((s) => ({ ...s, [cueId]: { kind: 'firing' } }))
     activateCue(cueId)
       .then((resp) => {
-        setFireState((s) => ({ ...s, [cueId]: { kind: 'reported', nodes: resp.nodes } }))
+        setFireState((s) => ({
+          ...s,
+          [cueId]: {
+            kind: 'reported',
+            nodes: resp.nodes,
+            aligned: resp.aligned,
+            unalignedReason: resp.unalignedReason ?? '',
+            scheduledAtNs: resp.scheduledAtNs ?? null,
+          },
+        }))
       })
       .catch((err: unknown) => {
         setFireState((s) => ({ ...s, [cueId]: { kind: 'refused', message: describeApiError(err) } }))

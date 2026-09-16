@@ -195,6 +195,17 @@ func (f *fakeAudioPublisher) count() int {
 	return f.publishCount
 }
 
+// dispatchedSnapshot returns a copy of f.dispatched, safe to read while a
+// background dispatch (one this fake's own caller gave up waiting on, but
+// did not cancel) may still be appending to it concurrently.
+func (f *fakeAudioPublisher) dispatchedSnapshot() []dispatchedAudioCommand {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]dispatchedAudioCommand, len(f.dispatched))
+	copy(out, f.dispatched)
+	return out
+}
+
 type audioDispatchTestSetup struct {
 	st       *store.Store
 	svc      identity.Service

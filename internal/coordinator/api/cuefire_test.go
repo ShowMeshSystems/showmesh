@@ -182,6 +182,49 @@ func TestHandleActivateCueNoActiveShowRefused(t *testing.T) {
 	}
 }
 
+// TestHandleActivateCueReachesTheSharedSchedulingStep proves the direct-
+// fire route reaches the IDENTICAL ADR-049 decision 3 scheduling step the
+// Playlist path's dispatchCueActivations wraps (cueactivationschedule_test.go's
+// own TestScheduleCueActivations* tests exercise that step directly with
+// two real audio-bearing nodes; show.cue's audio output is still
+// single-target pre-merge, so a Fire click against ONE cueId can only
+// ever resolve ONE audio-bearing node, see that file's own doc comment).
+// A single-audio-node Cue never attempted scheduling at all, so this
+// proves the trivial, wire-visible half of ADR-049 decision 5: Aligned
+// reports true with no instant and no reason, end to end through the real
+// HTTP response, not merely by code inspection.
+func TestHandleActivateCueReachesTheSharedSchedulingStep(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+
+	rec := httptest.NewRecorder()
+	h.handleActivateCue(rec, newCueFireTestRequest(t, act.CueID))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	var resp v1.CueActivateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
+	}
+	if !resp.Aligned {
+		t.Fatalf("Aligned = false, want true: a single audio-bearing node never attempts scheduling and is never reported as an unaligned failure it did not attempt")
+	}
+	if resp.UnalignedReason != "" {
+		t.Fatalf("UnalignedReason = %q, want empty", resp.UnalignedReason)
+	}
+	if resp.ScheduledAtNs != nil {
+		t.Fatalf("ScheduledAtNs = %v, want nil: no reading round was attempted for one audio-bearing node", resp.ScheduledAtNs)
+	}
+}
+
 // TestHandleActivateCueNoParticipatingNodeRefused proves a Fire click
 // against a real, active show whose Cue catalog resolves cueID on ZERO
 // nodes (no node is declared at all) is refused (400) with a reason

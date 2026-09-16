@@ -107,6 +107,77 @@ func TestActivateAudioSelectsCueAssetAndSeeksToPosition(t *testing.T) {
 	_ = fake // this test's own assertions are on mgr's session snapshot; fake's LTC request shape is covered separately below.
 }
 
+// seekCountingFakeEngine counts Seek calls, so a test can prove a
+// scheduled activation presents PositionMS in the SAME engine.Start call
+// rather than a separate engine.Seek after it, the exact defect ADR-049
+// decision 3 exists to close (see [audio.Manager.StartAtPosition]'s own
+// doc comment).
+type seekCountingFakeEngine struct {
+	activationAvailableEngine
+	seeks int
+}
+
+func (e *seekCountingFakeEngine) Seek(ctx context.Context, handle audio.EngineHandle, position time.Duration) (audio.EngineObservation, error) {
+	e.seeks++
+	return e.activationAvailableEngine.Seek(ctx, handle, position)
+}
+
+// TestActivateAudioWithScheduledInstantPresentsPositionWithoutASeparateSeek
+// proves ADR-049 decision 3's own agent-side fix: an Activation carrying
+// ScheduledAtNs reaches [audio.Manager.StartAtPosition] (Prepare then
+// StartAtPosition, never Promote, never a trailing Seek), so PositionMS
+// is the play head's value at the very first sample rather than a
+// position corrected one engine call later.
+func TestActivateAudioWithScheduledInstantPresentsPositionWithoutASeparateSeek(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	fake := audio.NewFakeEngine(clock.now)
+	seekCounting := &seekCountingFakeEngine{activationAvailableEngine: activationAvailableEngine{fake}}
+	mgr := audio.NewManager(seekCounting, audio.NewFileSessionStore(dir), dir, fixedAudioDecoder{}, clock.now, nil)
+	mgr.SetSettings(audio.Settings{
+		DefaultFadeCurve: pkgaudio.FadeCurveLinear, DefaultFadeDurationMs: 500,
+		LTCFrameRate: pkgaudio.LTCFrameRate25, LTCDefaultStartOffset: "00:00:00:00",
+	})
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-sched", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-sched", "cue-sched", 1, "halloween-2026", 3, "rev-a", 4500)
+	at := int64(1_700_000_000_000_000_000)
+	act.ScheduledAtNs = &at
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm: %+v", result)
+	}
+	if seekCounting.seeks != 0 {
+		t.Fatalf("Seek called %d times, want 0: a scheduled activation must present its position in the Start call itself", seekCounting.seeks)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	if len(snaps) != 1 {
+		t.Fatalf("session snapshots = %+v, want exactly one", snaps)
+	}
+	snap := snaps[0]
+	if snap.State != pkgaudio.StatePlaying {
+		t.Fatalf("session state = %s, want playing", snap.State)
+	}
+	if snap.PositionKnown && snap.Position != 4500*time.Millisecond {
+		t.Fatalf("session position = %v, want 4.5s (the activation's PositionMS)", snap.Position)
+	}
+}
+
 // TestActivateAudioAndLTCEmitsCueOffsetPlusPosition proves H4-BRIEF.md
 // ruling 2: an activation whose Cue declares both audio and ltc emits
 // exactly "Cue LTC start offset + current Cue position" — computed by the
@@ -377,6 +448,73 @@ func TestActivateAudioClearsStaleStagedSessionWhenContentDoesNotMatch(t *testing
 	}
 	if sawStaging {
 		t.Fatalf("stale staging session is still present after activate; it should have been cleared: %+v", snaps)
+	}
+}
+
+// TestActivateAudioScheduledBranchAlsoClearsAStaleStagedSession proves
+// finding 7's own fix: the scheduled branch never Promotes from
+// PrepareStagingSessionID (it bypasses Promote entirely, see
+// activateAudio's own doc comment on that branch), so without its own
+// explicit clear a stage a prepare-ahead cycle loaded in advance for this
+// same Cue would be left loaded, unreleased, until some unrelated future
+// Cue's own prepare-ahead cycle happened to overwrite it.
+func TestActivateAudioScheduledBranchAlsoClearsAStaleStagedSession(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+
+	stagedContent := []byte("staged content, never used")
+	stagedHash := writeAssetFixture(t, dir, "staged-song.wav", stagedContent)
+	stagedRef := pkgaudio.MediaRef{
+		AssetID: "staged-song-asset", ContentHash: stagedHash,
+		SizeBytes: int64(len(stagedContent)), RuntimeFilename: "staged-song.wav",
+	}
+	stagingID := pkgaudio.SessionID(cueactivation.PrepareStagingSessionID)
+	if r := mgr.Apply(context.Background(), stagingID, "stage-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(stagedRef)}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging apply refused: %+v", r)
+	}
+	if r := mgr.Prepare(context.Background(), stagingID, "stage-prepare", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("staging prepare refused: %+v", r)
+	}
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-sched-stale-stage", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-sched-stale-stage", "cue-sched-stale-stage", 1, "halloween-2026", 3, "rev-a", 0)
+	at := int64(1_700_000_000_000_000_000)
+	act.ScheduledAtNs = &at
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm: %+v", result)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	var sawShowPlaying, sawStaging bool
+	for _, s := range snaps {
+		if s.ID == cueActivationAudioSessionID && s.State == pkgaudio.StatePlaying {
+			sawShowPlaying = true
+		}
+		if s.ID == stagingID {
+			sawStaging = true
+		}
+	}
+	if !sawShowPlaying {
+		t.Fatalf("show session is not playing after activate: %+v", snaps)
+	}
+	if sawStaging {
+		t.Fatalf("stale staging session is still present after a scheduled activate; it should have been cleared: %+v", snaps)
 	}
 }
 
