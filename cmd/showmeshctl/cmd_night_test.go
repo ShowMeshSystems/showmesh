@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -129,6 +130,260 @@ func TestCmdNightGetRendersSiteControlAndInterlocks(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q; got: %s", want, out)
 		}
+	}
+}
+
+// nightSessionSampleJSONWithInlineBackgroundAudioTargets is
+// nightSessionSampleJSON plus an inline resting.backgroundAudio carrying
+// ADR-049 decision 7's own targets list, for both the text-output and
+// round-trip coverage below.
+const nightSessionSampleJSONWithInlineBackgroundAudioTargets = `{"serverTime":"2026-08-16T21:00:00Z","kind":"night.session","id":"halloween-main","revision":1,
+	"payload":{
+		"show":"halloween-2026","label":"Halloween main loop",
+		"showPlaylist":{"fppInstanceId":"player-01","playlist":"halloween-show"},
+		"resting":{
+			"fppInstanceId":"player-01","playlist":"halloween-resting","endOfNightPlaylist":"halloween-resting",
+			"timelineAsset":{"show":"halloween-2026","sequence":"resting-loop","target":"player-01"},
+			"endOfNightRepeat":true,
+			"backgroundAudio":{
+				"items":[{"itemId":"track-1","show":"halloween-2026","sequence":"bg-track-1","target":"player-01"}],
+				"repeat":"none","resume":"resume","itemTransition":"sequential","maxGainDb":-10,
+				"targets":["player-01","player-02"]
+			}
+		},
+		"enterShow":{"cues":[],"blackoutHoldMs":6000},
+		"enterResting":{"cues":[],"blackoutAfterShowMs":6000}
+	},
+	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+// nightSessionSampleJSONWithReferenceBackgroundAudioTargets is the same
+// session, but with the REFERENCE (media.playlist) form of the bed, plus
+// the same targets list - ADR-049 decision 7 applies identically to both
+// forms, so this file exercises both instead of only the inline one.
+const nightSessionSampleJSONWithReferenceBackgroundAudioTargets = `{"serverTime":"2026-08-16T21:00:00Z","kind":"night.session","id":"halloween-main","revision":1,
+	"payload":{
+		"show":"halloween-2026","label":"Halloween main loop",
+		"showPlaylist":{"fppInstanceId":"player-01","playlist":"halloween-show"},
+		"resting":{
+			"fppInstanceId":"player-01","playlist":"halloween-resting","endOfNightPlaylist":"halloween-resting",
+			"timelineAsset":{"show":"halloween-2026","sequence":"resting-loop","target":"player-01"},
+			"endOfNightRepeat":true,
+			"backgroundAudio":{"mediaPlaylist":"holiday-bed","targets":["player-01","player-02"]}
+		},
+		"enterShow":{"cues":[],"blackoutHoldMs":6000},
+		"enterResting":{"cues":[],"blackoutAfterShowMs":6000}
+	},
+	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
+
+// TestCmdNightGetRendersBackgroundAudioTargets proves "night get"'s text
+// output states the bed's own targets for both forms, and the documented
+// fallback sentence when a bed is configured but declares none (ADR-049
+// decision 7: absent/empty is today's per-node behavior, not "no bed").
+func TestCmdNightGetRendersBackgroundAudioTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"inline form", nightSessionSampleJSONWithInlineBackgroundAudioTargets, []string{"Targets: player-01, player-02"}},
+		{"reference form", nightSessionSampleJSONWithReferenceBackgroundAudioTargets, []string{"mediaPlaylist=holiday-bed", "Targets: player-01, player-02"}},
+		{"no targets declared", nightSessionSampleJSON, []string{"Background audio:    (not configured)"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer ts.Close()
+
+			var stdout, stderr bytes.Buffer
+			code := cmdNight([]string{"get", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+			if code != exitOK {
+				t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+			}
+			out := stdout.String()
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("stdout missing %q; got: %s", want, out)
+				}
+			}
+		})
+	}
+}
+
+// TestCmdNightGetRendersBackgroundAudioWithNoTargetsDeclared covers the
+// documented fallback sentence for a bed that IS configured but declares
+// no targets, distinct from the "(not configured)" case above.
+func TestCmdNightGetRendersBackgroundAudioWithNoTargetsDeclared(t *testing.T) {
+	body := strings.Replace(nightSessionSampleJSONWithInlineBackgroundAudioTargets, `,
+				"targets":["player-01","player-02"]`, "", 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, body)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"get", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Targets: none: each node plays its registered items") {
+		t.Errorf("stdout missing the no-targets fallback sentence; got: %s", stdout.String())
+	}
+}
+
+// TestCmdNightGetSetRoundTripsBackgroundAudioTargets proves "night get
+// --output json | night set" carries resting.backgroundAudio.targets
+// through unchanged for both bed forms - the exact round trip
+// types_night.go's own doc comment promises, and the reason this test
+// drives the real "get" then "set" commands rather than hand-building a
+// draft.
+func TestCmdNightGetSetRoundTripsBackgroundAudioTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"inline form", nightSessionSampleJSONWithInlineBackgroundAudioTargets},
+		{"reference form", nightSessionSampleJSONWithReferenceBackgroundAudioTargets},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			getServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer getServer.Close()
+
+			var getOut, getErr bytes.Buffer
+			code := cmdNight([]string{"get", "--server", getServer.URL, "--output", "json", "halloween-main"}, &getOut, &getErr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+			if code != exitOK {
+				t.Fatalf("night get exit code = %d, want exitOK; stderr=%s", code, getErr.String())
+			}
+
+			var gotPutBody []byte
+			putServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPutBody, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("ShowMesh-API-Version", "1")
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer putServer.Close()
+
+			oldStdin := os.Stdin
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("os.Pipe: %v", err)
+			}
+			os.Stdin = r
+			defer func() { os.Stdin = oldStdin }()
+			piped := getOut.Bytes()
+			go func() {
+				_, _ = w.Write(piped)
+				_ = w.Close()
+			}()
+
+			var setOut, setErr bytes.Buffer
+			code = cmdNight([]string{"set", "--server", putServer.URL, "halloween-main"}, &setOut, &setErr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+			if code != exitOK {
+				t.Fatalf("night set exit code = %d, want exitOK; stderr=%s", code, setErr.String())
+			}
+
+			var sent struct {
+				Resting struct {
+					BackgroundAudio map[string]json.RawMessage `json:"backgroundAudio"`
+				} `json:"resting"`
+			}
+			if err := json.Unmarshal(gotPutBody, &sent); err != nil {
+				t.Fatalf("PUT body was not valid JSON: %v; body=%s", err, gotPutBody)
+			}
+			ba := sent.Resting.BackgroundAudio
+			if ba == nil {
+				t.Fatalf("PUT body has no resting.backgroundAudio at all: %s", gotPutBody)
+			}
+			var targets []string
+			if err := json.Unmarshal(ba["targets"], &targets); err != nil {
+				t.Fatalf("resting.backgroundAudio.targets did not decode: %v; body=%s", err, gotPutBody)
+			}
+			if want := []string{"player-01", "player-02"}; !reflect.DeepEqual(targets, want) {
+				t.Fatalf("PUT body targets = %v, want %v - the round trip must survive", targets, want)
+			}
+			if tc.name == "reference form" {
+				if _, ok := ba["items"]; ok {
+					t.Fatalf("reference-form PUT body carries an \"items\" key, which the reference write shape forbids: %s", gotPutBody)
+				}
+				var mediaPlaylist string
+				_ = json.Unmarshal(ba["mediaPlaylist"], &mediaPlaylist)
+				if mediaPlaylist != "holiday-bed" {
+					t.Fatalf("PUT body mediaPlaylist = %q, want %q", mediaPlaylist, "holiday-bed")
+				}
+			} else {
+				var items []map[string]json.RawMessage
+				if err := json.Unmarshal(ba["items"], &items); err != nil || len(items) != 1 {
+					t.Fatalf("inline-form PUT body lost its own item: %v; body=%s", err, gotPutBody)
+				}
+			}
+		})
+	}
+}
+
+// TestCmdNightGetSetPreservesAbsentBackgroundAudioTargets proves a bed
+// with no targets declared still round-trips unchanged: absent stays
+// absent, never turned into an empty array on the wire.
+func TestCmdNightGetSetPreservesAbsentBackgroundAudioTargets(t *testing.T) {
+	getServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, nightSessionSampleJSON)
+	}))
+	defer getServer.Close()
+
+	var getOut, getErr bytes.Buffer
+	code := cmdNight([]string{"get", "--server", getServer.URL, "--output", "json", "halloween-main"}, &getOut, &getErr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("night get exit code = %d, want exitOK; stderr=%s", code, getErr.String())
+	}
+
+	var gotPutBody []byte
+	putServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPutBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, nightSessionSampleJSON)
+	}))
+	defer putServer.Close()
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+	piped := getOut.Bytes()
+	go func() {
+		_, _ = w.Write(piped)
+		_ = w.Close()
+	}()
+
+	var setOut, setErr bytes.Buffer
+	code = cmdNight([]string{"set", "--server", putServer.URL, "halloween-main"}, &setOut, &setErr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("night set exit code = %d, want exitOK; stderr=%s", code, setErr.String())
+	}
+	var sent map[string]json.RawMessage
+	if err := json.Unmarshal(gotPutBody, &sent); err != nil {
+		t.Fatalf("PUT body was not valid JSON: %v; body=%s", err, gotPutBody)
+	}
+	if _, hasResting := sent["resting"]; !hasResting {
+		t.Fatalf("PUT body lost \"resting\" entirely: %s", gotPutBody)
+	}
+	var resting map[string]json.RawMessage
+	_ = json.Unmarshal(sent["resting"], &resting)
+	if _, hasBackgroundAudio := resting["backgroundAudio"]; hasBackgroundAudio {
+		t.Fatalf("PUT body added a backgroundAudio the original session never had: %s", gotPutBody)
 	}
 }
 

@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // This file is Track F seam F1's own transcription of
 // internal/coordinator/api/v1/nightsession.go into showmeshctl's
@@ -35,14 +38,70 @@ type nightSessionBackgroundAudioItem struct {
 }
 
 // nightSessionBackgroundAudio is night.session.resting.backgroundAudio,
-// present only when the deployment configures background audio.
+// present only when the deployment configures background audio: a
+// discriminated union of the INLINE form (Items and its own knobs) and the
+// REFERENCE form (MediaPlaylist), matching
+// ConfigNightSessionBackgroundAudio's own oneOf (api/openapi.yaml) -
+// MediaPlaylist is "" for the inline form. Targets (ADR-049 decision 7) is
+// the bed's own optional audio.node id list and applies identically to
+// both forms; MarshalJSON/UnmarshalJSON below keep it (and every other
+// field) from being dropped by "night get --output json | night set"
+// regardless of which form is on the wire.
 type nightSessionBackgroundAudio struct {
-	Items          []nightSessionBackgroundAudioItem `json:"items"`
-	Repeat         string                            `json:"repeat"`
-	Resume         string                            `json:"resume"`
-	ItemTransition string                            `json:"itemTransition"`
-	CrossfadeMs    *int                              `json:"crossfadeMs,omitempty"`
-	MaxGainDb      float64                           `json:"maxGainDb"`
+	MediaPlaylist  string
+	Items          []nightSessionBackgroundAudioItem
+	Repeat         string
+	Resume         string
+	ItemTransition string
+	CrossfadeMs    *int
+	MaxGainDb      float64
+	Targets        []string
+}
+
+func (b nightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
+	if b.MediaPlaylist != "" {
+		return json.Marshal(struct {
+			MediaPlaylist string   `json:"mediaPlaylist"`
+			Targets       []string `json:"targets,omitempty"`
+		}{MediaPlaylist: b.MediaPlaylist, Targets: b.Targets})
+	}
+	return json.Marshal(struct {
+		Items          []nightSessionBackgroundAudioItem `json:"items"`
+		Repeat         string                            `json:"repeat"`
+		Resume         string                            `json:"resume"`
+		ItemTransition string                            `json:"itemTransition"`
+		CrossfadeMs    *int                              `json:"crossfadeMs,omitempty"`
+		MaxGainDb      float64                           `json:"maxGainDb"`
+		Targets        []string                          `json:"targets,omitempty"`
+	}{
+		Items: b.Items, Repeat: b.Repeat, Resume: b.Resume, ItemTransition: b.ItemTransition,
+		CrossfadeMs: b.CrossfadeMs, MaxGainDb: b.MaxGainDb, Targets: b.Targets,
+	})
+}
+
+func (b *nightSessionBackgroundAudio) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		MediaPlaylist  string                            `json:"mediaPlaylist"`
+		Items          []nightSessionBackgroundAudioItem `json:"items"`
+		Repeat         string                            `json:"repeat"`
+		Resume         string                            `json:"resume"`
+		ItemTransition string                            `json:"itemTransition"`
+		CrossfadeMs    *int                              `json:"crossfadeMs"`
+		MaxGainDb      float64                           `json:"maxGainDb"`
+		Targets        []string                          `json:"targets"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	b.MediaPlaylist = wire.MediaPlaylist
+	b.Items = wire.Items
+	b.Repeat = wire.Repeat
+	b.Resume = wire.Resume
+	b.ItemTransition = wire.ItemTransition
+	b.CrossfadeMs = wire.CrossfadeMs
+	b.MaxGainDb = wire.MaxGainDb
+	b.Targets = wire.Targets
+	return nil
 }
 
 // nightSessionResting is night.session.resting.
