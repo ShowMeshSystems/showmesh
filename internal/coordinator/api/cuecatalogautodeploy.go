@@ -55,7 +55,10 @@ func (h *handlers) AutoDeployCueCatalog(ctx context.Context, now time.Time, node
 		h.logDebug("cue catalog auto-deploy: held", "node", nodeID, "evidenceUncertain", hold.EvidenceUncertain, "reason", hold.Reason)
 		return
 	}
-	res := h.dispatchCueCatalogDeploy(ctx, now, nodeID, uuid.NewString(), cueCatalogDeployIssuer{
+	// override is always false: this system principal must never be
+	// recorded as the overrider. Only an operator's own explicit request
+	// can pass override=true.
+	res := h.dispatchCueCatalogDeploy(ctx, now, nodeID, uuid.NewString(), false, cueCatalogDeployIssuer{
 		PrincipalID: cueCatalogAutoDeploySystemPrincipalID, PrincipalName: cueCatalogAutoDeploySystemPrincipalName,
 	})
 	switch {

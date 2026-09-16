@@ -115,6 +115,23 @@ func (h *handlers) nightCheckNodeCatalogCurrent(ctx context.Context, now time.Ti
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not resolve node catalog acknowledgement status: " + err.Error()}, true
 	}
 	if status == v1.CueCatalogStatusCurrent {
+		// A node can only hold a conflicted revision via an operator's own
+		// override=true deploy. fppreconcile.CueCatalogOverrideStatus is
+		// the one place this coverage decision is made, reused so this and
+		// exclusiveClaimReadiness never disagree.
+		if len(catalog.Conflicts) > 0 {
+			covered, overrideRec, err := fppreconcile.CueCatalogOverrideStatus(ctx, h.deps.AssetManifests, nodeID, catalog)
+			if err != nil {
+				return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "could not resolve node catalog override status: " + err.Error()}, true
+			}
+			if covered {
+				return nightReadinessCheck{name: name, health: nightHealthDegraded(),
+					reason: fppreconcile.CueCatalogOverrideWarning(nodeID, catalog, overrideRec)}, true
+			}
+			return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
+				"node %q holds the active show's required catalog revision %q, but it carries an exclusive-claim "+
+					"conflict (%s) no recorded operator override covers", nodeID, catalog.Revision, catalog.Conflicts[0].Detail())}, true
+		}
 		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
 			"node %q has acknowledged the active show's required catalog revision %q", nodeID, catalog.Revision)}, true
 	}

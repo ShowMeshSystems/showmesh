@@ -26,6 +26,7 @@ func TestOpenAPICueCatalogDocumentIsWellFormed(t *testing.T) {
 		"CueCatalogAnnouncementOutput", "CueCatalogOutputs", "CueCatalogEntry", "CueCatalogResponse",
 		"CueCatalogAcknowledgeRequest", "CueCatalogAcknowledgeResponse",
 		"CueCatalogDeployRequest", "CueCatalogDeployResponse", "CueCatalogDeployResult",
+		"CueCatalogOverriddenCondition",
 	} {
 		compileSchema(t, c, name)
 	}

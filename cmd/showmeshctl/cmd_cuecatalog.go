@@ -84,21 +84,30 @@ type cueCatalogAcknowledgeResponse struct {
 
 type cueCatalogDeployRequest struct {
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	Override       bool   `json:"override,omitempty"`
+}
+
+type cueCatalogOverriddenConditionRecord struct {
+	Kind  string `json:"kind"`
+	CueA  string `json:"cueA"`
+	CueB  string `json:"cueB"`
+	Claim string `json:"claim"`
 }
 
 type cueCatalogDeployResult struct {
-	CommandID            string     `json:"commandId"`
-	IdempotencyKey       string     `json:"idempotencyKey"`
-	Node                 string     `json:"node"`
-	Replay               bool       `json:"replay"`
-	Show                 string     `json:"show"`
-	Generation           int64      `json:"generation"`
-	Revision             string     `json:"revision"`
-	Outcome              string     `json:"outcome"`
-	Reason               string     `json:"reason,omitempty"`
-	AcknowledgedRevision string     `json:"acknowledgedRevision,omitempty"`
-	DispatchedAt         time.Time  `json:"dispatchedAt"`
-	ResolvedAt           *time.Time `json:"resolvedAt,omitempty"`
+	CommandID            string                                `json:"commandId"`
+	IdempotencyKey       string                                `json:"idempotencyKey"`
+	Node                 string                                `json:"node"`
+	Replay               bool                                  `json:"replay"`
+	Show                 string                                `json:"show"`
+	Generation           int64                                 `json:"generation"`
+	Revision             string                                `json:"revision"`
+	Outcome              string                                `json:"outcome"`
+	Reason               string                                `json:"reason,omitempty"`
+	AcknowledgedRevision string                                `json:"acknowledgedRevision,omitempty"`
+	OverriddenConditions []cueCatalogOverriddenConditionRecord `json:"overriddenConditions,omitempty"`
+	DispatchedAt         time.Time                             `json:"dispatchedAt"`
+	ResolvedAt           *time.Time                            `json:"resolvedAt,omitempty"`
 }
 
 type cueCatalogDeployResponse struct {
@@ -286,7 +295,9 @@ func cmdCueCatalogAcknowledge(args []string, stdout, stderr io.Writer, clock fun
 func cmdCueCatalogDeploy(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl cuecatalog deploy", stderr)
 	var idempotencyKey string
+	var override bool
 	fs.StringVar(&idempotencyKey, "idempotency-key", "", "reuse a prior request's key to replay its result instead of dispatching again")
+	fs.BoolVar(&override, "override", false, "accept an H0.5 exclusive-claim conflict and deploy anyway; has no effect when the catalog carries no conflict")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl cuecatalog deploy <nodeId> [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nResolve this coordinator's own current Cue catalog for <nodeId> and push it")
@@ -294,6 +305,11 @@ func cmdCueCatalogDeploy(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "write: requires the cuecatalog:deploy scope (admin only). On a")
 		_, _ = fmt.Fprintln(stderr, "confirmed outcome, the revision the node reports holding is also")
 		_, _ = fmt.Fprintln(stderr, "recorded as its acknowledgement.")
+		_, _ = fmt.Fprintln(stderr, "\n-override deploys anyway when the resolved catalog carries an H0.5")
+		_, _ = fmt.Fprintln(stderr, "exclusive-claim conflict that would otherwise refuse with a 409. The")
+		_, _ = fmt.Fprintln(stderr, "operator issuing this command is recorded as having accepted that")
+		_, _ = fmt.Fprintln(stderr, "conflict for exactly the deployed revision; it does not carry forward to a")
+		_, _ = fmt.Fprintln(stderr, "later revision. It never bypasses any other refusal.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -316,7 +332,7 @@ func cmdCueCatalogDeploy(args []string, stdout, stderr io.Writer, clock func() t
 	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
-	req := cueCatalogDeployRequest{IdempotencyKey: idempotencyKey}
+	req := cueCatalogDeployRequest{IdempotencyKey: idempotencyKey, Override: override}
 	var resp cueCatalogDeployResponse
 	if err := c.postJSON(ctx, "/api/v1/nodes/"+url.PathEscape(nodeID)+"/cue-catalog/deploy", req, &resp); err != nil {
 		return reportError(stderr, "cuecatalog deploy", err)
@@ -341,5 +357,8 @@ func cmdCueCatalogDeploy(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprint(stdout, " (replay)")
 	}
 	_, _ = fmt.Fprintln(stdout)
+	for _, c := range cmd.OverriddenConditions {
+		_, _ = fmt.Fprintf(stdout, "  overrode %s: cues %s and %s, claim %s\n", c.Kind, c.CueA, c.CueB, c.Claim)
+	}
 	return exitOK
 }

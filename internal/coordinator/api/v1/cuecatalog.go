@@ -136,6 +136,22 @@ const (
 	CueCatalogStatusNeverAcknowledged = "catalog-unacknowledged"
 )
 
+// CueCatalogOverriddenCondition is one refusal condition an operator
+// accepted via POST .../cue-catalog/deploy's `override: true`. Kind is
+// presently always CueCatalogOverrideKindExclusiveClaimConflict.
+// CueA/CueB/Claim mirror assetsync.CatalogConflict's own fields.
+type CueCatalogOverriddenCondition struct {
+	Kind  string `json:"kind"`
+	CueA  string `json:"cueA"`
+	CueB  string `json:"cueB"`
+	Claim string `json:"claim"`
+}
+
+// CueCatalogOverrideKindExclusiveClaimConflict is the one
+// [CueCatalogOverriddenCondition.Kind] value this coordinator produces
+// today: an H0.5 exclusive-claim conflict ([assetsync.CatalogConflict]).
+const CueCatalogOverrideKindExclusiveClaimConflict = "exclusive-claim-conflict"
+
 // CueCatalogDeployResult is the outcome of dispatching cuecatalog.deploy
 // to one node — the coordinator's own push half of TRACK-H-H3-SPEC.md
 // section 4, complementing CueCatalogAcknowledgeResponse's pull/report
@@ -151,6 +167,8 @@ const (
 // documents.
 // AcknowledgedRevision is the revision the node reported holding, present
 // only when Outcome is "confirmed".
+// OverriddenConditions is non-empty exactly when this dispatch bypassed a
+// refusal because the request carried `override: true`.
 type CueCatalogDeployResult struct {
 	CommandID      string `json:"commandId"`
 	IdempotencyKey string `json:"idempotencyKey"`
@@ -164,6 +182,8 @@ type CueCatalogDeployResult struct {
 	Outcome              string `json:"outcome"`
 	Reason               string `json:"reason,omitempty"`
 	AcknowledgedRevision string `json:"acknowledgedRevision,omitempty"`
+
+	OverriddenConditions []CueCatalogOverriddenCondition `json:"overriddenConditions,omitempty"`
 
 	DispatchedAt *string `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt,omitempty"`
