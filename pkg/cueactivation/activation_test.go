@@ -195,7 +195,7 @@ func TestScheduleProbeSessionRevisionIsAdditiveNotMultiplicative(t *testing.T) {
 		t.Fatalf("revisions = (%d, %d, %d), want (%d, %d, %d): the derivation must add the step, never multiply the timestamp by it",
 			apply, prepare, clear, base, base+1, base+2)
 	}
-	if !(apply < prepare && prepare < clear) {
+	if apply >= prepare || prepare >= clear {
 		t.Fatalf("revisions are not strictly increasing: apply=%d prepare=%d clear=%d", apply, prepare, clear)
 	}
 }
