@@ -17,15 +17,12 @@ import (
 )
 
 // This file proves ADR-049 decision 3's own coordinator-side scheduling
-// step. show.cue's audio output is still single-target: a separate,
-// not-yet-merged change owns the multi-target schema ADR-049 decision 1
-// describes, so a real single Cue cannot resolve on two nodes' catalogs
-// yet. These fixtures fake it by giving each of two nodes its OWN
-// legitimately single-targeted Cue and building one Activation per node
-// for its own Cue: scheduleCueActivations never inspects whether the
-// Activations in one batch share a CueID, only whether each node's own
-// resolved outputs are audio-bearing, so this is indistinguishable from
-// its own code's perspective from the eventual shared-CueID case.
+// step. These fixtures give each of two nodes its OWN single-targeted Cue
+// rather than one Cue naming both nodes in outputs.audio.targets:
+// scheduleCueActivations never inspects whether the Activations in one
+// batch share a CueID, only whether each node's own resolved outputs are
+// audio-bearing, so this is indistinguishable from its own code's
+// perspective from the shared-CueID case ADR-049 decision 1 also enables.
 
 // putAudioNodeNoLTCForTest declares nodeID's own audio.node WITHOUT an
 // LTC route: [handlers.nodeHoldsMediaClock] reports false for it, unlike
@@ -45,13 +42,12 @@ func putAudioNodeNoLTCForTest(t *testing.T, st *store.Store, nodeID string) {
 }
 
 // putTargetedAudioCueForTest writes a show.cue whose audio output
-// explicitly targets nodeID, the one node this Cue resolves on,
-// pre-merge (assetsync.audioTargets.Owns's own single-target rule).
+// explicitly targets nodeID, the one node this Cue resolves on.
 func putTargetedAudioCueForTest(t *testing.T, st *store.Store, cueID, showID, nodeID string) {
 	t.Helper()
 	payload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
 		Show: showID, Name: cueID,
-		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-" + cueID, Target: nodeID}},
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-" + cueID, Targets: []string{nodeID}}},
 	})
 	if err != nil {
 		t.Fatalf("encode show.cue payload: %v", err)
