@@ -256,7 +256,11 @@ type Report struct {
 // yet. Building one is out of this seam's scope (H2 ships no activation);
 // this is the narrower, safer reading of a spec phrase this codebase does
 // not yet have infrastructure to answer more richly.
-func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, playlistID string, revision int64, p config.ShowPlaylistPayload) (Report, error) {
+//
+// clock is ADR-049 decision 5's clock-alignment evidence source (see
+// [ClockObservationsLister]); nil is safe, so a caller or test unconcerned
+// with audio clock alignment need not wire it.
+func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, clock ClockObservationsLister, playlistID string, revision int64, p config.ShowPlaylistPayload) (Report, error) {
 	if p.Runner != config.ShowPlaylistRunnerFPP || p.FPP == nil {
 		return Report{}, fmt.Errorf("fppreconcile: playlist readiness requires an fpp-runner playlist with an fpp binding, got runner %q", p.Runner)
 	}
@@ -470,14 +474,18 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 
 	// Condition 10: exactly one node may emit LTC, and every referenced
 	// Cue's audio, LTC and announcement outputs must resolve to a node
-	// that can receive them (ADR-045 decisions 1 and 2).
-	if cond, reason, err := audioTargetReadiness(ctx, st, logger, p); err != nil {
+	// that can receive them (ADR-045 decisions 1 and 2). The warning is
+	// ADR-049 decision 5's own: a multi-node Cue whose targets exclude the
+	// program+ltc node can never start aligned.
+	if cond, reason, warning, err := audioTargetReadiness(ctx, st, logger, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
 		report.Ready = false
 		report.FailingCondition = cond
 		report.Reason = reason
 		return report, nil
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
 	}
 
 	// Condition 11: every node that must render or play one of this Show's
@@ -490,6 +498,20 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.FailingCondition = cond
 		report.Reason = reason
 		return report, nil
+	}
+
+	// Condition 12: ADR-049 decision 5's clock-alignment warning: once a
+	// Cue's audio and announcement outputs, together, target more than one
+	// node, every node they reach is checked for the SAME clock-provider
+	// lock state internal/agent/audio.Manager.StartAt honors when it
+	// decides whether a scheduled multi-node start is usable. Never a
+	// failure (see [audioTargetClockReadiness]'s own doc comment): it runs
+	// after condition 11 so an asset failure is always reported on its own
+	// terms, never silently replaced by a warning.
+	if warning, err := audioTargetClockReadiness(ctx, st, logger, clock, time.Now(), p); err != nil {
+		return Report{}, err
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
 	}
 
 	return report, nil
