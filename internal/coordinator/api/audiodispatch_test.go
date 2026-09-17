@@ -85,6 +85,14 @@ type fakeAudioPublisher struct {
 	// canceling the caller's own request context) at the exact moment a
 	// real broker round trip would be in flight, without a real broker.
 	onAwaitResponse func()
+
+	// onAwaitResponseForNode, when set, blocks AwaitResponse for one
+	// specific dispatch, keyed exactly like resultsByNode ("nodeID" or
+	// "nodeID:action", the latter taking priority) - a test's way to make
+	// ONE node's own dispatch hang while every other node's own dispatch
+	// still answers normally, which onAwaitResponse (fired for every
+	// dispatch, before the node is even known) cannot express.
+	onAwaitResponseForNode map[string]func()
 }
 
 // dispatchedAudioCommand is one recorded publish: the action string, the
@@ -149,6 +157,13 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 	cmd, err := mqttproto.DecodeCmdPayload(cmdEnv)
 	if err != nil {
 		return broker.Message{}, err
+	}
+	if f.onAwaitResponseForNode != nil {
+		if fn, ok := f.onAwaitResponseForNode[cmdEnv.NodeID+":"+cmd.Action]; ok {
+			fn()
+		} else if fn, ok := f.onAwaitResponseForNode[cmdEnv.NodeID]; ok {
+			fn()
+		}
 	}
 
 	result := f.result

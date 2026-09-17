@@ -448,20 +448,143 @@ func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T
 }
 
 // TestNightCheckAnnouncementAssets_NeverInventsAPass mirrors the same
-// rule for announcement content: not_verifiable when one IS configured
-// (this coordinator holds no evidence for it), not_configured when none
-// is (LOW 14: absent OPTIONAL configuration is a different fact from a
-// structurally unverifiable check).
+// rule for announcement content: not_verifiable when this coordinator
+// cannot resolve a configured announcement cue's own bound action at all
+// (here, an empty Action - no show.action to read), not_configured when
+// no announcement cue is configured at all (LOW 14: absent OPTIONAL
+// configuration is a different fact from a structurally unverifiable
+// check).
 func TestNightCheckAnnouncementAssets_NeverInventsAPass(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	ctx := context.Background()
+	payload := config.NightSessionPayload{Show: "halloween"}
+
 	withAnnouncement := []config.NightSessionCue{{Name: "thanks", Role: config.NightSessionCueRoleAnnouncement}}
-	check := nightCheckAnnouncementAssets(withAnnouncement)
+	check := h.nightCheckAnnouncementAssets(ctx, withAnnouncement, payload)
 	if check.health != nightCheckStateNotVerifiable {
-		t.Fatalf("with an announcement cue: health = %v, want not_verifiable", check.health)
+		t.Fatalf("with an announcement cue bound to no action: health = %v, want not_verifiable", check.health)
 	}
 
 	withoutAnnouncement := []config.NightSessionCue{{Name: "lights", Role: config.NightSessionCueRoleLighting}}
-	check = nightCheckAnnouncementAssets(withoutAnnouncement)
+	check = h.nightCheckAnnouncementAssets(ctx, withoutAnnouncement, payload)
 	if check.health != nightCheckStateNotConfigured {
 		t.Fatalf("with no announcement cue: health = %v, want not_configured", check.health)
+	}
+}
+
+// announcementReadinessAsset registers a current node-scoped "audio"
+// asset row, mirroring putBackgroundAudioAsset (nightbackgroundaudio_test.go)
+// but keyed by contentHash directly, per ADR-049 decisions 7 and 9, for an
+// announcement, which carries no sequence identity.
+func announcementReadinessAsset(t *testing.T, st *store.Store, show, node, assetID, contentHash string) {
+	t.Helper()
+	if _, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: assetID, ShowID: show, SequenceID: "announcement", TargetKind: store.AssetTargetKindNode, TargetID: node,
+		MediaType: "audio", ContentHash: contentHash, RuntimeFilename: assetID + ".mp3", SizeBytes: 4096,
+		Backend: "volume", StorageKey: assetID, CreatedByPrincipalID: "test", CreatedByPrincipalName: "test",
+	}); err != nil {
+		t.Fatalf("create announcement asset %q: %v", assetID, err)
+	}
+}
+
+// announcementReadinessAction registers a show.action bound to nodeIDs,
+// carrying the ADR-049 decision 9 media reference in its apply params.
+func announcementReadinessAction(t *testing.T, st *store.Store, id string, nodeIDs []string, assetID, contentHash, filename string) {
+	t.Helper()
+	putNightAction(t, st, id, config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationAudio, AudioNodeIDs: config.AudioNodeIDList(nodeIDs),
+			AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
+			Params: map[string]any{"media": map[string]any{
+				"assetId": assetID, "contentHash": contentHash, "filename": filename, "sizeBytes": float64(4096),
+			}},
+		},
+	})
+}
+
+// TestNightCheckAnnouncementAssets_HealthyWhenEveryListedNodeCanGetTheFile
+// proves ADR-049 decisions 7 and 9 answer healthy once a complete media
+// reference resolves to a copy on every listed node, with no fallback needed.
+func TestNightCheckAnnouncementAssets_HealthyWhenEveryListedNodeCanGetTheFile(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	h.deps.AssetManifests = st
+	ctx := context.Background()
+	announcementReadinessAsset(t, st, "halloween", "node-a", "ann-a", "sha256:thankyou")
+	announcementReadinessAsset(t, st, "halloween", "node-b", "ann-b", "sha256:thankyou")
+	announcementReadinessAction(t, st, "thank-you", []string{"node-a", "node-b"}, "ann-a", "sha256:thankyou", "thankyou.mp3")
+
+	cue := config.NightSessionCue{Name: "thank-you", Role: config.NightSessionCueRoleAnnouncement, Action: "thank-you"}
+	payload := config.NightSessionPayload{Show: "halloween"}
+	check := h.nightCheckAnnouncementAssets(ctx, []config.NightSessionCue{cue}, payload)
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("check = %+v, want healthy", check)
+	}
+}
+
+// TestNightCheckAnnouncementAssets_HealthyViaFallback proves a node with
+// no registered copy of its own is still healthy when a sibling target
+// node holds one, per ADR-049 decisions 7 and 9, checked at readiness.
+func TestNightCheckAnnouncementAssets_HealthyViaFallback(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	h.deps.AssetManifests = st
+	ctx := context.Background()
+	announcementReadinessAsset(t, st, "halloween", "node-a", "ann-a", "sha256:thankyou")
+	// node-b has no row of its own for this content.
+	announcementReadinessAction(t, st, "thank-you", []string{"node-a", "node-b"}, "ann-a", "sha256:thankyou", "thankyou.mp3")
+
+	cue := config.NightSessionCue{Name: "thank-you", Role: config.NightSessionCueRoleAnnouncement, Action: "thank-you"}
+	payload := config.NightSessionPayload{Show: "halloween"}
+	check := h.nightCheckAnnouncementAssets(ctx, []config.NightSessionCue{cue}, payload)
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("check = %+v, want healthy (node-b covered via node-a's fallback row)", check)
+	}
+}
+
+// TestNightCheckAnnouncementAssets_FailsNamingNodeAndFile proves the one
+// case ADR-049 decision 9's fallback cannot rescue, no listed node holds
+// the content anywhere, fails naming the node(s) and the file.
+func TestNightCheckAnnouncementAssets_FailsNamingNodeAndFile(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	h.deps.AssetManifests = st
+	ctx := context.Background()
+	// No asset row registered anywhere for this content hash.
+	announcementReadinessAction(t, st, "thank-you", []string{"node-a", "node-b"}, "ann-a", "sha256:missing", "thankyou.mp3")
+
+	cue := config.NightSessionCue{Name: "thank-you", Role: config.NightSessionCueRoleAnnouncement, Action: "thank-you"}
+	payload := config.NightSessionPayload{Show: "halloween"}
+	check := h.nightCheckAnnouncementAssets(ctx, []config.NightSessionCue{cue}, payload)
+	if check.health != nightHealthFailed() {
+		t.Fatalf("check = %+v, want failed", check)
+	}
+	if !containsAllSubstrings(check.reason, "node-a", "node-b", "thankyou.mp3") {
+		t.Fatalf("reason = %q, want it to name both nodes and the file", check.reason)
+	}
+}
+
+// TestNightCheckAnnouncementAssets_NotVerifiableWithIncompleteMediaRef
+// proves a bound audio.session.apply action whose params carry no
+// complete media reference reports not_verifiable, naming the cue and
+// action, rather than a failure or an invented pass.
+func TestNightCheckAnnouncementAssets_NotVerifiableWithIncompleteMediaRef(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	h.deps.AssetManifests = st
+	ctx := context.Background()
+	putNightAction(t, st, "thank-you", config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationAudio, AudioNodeIDs: config.AudioNodeIDList{"node-a"},
+			AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
+		},
+	})
+
+	cue := config.NightSessionCue{Name: "thank-you", Role: config.NightSessionCueRoleAnnouncement, Action: "thank-you"}
+	payload := config.NightSessionPayload{Show: "halloween"}
+	check := h.nightCheckAnnouncementAssets(ctx, []config.NightSessionCue{cue}, payload)
+	if check.health != nightCheckStateNotVerifiable {
+		t.Fatalf("check = %+v, want not_verifiable", check)
+	}
+	if !containsAllSubstrings(check.reason, "thank-you") {
+		t.Fatalf("reason = %q, want it to name the cue", check.reason)
 	}
 }

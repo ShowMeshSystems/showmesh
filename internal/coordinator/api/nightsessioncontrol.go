@@ -1672,7 +1672,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// configured: alignment is a node-level fact.
 	checks = append(checks, h.nightCheckAudioAlignment(ctx, now)...)
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
-	checks = append(checks, nightCheckAnnouncementAssets(allCues))
+	checks = append(checks, h.nightCheckAnnouncementAssets(ctx, allCues, payload))
 	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))
 
 	return checks, nightOutcomeFromChecks(checks)

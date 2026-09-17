@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/capability"
@@ -365,20 +367,60 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 	return checks
 }
 
-// nightCheckAnnouncementAssets is §13's own announcement-asset bullet -
-// see this file's own top doc comment for why it is always not_verifiable
-// here.
-func nightCheckAnnouncementAssets(cues []config.NightSessionCue) nightReadinessCheck {
+// nightCheckAnnouncementAssets is §13's own announcement-asset bullet (ADR-049 decisions 7 and 9):
+// healthy when every announcement-role cue's own media reference is deliverable to every one of its bound action's listed nodes;
+// failed, naming the node and file, when a listed node genuinely cannot get it; not_verifiable, naming the cue and action, otherwise.
+func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []config.NightSessionCue, payload config.NightSessionPayload) nightReadinessCheck {
 	name := "announcement-assets"
+	var announcements int
+	var unverifiable []string
+	var undeliverable []string
 	for _, cue := range cues {
-		if cue.Role == config.NightSessionCueRoleAnnouncement {
-			return nightReadinessCheck{
-				name: name, health: nightCheckStateNotVerifiable,
-				reason: "an announcement cue's audio content lives inside its bound show.action's own opaque target.params; this coordinator has no structured asset reference for it to check against the asset store",
-			}
+		if cue.Role != config.NightSessionCueRoleAnnouncement {
+			continue
+		}
+		announcements++
+		action, _, err := nightResolveShowAction(ctx, h.deps.Config, cue.Action)
+		if err != nil {
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: could not read its bound show.action %q: %s", cue.Name, cue.Action, err.Error()))
+			continue
+		}
+		if !nightAnnouncementTargetDeclarable(action.Target) {
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: action %q is not an audio.session.apply, so it carries no media reference to check", cue.Name, cue.Action))
+			continue
+		}
+		media := nightAnnouncementMediaRef(action.Target.Params)
+		if !media.Complete() {
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: action %q's own params carry no complete media reference (assetId/contentHash/filename)", cue.Name, cue.Action))
+			continue
+		}
+		if len(action.Target.AudioNodeIDs) == 0 {
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: action %q names no target node", cue.Name, cue.Action))
+			continue
+		}
+		if h.deps.AssetManifests == nil {
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: no asset manifest store is configured on this coordinator", cue.Name))
+			continue
+		}
+		missing, cerr := assetsync.AnnouncementNodesWithoutCopy(ctx, h.deps.AssetManifests, payload.Show, action.Target.AudioNodeIDs, assetsync.AnnouncementMedia(media))
+		if cerr != nil {
+			unverifiable = append(unverifiable, fmt.Sprintf("%s: could not check asset delivery: %s", cue.Name, cerr.Error()))
+			continue
+		}
+		if len(missing) > 0 {
+			undeliverable = append(undeliverable, fmt.Sprintf("%s: node(s) %v cannot get file %q (no registered copy of it exists on any of action %q's listed target nodes)", cue.Name, missing, media.Filename, cue.Action))
 		}
 	}
-	return nightReadinessCheck{name: name, health: nightCheckStateNotConfigured, reason: "no announcement-role cue is configured"}
+	switch {
+	case announcements == 0:
+		return nightReadinessCheck{name: name, health: nightCheckStateNotConfigured, reason: "no announcement-role cue is configured"}
+	case len(undeliverable) > 0:
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: strings.Join(undeliverable, "; ")}
+	case len(unverifiable) > 0:
+		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: strings.Join(unverifiable, "; ")}
+	default:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d announcement cue(s) name a complete media reference deliverable to every listed node", announcements)}
+	}
 }
 
 // nightCheckAnnouncementPolicyEnforceable reports whether every
