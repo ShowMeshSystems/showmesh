@@ -18,10 +18,15 @@ type CueActivateResponse struct {
 	// reached at most one audio-bearing node (nothing to align, per that
 	// ADR's "a Cue reaching one node behaves exactly as today"), or when
 	// it reached more than one and the coordinator chose one shared start
-	// instant for all of them. False only when more than one audio-
-	// bearing node was reached and no usable media-clock reading could be
-	// obtained: every one of those nodes still started, on arrival,
-	// never reported as a synchronized success it did not reach.
+	// instant for all of them AND every node's own confirmed result
+	// reports it actually started at that instant. False when more than
+	// one audio-bearing node was reached and no usable media-clock
+	// reading could be obtained (every one of those nodes still started,
+	// on arrival), or when the coordinator did choose a shared instant
+	// but some node's own confirmed result reports it did not honor that
+	// instant (that node's own clock was not usable when the command
+	// reached it) - either way, no node is ever reported as a
+	// synchronized success it did not reach.
 	Aligned bool `json:"aligned"`
 	// UnalignedReason is the concrete reason, non-empty only when Aligned
 	// is false.

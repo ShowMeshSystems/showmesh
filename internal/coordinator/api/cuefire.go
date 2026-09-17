@@ -178,6 +178,23 @@ func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 
 	aligned, unalignedReason, scheduledAtNs := cueActivationAlignment(activations)
+	if aligned {
+		// The coordinator's own scheduling round (above) only ever sees
+		// whether IT could pick and dispatch one shared instant; it has no
+		// way to know whether a target node's own clock actually honored
+		// that instant once the command reached it. A node's own confirmed
+		// result carries UnalignedReason when it did not (cuefire.go's own
+		// cueActivateWireOutcome, fed from cueActivationNodeUnalignedReasonFromResult),
+		// covering both a missed instant and an unusable clock provider
+		// alike, so a caller that only inspected the pre-dispatch schedule
+		// would report "aligned" for a Cue that a real node never started
+		// at the shared instant.
+		if nodeID, reason, ok := firstConfirmedUnalignedReason(nodes); ok {
+			aligned = false
+			unalignedReason = fmt.Sprintf("node %q confirmed but did not honor the shared start instant: %s", nodeID, reason)
+			scheduledAtNs = nil
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
@@ -230,4 +247,17 @@ func cueActivateWireOutcome(o cueActivationDispatchOutcome) v1.CueActivationNode
 	default:
 		return v1.CueActivationNodeOutcome{NodeID: o.NodeID, Outcome: outcomeWordFailed, OutcomeReason: "no outcome was recorded for this node"}
 	}
+}
+
+// firstConfirmedUnalignedReason returns the first (by NodeID, so
+// deterministic against nodes already sorted by handleActivateCue) node
+// that confirmed its activation but reported a non-empty UnalignedReason.
+// ok is false when no node did.
+func firstConfirmedUnalignedReason(nodes []v1.CueActivationNodeOutcome) (nodeID, reason string, ok bool) {
+	for _, n := range nodes {
+		if n.Confirmed && n.UnalignedReason != "" {
+			return n.NodeID, n.UnalignedReason, true
+		}
+	}
+	return "", "", false
 }

@@ -445,15 +445,15 @@ func (m *Manager) resolveScheduleLocked(ctx context.Context, scheduledAtNs *int6
 	}
 	source := m.clockSourceSnapshot()
 	if source == nil {
-		return nil, "started on arrival: this node has no media clock wired, so the requested start instant was ignored", nil
+		return nil, pkgaudio.ReasonScheduledStartIgnored + ": started on arrival: this node has no media clock wired, so the requested start instant was ignored", nil
 	}
 	status := source.Poll(ctx)
 	if status.State != agentclock.StateLocked {
-		return nil, fmt.Sprintf("started on arrival: this node's clock provider reports %q (%s), so the requested start instant was ignored", status.State, status.Reason), nil
+		return nil, fmt.Sprintf("%s: started on arrival: this node's clock provider reports %q (%s), so the requested start instant was ignored", pkgaudio.ReasonScheduledStartIgnored, status.State, status.Reason), nil
 	}
 	mediaNow := source.Now(ctx)
 	if !mediaNow.Valid {
-		return nil, "started on arrival: this node's media clock is unreadable (" + mediaNow.Reason + "), so the requested start instant was ignored", nil
+		return nil, pkgaudio.ReasonScheduledStartIgnored + ": started on arrival: this node's media clock is unreadable (" + mediaNow.Reason + "), so the requested start instant was ignored", nil
 	}
 
 	t0 := time.Unix(0, *scheduledAtNs)

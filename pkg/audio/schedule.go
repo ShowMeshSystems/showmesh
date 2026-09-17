@@ -29,6 +29,15 @@ const ParamScheduledAtNs = "scheduledAtNs"
 // legible.
 const ReasonScheduledStartInPast = "scheduled_start_in_past"
 
+// ReasonScheduledStartIgnored prefixes the note a node reports when it
+// accepted a [ParamScheduledAtNs] start but its own media clock was not
+// usable to honor that instant, so it started on arrival instead. Unlike
+// [ReasonScheduledStartInPast], this is not a refusal: the node still
+// confirms the start, only unaligned to the shared instant, and a caller
+// matches this prefix rather than the free text after it to tell the two
+// apart.
+const ReasonScheduledStartIgnored = "scheduled_start_ignored"
+
 // The audio.session.prepare result's media-clock readiness fields. A
 // coordinator cannot pick a T0 without a reading of the target node's own
 // media clock (RES-019 section 6: it obtains the clock from the node that

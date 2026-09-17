@@ -172,9 +172,12 @@ func announcementMixPolicy(policy string) (pkgaudio.MixPolicy, error) {
 // ltcgen, LTCGenerator.StartLTC, or multisync.Timeline directly; the
 // position crosses into the audio clock domain as data (PositionMS, a
 // plain time.Duration argument to Seek), never as a second clock.
-// activateAudio's string return is the unaligned reason from
-// [startUnalignedOnArrival]'s missed-instant fallback when that fallback's
-// own start and seek both succeeded; empty on every other successful path.
+// activateAudio's string return is the unaligned reason: either
+// [startUnalignedOnArrival]'s missed-instant fallback once its own start
+// and seek both succeeded, or the scheduled start's own confirmed outcome
+// naming why THIS node's clock could not honor the instant it started
+// on arrival instead ([pkgaudio.ReasonScheduledStartIgnored]); empty on
+// every other successful path.
 func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput, announcement *cuecatalog.AnnouncementOutput) (string, error) {
 	if out.Filename == "" {
 		return "", fmt.Errorf("cue.activate: audio output for Cue %q resolves asset %q to no runtime filename (no matching asset uploaded); refusing to open anything by asset id (ADR-043 decision 6)", act.CueID, out.Asset)
@@ -264,6 +267,17 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 				return startUnalignedOnArrival(ctx, mgr, id, act, position, startOutcome.Reason)
 			}
 			return "", fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+		}
+		// A started outcome still carries [pkgaudio.ReasonScheduledStartIgnored]
+		// in its Reason when this node's own clock could not honor the
+		// instant (resolveScheduleLocked's ignored-instant note, set onto
+		// the outcome by [audio.Manager.start] once it succeeds): this node
+		// confirmed and is playing, just not at the shared instant, exactly
+		// the same unaligned-but-confirmed shape startUnalignedOnArrival
+		// reports for a missed instant, so it is surfaced identically
+		// rather than silently dropped.
+		if strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartIgnored) {
+			return startOutcome.Reason, nil
 		}
 		return "", nil
 	}

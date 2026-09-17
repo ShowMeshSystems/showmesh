@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // This file proves POST /api/v1/cues/{id}/activate's own three load-
@@ -302,5 +306,97 @@ func TestCueFireSurvivesServerWriteTimeout(t *testing.T) {
 	}
 	if resp.Nodes[0].Outcome != outcomeWordUnconfirmed {
 		t.Fatalf("outcome = %q, want %q: the connection surviving the server's short WriteTimeout must have delivered the real unconfirmed body; body: %s", resp.Nodes[0].Outcome, outcomeWordUnconfirmed, body)
+	}
+}
+
+// TestHandleActivateCueNodeIgnoredSharedInstantReportsUnaligned proves the
+// Fire response's top-level Aligned/UnalignedReason are not just the
+// coordinator's own PRE-DISPATCH scheduling decision (cueActivationAlignment,
+// read off the activations map before any node result exists). Here the
+// coordinator successfully chooses ONE shared instant for both nodes of a
+// real multi-target Cue (cueactivationschedule_test.go's own
+// putMultiTargetAudioCueForTest fixture), but "audio-second"'s own
+// confirmed result reports it did not honor that instant (as internal/agent/
+// cueactivationaudio.go's activateAudio now reports for a node whose own
+// clock provider is unusable, matching startUnalignedOnArrival's existing
+// missed-instant shape). Before this fix, the top level still reported
+// aligned:true — this Cue's coordinator-side schedule succeeded — even
+// though a real node never started at the shared instant.
+func TestHandleActivateCueNodeIgnoredSharedInstantReportsUnaligned(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	const showID, cueID = "halloween-2026", "cue-multi"
+	nodeIDs := []string{"audio-holder", "audio-second"}
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putAudioNodeForTest(t, setup.st, "audio-holder")
+	putAudioNodeNoLTCForTest(t, setup.st, "audio-second")
+	declareNodeForTest(t, setup.st, "audio-holder")
+	declareNodeForTest(t, setup.st, "audio-second")
+	putFreshReportForTest(t, setup.st, "audio-holder", now)
+	putFreshReportForTest(t, setup.st, "audio-second", now)
+	putMultiTargetAudioCueForTest(t, setup.st, cueID, showID, nodeIDs)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, cueID, "audio-holder", now)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, cueID, "audio-second", now)
+	putPlaylistForTest(t, setup.st, "playlist-multi", config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "inst-1", PlaylistName: "Main", PlaylistHash: hash64ForTest("70a11")},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-multi", Cue: cueID, FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+		},
+	})
+	putActiveShowForTest(t, setup.st, showID)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	const unalignedReason = pkgaudio.ReasonScheduledStartIgnored + `: started on arrival: this node's clock provider reports "failed" (read-only management socket), so the requested start instant was ignored`
+	setup.pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"audio-holder:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"audio-second:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+		"audio-holder:cue.activate":          cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized),
+		"audio-second:cue.activate":          cueActivationNodeConfirmedUnalignedResultPayload(unalignedReason),
+	}
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+
+	rec := httptest.NewRecorder()
+	h.handleActivateCue(rec, newCueFireTestRequest(t, cueID))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	var resp v1.CueActivateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
+	}
+	if len(resp.Nodes) != 2 {
+		t.Fatalf("len(nodes) = %d, want 2; nodes = %+v", len(resp.Nodes), resp.Nodes)
+	}
+	var second v1.CueActivationNodeOutcome
+	found := false
+	for _, n := range resp.Nodes {
+		if n.NodeID == "audio-second" {
+			second, found = n, true
+		}
+	}
+	if !found {
+		t.Fatalf("nodes = %+v, want an entry for audio-second", resp.Nodes)
+	}
+	if !second.Confirmed || second.UnalignedReason != unalignedReason {
+		t.Fatalf("audio-second node outcome = %+v, want Confirmed true and UnalignedReason %q", second, unalignedReason)
+	}
+	if resp.Aligned {
+		t.Fatalf("Aligned = true, want false: audio-second confirmed but did not honor the shared instant this Cue's own scheduling round chose")
+	}
+	if resp.UnalignedReason == "" {
+		t.Fatalf("UnalignedReason is empty, want a non-empty reason naming the node that ignored the instant")
+	}
+	if !strings.Contains(resp.UnalignedReason, "audio-second") {
+		t.Fatalf("UnalignedReason = %q, want it to name node %q", resp.UnalignedReason, "audio-second")
+	}
+	if resp.ScheduledAtNs != nil {
+		t.Fatalf("ScheduledAtNs = %v, want nil once Aligned is false", resp.ScheduledAtNs)
 	}
 }
