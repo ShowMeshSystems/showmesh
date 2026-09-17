@@ -385,7 +385,7 @@ func decideMismatch(ctx context.Context, st *store.Store, active assetsync.Activ
 // nothing to govern), so there is nothing coherent to undo and
 // Decision.EvidenceBroken is left nil.
 func decideEvidenceBroken(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
-	reason := fmt.Sprintf("%s; a sequence-regression refusal was recorded for this instance at %s, so this evidence can no longer be trusted",
+	reason := fmt.Sprintf("%s. A sequence-regression refusal was recorded for this instance at %s, so this reading can no longer be trusted.",
 		result.Reason, obs.EvidenceBrokenAt.UTC().Format(time.RFC3339))
 	if result.Outcome != fppreconcile.OutcomeResolved {
 		return Decision{State: StateEvidenceBroken, Reason: reason}, nil
@@ -746,7 +746,7 @@ func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inven
 		}
 	}
 	if now.After(deadline) {
-		return false, fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+		return false, fmt.Sprintf("cue %q: node %q's asset inventory is from before the last change (received at %s) and may be out of date. Wait for the node to report again.",
 			entry.CueID, nodeID, report.ReportedAt.Format(time.RFC3339)), nil
 	}
 	if !report.Complete {

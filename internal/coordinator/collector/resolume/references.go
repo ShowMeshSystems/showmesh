@@ -273,8 +273,8 @@ func resolveClipCandidates(matched []clipCandidate, ref ClipReference, deckDesc 
 		// "add a layer" stays the correct advice for the whole refusal.
 		if len(layerCounts) == 1 {
 			return 0, fmt.Errorf(
-				"more than one clip named %q %s (%s); these clips also share the same layer, so no reference can "+
-					"ever tell them apart — rename one of them in Resolume and re-upload the composition",
+				"more than one clip named %q %s (%s), and these clips also share the same layer, so no reference can "+
+					"tell them apart; rename one of them in Resolume and re-upload the composition",
 				ref.Clip, scope, strings.Join(layers, ", "))
 		}
 		return 0, fmt.Errorf(

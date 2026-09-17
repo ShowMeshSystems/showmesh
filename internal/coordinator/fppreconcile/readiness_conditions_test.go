@@ -442,8 +442,8 @@ func TestPlaylistReadinessUndecodableCueDoesNotFailUnrelatedPlaylist(t *testing.
 	if report.FailingCondition == ReadinessExclusiveClaimConflict {
 		t.Fatalf("FailingCondition = %q, want anything but a false-positive conflict report: a corrupted cue proves nothing about a real collision", report.FailingCondition)
 	}
-	if !containsAll(report.Warning, "cue-corrupt", "could not be decoded") {
-		t.Fatalf("Warning = %q, want it to name the offending cue cue-corrupt and explain it could not be decoded", report.Warning)
+	if !containsAll(report.Warning, "cue-corrupt", "could not be read") {
+		t.Fatalf("Warning = %q, want it to name the offending cue cue-corrupt and explain it could not be read", report.Warning)
 	}
 
 	logged := logBuf.String()

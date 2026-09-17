@@ -1259,8 +1259,8 @@ func TestDispatchBlackoutWithAnUnreadableBaselineStillDispatches(t *testing.T) {
 	if out.State != ActionUnconfirmable {
 		t.Fatalf("State = %q, want %q (reason: %s)", out.State, ActionUnconfirmable, out.Reason)
 	}
-	if !contains(out.Reason, "baseline") {
-		t.Errorf("Reason = %q, want it to say the pre-dispatch baseline could not be read", out.Reason)
+	if !contains(out.Reason, "could not read this action's state") {
+		t.Errorf("Reason = %q, want it to say this action's state could not be read", out.Reason)
 	}
 
 	arena.mu.Lock()

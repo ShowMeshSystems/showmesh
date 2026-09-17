@@ -420,7 +420,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	if p.LTCTimecodeKnown {
 		obs = append(obs, buildValue(nodeID, SignalLTCTimecode, p.LTCTimecode, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalLTCTimecode, source, "generator is not confirmed running; no fresh timecode evidence", rep.receivedAt))
+		obs = append(obs, notCollected(res, SignalLTCTimecode, source, "the timecode generator is not confirmed running, so no fresh timecode is available", rep.receivedAt))
 	}
 
 	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
@@ -533,7 +533,7 @@ func engineGlitchObservations(nodeID string, p mqttproto.AudioPayload, observedA
 	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
 	source := SourceFor(nodeID)
 	if !p.EngineGlitchCountsKnown {
-		reason := "this node's audio engine backend does not collect bus-level glitch evidence"
+		reason := "this node's audio engine does not report glitch counts"
 		return []observation.Observation{
 			notCollected(res, SignalEngineStartedAt, source, reason, rep.receivedAt),
 			notCollected(res, SignalEngineWarningsStream, source, reason, rep.receivedAt),
@@ -659,12 +659,12 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		}
 		obs = append(obs, buildSessionValue(res, source, SignalSessionPositionMs, sess.PositionMs, posAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalSessionPositionMs, source, "no fresh engine evidence: mid-discontinuity or no handle loaded", rep.receivedAt))
+		obs = append(obs, notCollected(res, SignalSessionPositionMs, source, "no fresh position is available from the engine; it is mid-discontinuity or has nothing loaded", rep.receivedAt))
 	}
 
 	obs = append(obs,
-		notCollected(res, SignalSessionReferencePositionMs, source, "no reference show-position source is wired into this seam", rep.receivedAt),
-		notCollected(res, SignalSessionDriftMs, source, "drift is measured at track boundaries only (ADR-017); that measurement is not implemented", rep.receivedAt),
+		notCollected(res, SignalSessionReferencePositionMs, source, "this build has no reference show-position source", rep.receivedAt),
+		notCollected(res, SignalSessionDriftMs, source, "drift is only measured at track changes, and that measurement is not implemented yet", rep.receivedAt),
 	)
 
 	obs = append(obs, buildSessionValue(res, source, SignalSessionState, sess.State, sessionAt, rep))
