@@ -2197,10 +2197,13 @@ func (h *handlers) nightRunBedAudioCommand(ctx context.Context, now time.Time, r
 		}
 	}
 
-	// audio.session.* actions require params.revision on the wire itself
-	// (internal/agent/audiosessionops.go's own audioSessionCommonKeys):
-	// unlike nightDispatchCueAudio's generic path (nightcue.go), this
-	// direct dispatch builds params itself, so it must add it here too.
+	// audio.session.* actions require params.sessionId/invocationId/revision
+	// on the wire itself (internal/agent/audiosessionops.go's own
+	// audioSessionCommonKeys): unlike nightDispatchCueAudio's generic path
+	// (nightcue.go), this direct dispatch builds params itself, so it must
+	// add all three here too.
+	params["sessionId"] = sessionID
+	params["invocationId"] = idemKey
 	params["revision"] = uint64(revision)
 
 	issuer := nightBackgroundAudioIssuer(rec)

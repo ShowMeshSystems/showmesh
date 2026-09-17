@@ -814,9 +814,10 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeParamKeysMatchSharedWireCons
 	if !ok {
 		t.Fatalf("node-a: no audio.session.resume dispatched")
 	}
-	// "revision" is the dispatch envelope's own idempotency field, outside
-	// this rebase's shared bookmark/resume wire contract.
-	want := []string{pkgaudio.ParamResumeItemID, pkgaudio.ParamResumeIndex, pkgaudio.ParamResumePositionMs, pkgaudio.ParamScheduledAtNs, "revision"}
+	// "sessionId"/"invocationId"/"revision" are the dispatch envelope's own
+	// required keys (internal/agent/audiosessionops.go's audioSessionCommonKeys),
+	// outside this rebase's shared bookmark/resume wire contract.
+	want := []string{pkgaudio.ParamResumeItemID, pkgaudio.ParamResumeIndex, pkgaudio.ParamResumePositionMs, pkgaudio.ParamScheduledAtNs, "sessionId", "invocationId", "revision"}
 	sort.Strings(want)
 	got := make([]string, 0, len(resumeA))
 	for k := range resumeA {
@@ -826,6 +827,89 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeParamKeysMatchSharedWireCons
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("node-a resume param keys = %v, want exactly %v (the shared pkg/audio wire keys)", got, want)
 	}
+}
+
+// assertAudioSessionCommonParamsParse checks params against exactly the
+// rules internal/agent/audiosessionops.go's own parseAudioSessionCommon
+// applies to every audio.session.* dispatch (that function is unexported
+// and lives in a package this one cannot import, so this mirrors its
+// checks rather than calling it): sessionId and invocationId are
+// non-empty strings, sessionId matches wantSessionID, and revision is a
+// non-negative whole number carried as json.Number, float64, or int64.
+func assertAudioSessionCommonParamsParse(t *testing.T, label string, params map[string]any, wantSessionID string) {
+	t.Helper()
+	sessionID, ok := params["sessionId"].(string)
+	if !ok || sessionID == "" {
+		t.Fatalf("%s: params.sessionId = %#v, want a non-empty string", label, params["sessionId"])
+	}
+	if sessionID != wantSessionID {
+		t.Fatalf("%s: params.sessionId = %q, want %q", label, sessionID, wantSessionID)
+	}
+	invocationID, ok := params["invocationId"].(string)
+	if !ok || invocationID == "" {
+		t.Fatalf("%s: params.invocationId = %#v, want a non-empty string", label, params["invocationId"])
+	}
+	revision, ok := evidenceInt64(params["revision"])
+	if !ok || revision < 0 {
+		t.Fatalf("%s: params.revision = %#v, want a non-negative whole number", label, params["revision"])
+	}
+}
+
+// TestNightAdvanceMultiNodeBackgroundAudio_BedDispatchesCarryAgentRequiredKeys
+// proves every nightRunBedAudioCommand dispatch (start, resume, pause) carries
+// sessionId, invocationId, and revision exactly as
+// internal/agent/audiosessionops.go's parseAudioSessionCommon requires them
+// on the wire. Two real nodes hit this gap: nightRunBedAudioCommand only
+// ever added params["revision"], so every one of these actions resolved
+// unconfirmable with the agent's own "params.sessionId is required".
+func TestNightAdvanceMultiNodeBackgroundAudio_BedDispatchesCarryAgentRequiredKeys(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	startA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.start dispatched")
+	}
+	startB, ok := dispatchedByNodeAction(pub, "node-b", "audio.session.start")
+	if !ok {
+		t.Fatalf("node-b: no audio.session.start dispatched")
+	}
+	assertAudioSessionCommonParamsParse(t, "audio.session.start (node-a)", startA, sessionID)
+	assertAudioSessionCommonParamsParse(t, "audio.session.start (node-b)", startB, sessionID)
+
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
+	}
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	pauseA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.pause")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.pause dispatched")
+	}
+	pauseB, ok := dispatchedByNodeAction(pub, "node-b", "audio.session.pause")
+	if !ok {
+		t.Fatalf("node-b: no audio.session.pause dispatched")
+	}
+	assertAudioSessionCommonParamsParse(t, "audio.session.pause (node-a)", pauseA, sessionID)
+	assertAudioSessionCommonParamsParse(t, "audio.session.pause (node-b)", pauseB, sessionID)
+
+	const resumeClockReading = int64(1_800_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
+	}
+	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+
+	resumeA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.resume dispatched")
+	}
+	resumeB, ok := dispatchedByNodeAction(pub, "node-b", "audio.session.resume")
+	if !ok {
+		t.Fatalf("node-b: no audio.session.resume dispatched")
+	}
+	assertAudioSessionCommonParamsParse(t, "audio.session.resume (node-a)", resumeA, sessionID)
+	assertAudioSessionCommonParamsParse(t, "audio.session.resume (node-b)", resumeB, sessionID)
 }
 
 func reasonMentionsAll(s string, subs ...string) bool {
