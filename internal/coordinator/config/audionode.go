@@ -617,7 +617,7 @@ func decodeRequiredIntList(top map[string]json.RawMessage, key, field string) ([
 // wrong", but "this coordinator holds no probe evidence for this node's
 // audio output at all", which is a different, more basic refusal.
 var ErrAudioNodeNoEvidence = fmt.Errorf("audio.node: this node has not advertised any audio output. " +
-	"Placement is refused based on what the node itself reports, not the operator's claim alone.")
+	"Placement is refused based on what the node itself reports, not the operator's claim alone")
 
 // ValidateAudioNodePlacement refuses placement of p against advertised
 // probe evidence (audio.output.local / audio.output.ltc capability
@@ -654,7 +654,7 @@ func ValidateAudioNodePlacement(p AudioNodePayload, programRoutes, ltcRoutes []s
 	}
 	if !containsString(ltcRoutes, p.LTCRoute) {
 		return fmt.Errorf("audio.node: ltcRoute %q is not among this node's advertised LTC-capable routes %v. "+
-			"An LTC route needs at least a third channel beyond the program pair.",
+			"An LTC route needs at least a third channel beyond the program pair",
 			p.LTCRoute, ltcRoutes)
 	}
 	return nil
@@ -679,7 +679,7 @@ func ValidateAudioNodeRoleUniqueness(id string, p AudioNodePayload, existingRole
 		}
 		if otherRole == AudioNodeRoleProgramLTC {
 			return fmt.Errorf(
-				"audio.node: %q and %q would both carry role %q. Only one audio.node may be the installation's program+ltc node.",
+				"audio.node: %q and %q would both carry role %q. Only one audio.node may be the installation's program+ltc node",
 				id, otherID, AudioNodeRoleProgramLTC)
 		}
 	}
