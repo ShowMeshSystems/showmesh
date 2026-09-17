@@ -12,6 +12,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -37,14 +38,26 @@ func multiNodeBedConfig(registeredOn string, targets ...string) *config.NightSes
 }
 
 // driveNightAdvanceBackgroundAudioUntilStable ticks h.nightAdvanceBackgroundAudio
-// until a tick dispatches nothing new (or maxTicks is reached), so a test
-// need not hand-count exactly how many ticks a multi-node bed's per-node
-// convergence takes.
+// at testNow until a tick dispatches nothing new (or maxTicks is reached),
+// so a test need not hand-count exactly how many ticks a multi-node bed's
+// per-node convergence takes.
 func driveNightAdvanceBackgroundAudioUntilStable(t *testing.T, h *handlers, pub *fakeAudioPublisher, rec store.NightSessionRecord, maxTicks int) {
+	t.Helper()
+	driveNightAdvanceBackgroundAudioUntilStableAt(t, h, pub, rec, testNow, maxTicks)
+}
+
+// driveNightAdvanceBackgroundAudioUntilStableAt is
+// [driveNightAdvanceBackgroundAudioUntilStable]'s own now-parameterized
+// form: a test driving a bed through two distinct schedule reads (a start,
+// then a later resume) must advance now between them, exactly as a real
+// overnight tick loop would - the probe session's own invocationId
+// (readScheduleProbe, cueactivationschedule.go) is derived from (nodeID,
+// now) alone, so two reads sharing the identical instant collide.
+func driveNightAdvanceBackgroundAudioUntilStableAt(t *testing.T, h *handlers, pub *fakeAudioPublisher, rec store.NightSessionRecord, now time.Time, maxTicks int) {
 	t.Helper()
 	for i := 0; i < maxTicks; i++ {
 		before := len(pub.dispatchedSnapshot())
-		h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+		h.nightAdvanceBackgroundAudio(context.Background(), now, rec)
 		if len(pub.dispatchedSnapshot()) == before {
 			return
 		}
@@ -88,6 +101,22 @@ func countDispatchedAction(pub *fakeAudioPublisher, action string) int {
 	n := 0
 	for _, d := range pub.dispatchedSnapshot() {
 		if d.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
+// countDispatchedActionForSession is [countDispatchedAction] narrowed to
+// dispatches carrying params.sessionId == sessionID: a bed schedule read
+// dispatches its own apply/prepare/clear against
+// [cueactivation.ScheduleProbeSessionID], never the bed's own real
+// session, so a count scoped to the bed session is what proves nothing
+// beyond it changed.
+func countDispatchedActionForSession(pub *fakeAudioPublisher, action, sessionID string) int {
+	n := 0
+	for _, d := range pub.dispatchedSnapshot() {
+		if d.Action == action && d.Params["sessionId"] == sessionID {
 			n++
 		}
 	}
@@ -381,8 +410,9 @@ func twoNodeMultiNodeBedThroughStart(t *testing.T, h *handlers, st *store.Store,
 func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstant(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
+	sessionID := nightBackgroundAudioSessionID(rec)
 
-	applyCountBeforeResume := countDispatchedAction(pub, "audio.session.apply")
+	applyCountBeforeResume := countDispatchedActionForSession(pub, "audio.session.apply", sessionID)
 
 	pub.resultsByNode = map[string]mqttproto.ResultPayload{
 		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
@@ -393,10 +423,13 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstan
 	pub.resultsByNode = map[string]mqttproto.ResultPayload{
 		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
 	}
-	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+	// A later instant than the start phase's own testNow: two genuinely
+	// distinct schedule reads for the SAME node must never share a probe
+	// invocationId (readScheduleProbe derives it from (nodeID, now) alone).
+	driveNightAdvanceBackgroundAudioUntilStableAt(t, h, pub, rec, testNow.Add(time.Hour), 10)
 
-	if got := countDispatchedAction(pub, "audio.session.apply"); got != applyCountBeforeResume {
-		t.Fatalf("audio.session.apply dispatch count went from %d to %d, want unchanged (the resume point travels on resume itself, never a separate apply push)", applyCountBeforeResume, got)
+	if got := countDispatchedActionForSession(pub, "audio.session.apply", sessionID); got != applyCountBeforeResume {
+		t.Fatalf("audio.session.apply dispatch count on the bed session went from %d to %d, want unchanged (the resume point travels on resume itself, never a separate apply push)", applyCountBeforeResume, got)
 	}
 
 	resumeA, okA := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
@@ -427,6 +460,102 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstan
 	}
 	if got := countDispatchedAction(pub, "audio.session.prepare"); got != 2 {
 		t.Fatalf("audio.session.prepare dispatch count = %d, want 2 (one for the first start, one for the resume)", got)
+	}
+}
+
+// TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume is
+// Defect B's own regression guard. nightComputeBedSchedule used to read
+// the clock by preparing the REAL bed session directly
+// (audio.session.prepare against nightBackgroundAudioSessionID(rec)), on
+// both the shared start and the shared resume - and the agent's own
+// Manager.Prepare (internal/agent/audio/manager.go) releases the engine
+// and marks the session Ready, ending a just-confirmed pause. This proves
+// both reads instead go through readScheduleProbe's own dedicated
+// [cueactivation.ScheduleProbeSessionID], never the bed's own session id,
+// and that the paused bed session sees no prepare of any kind between its
+// own confirmed pause and its own confirmed resume.
+func TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	bedSessionID := nightBackgroundAudioSessionID(rec)
+
+	assertNoScheduleReadTouchesSession := func(from int) {
+		t.Helper()
+		for _, d := range pub.dispatchedSnapshot()[from:] {
+			isScheduleReadAction := d.Action == "audio.session.apply" || d.Action == "audio.session.prepare" || d.Action == "audio.session.clear"
+			if isScheduleReadAction && d.Params["sessionId"] == bedSessionID {
+				// The bed's own real apply (playlist load) also uses this
+				// action name; narrow to the probe's own giveaway shape (no
+				// playlist, a bare media object) to avoid a false positive
+				// against that legitimate dispatch.
+				if _, hasPlaylist := d.Params["playlist"]; !hasPlaylist {
+					t.Fatalf("schedule read dispatched %s against the bed's own session %q; the clock read must use the dedicated probe session, never the bed session (params=%v)", d.Action, bedSessionID, d.Params)
+				}
+			}
+		}
+	}
+
+	pub.result = confirmedResultForAction("x", bedSessionID, "started")
+	const startClockReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, startClockReading, ""),
+	}
+	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+	assertNoScheduleReadTouchesSession(0)
+
+	startA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.start dispatched")
+	}
+	if _, present := startA[pkgaudio.ParamScheduledAtNs]; !present {
+		t.Fatalf("node-a start params = %v, want scheduledAtNs present (the start's own schedule read must have succeeded through the probe)", startA)
+	}
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 1 {
+		t.Fatalf("audio.session.prepare on the probe session = %d, want exactly 1 (one schedule read for the start)", got)
+	}
+
+	rec.Cycle++
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
+	}
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+	if _, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.pause"); !ok {
+		t.Fatalf("node-a: no audio.session.pause dispatched")
+	}
+	dispatchedBeforeResume := len(pub.dispatchedSnapshot())
+
+	const resumeClockReading = int64(1_800_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
+	}
+	// A later instant than the start phase's own testNow: see
+	// driveNightAdvanceBackgroundAudioUntilStableAt's own doc comment.
+	driveNightAdvanceBackgroundAudioUntilStableAt(t, h, pub, rec, testNow.Add(time.Hour), 10)
+
+	// The core of Defect B: between the confirmed pause above and here, not
+	// one prepare (of any kind, on any session) may have reached the
+	// PAUSED bed session - that is exactly what silently un-pauses it.
+	for _, d := range pub.dispatchedSnapshot()[dispatchedBeforeResume:] {
+		if d.Action == "audio.session.prepare" && d.Params["sessionId"] == bedSessionID {
+			t.Fatalf("a prepare was dispatched against the paused bed session %q between pause and resume; this is exactly Defect B (internal/agent/audio.Manager.Prepare ends a paused session)", bedSessionID)
+		}
+	}
+	assertNoScheduleReadTouchesSession(dispatchedBeforeResume)
+
+	resumeA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.resume dispatched")
+	}
+	if _, present := resumeA[pkgaudio.ParamScheduledAtNs]; !present {
+		t.Fatalf("node-a resume params = %v, want scheduledAtNs present (the resume's own schedule read must have succeeded through the probe)", resumeA)
+	}
+	if got := countDispatchedActionForSession(pub, "audio.session.prepare", cueactivation.ScheduleProbeSessionID); got != 2 {
+		t.Fatalf("audio.session.prepare on the probe session = %d, want exactly 2 (one for the start, one for the resume)", got)
 	}
 }
 
@@ -809,7 +938,10 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeParamKeysMatchSharedWireCons
 	pub.resultsByNode = map[string]mqttproto.ResultPayload{
 		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
 	}
-	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+	// A later instant than the start phase's own testNow: two genuinely
+	// distinct schedule reads for the SAME node must never share a probe
+	// invocationId (readScheduleProbe derives it from (nodeID, now) alone).
+	driveNightAdvanceBackgroundAudioUntilStableAt(t, h, pub, rec, testNow.Add(time.Hour), 10)
 
 	resumeA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
 	if !ok {
@@ -899,7 +1031,10 @@ func TestNightAdvanceMultiNodeBackgroundAudio_BedDispatchesCarryAgentRequiredKey
 	pub.resultsByNode = map[string]mqttproto.ResultPayload{
 		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
 	}
-	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+	// A later instant than the start phase's own testNow: two genuinely
+	// distinct schedule reads for the SAME node must never share a probe
+	// invocationId (readScheduleProbe derives it from (nodeID, now) alone).
+	driveNightAdvanceBackgroundAudioUntilStableAt(t, h, pub, rec, testNow.Add(time.Hour), 10)
 
 	resumeA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
 	if !ok {

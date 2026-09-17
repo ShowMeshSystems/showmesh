@@ -1614,9 +1614,9 @@ func (h *handlers) nightAdvanceMultiNodeBackgroundAudio(ctx context.Context, now
 
 	switch {
 	case nightBedStartPending(history, nodeIDs):
-		h.nightStartMultiNodeBackgroundAudio(ctx, now, rec, history, nodeIDs)
+		h.nightStartMultiNodeBackgroundAudio(ctx, now, rec, show, ba, history, nodeIDs)
 	case nightBedResumePending(history, nodeIDs):
-		h.nightResumeMultiNodeBackgroundAudio(ctx, now, rec, ba, history, nodeIDs)
+		h.nightResumeMultiNodeBackgroundAudio(ctx, now, rec, show, ba, history, nodeIDs)
 	}
 }
 
@@ -1794,7 +1794,10 @@ func (h *handlers) nightBedNodeDispatchRevision(ctx context.Context, nodeID, ses
 // nightGetOrComputeBedSchedule returns this cycle's schedule decision,
 // recorded or freshly computed. The row commits PENDING before the clock
 // read, never after, so a crash between the two is abandoned, not replayed.
-func (h *handlers) nightGetOrComputeBedSchedule(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeIDs []string, history []nightBackgroundAudioHistoryRow, issuer FPPCommandIssuer, unreadyReason string) (nightBedScheduleResult, error) {
+// show and ba resolve the probe media [nightComputeBedSchedule] reads the
+// clock against; bookmark, when known, is the item being resumed (pass
+// the zero value on a start read).
+func (h *handlers) nightGetOrComputeBedSchedule(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeIDs []string, history []nightBackgroundAudioHistoryRow, issuer FPPCommandIssuer, unreadyReason, show string, ba *config.NightSessionBackgroundAudio, bookmark nightBedBookmark) (nightBedScheduleResult, error) {
 	if existing, ok := nightBedScheduleForCycle(history, rec.Cycle); ok {
 		return existing, nil
 	}
@@ -1819,7 +1822,7 @@ func (h *handlers) nightGetOrComputeBedSchedule(ctx context.Context, now time.Ti
 		}
 	}
 
-	result := h.nightComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer, unreadyReason)
+	result := h.nightComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer, unreadyReason, show, ba, bookmark)
 
 	row.State = nightCueStateResolved
 	row.Outcome = nightCueOutcomeConfirmed
@@ -1832,10 +1835,37 @@ func (h *handlers) nightGetOrComputeBedSchedule(ctx context.Context, now time.Ti
 	return result, nil
 }
 
-// nightComputeBedSchedule is the single schedule read: a fresh
-// audio.session.prepare to the program+ltc node alone. No usable clock,
-// or a non-empty unreadyReason, falls back to unaligned.
-func (h *handlers) nightComputeBedSchedule(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeIDs []string, history []nightBackgroundAudioHistoryRow, issuer FPPCommandIssuer, unreadyReason string) nightBedScheduleResult {
+// nightBedProbeMedia resolves the media [nightComputeBedSchedule] applies
+// onto the clock holder's own probe session: the item being resumed, when
+// bookmark names one found among nodeID's own configured items, otherwise
+// nodeID's own first configured item. Never the bed's own real session -
+// this is what lets the clock read leave a paused bed session paused.
+func (h *handlers) nightBedProbeMedia(ctx context.Context, show string, ba *config.NightSessionBackgroundAudio, nodeID string, bookmark nightBedBookmark) (pkgaudio.MediaRef, error) {
+	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.PlaybackItemsFor(nodeID))
+	if err != nil {
+		return pkgaudio.MediaRef{}, err
+	}
+	if len(items) == 0 {
+		return pkgaudio.MediaRef{}, fmt.Errorf("no playlist items configured for node %q", nodeID)
+	}
+	if bookmark.Known {
+		for _, item := range items {
+			if item.ItemID == bookmark.ItemID {
+				return item.Media, nil
+			}
+		}
+	}
+	return items[0].Media, nil
+}
+
+// nightComputeBedSchedule is the single schedule read: [readScheduleProbe]
+// (cueactivationschedule.go) against the program+ltc node's own dedicated
+// [cueactivation.ScheduleProbeSessionID], never the bed's own real
+// session - preparing the bed session itself would release the agent's
+// engine handle and end a just-confirmed pause (internal/agent/audio.
+// Manager.Prepare's own doc comment), refusing every later resume. No
+// usable clock, or a non-empty unreadyReason, falls back to unaligned.
+func (h *handlers) nightComputeBedSchedule(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeIDs []string, history []nightBackgroundAudioHistoryRow, issuer FPPCommandIssuer, unreadyReason, show string, ba *config.NightSessionBackgroundAudio, bookmark nightBedBookmark) nightBedScheduleResult {
 	if unreadyReason != "" {
 		return nightBedScheduleResult{UnalignedReason: unreadyReason}
 	}
@@ -1843,7 +1873,7 @@ func (h *handlers) nightComputeBedSchedule(ctx context.Context, now time.Time, r
 	if err != nil {
 		return nightBedScheduleResult{UnalignedReason: "could not read audio.settings to select a shared start instant: " + err.Error()}
 	}
-	sessionID := nightBackgroundAudioSessionID(rec)
+	probeIssuer := cueActivationIssuer{PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName, Form: issuer.Form, CredentialID: issuer.CredentialID}
 
 	read := func(ctx context.Context, nodeID string) (AudioStartInstantReading, error) {
 		holdsClock, err := h.nodeHoldsMediaClock(ctx, nodeID)
@@ -1856,27 +1886,13 @@ func (h *handlers) nightComputeBedSchedule(ctx context.Context, now time.Time, r
 			// costing this schedule decision no extra network round trip.
 			return AudioStartInstantReading{HoldsMediaClock: false}, nil
 		}
-		var evidence map[string]any
-		prepareStart := time.Now()
-		invocation := fmt.Sprintf("night-bed-schedule-prepare:%s:%s:%d", rec.ID, nodeID, rec.Cycle)
-		revision := uint64(h.nightBedNodeDispatchRevision(ctx, nodeID, sessionID, history))
-		result, problem, derr := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
-			Action: "audio.session.prepare", NodeID: nodeID, SessionID: sessionID,
-			Params:   map[string]any{"sessionId": sessionID, "invocationId": invocation, "revision": revision},
-			Revision: revision, IdempotencyKey: invocation,
-			IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
-			IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
-			OnEvidence: func(v map[string]any) { evidence = v },
-		})
-		elapsed := time.Since(prepareStart)
-		if derr != nil {
-			return AudioStartInstantReading{HoldsMediaClock: true}, derr
+		media, err := h.nightBedProbeMedia(ctx, show, ba, nodeID, bookmark)
+		if err != nil {
+			return AudioStartInstantReading{HoldsMediaClock: true}, err
 		}
-		if problem != nil {
-			return AudioStartInstantReading{HoldsMediaClock: true}, fmt.Errorf("prepare refused: %s", problem.Detail)
-		}
-		if result.Outcome == "refused" || result.Outcome == "failed" {
-			return AudioStartInstantReading{HoldsMediaClock: true}, fmt.Errorf("prepare reported %s: %s", result.Outcome, result.Reason)
+		evidence, elapsed, probeErr := h.readScheduleProbe(ctx, now, nodeID, media, probeIssuer)
+		if probeErr != nil {
+			return AudioStartInstantReading{HoldsMediaClock: true}, probeErr
 		}
 		return AudioStartInstantReading{HoldsMediaClock: true, Evidence: evidence, ProbeElapsed: elapsed}, nil
 	}
@@ -1901,7 +1917,7 @@ func nightBedLateUnalignedReason(verb string) string {
 // nightStartMultiNodeBackgroundAudio is the shared start gate: bounded
 // waits, one node refusing never stops others. Once this cycle's schedule
 // row exists, a newly-ready node is a late arrival and starts alone.
-func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, history []nightBackgroundAudioHistoryRow, nodeIDs []string) {
+func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, show string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow, nodeIDs []string) {
 	sessionID := nightBackgroundAudioSessionID(rec)
 
 	if _, already := nightBedScheduleForCycle(history, rec.Cycle); already {
@@ -1928,7 +1944,7 @@ func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now t
 	}
 
 	issuer := nightBackgroundAudioIssuer(rec)
-	sched, err := h.nightGetOrComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer, unreadyReason)
+	sched, err := h.nightGetOrComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer, unreadyReason, show, ba, nightBedBookmark{})
 	if err != nil {
 		h.logWarn("night loop: background audio: bed schedule failed", "sessionId", rec.ID, "error", err)
 		return
@@ -2091,7 +2107,7 @@ func (h *handlers) nightBedProgramLTCNode(ctx context.Context, nodeIDs []string)
 // nightResumeMultiNodeBackgroundAudio is the shared resume gate. The
 // resume point travels on resume itself, never a separate apply push;
 // with no ready program+ltc node or unknown bookmark, it falls back per-node.
-func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow, nodeIDs []string) {
+func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, show string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow, nodeIDs []string) {
 	sessionID := nightBackgroundAudioSessionID(rec)
 
 	if _, already := nightBedScheduleForCycle(history, rec.Cycle); already {
@@ -2139,7 +2155,7 @@ func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now 
 	}
 
 	issuer := nightBackgroundAudioIssuer(rec)
-	sched, err := h.nightGetOrComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer, "")
+	sched, err := h.nightGetOrComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer, "", show, ba, bookmark)
 	if err != nil {
 		h.logWarn("night loop: background audio: bed schedule failed", "sessionId", rec.ID, "error", err)
 		return
