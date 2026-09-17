@@ -468,19 +468,24 @@ type ExtraAsset struct {
 // item 2): what the node's own fresh inventory report says about the
 // bytes it holds for that asset's identity, derived from facts
 // [ComputeNodeManifest] already computes for Missing/Extra and nothing
-// else — never a filename join (ADR-028 decision 1) and never a
-// timestamp.
+// else — never a timestamp. AssetVerdictHeld does join on filename (a
+// node's own [store.NodeAssetInventoryRecord] already records its
+// runtime filename per ADR-028 decision 2, and the same bytes under a
+// name the node was never told to play are not a held copy); the other
+// two states stay content-hash-only, matching what a superseded row's
+// own identity check has always compared.
 type AssetVerdictState string
 
 const (
 	// AssetVerdictHeld: the node's inventory holds the expected asset's
-	// own content hash.
+	// own content hash UNDER THE EXPECTED RUNTIME FILENAME.
 	AssetVerdictHeld AssetVerdictState = "held"
 	// AssetVerdictSuperseded: the node does not hold the expected content
-	// hash, but its inventory holds the content hash of a row that USED TO
-	// be current for this exact (show, sequence, targetKind, target)
-	// identity before being superseded — the node has not caught up to the
-	// latest upload, but it has not lost the asset either.
+	// hash under the expected filename, but its inventory holds the
+	// content hash (under any filename) of a row that USED TO be current
+	// for this exact (show, sequence, targetKind, target) identity before
+	// being superseded — the node has not caught up to the latest upload,
+	// but it has not lost the asset either.
 	AssetVerdictSuperseded AssetVerdictState = "superseded"
 	// AssetVerdictAbsent: the node's inventory holds nothing recognizable
 	// for this identity at all — neither the expected hash nor any hash
@@ -580,11 +585,16 @@ func StalenessWindow(inventoryInterval time.Duration) time.Duration {
 //     Ready/NotReady branches at all.
 //  4. !report.Complete -> Unknown/ReportIncomplete, carrying report.Reason.
 //  5. Otherwise: Ready if every expected asset is held and there is no
-//     gap, NotReady (naming every miss) otherwise. Every expected asset
-//     also gets an [AssetVerdict] here: [AssetVerdictHeld] if its own
-//     content hash is held, else [AssetVerdictSuperseded] if the node
-//     holds any hash expected.SupersededHashes names as once-current for
-//     that same asset's identity, else [AssetVerdictAbsent].
+//     gap, NotReady (naming every miss) otherwise. "Held" requires the
+//     node's inventory to report the expected content hash UNDER THE
+//     EXPECTED RUNTIME FILENAME — the same bytes registered under a
+//     different name is a node that cannot actually play what gets
+//     dispatched, so it counts as missing, never as held. Every expected
+//     asset also gets an [AssetVerdict] here: [AssetVerdictHeld] on that
+//     same hash-and-filename match, else [AssetVerdictSuperseded] if the
+//     node holds any hash (any filename) expected.SupersededHashes names
+//     as once-current for that same asset's identity, else
+//     [AssetVerdictAbsent].
 //
 // Extra, and Verdicts alongside it, are populated only once report.Complete
 // is known true for a fresh report (i.e. only in case 5's body — case 4
@@ -620,15 +630,28 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		return m
 	}
 
-	held := make(map[string]bool, len(inventory))
+	// heldUnderFilename requires BOTH the content hash and the runtime
+	// filename to match a node's own reported inventory row, via the same
+	// [heldKey] join the sync service applies before confirming a fetch:
+	// the same bytes registered under a different name (a node that
+	// fetched a since-retired show-scoped row sharing this hash, for
+	// instance) is a node that cannot actually play what was dispatched
+	// (internal/agent/audio/mediaprobe.go opens the expected filename
+	// verbatim), so it must render as missing here, never as held.
+	// heldHashes stays hash-only, matching a superseded row's identity
+	// check below, which is about "has this node caught up to a past
+	// upload" and unaffected by whatever name that past upload carried.
+	heldUnderFilename := make(map[string]bool, len(inventory))
+	heldHashes := make(map[string]bool, len(inventory))
 	for _, item := range inventory {
-		held[item.ContentHash] = true
+		heldUnderFilename[heldKey(item.ContentHash, item.RuntimeFilename)] = true
+		heldHashes[item.ContentHash] = true
 	}
 
 	var missing []MissingAsset
 	var verdicts []AssetVerdict
 	for _, a := range expected.Assets {
-		if held[a.ContentHash] {
+		if heldUnderFilename[heldKey(a.ContentHash, a.Filename)] {
 			verdicts = append(verdicts, AssetVerdict{
 				AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
 				ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: AssetVerdictHeld, Source: a.Source,
@@ -641,7 +664,7 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		})
 		state := AssetVerdictAbsent
 		for oldHash := range expected.SupersededHashes[a.AssetID] {
-			if held[oldHash] {
+			if heldHashes[oldHash] {
 				state = AssetVerdictSuperseded
 				break
 			}

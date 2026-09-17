@@ -566,7 +566,7 @@ func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
 
 	held := make(map[string]bool, len(inventory))
 	for _, item := range inventory {
-		held[item.ContentHash] = true
+		held[heldKey(item.ContentHash, item.RuntimeFilename)] = true
 	}
 
 	// reconcileInFlight's post-dispatch fence ([FetchConfirmed]) is
@@ -603,10 +603,25 @@ func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
 	}
 }
 
+// heldKey joins a content hash and a runtime filename into this package's
+// shared inventory-membership key ([Service.syncNode]'s dispatch decision
+// and [ComputeNodeManifest]'s own held/missing join both use it): a node
+// holds an expected asset only once its inventory reports the hash under
+// that SAME filename, not merely the hash alone (the same bytes can
+// already sit on a node under a different, unrelated name — ADR-028
+// decision 1 — and that is not the copy either one means). The NUL
+// separator cannot appear in either a hex content hash or a
+// filesystem-valid runtime filename, so this never collides two distinct
+// (hash, filename) pairs onto the same key.
+func heldKey(contentHash, filename string) string {
+	return contentHash + "\x00" + filename
+}
+
 // FetchConfirmed reports whether a dispatched asset.fetch for contentHash
 // on nodeID is confirmed complete: report must be non-nil, held must be
-// true (the node's current inventory includes contentHash), AND report's
-// own ReportedAt must be AT OR AFTER dispatchedAt.
+// true (the node's current inventory includes contentHash UNDER THE
+// DISPATCHED FILENAME — see [heldKey]), AND report's own ReportedAt must be
+// AT OR AFTER dispatchedAt.
 //
 // That third condition is the load-bearing one. Held-and-non-nil alone is
 // NOT evidence this particular dispatch succeeded: a report from BEFORE
@@ -628,7 +643,12 @@ func FetchConfirmed(dispatchedAt time.Time, report *store.NodeAssetReportRecord,
 
 // reconcileInFlight clears every in-flight record for nodeID that
 // [FetchConfirmed] now says is done, using report and held (nodeID's
-// current inventory, already reduced to a hash set by the caller).
+// current inventory, already reduced to a [heldKey] set by the caller).
+// Every in-flight record carries the filename it was dispatched for
+// (dispatchRecord.filename), so this joins on hash AND filename per
+// [heldKey] rather than the hash alone: a node that already held these
+// bytes under some other name before this dispatch was ever sent must not
+// read as confirming it.
 func (s *Service) reconcileInFlight(nodeID string, report *store.NodeAssetReportRecord, held map[string]bool) {
 	if report == nil {
 		return
@@ -639,7 +659,7 @@ func (s *Service) reconcileInFlight(nodeID string, report *store.NodeAssetReport
 		if key.nodeID != nodeID {
 			continue
 		}
-		if FetchConfirmed(rec.dispatchedAt, report, held[key.contentHash]) {
+		if FetchConfirmed(rec.dispatchedAt, report, held[heldKey(key.contentHash, rec.filename)]) {
 			delete(s.inFlight, key)
 			// byCmdID must not outlive its inFlight record: HandleMessage
 			// reads inFlight[key] only while byCmdID still tracks the

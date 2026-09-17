@@ -8,6 +8,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/capability"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -361,7 +362,7 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 	}
 	checks := []nightReadinessCheck{h.nightCheckBackgroundAudioAssets(ctx, show, resolved)}
 	if resolved.HasDeclaredTargets() {
-		checks = append(checks, h.nightCheckBackgroundAudioBedTargetCoverage(ctx, show, resolved))
+		checks = append(checks, h.nightCheckBackgroundAudioBedTargetCoverage(ctx, now, show, resolved))
 		checks = append(checks, h.nightCheckBackgroundAudioBedProgramLTCCoverage(ctx, resolved))
 	}
 	for _, nodeID := range resolved.PlaybackNodeIDs() {
@@ -374,51 +375,152 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 // nightCheckBackgroundAudioBedTargetCoverage is ADR-049 decision 7's own
 // readiness bullet, mirroring decision 5's identical rule for a Cue
 // (assetsync/audiofallback.go): every node this bed's declared Targets list
-// must be able to receive a copy of every configured item's file, whether
-// from its own registered row or another listed target's registered row -
-// the same registered-copy rule assetsync/nightaudiofallback.go applies at
-// delivery time. Failed, naming the node and the item, when neither source
-// exists for a listed node. A bed with no declared Targets is never called
-// here (nightCheckBackgroundAudioReadiness's own guard): it keeps today's
+// must actually HOLD, under the expected runtime filename, a copy of every
+// configured item's file, whether that copy is its own registered row or
+// borrowed from another listed target's row - the same registered-copy
+// rule assetsync/nightaudiofallback.go applies at delivery time
+// ([nightBedResolveDeliverableCopy] below, working from the SAME resolved
+// ba this check was called with, not a second read of whatever night.session
+// config revision happens to be current in the store right now).
+//
+// A registered row existing somewhere to borrow is necessary but not
+// sufficient: this check also cross-checks each listed node's own fresh
+// inventory report for the resolved copy's content hash UNDER ITS RUNTIME
+// FILENAME, the same join [ComputeNodeManifest] applies before dispatching
+// a fetch, so this check and the sync service's own dispatch decision can
+// never disagree about whether a node holds a file a play command would
+// name.
+//
+// Failed, naming the node, the item, the expected filename, and whatever
+// filename (if any) that node's own inventory holds the same bytes under
+// instead, whenever a listed node would be told to play a file it does not
+// hold. Unknown, naming the node and why, whenever that node's own
+// inventory report is missing, stale, or incomplete - such a report is not
+// evidence of what the node holds OR lacks, so it is never a pass and never
+// a failure. A bed with no declared Targets is never called here
+// (nightCheckBackgroundAudioReadiness's own guard): it keeps today's
 // per-node routing, where a node only ever needs the assets it is itself
 // the target of, already covered by nightCheckBackgroundAudioAssets.
-func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Context, show string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Context, now time.Time, show string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	name := "resting:background-audio-bed-target-coverage"
 	targets := ba.PlaybackNodeIDs()
+	if h.deps.AssetManifests == nil {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: "no asset manifest store is configured on this coordinator"}
+	}
+	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
+
 	var missing []string
-	for _, item := range ba.Items {
-		for _, nodeID := range targets {
-			ok, err := nightBedTargetHasDeliverableCopy(ctx, h.deps.Assets, show, item.Asset.Sequence, nodeID, targets)
+	var unverifiable []string
+	for _, nodeID := range targets {
+		manifest, err := assetsync.BuildNodeManifest(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID)
+		if err != nil {
+			return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+				"could not build the node manifest for node %q: %s", nodeID, err.Error())}
+		}
+		nodeUnknown := manifest.State == assetsync.ManifestUnknown
+		if nodeUnknown {
+			unverifiable = append(unverifiable, fmt.Sprintf("node %q: %s", nodeID, manifest.Reason))
+		}
+		var inventory []store.NodeAssetInventoryRecord
+		if !nodeUnknown {
+			inventory, err = h.deps.AssetManifests.GetNodeAssetInventory(ctx, nodeID)
+			if err != nil {
+				return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+					"could not read node %q's inventory: %s", nodeID, err.Error())}
+			}
+		}
+
+		for _, item := range ba.Items {
+			rec, ok, err := nightBedResolveDeliverableCopy(ctx, h.deps.Assets, show, item.Asset.Sequence, nodeID, targets)
 			if err != nil {
 				return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
 					"could not check asset coverage for node %q item %q: %s", nodeID, item.ItemID, err.Error())}
 			}
 			if !ok {
-				filename := nightBedAnyRegisteredFilename(ctx, h.deps.Assets, show, item.Asset.Sequence)
-				if filename == "" {
-					filename = "unknown (no registered copy exists to name one)"
-				}
-				missing = append(missing, fmt.Sprintf("node %q item %q (sequence %q, file %q)", nodeID, item.ItemID, item.Asset.Sequence, filename))
+				missing = append(missing, fmt.Sprintf(
+					"node %q item %q (sequence %q): no listed target holds a registered copy of this item's file",
+					nodeID, item.ItemID, item.Asset.Sequence))
+				continue
 			}
+			if nodeUnknown || nightInventoryHoldsUnderFilename(inventory, rec.ContentHash, rec.RuntimeFilename) {
+				continue
+			}
+			actual := nightInventoryFilenameForHash(inventory, rec.ContentHash)
+			if actual == "" {
+				actual = "no copy of these bytes under any filename"
+			} else {
+				actual = fmt.Sprintf("filename %q instead", actual)
+			}
+			missing = append(missing, fmt.Sprintf(
+				"node %q item %q (sequence %q) expects file %q but its inventory holds %s",
+				nodeID, item.ItemID, item.Asset.Sequence, rec.RuntimeFilename, actual))
 		}
 	}
-	if len(missing) > 0 {
+	switch {
+	case len(missing) > 0:
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-			"no registered copy can be delivered for: %v", missing)}
+			"no correctly named, deliverable copy exists for: %v", missing)}
+	case len(unverifiable) > 0:
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: strings.Join(unverifiable, "; ")}
+	default:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
+			"every listed node %v holds, under its expected filename, every configured item", targets)}
 	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
-		"every listed node %v can receive a copy of every configured item, from its own registered row or another listed target's row", targets)}
 }
 
-// nightBedAnyRegisteredFilename best-effort names (show, sequence)'s own
-// runtime filename from any registered row, node unfiltered - for a
-// message naming the file, never for deliverability. Empty when none.
-func nightBedAnyRegisteredFilename(ctx context.Context, lister nightAssetLister, show, sequence string) string {
-	rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, "")
-	if err != nil || !ok {
-		return ""
+// nightBedResolveDeliverableCopy resolves the registered [store.AssetRecord]
+// the bed's registered-copy rule would deliver to nodeID for (show,
+// sequence): nodeID's own current row if it has one, else the first other
+// bed target's own current row, in targets' own declared order. ok is
+// false when no listed target holds any row for this (show, sequence) at
+// all - the "nothing anywhere to borrow" case, independent of any node's
+// own inventory evidence.
+func nightBedResolveDeliverableCopy(ctx context.Context, lister nightAssetLister, show, sequence, nodeID string, targets []string) (store.AssetRecord, bool, error) {
+	if rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, nodeID); err != nil {
+		return store.AssetRecord{}, false, err
+	} else if ok {
+		return rec, true, nil
 	}
-	return rec.RuntimeFilename
+	for _, other := range targets {
+		if other == nodeID {
+			continue
+		}
+		if rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, other); err != nil {
+			return store.AssetRecord{}, false, err
+		} else if ok {
+			return rec, true, nil
+		}
+	}
+	return store.AssetRecord{}, false, nil
+}
+
+// nightInventoryHoldsUnderFilename reports whether inventory holds
+// contentHash UNDER filename specifically - the same hash-and-filename
+// join [ComputeNodeManifest] requires before treating an expected asset as
+// held (see that function's own doc comment): the same bytes registered
+// under a different name is a node that cannot actually play what gets
+// dispatched.
+func nightInventoryHoldsUnderFilename(inventory []store.NodeAssetInventoryRecord, contentHash, filename string) bool {
+	for _, item := range inventory {
+		if item.ContentHash == contentHash && item.RuntimeFilename == filename {
+			return true
+		}
+	}
+	return false
+}
+
+// nightInventoryFilenameForHash names, for an operator reading a
+// bed-target-coverage failure, the runtime filename inventory holds
+// contentHash under, if any - never for deliverability, only so the
+// failure names both the expected and the actual filename. Empty when
+// inventory holds nothing recognizable for that hash.
+func nightInventoryFilenameForHash(inventory []store.NodeAssetInventoryRecord, contentHash string) string {
+	for _, item := range inventory {
+		if item.ContentHash == contentHash {
+			return item.RuntimeFilename
+		}
+	}
+	return ""
 }
 
 // nightCheckBackgroundAudioBedProgramLTCCoverage warns, mirroring
@@ -442,28 +544,6 @@ func (h *handlers) nightCheckBackgroundAudioBedProgramLTCCoverage(ctx context.Co
 	}
 	return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
 		"this bed's targets %v exclude the installation's program+ltc node, so it can never start aligned; decision 4 still plays it unaligned", targets)}
-}
-
-// nightBedTargetHasDeliverableCopy reports whether nodeID can end up with a
-// copy of (show, sequence): its own registered row, or - the registered-
-// copy rule - another node in targets' own registered row.
-func nightBedTargetHasDeliverableCopy(ctx context.Context, lister nightAssetLister, show, sequence, nodeID string, targets []string) (bool, error) {
-	if _, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, nodeID); err != nil {
-		return false, err
-	} else if ok {
-		return true, nil
-	}
-	for _, other := range targets {
-		if other == nodeID {
-			continue
-		}
-		if _, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, other); err != nil {
-			return false, err
-		} else if ok {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // nightCheckAnnouncementAssets is §13's own announcement-asset bullet (ADR-049 decisions 7 and 9):

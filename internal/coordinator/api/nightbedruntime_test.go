@@ -37,6 +37,19 @@ func multiNodeBedConfig(registeredOn string, targets ...string) *config.NightSes
 	}
 }
 
+// putNodeInventoryForTest marks nodeID's asset inventory report complete
+// and dated at, holding exactly items - the coverage check's own evidence
+// for what a node actually holds, as opposed to what is merely registered
+// for it to borrow.
+func putNodeInventoryForTest(t *testing.T, st *store.Store, nodeID string, at time.Time, items ...store.NodeAssetInventoryRecord) {
+	t.Helper()
+	if err := st.ReplaceNodeAssetInventory(context.Background(), nodeID, items, store.NodeAssetReportRecord{
+		NodeID: nodeID, ReportedAt: at, Complete: true,
+	}); err != nil {
+		t.Fatalf("replace node asset inventory for %q: %v", nodeID, err)
+	}
+}
+
 // driveNightAdvanceBackgroundAudioUntilStable ticks h.nightAdvanceBackgroundAudio
 // at testNow until a tick dispatches nothing new (or maxTicks is reached),
 // so a test need not hand-count exactly how many ticks a multi-node bed's
@@ -869,36 +882,102 @@ func TestNightCheckBackgroundAudioBedProgramLTCCoverage_HealthyWhenATargetHoldsP
 
 // TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile
 // proves a listed node with no way to receive a copy fails, naming the
-// node, the item, and the file (when a copy is registered elsewhere).
+// node and the item: neither node-a nor node-b (this bed's only declared
+// targets) has any registered row for bg-1/bg-2, and node-c's own row is
+// never consulted because it is not a listed target.
 func TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-c", "asset-2")
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), "halloween", ba)
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
 	if check.health != nightHealthFailed() {
 		t.Fatalf("health = %v, want failed (no listed target has a registered copy)", check.health)
 	}
 	if !reasonMentionsAll(check.reason, "node-a", "node-b", "track-1", "track-2") {
 		t.Fatalf("reason = %q, want it to name both nodes and both items", check.reason)
 	}
-	if !strings.Contains(check.reason, "asset-2.mp3") {
-		t.Fatalf("reason = %q, want it to name track-2's own registered file (asset-2.mp3), even though node-c is not a listed target", check.reason)
-	}
 }
 
 // TestNightCheckBackgroundAudioBedTargetCoverage_HealthyViaFallback proves
-// the positive case: node-a's own registered row is enough to cover
-// node-b too, via the registered-copy rule.
+// the positive case: node-a's own registered row is enough to cover node-b
+// too, via the registered-copy rule, once both nodes' own fresh inventory
+// reports actually hold the registered bytes under the registered filename.
 func TestNightCheckBackgroundAudioBedTargetCoverage_HealthyViaFallback(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putActiveShowForTest(t, st, "halloween")
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putNodeInventoryForTest(t, st, "node-a", testNow,
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-1", RuntimeFilename: "asset-1.mp3", SizeBytes: 12345},
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-2", RuntimeFilename: "asset-2.mp3", SizeBytes: 12345},
+	)
+	putNodeInventoryForTest(t, st, "node-b", testNow,
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-1", RuntimeFilename: "asset-1.mp3", SizeBytes: 12345},
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-2", RuntimeFilename: "asset-2.mp3", SizeBytes: 12345},
+	)
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), "halloween", ba)
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
 	if check.health != nightHealthHealthy() {
-		t.Fatalf("health = %v, reason = %q, want healthy (node-b covered via node-a's own registered row)", check.health, check.reason)
+		t.Fatalf("health = %v, reason = %q, want healthy (node-b covered via node-a's own registered row, and both nodes' inventory holds it under the expected filename)", check.health, check.reason)
+	}
+}
+
+// TestNightCheckBackgroundAudioBedTargetCoverage_FailsWhenHeldUnderWrongFilename
+// is the rehearsal-rig failure this check exists to catch: node-b's own
+// fresh inventory holds node-a's registered content hash, but under a
+// different filename than the one node-a registered it under, so node-b
+// cannot actually play what would be dispatched
+// (internal/agent/audio/mediaprobe.go opens the expected filename
+// verbatim).
+func TestNightCheckBackgroundAudioBedTargetCoverage_FailsWhenHeldUnderWrongFilename(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putActiveShowForTest(t, st, "halloween")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putNodeInventoryForTest(t, st, "node-a", testNow,
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-1", RuntimeFilename: "asset-1.mp3", SizeBytes: 12345},
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-2", RuntimeFilename: "asset-2.mp3", SizeBytes: 12345},
+	)
+	putNodeInventoryForTest(t, st, "node-b", testNow,
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-1", RuntimeFilename: "content.mp3", SizeBytes: 12345},
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-2", RuntimeFilename: "asset-2.mp3", SizeBytes: 12345},
+	)
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
+	if check.health != nightHealthFailed() {
+		t.Fatalf("health = %v, reason = %q, want failed (node-b holds asset-1's bytes under the wrong filename)", check.health, check.reason)
+	}
+	if !reasonMentionsAll(check.reason, "node-b", "track-1", "asset-1.mp3", "content.mp3") {
+		t.Fatalf("reason = %q, want it to name node-b, the item, the expected filename, and the filename node-b actually holds", check.reason)
+	}
+}
+
+// TestNightCheckBackgroundAudioBedTargetCoverage_UnknownOnStaleReport proves
+// the unknown-versus-failed discipline: a listed node with a registered
+// copy to borrow, but a stale (or missing) inventory report, must read as
+// unknown rather than healthy or failed - a stale report is not evidence
+// of what the node holds or lacks.
+func TestNightCheckBackgroundAudioBedTargetCoverage_UnknownOnStaleReport(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putActiveShowForTest(t, st, "halloween")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putNodeInventoryForTest(t, st, "node-a", testNow,
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-1", RuntimeFilename: "asset-1.mp3", SizeBytes: 12345},
+		store.NodeAssetInventoryRecord{ContentHash: "sha256:asset-2", RuntimeFilename: "asset-2.mp3", SizeBytes: 12345},
+	)
+	// node-b never reports at all.
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
+	if check.health != nightHealthUnknown() {
+		t.Fatalf("health = %v, reason = %q, want unknown (node-b has never reported its inventory)", check.health, check.reason)
+	}
+	if !strings.Contains(check.reason, "node-b") {
+		t.Fatalf("reason = %q, want it to name node-b", check.reason)
 	}
 }
 

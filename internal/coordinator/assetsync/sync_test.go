@@ -282,6 +282,57 @@ func TestServiceReadyNodeIsNeverDispatchedTo(t *testing.T) {
 	}
 }
 
+// TestServiceDispatchesWhenHeldUnderWrongFilename is
+// TestServiceReadyNodeIsNeverDispatchedTo's own inverse, pinning the
+// rehearsal-rig defect: pi-audio-01 already reports the EXPECTED content
+// hash, but under a filename it fetched for a since-retired show-scoped
+// row, never the one this asset is registered under. That is not the
+// registered copy (internal/agent/audio/mediaprobe.go opens the expected
+// filename verbatim, ADR-028 decision 1), so the sync service must still
+// dispatch a fetch that lands a correctly-named second copy — the accepted
+// duplicate-copy tradeoff, never a rename or a hard link.
+func TestServiceDispatchesWhenHeldUnderWrongFilename(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "pi-audio-01")
+	rec := createAssetWithMediaType(t, st, "halloween-2026", "background-reaper", store.AssetTargetKindNode, "pi-audio-01",
+		"audio", "sha256:151b7626", "(Don't Fear) The Reaper.mp3")
+
+	// pi-audio-01's own fresh inventory holds the identical bytes, but
+	// under "content.mp3" — a since-retired show-scoped row that happened
+	// to share this content hash — never under the registered filename.
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "pi-audio-01",
+		[]store.NodeAssetInventoryRecord{{ContentHash: rec.ContentHash, RuntimeFilename: "content.mp3", SizeBytes: rec.SizeBytes, VerifiedAt: time.Now()}},
+		store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true},
+	); err != nil {
+		t.Fatalf("seed inventory: %v", err)
+	}
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.tick(context.Background())
+
+	calls := pub.callsFor("pi-audio-01")
+	if len(calls) != 1 {
+		t.Fatalf("callsFor(pi-audio-01) = %d calls, want exactly 1: the wrongly-named copy must not suppress a fetch for the correctly-named one", len(calls))
+	}
+	env, err := mqttproto.DecodeEnvelope(calls[0].payload)
+	if err != nil {
+		t.Fatalf("DecodeEnvelope() error = %v", err)
+	}
+	cmd, err := mqttproto.DecodeCmdPayload(env)
+	if err != nil {
+		t.Fatalf("DecodeCmdPayload() error = %v", err)
+	}
+	if cmd.Action != "asset.fetch" {
+		t.Errorf("Action = %q, want %q", cmd.Action, "asset.fetch")
+	}
+	if cmd.Params["contentHash"] != "sha256:151b7626" || cmd.Params["filename"] != "(Don't Fear) The Reaper.mp3" {
+		t.Errorf("Params = %+v, want contentHash=sha256:151b7626 filename=%q", cmd.Params, "(Don't Fear) The Reaper.mp3")
+	}
+}
+
 func TestServicePerNodeBudgetLimitsConcurrentDispatch(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "halloween-2026", "Halloween 2026")
@@ -1105,7 +1156,7 @@ func TestHandleMessageLateResultAfterInventoryReconcileDoesNotClobberFailure(t *
 	// reconcileInFlight deletes inFlight[key] out from under attempt #2,
 	// with no result for attempt #2 ever having arrived.
 	report := &store.NodeAssetReportRecord{ReportedAt: dispatchedAt2.Add(time.Second), Complete: true}
-	svc.reconcileInFlight("render-01", report, map[string]bool{"sha256:aaa": true})
+	svc.reconcileInFlight("render-01", report, map[string]bool{heldKey("sha256:aaa", "Opening.fseq"): true})
 
 	svc.mu.Lock()
 	_, stillInFlight := svc.inFlight[dispatchKey{nodeID: "render-01", contentHash: "sha256:aaa"}]

@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +61,7 @@ func nightBackgroundAudioTestHandlers(t *testing.T) (*handlers, *store.Store, *f
 	deps := Dependencies{
 		NightSessions: st, Config: st, Commands: st, Identity: svc,
 		AudioPublisher: pub, AudioSessions: st, Assets: st, Observations: obsLister,
+		AssetManifests:  st,
 		ResolumeActions: &fakeResolumeActionDispatcher{}, Nodes: &fakeNodeLister{}, Audio: &fakeNodeAudioLister{},
 	}.withDefaults()
 	return &handlers{deps: deps, clock: fixedClock(testNow), logger: testLogger()}, st, pub, obsLister
@@ -550,6 +554,72 @@ func TestNightAdvanceBackgroundAudio_GainBeforeStart(t *testing.T) {
 	}
 	if pub.count() != 3 {
 		t.Fatalf("publish count = %d, want 3 (apply, gain, start)", pub.count())
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_StartDidNotConfirmLogsOnceAndBacksOff
+// proves the log-flood fix directly against the real tick loop: a start
+// that resolves refused (never confirmed) is not auto-retried (unchanged
+// policy), and logs its "did not confirm; not auto-retrying" warning
+// exactly once across many ticks over the identical unconfirmed attempt,
+// carrying its own reason - not once per tick, which was observed as 559
+// lines in 90 minutes on the rehearsal rig.
+func TestNightAdvanceBackgroundAudio_StartDidNotConfirmLogsOnceAndBacksOff(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	var logs bytes.Buffer
+	h.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // apply
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // gain
+
+	pub.result = refusedResultForAction("start", "node-a refuses this start")
+	for i := 0; i < 5; i++ {
+		h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // start, refused, every tick
+	}
+
+	if got := countActionDispatches(pub, "audio.session.start"); got != 1 {
+		t.Fatalf("audio.session.start dispatch count = %d, want exactly 1 (a refused start must not be auto-retried)", got)
+	}
+	if got := strings.Count(logs.String(), "start did not confirm"); got != 1 {
+		t.Fatalf("logged %d times across 5 ticks over the same unconfirmed start, want exactly 1", got)
+	}
+	if !strings.Contains(logs.String(), "node-a refuses this start") {
+		t.Fatalf("log output = %q, want it to carry the row's own refusal reason", logs.String())
+	}
+}
+
+// TestLogBackgroundAudioDidNotConfirmOnce_NewAttemptLogsAgain proves
+// [handlers.logBackgroundAudioDidNotConfirmOnce]'s own dedup key: repeated
+// calls naming the SAME outbox row log once, but a genuinely NEW attempt
+// (a fresh row id, as a later cycle re-arming this bed would produce) logs
+// again - the fix stops the flood without ever silently swallowing a real,
+// new failure.
+func TestLogBackgroundAudioDidNotConfirmOnce_NewAttemptLogsAgain(t *testing.T) {
+	var logs bytes.Buffer
+	h := &handlers{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	rec := store.NightSessionRecord{ID: "sess-1"}
+	row := store.NightCueOutboxRecord{ID: "row-1", Outcome: nightCueOutcomeRefused, OutcomeReason: "node-a refuses this start"}
+
+	h.logBackgroundAudioDidNotConfirmOnce(rec, "node-a", nightBGStepStart, row)
+	h.logBackgroundAudioDidNotConfirmOnce(rec, "node-a", nightBGStepStart, row)
+	h.logBackgroundAudioDidNotConfirmOnce(rec, "node-a", nightBGStepStart, row)
+	if got := strings.Count(logs.String(), "start did not confirm"); got != 1 {
+		t.Fatalf("logged %d times for the same outbox row, want exactly 1", got)
+	}
+
+	logs.Reset()
+	newRow := store.NightCueOutboxRecord{ID: "row-2", Outcome: nightCueOutcomeRefused, OutcomeReason: "node-a refuses this start, again"}
+	h.logBackgroundAudioDidNotConfirmOnce(rec, "node-a", nightBGStepStart, newRow)
+	if got := strings.Count(logs.String(), "start did not confirm"); got != 1 {
+		t.Fatal("a fresh attempt (a new outbox row id) did not log; a genuinely new failure must never be silently swallowed")
 	}
 }
 
