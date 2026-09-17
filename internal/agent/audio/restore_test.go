@@ -1,8 +1,11 @@
 package audio
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1409,5 +1412,160 @@ func TestDuckReleaseDuringPendingWindowMustNotCorruptPersistedState(t *testing.T
 	}
 	if rec.SessionState != pkgaudio.StatePlaying {
 		t.Fatalf("persisted state after a duck release during the pending window = %q, want Playing (untouched by the pending report)", rec.SessionState)
+	}
+}
+
+// scheduledRestoreFixture starts a two-item scheduled playlist session on
+// m1 against media, and returns the accepted T0, for the restore-rebuild
+// tests below.
+func scheduledRestoreFixture(t *testing.T, ctx context.Context, m1 *Manager, media *fakeClockSource, id pkgaudio.SessionID, dir string) time.Time {
+	t.Helper()
+	itemA := writeTestAsset(t, dir, "sched-a.wav", "asset-sched-a", []byte("item-a"))
+	itemB := writeTestAsset(t, dir, "sched-b.wav", "asset-sched-b", []byte("item-b"))
+	playlist := pkgaudio.PlaylistRef{
+		OwnerKind: "show", OwnerID: string(id), OwnerRevision: 1,
+		Repeat: pkgaudio.RepeatNone, Resume: pkgaudio.ResumePolicyRestart, RequestedTransition: pkgaudio.ItemTransitionSequential,
+		Items: []pkgaudio.PlaylistItem{
+			{ItemID: "item-a", Index: 0, Media: itemA},
+			{ItemID: "item-b", Index: 1, Media: itemB},
+		},
+	}
+	if out := m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Playlist: pkgaudio.SetField(playlist)}); out.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("Apply refused: %s", out.Reason)
+	}
+
+	t0 := media.Now(ctx).Time.Add(20 * time.Millisecond)
+	before := media.reads()
+	done := make(chan pkgaudio.OutcomeResult, 1)
+	go func() {
+		done <- m1.StartAt(ctx, id, "inv-start", 2, t0.UnixNano())
+	}()
+	media.waitForReads(t, before+1)
+	media.advance(20 * time.Millisecond)
+	select {
+	case out := <-done:
+		if out.Outcome != pkgaudio.OutcomeStarted {
+			t.Fatalf("StartAt = %q (%s), want started", out.Outcome, out.Reason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartAt never returned after the media clock reached T0")
+	}
+	return t0
+}
+
+// TestRestorePlayingRebuildsItemScheduleWhenMediaClockIsValid is R1's own
+// restore case: an agent restart mid a scheduled multi-item session must
+// rebuild the item-boundary schedule from what was persisted, not drop
+// it silently and fall back to per-node decoder-end drift.
+func TestRestorePlayingRebuildsItemScheduleWhenMediaClockIsValid(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Unix(1_700_000_000, 0))
+	store := NewFileSessionStore(dir)
+	dec := newPerFileDecoder(knownDurationResult(2 * time.Second))
+	media := newFakeClockSource(time.Unix(4_000_000_000, 0))
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("bed-restore-schedule")
+
+	engine1 := newScheduleTestEngine(c.now)
+	m1 := NewManager(engine1, store, dir, dec, c.now, nil)
+	m1.SetClockSource(media)
+	t0 := scheduledRestoreFixture(t, ctx, m1, media, id, dir)
+
+	s1, ok := m1.get(id)
+	if !ok || func() bool { s1.mu.Lock(); defer s1.mu.Unlock(); return s1.schedule == nil }() {
+		t.Fatal("precondition: schedule not established before restart")
+	}
+
+	// "Restart": a fresh Manager and engine over the same store, the same
+	// media clock still valid and continuing from where it left off.
+	engine2 := newScheduleTestEngine(c.now)
+	m2 := NewManager(engine2, store, dir, dec, c.now, nil)
+	m2.SetClockSource(media)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s2.mu.Lock()
+	if s2.schedule == nil {
+		s2.mu.Unlock()
+		t.Fatal("schedule was not rebuilt after a restart with a valid media clock")
+	}
+	if !s2.schedule.itemStartAt.Equal(t0) {
+		t.Fatalf("rebuilt T_i = %v, want %v (the persisted scheduled start)", s2.schedule.itemStartAt, t0)
+	}
+	wantBoundary := t0.Add(2 * time.Second)
+	if !s2.schedule.boundaryKnown || !s2.schedule.boundaryAt.Equal(wantBoundary) {
+		t.Fatalf("rebuilt boundary = %v (known=%v), want %v", s2.schedule.boundaryAt, s2.schedule.boundaryKnown, wantBoundary)
+	}
+	s2.mu.Unlock()
+
+	// Functional proof: the media clock reaching the boundary advances the
+	// session via the rebuilt schedule, not decoder-end drift.
+	media.advance(2 * time.Second)
+	m2.watchTick(ctx)
+
+	s2.mu.Lock()
+	currentItemID := s2.currentItemID
+	s2.mu.Unlock()
+	if currentItemID != "item-b" {
+		t.Fatalf("current item after the rebuilt boundary = %q, want item-b", currentItemID)
+	}
+	if got := engine2.startCount(); got != 2 {
+		t.Fatalf("Start call count = %d, want 2 (restore's own Start, then the scheduled boundary's)", got)
+	}
+}
+
+// TestRestorePlayingFallsBackToDecoderEndWhenMediaClockIsInvalid is R1's
+// other restore case: a media clock this node cannot read at restore
+// time must not be anchored anyway, since that would leave watchTick's
+// own boundary check permanently unable to fire while suppressing its
+// decoder-end fallback, stalling the item forever. The session instead
+// falls back to decoder-end advance, with a named warning logged.
+func TestRestorePlayingFallsBackToDecoderEndWhenMediaClockIsInvalid(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Unix(1_700_000_000, 0))
+	store := NewFileSessionStore(dir)
+	dec := newPerFileDecoder(knownDurationResult(2 * time.Second))
+	media := newFakeClockSource(time.Unix(4_000_000_000, 0))
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("bed-restore-no-clock")
+
+	engine1 := newScheduleTestEngine(c.now)
+	m1 := NewManager(engine1, store, dir, dec, c.now, nil)
+	m1.SetClockSource(media)
+	scheduledRestoreFixture(t, ctx, m1, media, id, dir)
+
+	// "Restart": this node's media clock is not readable this time
+	// (provider down, or not yet locked).
+	media.mu.Lock()
+	media.valid = false
+	media.reason = "clock not locked"
+	media.mu.Unlock()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	engine2 := newScheduleTestEngine(c.now)
+	m2 := NewManager(engine2, store, dir, dec, c.now, logger)
+	m2.SetClockSource(media)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s2.mu.Lock()
+	scheduleIsNil := s2.schedule == nil
+	s2.mu.Unlock()
+	if !scheduleIsNil {
+		t.Fatal("schedule was rebuilt despite an unreadable media clock, want nil (decoder-end fallback)")
+	}
+	if !strings.Contains(logBuf.String(), string(id)) || !strings.Contains(logBuf.String(), "media clock") {
+		t.Fatalf("no warning naming the session and the media clock fallback reason; log = %q", logBuf.String())
 	}
 }

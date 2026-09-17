@@ -267,7 +267,7 @@ func TestResumeRefusesASessionSuspendedByInterrupt(t *testing.T) {
 	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
 	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
 
-	r := m.Resume(ctx, "bg", "inv-operator-resume", 3)
+	r := m.Resume(ctx, "bg", "inv-operator-resume", 3, nil)
 	if r.Outcome != pkgaudio.OutcomeRefused {
 		t.Fatalf("operator resume of an interrupted session: outcome=%+v, want refused", r)
 	}
@@ -432,7 +432,7 @@ func TestInterruptedSessionResumeFailureStaysRecoverable(t *testing.T) {
 
 	// Recovery: nothing is armed to fail this Resume, so the operator can
 	// still bring bg back from exactly here.
-	r := m.Resume(ctx, "bg", "inv-bg-resume", 4)
+	r := m.Resume(ctx, "bg", "inv-bg-resume", 4, nil)
 	if r.Outcome == pkgaudio.OutcomeRefused || r.Outcome == pkgaudio.OutcomeFailed {
 		t.Fatalf("recovery Resume after the automatic one failed = %+v, want it to succeed", r)
 	}

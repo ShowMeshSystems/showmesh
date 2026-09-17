@@ -43,7 +43,7 @@ func TestScheduledStartInstantSurvivesTheWireExactly(t *testing.T) {
 		t.Fatalf("DecodeCmdPayload: %v", err)
 	}
 
-	got, present, err := parseScheduledAtNs(decoded.Params)
+	got, present, err := parseScheduledAtNs("audio.session.start", decoded.Params)
 	if err != nil {
 		t.Fatalf("parseScheduledAtNs: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestScheduledStartInstantSurvivesTheWireExactly(t *testing.T) {
 }
 
 func TestParseScheduledAtNsAbsentIsNotAnError(t *testing.T) {
-	_, present, err := parseScheduledAtNs(map[string]any{"sessionId": "s1"})
+	_, present, err := parseScheduledAtNs("audio.session.start", map[string]any{"sessionId": "s1"})
 	if err != nil {
 		t.Fatalf("parseScheduledAtNs with no instant = %v, want no error: the param is optional", err)
 	}
@@ -74,13 +74,13 @@ func TestParseScheduledAtNsRefusesAnAlreadyRoundedFloat(t *testing.T) {
 	if int64(rounded) == nanosecondScaleInstant {
 		t.Skip("this platform's float64 holds the test instant exactly; nothing to prove")
 	}
-	if _, _, err := parseScheduledAtNs(map[string]any{pkgaudio.ParamScheduledAtNs: rounded}); err == nil {
+	if _, _, err := parseScheduledAtNs("audio.session.start", map[string]any{pkgaudio.ParamScheduledAtNs: rounded}); err == nil {
 		t.Fatal("a float64 that cannot represent the instant exactly was accepted")
 	}
 }
 
 func TestParseScheduledAtNsRefusesANonNumber(t *testing.T) {
-	if _, _, err := parseScheduledAtNs(map[string]any{pkgaudio.ParamScheduledAtNs: "soon"}); err == nil {
+	if _, _, err := parseScheduledAtNs("audio.session.start", map[string]any{pkgaudio.ParamScheduledAtNs: "soon"}); err == nil {
 		t.Fatal("a non-numeric start instant was accepted")
 	}
 }

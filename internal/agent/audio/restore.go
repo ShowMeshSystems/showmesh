@@ -240,6 +240,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = false
 		m.startLTCLocked(ctx, s, position)
+		m.restoreItemScheduleLocked(ctx, s, rec)
 		s.persistBestEffortLocked("state change")
 	case pkgaudio.StatePaused:
 		// prepareLocked only reaches a freshly-Loaded engine handle (Ready),
@@ -351,6 +352,41 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		}
 	}
 	return nil
+}
+
+// restoreItemScheduleLocked rebuilds s.schedule (ADR-049 decision 8) from
+// rec's persisted item-boundary state once this restart's own engine
+// Start for the current item has already succeeded -- a silent gap
+// otherwise, since nothing else on this path ever reconstructs it and
+// [newSession] zero-initializes it to nil. rec.ScheduleItemIndex is
+// checked against rec.CurrentIndex first: a mismatch means the persisted
+// schedule evidence predates whatever moved CurrentIndex, and is not
+// trusted.
+//
+// A media clock this node cannot read right now is refused rather than
+// anchored anyway: [Manager.watchTick]'s boundary check requires a valid
+// reading to ever fire, and a schedule with boundaryKnown true but no
+// way to reach that check would permanently suppress watchTick's own
+// decoder-end fallback (`s.schedule == nil || !s.schedule.boundaryKnown`),
+// stalling the item forever instead of degrading to today's decoder-end
+// advance. Caller holds s.mu.
+func (m *Manager) restoreItemScheduleLocked(ctx context.Context, s *Session, rec PersistedSession) {
+	if !rec.ScheduleActive || rec.ScheduleItemIndex != rec.CurrentIndex {
+		return
+	}
+	source := m.clockSourceSnapshot()
+	if source == nil {
+		m.logf("audio session %s: restore had a scheduled item boundary but no media clock is bound; falling back to decoder-end advance", s.id)
+		return
+	}
+	mediaNow := source.Now(ctx)
+	if !mediaNow.Valid {
+		m.logf("audio session %s: restore had a scheduled item boundary but the media clock is not valid (%s); falling back to decoder-end advance", s.id, mediaNow.Reason)
+		return
+	}
+	s.schedule = &itemSchedule{itemStartAt: rec.ScheduleItemStartAt}
+	s.refreshBoundaryFromProbeLocked()
+	s.discardStageLocked(ctx)
 }
 
 // deferRestoreLocked handles the "cannot restore yet" case restoreOne's
@@ -485,7 +521,22 @@ func (m *Manager) watchTick(ctx context.Context) {
 			} else {
 				s.lastObservedAt = obs.ObservedAt
 				if obs.State == pkgaudio.StateCompleted {
-					s.advanceLocked(ctx, false, obs.ObservedAt)
+					// A scheduled item boundary (ADR-049 decision 8)
+					// governs this item's own end instead of the decoder,
+					// once its duration is known: the boundary check
+					// below decides when to move on, and an early decoder
+					// end here is not itself a reason to. A duration this
+					// node never learned falls back to today's decoder-end
+					// advance exactly, reported as such.
+					if s.schedule == nil || !s.schedule.boundaryKnown {
+						if s.schedule != nil {
+							m.logf("audio session %s: item %s duration unknown; advancing on decoder end instead of a scheduled boundary", s.id, s.currentItemID)
+						}
+						s.advanceLocked(ctx, false, obs.ObservedAt)
+						if s.schedule != nil && s.state == pkgaudio.StatePlaying {
+							m.reanchorScheduleAfterNaturalAdvanceLocked(ctx, s)
+						}
+					}
 				} else if obs.Reason != "" {
 					// State stays Playing, deliberately: the engine is
 					// still answering, so the fault beside it is the
@@ -495,6 +546,16 @@ func (m *Manager) watchTick(ctx context.Context) {
 					s.freezeCleanSince = time.Time{}
 				} else {
 					s.clearRecoveredFreezeLocked(obs.ObservedAt)
+				}
+			}
+		}
+		if s.state == pkgaudio.StatePlaying && s.schedule != nil {
+			m.maybeStageNextItemLocked(ctx, s)
+			if s.schedule != nil && s.schedule.boundaryKnown {
+				if source := m.clockSourceSnapshot(); source != nil {
+					if mediaNow := source.Now(ctx); mediaNow.Valid && !mediaNow.Time.Before(s.schedule.boundaryAt) {
+						m.scheduledAdvanceLocked(ctx, s, mediaNow.Time)
+					}
 				}
 			}
 		}
