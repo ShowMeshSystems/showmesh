@@ -15,7 +15,7 @@ import (
 // twoTargetInlineBackgroundAudioJSON declares two items on two different
 // registered nodes (audio-node-1, audio-node-2) and a bed-level targets
 // list naming audio-node-1 and a THIRD node, audio-node-3, that neither
-// item is registered for — exactly the shape PlaybackItemsFor's own test
+// item is registered for, exactly the shape PlaybackItemsFor's own test
 // needs: a listed node with no item of its own still plays every item
 // (the registered-copy rule, ADR-049 decision 7), and audio-node-2 (an
 // item's own target, but not listed) plays nothing.
