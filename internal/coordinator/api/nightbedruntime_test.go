@@ -1093,6 +1093,65 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeDispatchesNodesConcurrently(
 	}
 }
 
+// TestNightAdvanceMultiNodeBackgroundAudio_RefusedResumeIsNotRedispatched
+// is Defect C's own regression guard. The per-node start path
+// (nightAdvanceBackgroundAudioForNode's own nightBGStepStart case) logs
+// "start did not confirm; not auto-retrying" and stops; before the fix,
+// its nightBGStepResume sibling had no such gate for a multi-node bed, and
+// unconditionally re-dispatched a fresh audio.session.resume every tick
+// under nightBackgroundAudioResume's own "retry under a fresh revision:
+// never wedge here" rule meant for a SINGLE-node bed - observed on a bench
+// coordinator as revisions 9 to 29 and counting, every one refused. This
+// proves a resume row that resolved refused is never re-dispatched on a
+// later tick, while it still carries its own refusal reason (surfaced by
+// mapNightBackgroundAudio, nightsessioncontrol.go, straight off history).
+func TestNightAdvanceMultiNodeBackgroundAudio_RefusedResumeIsNotRedispatched(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
+
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
+	}
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	// A later instant than the start phase's own testNow: see
+	// driveNightAdvanceBackgroundAudioUntilStableAt's own doc comment.
+	resumeNow := testNow.Add(time.Hour)
+	const resumeClockReading = int64(1_800_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
+		"node-a:audio.session.resume":  refusedResultForAction("resume", "node-a refuses this resume"),
+	}
+	for i := 0; i < 5; i++ {
+		h.nightAdvanceBackgroundAudio(context.Background(), resumeNow, rec)
+	}
+
+	if got := countDispatchedByNodeAction(pub, "node-a", "audio.session.resume"); got != 1 {
+		t.Fatalf("node-a audio.session.resume dispatch count = %d, want exactly 1 (a refused resume must not be auto-retried in the same cycle)", got)
+	}
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestA, ok := nightBackgroundAudioLatestStepForNode(history, "node-a")
+	if !ok || latestA.Step.Kind != nightBGStepResume || latestA.Row.Outcome == nightCueOutcomeConfirmed || latestA.Row.OutcomeReason == "" {
+		t.Fatalf("node-a latest step = %+v, want its own resume resolved refused (not confirmed) and still carrying a non-empty reason", latestA)
+	}
+}
+
+// countDispatchedByNodeAction is [countDispatchedAction] narrowed to a
+// single node id.
+func countDispatchedByNodeAction(pub *fakeAudioPublisher, nodeID, action string) int {
+	n := 0
+	for _, d := range pub.dispatchedSnapshot() {
+		if d.NodeID == nodeID && d.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
 func reasonMentionsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(s, sub) {
