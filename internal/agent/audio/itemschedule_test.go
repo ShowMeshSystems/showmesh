@@ -261,7 +261,7 @@ func TestScheduledItemBoundaryIgnoresAnEarlyDecoderEnd(t *testing.T) {
 	// engine-clock time, well short of its scheduled 3s.
 	f.engine.setOverride("asset-a", 1*time.Second)
 
-	out, t0 := f.startAt(t, 20*time.Millisecond)
+	out, _ := f.startAt(t, 20*time.Millisecond)
 	if out.Outcome != pkgaudio.OutcomeStarted {
 		t.Fatalf("StartAt = %q (%s), want started", out.Outcome, out.Reason)
 	}
@@ -269,7 +269,10 @@ func TestScheduledItemBoundaryIgnoresAnEarlyDecoderEnd(t *testing.T) {
 	// Advance the engine's own clock past item-a's overridden 1s decode
 	// length, and the media clock to just short of the boundary. A tick
 	// here must not advance: the decoder says complete, but the boundary
-	// has not arrived yet.
+	// has not arrived yet. It must, however, already have LOADED item-b
+	// onto the engine ahead of the boundary (R2's "prepared early enough
+	// to be ready at its boundary"): one Load for item-a's own initial
+	// prepare, plus one for item-b staged ahead of time.
 	f.clk.advance(1500 * time.Millisecond)
 	f.media.advance(3*time.Second - 100*time.Millisecond)
 	f.m.watchTick(ctx)
@@ -278,6 +281,9 @@ func TestScheduledItemBoundaryIgnoresAnEarlyDecoderEnd(t *testing.T) {
 	}
 	if got := f.currentItemID(t); got != "item-a" {
 		t.Fatalf("current item before the boundary = %q, want item-a", got)
+	}
+	if got := f.engine.loadCount(); got != 2 {
+		t.Fatalf("Load call count before the boundary = %d, want 2 (item-b must already be staged ahead of the boundary)", got)
 	}
 
 	// Now reach exactly T+d0.
@@ -292,7 +298,11 @@ func TestScheduledItemBoundaryIgnoresAnEarlyDecoderEnd(t *testing.T) {
 	if got := f.state(t); got != pkgaudio.StatePlaying {
 		t.Fatalf("state at the boundary = %q, want playing", got)
 	}
-	_ = t0
+	// No further Load: the boundary promoted the already-staged handle
+	// rather than re-preparing it.
+	if got := f.engine.loadCount(); got != 2 {
+		t.Fatalf("Load call count at the boundary = %d, want 2 (no re-prepare of an already-staged item)", got)
+	}
 }
 
 // TestScheduledItemBoundaryIgnoresALateDecoderEnd is the other half of
