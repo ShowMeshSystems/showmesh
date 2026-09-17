@@ -320,7 +320,7 @@ func TestCueFireSurvivesServerWriteTimeout(t *testing.T) {
 // cueactivationaudio.go's activateAudio now reports for a node whose own
 // clock provider is unusable, matching startUnalignedOnArrival's existing
 // missed-instant shape). Before this fix, the top level still reported
-// aligned:true — this Cue's coordinator-side schedule succeeded — even
+// aligned:true (the coordinator-side schedule succeeded) even
 // though a real node never started at the shared instant.
 func TestHandleActivateCueNodeIgnoredSharedInstantReportsUnaligned(t *testing.T) {
 	now := testNow
