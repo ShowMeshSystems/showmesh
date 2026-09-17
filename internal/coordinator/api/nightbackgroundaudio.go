@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
@@ -1920,9 +1921,35 @@ func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now t
 		h.logWarn("night loop: background audio: bed schedule failed", "sessionId", rec.ID, "error", err)
 		return
 	}
-	for _, nodeID := range ready {
+	h.nightDispatchBedNodesConcurrently(ready, func(nodeID string) {
 		h.nightBackgroundAudioStartScheduled(ctx, now, rec, nodeID, sessionID, sched, history)
+	})
+}
+
+// nightDispatchBedNodesConcurrently runs fn once per nodeID on its own
+// goroutine and waits for all of them: a bed's shared start or resume
+// instant must reach every ready node before that instant elapses, so
+// one node's own dispatch (which blocks on its own agent's result) must
+// never delay another node's own publish until after the shared instant
+// has already passed - mirrors dispatchCueActivationsConcurrently's
+// identical concurrency contract for cue.activate (ADR-049 decision 3).
+// A panic on one node's own goroutine is logged and never reaches, or
+// blocks, any other node's own dispatch.
+func (h *handlers) nightDispatchBedNodesConcurrently(nodeIDs []string, fn func(nodeID string)) {
+	var wg sync.WaitGroup
+	for _, nodeID := range nodeIDs {
+		wg.Add(1)
+		go func(nodeID string) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					h.logWarn("night loop: background audio: bed dispatch panicked", "nodeId", nodeID, "panic", r)
+				}
+			}()
+			fn(nodeID)
+		}(nodeID)
 	}
+	wg.Wait()
 }
 
 // nightBedProgramLTCUnreadyReason is non-empty when nodeIDs names a
@@ -2105,9 +2132,9 @@ func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now 
 		h.logWarn("night loop: background audio: bed schedule failed", "sessionId", rec.ID, "error", err)
 		return
 	}
-	for _, nodeID := range ready {
+	h.nightDispatchBedNodesConcurrently(ready, func(nodeID string) {
 		h.nightBackgroundAudioResumeScheduled(ctx, now, rec, nodeID, sessionID, sched, bookmark, history)
-	}
+	})
 }
 
 // nightBackgroundAudioResumeScheduled mirrors [nightBackgroundAudioStartScheduled]:

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -910,6 +911,186 @@ func TestNightAdvanceMultiNodeBackgroundAudio_BedDispatchesCarryAgentRequiredKey
 	}
 	assertAudioSessionCommonParamsParse(t, "audio.session.resume (node-a)", resumeA, sessionID)
 	assertAudioSessionCommonParamsParse(t, "audio.session.resume (node-b)", resumeB, sessionID)
+}
+
+// waitForBedDispatchCondition polls cond every 5ms until it reports true,
+// or bound elapses - in which case onTimeout runs (releasing a blocked
+// node so the driving goroutine below can still exit) before the test
+// fails, rather than leaving that goroutine hung past the test's own end.
+func waitForBedDispatchCondition(t *testing.T, bound time.Duration, onTimeout func(), cond func() bool) {
+	t.Helper()
+	deadline := time.After(bound)
+	for {
+		if cond() {
+			return
+		}
+		select {
+		case <-deadline:
+			onTimeout()
+			t.Fatal("condition was never satisfied within the bound")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// TestNightAdvanceMultiNodeBackgroundAudio_StartDispatchesNodesConcurrently
+// proves nightDispatchBedNodesConcurrently's own contract for the bed's
+// shared start instant: real hardware hit the opposite of this - a plain
+// per-node for loop meant the second node's own audio.session.start
+// reached it only after the first node's own agent had already answered,
+// which for a ~4s lead time landed after the shared instant and the
+// second node refused with scheduled_start_in_past. Here node-a's own
+// agent never answers until this test releases it, so node-b's own start
+// dispatching and confirming in the meantime is only possible if the two
+// nodes are genuinely dispatched concurrently, not serially.
+func TestNightAdvanceMultiNodeBackgroundAudio_StartDispatchesNodesConcurrently(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	pub.result = confirmedResultForAction("x", nightBackgroundAudioSessionID(rec), "started")
+	const clockReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, clockReading, ""),
+	}
+
+	release := make(chan struct{})
+	var released bool
+	closeRelease := func() {
+		if !released {
+			released = true
+			close(release)
+		}
+	}
+	defer closeRelease()
+	pub.blockUntilByNode = map[string]<-chan struct{}{"node-a:audio.session.start": release}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 10; i++ {
+			h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+		}
+	}()
+
+	waitForBedDispatchCondition(t, 5*time.Second, closeRelease, func() bool {
+		_, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
+		return ok
+	})
+
+	waitForBedDispatchCondition(t, 5*time.Second, closeRelease, func() bool {
+		history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+		if err != nil {
+			t.Fatalf("history: %v", err)
+		}
+		latestB, ok := nightBackgroundAudioLatestStepForNode(history, "node-b")
+		return ok && latestB.Step.Kind == nightBGStepStart && latestB.Row.Outcome == nightCueOutcomeConfirmed
+	})
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestA, ok := nightBackgroundAudioLatestStepForNode(history, "node-a")
+	if !ok || latestA.Step.Kind != nightBGStepStart || latestA.Row.State != nightCueStateDispatched {
+		t.Fatalf("node-a latest step = %+v, want still dispatched (unresolved) while node-b already confirmed its own start", latestA)
+	}
+
+	closeRelease()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("driving loop never finished after releasing node-a")
+	}
+
+	history, err = h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestA, ok = nightBackgroundAudioLatestStepForNode(history, "node-a")
+	if !ok || latestA.Step.Kind != nightBGStepStart || latestA.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-a latest step = %+v, want a confirmed start once released", latestA)
+	}
+}
+
+// TestNightAdvanceMultiNodeBackgroundAudio_ResumeDispatchesNodesConcurrently
+// is [TestNightAdvanceMultiNodeBackgroundAudio_StartDispatchesNodesConcurrently]'s
+// own counterpart for the bed's shared resume instant.
+func TestNightAdvanceMultiNodeBackgroundAudio_ResumeDispatchesNodesConcurrently(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
+
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
+	}
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	const resumeClockReading = int64(1_800_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
+	}
+
+	release := make(chan struct{})
+	var released bool
+	closeRelease := func() {
+		if !released {
+			released = true
+			close(release)
+		}
+	}
+	defer closeRelease()
+	pub.blockUntilByNode = map[string]<-chan struct{}{"node-a:audio.session.resume": release}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 10; i++ {
+			h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+		}
+	}()
+
+	waitForBedDispatchCondition(t, 5*time.Second, closeRelease, func() bool {
+		_, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
+		return ok
+	})
+
+	waitForBedDispatchCondition(t, 5*time.Second, closeRelease, func() bool {
+		history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+		if err != nil {
+			t.Fatalf("history: %v", err)
+		}
+		latestB, ok := nightBackgroundAudioLatestStepForNode(history, "node-b")
+		return ok && latestB.Step.Kind == nightBGStepResume && latestB.Row.Outcome == nightCueOutcomeConfirmed
+	})
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestA, ok := nightBackgroundAudioLatestStepForNode(history, "node-a")
+	if !ok || latestA.Step.Kind != nightBGStepResume || latestA.Row.State != nightCueStateDispatched {
+		t.Fatalf("node-a latest step = %+v, want still dispatched (unresolved) while node-b already confirmed its own resume", latestA)
+	}
+
+	closeRelease()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("driving loop never finished after releasing node-a")
+	}
+
+	history, err = h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestA, ok = nightBackgroundAudioLatestStepForNode(history, "node-a")
+	if !ok || latestA.Step.Kind != nightBGStepResume || latestA.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-a latest step = %+v, want a confirmed resume once released", latestA)
+	}
 }
 
 func reasonMentionsAll(s string, subs ...string) bool {
