@@ -30,6 +30,7 @@ type configNodeClock struct {
 
 	ExternalUDSAddress string `json:"externalUdsAddress,omitempty"`
 	FPPBaseURL         string `json:"fppBaseUrl,omitempty"`
+	PHCDevice          string `json:"phcDevice,omitempty"`
 }
 
 type nodeClockConfigResponse struct {
@@ -181,7 +182,7 @@ func cmdNodeClockGet(args []string, stdout, stderr io.Writer, clock func() time.
 
 func cmdNodeClockSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl node-clock set", stderr)
-	var provider, iface, externalUDSAddress, fppBaseURL string
+	var provider, iface, externalUDSAddress, fppBaseURL, phcDevice string
 	var domain, holdoverLimitSeconds, priority1 int
 	var clientOnly, hardwareTimestamping bool
 	fs.StringVar(&provider, "provider", "", `which PTP provider this node runs: "managed", "external", or "fpp" (required)`)
@@ -193,6 +194,7 @@ func cmdNodeClockSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.BoolVar(&hardwareTimestamping, "hardware-timestamping", false, "managed only: request hardware timestamping with a software fallback attempt")
 	fs.StringVar(&externalUDSAddress, "external-uds-address", "", "external only: overrides the read-only management socket path (default /var/run/ptp/ptp4lro)")
 	fs.StringVar(&fppBaseURL, "fpp-base-url", "", `fpp only: the FPP 10 host's own base URL (required when --provider is "fpp")`)
+	fs.StringVar(&phcDevice, "phc-device", "", `external only: the PTP hardware clock device (e.g. "/dev/ptp0") the externally run ptp4l keeps on PTP time`)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl node-clock set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new node.clock revision (PUT /api/v1/config/node.clock/{id}).")
@@ -236,6 +238,7 @@ func cmdNodeClockSet(args []string, stdout, stderr io.Writer, clock func() time.
 		ClientOnly: clientOnly, HoldoverLimitSeconds: holdoverLimitSeconds,
 		Priority1: priority1, HardwareTimestamping: hardwareTimestamping,
 		ExternalUDSAddress: externalUDSAddress, FPPBaseURL: fppBaseURL,
+		PHCDevice: phcDevice,
 	}
 	var resp nodeClockConfigResponse
 	if err := c.putJSON(ctx, "/api/v1/config/node.clock/"+url.PathEscape(id), "", body, &resp); err != nil {
@@ -311,6 +314,7 @@ func printNodeClockDetail(w io.Writer, resp nodeClockConfigResponse) {
 	}
 	if p.Provider == "external" {
 		_, _ = fmt.Fprintf(w, "External UDS address:    %s\n", p.ExternalUDSAddress)
+		_, _ = fmt.Fprintf(w, "PHC device:              %s\n", p.PHCDevice)
 	}
 	if p.Provider == "fpp" {
 		_, _ = fmt.Fprintf(w, "FPP base URL:            %s\n", p.FPPBaseURL)

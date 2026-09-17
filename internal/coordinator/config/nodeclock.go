@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
 
 // This file is the per-node kind (ADR-039, IDENTIFIER-REGISTER.md's
@@ -53,7 +54,15 @@ var nodeClockTopLevelKeys = map[string]bool{
 	"clientOnly": true, "holdoverLimitSeconds": true,
 	"priority1": true, "hardwareTimestamping": true,
 	"externalUdsAddress": true, "fppBaseUrl": true,
+	"phcDevice": true,
 }
+
+// phcDevicePattern is the only shape [DecodeNodeClockPayload] accepts for
+// phcDevice: a Linux PTP hardware clock device node. Anything else (a
+// symlink, a udev alias, a bare interface name) is refused rather than
+// guessed at, matching every PTP hardware clock this codebase already
+// reads ([clock.PHCIndexForInterface]'s own "/dev/ptp%d" construction).
+var phcDevicePattern = regexp.MustCompile(`^/dev/ptp[0-9]+$`)
 
 // NodeClockPayload is config_revisions.payload_json's decoded, VALIDATED
 // shape for [NodeClockConfigKind].
@@ -106,6 +115,12 @@ type NodeClockPayload struct {
 	// FPPBaseURL is the FPP 10 host's own base URL — required when
 	// Provider is [NodeClockProviderFPP].
 	FPPBaseURL string `json:"fppBaseUrl,omitempty"`
+
+	// PHCDevice is the operator-declared PTP hardware clock device (e.g.
+	// "/dev/ptp0") that the externally-owned ptp4l this node observes
+	// keeps disciplined to PTP time. External only; see
+	// [clock.ExternalProvider.Now] for why this must be declared.
+	PHCDevice string `json:"phcDevice,omitempty"`
 }
 
 // EncodeNodeClockPayload marshals p into config_revisions.payload_json's
@@ -214,10 +229,30 @@ func DecodeNodeClockPayload(raw string) (NodeClockPayload, *ValidationError) {
 		}
 	}
 
+	phcDevice, verr := decodeOptionalString(top, "phcDevice", "phcDevice")
+	if verr != nil {
+		return NodeClockPayload{}, verr
+	}
+	if phcDevice != "" {
+		if provider != NodeClockProviderExternal {
+			return NodeClockPayload{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "phcDevice",
+				Detail: fmt.Sprintf("phcDevice must be absent unless provider is %q: an ignored field would read as an applied one", NodeClockProviderExternal),
+			}
+		}
+		if !phcDevicePattern.MatchString(phcDevice) {
+			return NodeClockPayload{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "phcDevice",
+				Detail: fmt.Sprintf("phcDevice %q must match %s (a PTP hardware clock device path, e.g. \"/dev/ptp0\")", phcDevice, phcDevicePattern.String()),
+			}
+		}
+	}
+
 	return NodeClockPayload{
 		Provider: provider, Interface: iface, Domain: domain,
 		ClientOnly: clientOnly, HoldoverLimitSeconds: holdoverLimitSeconds,
 		Priority1: priority1, HardwareTimestamping: hardwareTimestamping,
 		ExternalUDSAddress: externalUDS, FPPBaseURL: fppBaseURL,
+		PHCDevice: phcDevice,
 	}, nil
 }

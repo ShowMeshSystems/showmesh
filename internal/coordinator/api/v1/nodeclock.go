@@ -22,6 +22,7 @@ type ConfigNodeClock struct {
 
 	ExternalUDSAddress string `json:"externalUdsAddress,omitempty"`
 	FPPBaseURL         string `json:"fppBaseUrl,omitempty"`
+	PHCDevice          string `json:"phcDevice,omitempty"`
 }
 
 // NodeClockConfigResponse is the body of GET and PUT

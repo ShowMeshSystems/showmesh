@@ -161,6 +161,7 @@ func mapNodeClockConfigResponse(now time.Time, rev store.ConfigRevisionRecord, o
 			ClientOnly: p.ClientOnly, HoldoverLimitSeconds: p.HoldoverLimitSeconds,
 			Priority1: p.Priority1, HardwareTimestamping: p.HardwareTimestamping,
 			ExternalUDSAddress: p.ExternalUDSAddress, FPPBaseURL: p.FPPBaseURL,
+			PHCDevice: p.PHCDevice,
 		},
 		UpdatedAt:              formatTime(obj.UpdatedAt),
 		CreatedByPrincipalID:   nonEmptyStrPtr(rev.CreatedByPrincipalID),

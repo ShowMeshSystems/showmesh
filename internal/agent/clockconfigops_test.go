@@ -39,3 +39,29 @@ func TestClockBindingCurrentInterfaceReportsTheAcceptedConfiguration(t *testing.
 		t.Fatalf("currentInterface() = (%q, %v), want (\"eth0\", true)", iface, ok)
 	}
 }
+
+// TestDecodeClockNodeConfigRejectsPHCDeviceOnManaged proves the agent
+// refuses phcDevice on a managed provider, matching
+// [config.DecodeNodeClockPayload]'s identical coordinator-side refusal.
+func TestDecodeClockNodeConfigRejectsPHCDeviceOnManaged(t *testing.T) {
+	_, err := decodeClockNodeConfig(map[string]any{
+		"schema": clockConfigSchema, "provider": "managed", "interface": "eth0",
+		"domain": 0, "revision": 1, "phcDevice": "/dev/ptp0",
+	})
+	if err == nil {
+		t.Fatal("decodeClockNodeConfig: err = nil, want a refusal naming phcDevice")
+	}
+}
+
+// TestDecodeClockNodeConfigRejectsPHCDeviceOnFPP mirrors
+// TestDecodeClockNodeConfigRejectsPHCDeviceOnManaged one provider over.
+func TestDecodeClockNodeConfigRejectsPHCDeviceOnFPP(t *testing.T) {
+	_, err := decodeClockNodeConfig(map[string]any{
+		"schema": clockConfigSchema, "provider": "fpp", "interface": "eth0",
+		"domain": 0, "revision": 1, "fppBaseUrl": "http://fpp-host.local",
+		"phcDevice": "/dev/ptp0",
+	})
+	if err == nil {
+		t.Fatal("decodeClockNodeConfig: err = nil, want a refusal naming phcDevice")
+	}
+}

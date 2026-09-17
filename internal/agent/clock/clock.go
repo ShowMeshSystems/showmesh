@@ -78,6 +78,14 @@ const (
 	ProviderNone     ProviderKind = "none"
 )
 
+// phcIndexForInterface and readPHC indirect [PHCIndexForInterface] and
+// [ReadPHC] so tests can fake "has a PHC" and "read fails" without real
+// PTP hardware.
+var (
+	phcIndexForInterface = PHCIndexForInterface
+	readPHC              = ReadPHC
+)
+
 // Timescale is the media clock's own epoch vocabulary (RES-019: "the media
 // clock is a PTP-domain clock, never wall time; its timescale may be
 // arbitrary"). TimescaleUnknown means genuinely undetermined, never a

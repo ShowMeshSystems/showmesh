@@ -876,6 +876,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
       else delete payload.priority1
       delete payload.externalUdsAddress
       delete payload.fppBaseUrl
+      delete payload.phcDevice
     } else if (provider === 'external') {
       if (externalUdsAddress.trim() !== '') payload.externalUdsAddress = externalUdsAddress
       else delete payload.externalUdsAddress
@@ -883,12 +884,14 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
       delete payload.priority1
       delete payload.hardwareTimestamping
       delete payload.fppBaseUrl
+      // phcDevice has no control here yet; the base spread round-trips it unchanged.
     } else {
       payload.fppBaseUrl = fppBaseUrl
       delete payload.clientOnly
       delete payload.priority1
       delete payload.hardwareTimestamping
       delete payload.externalUdsAddress
+      delete payload.phcDevice
     }
     return payload
   }

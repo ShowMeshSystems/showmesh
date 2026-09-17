@@ -40,6 +40,48 @@ func TestPutNodeClockAcceptsValidPayload(t *testing.T) {
 	}
 }
 
+// TestPutNodeClockRoundTripsPHCDevice proves phcDevice survives the full
+// HTTP write/read path, not only [config.DecodeNodeClockPayload]/
+// [config.EncodeNodeClockPayload] in isolation: mapNodeClockConfigResponse
+// (nodeclock.go) has its own, independent list of fields to carry into
+// v1.ConfigNodeClock, and a field added to the stored payload alone would
+// silently never reach a GET or the PUT response body.
+func TestPutNodeClockRoundTripsPHCDevice(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	body := `{"provider":"external","interface":"eno2","domain":0,"phcDevice":"/dev/ptp0"}`
+	status, putBody := mustPutNodeClock(t, api, token, "node-01", body)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", status, putBody)
+	}
+	if !containsAll(putBody, `"phcDevice":"/dev/ptp0"`) {
+		t.Fatalf("PUT response missing phcDevice; body: %s", putBody)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/node.clock/node-01", map[string]string{"Authorization": "Bearer " + token})
+	if !containsAll(string(getBody), `"phcDevice":"/dev/ptp0"`) {
+		t.Fatalf("GET response missing phcDevice; body: %s", getBody)
+	}
+}
+
+// TestPutNodeClockRejectsPHCDeviceOnManagedProvider proves the config
+// package's own refusal (phcDevice is external-only) is reachable through
+// the real handler.
+func TestPutNodeClockRejectsPHCDeviceOnManagedProvider(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showConfigTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	status, body := mustPutNodeClock(t, api, token, "render-01", `{"provider":"managed","interface":"eth0","domain":0,"phcDevice":"/dev/ptp0"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", status, body)
+	}
+}
+
 // TestPutNodeClockRejectsUnknownProvider proves the payload decode's
 // provider enum check is reachable through the real handler.
 func TestPutNodeClockRejectsUnknownProvider(t *testing.T) {
