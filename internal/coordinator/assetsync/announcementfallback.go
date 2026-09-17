@@ -9,11 +9,11 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// This file is R7's own announcement half of ADR-049 decision 5's registered-copy rule: a listed node without
+// This file is the announcement half of ADR-049 decisions 5, 7 and 9's registered-copy rule: a listed node without
 // its own registered row for an announcement's named file borrows another listed node's row for it, the direct analog of audiofallback.go's [audioFallbackAssets] for a Cue.
 
 // AnnouncementMedia is the file identity an announcement cue's own bound audio.session.apply target.params
-// carries (R6, the frozen ruling): {assetId, contentHash, filename, sizeBytes}, the same shape a bed item's own media reference uses.
+// carries, per ADR-049 decision 9: {assetId, contentHash, filename, sizeBytes}, the same shape a bed item's own media reference uses.
 type AnnouncementMedia struct {
 	AssetID     string
 	ContentHash string
@@ -28,8 +28,8 @@ func (m AnnouncementMedia) Complete() bool {
 }
 
 // decodeAnnouncementMedia is this package's own copy of
-// nightannouncement.go's identical decode (R6): this package must never
-// import internal/coordinator/api, so the shape is read back twice rather than shared.
+// nightannouncement.go's identical decode (ADR-049 decision 9): this
+// package must never import internal/coordinator/api, so the shape is read back twice rather than shared.
 func decodeAnnouncementMedia(params map[string]any) AnnouncementMedia {
 	media, _ := params["media"].(map[string]any)
 	assetID, _ := media["assetId"].(string)
@@ -49,7 +49,7 @@ func decodeAnnouncementMedia(params map[string]any) AnnouncementMedia {
 
 // AnnouncementBinding is one announcement-role night.session cue,
 // resolved far enough to answer asset-delivery questions: which nodes
-// need the file, and what file (R6's own media reference) they need.
+// need the file, and what file (the ADR-049 decision 9 media reference) they need.
 type AnnouncementBinding struct {
 	CueName  string
 	ActionID string
@@ -112,8 +112,8 @@ func AnnouncementBindings(ctx context.Context, st *store.Store, showID string) (
 }
 
 // announcementFallbackAssets is [ExpectedAssetsForNode]'s own wiring point
-// for R7's registered-copy rule: a listed node with no current row of its
-// own matching content borrows another listed node's current row, keyed by content hash rather than sequence (an announcement has no sequence identity, R6).
+// for ADR-049 decisions 7 and 9's registered-copy rule: a listed node with no current row of its
+// own matching content borrows another listed node's current row, keyed by content hash rather than sequence (an announcement has no sequence identity).
 func announcementFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string) ([]store.AssetRecord, error) {
 	bindings, err := AnnouncementBindings(ctx, st, showID)
 	if err != nil {

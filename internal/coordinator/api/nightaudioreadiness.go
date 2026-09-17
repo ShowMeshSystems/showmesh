@@ -367,7 +367,7 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 	return checks
 }
 
-// nightCheckAnnouncementAssets is §13's own announcement-asset bullet (R6/R7):
+// nightCheckAnnouncementAssets is §13's own announcement-asset bullet (ADR-049 decisions 7 and 9):
 // healthy when every announcement-role cue's own media reference is deliverable to every one of its bound action's listed nodes;
 // failed, naming the node and file, when a listed node genuinely cannot get it; not_verifiable, naming the cue and action, otherwise.
 func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []config.NightSessionCue, payload config.NightSessionPayload) nightReadinessCheck {

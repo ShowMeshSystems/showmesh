@@ -474,7 +474,7 @@ func TestNightCheckAnnouncementAssets_NeverInventsAPass(t *testing.T) {
 
 // announcementReadinessAsset registers a current node-scoped "audio"
 // asset row, mirroring putBackgroundAudioAsset (nightbackgroundaudio_test.go)
-// but keyed by contentHash directly - R7's own coverage key for an
+// but keyed by contentHash directly, per ADR-049 decisions 7 and 9, for an
 // announcement, which carries no sequence identity.
 func announcementReadinessAsset(t *testing.T, st *store.Store, show, node, assetID, contentHash string) {
 	t.Helper()
@@ -488,7 +488,7 @@ func announcementReadinessAsset(t *testing.T, st *store.Store, show, node, asset
 }
 
 // announcementReadinessAction registers a show.action bound to nodeIDs,
-// carrying R6's own media reference in its apply params.
+// carrying the ADR-049 decision 9 media reference in its apply params.
 func announcementReadinessAction(t *testing.T, st *store.Store, id string, nodeIDs []string, assetID, contentHash, filename string) {
 	t.Helper()
 	putNightAction(t, st, id, config.ShowActionPayload{
@@ -504,9 +504,8 @@ func announcementReadinessAction(t *testing.T, st *store.Store, id string, nodeI
 }
 
 // TestNightCheckAnnouncementAssets_HealthyWhenEveryListedNodeCanGetTheFile
-// proves R6+R7 together answer healthy once a complete media reference
-// resolves to a copy on every one of the action's own listed nodes -
-// here, directly, with no fallback needed.
+// proves ADR-049 decisions 7 and 9 answer healthy once a complete media
+// reference resolves to a copy on every listed node, with no fallback needed.
 func TestNightCheckAnnouncementAssets_HealthyWhenEveryListedNodeCanGetTheFile(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 	h.deps.AssetManifests = st
@@ -525,9 +524,7 @@ func TestNightCheckAnnouncementAssets_HealthyWhenEveryListedNodeCanGetTheFile(t 
 
 // TestNightCheckAnnouncementAssets_HealthyViaFallback proves a node with
 // no registered copy of its own is still healthy when a sibling target
-// node holds one - R7's own registered-copy rule, checked at readiness
-// rather than only discovered when asset sync leaves the node without
-// the file.
+// node holds one, per ADR-049 decisions 7 and 9, checked at readiness.
 func TestNightCheckAnnouncementAssets_HealthyViaFallback(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 	h.deps.AssetManifests = st
@@ -545,9 +542,8 @@ func TestNightCheckAnnouncementAssets_HealthyViaFallback(t *testing.T) {
 }
 
 // TestNightCheckAnnouncementAssets_FailsNamingNodeAndFile proves the one
-// case R7's fallback cannot rescue - NO listed node holds the content
-// anywhere - fails, naming the node(s) and the file, rather than
-// reporting not_verifiable or a silent pass.
+// case ADR-049 decision 9's fallback cannot rescue, no listed node holds
+// the content anywhere, fails naming the node(s) and the file.
 func TestNightCheckAnnouncementAssets_FailsNamingNodeAndFile(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 	h.deps.AssetManifests = st

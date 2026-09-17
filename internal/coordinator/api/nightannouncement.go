@@ -325,7 +325,7 @@ func nightAnnouncementApplyRowPhase(cuePhase string, target config.ShowActionTar
 
 // nightAdvanceAnnouncementStart dispatches every target node's own start.
 // A target naming one node keeps [nightAdvanceAnnouncementStartUnscheduled]'s
-// pre-ADR-049 behavior; more than one takes the shared-instant path (R3).
+// pre-ADR-049 behavior; more than one takes the shared-instant path (ADR-049 decisions 3, 4, 6).
 func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
 	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
 	if !ok {
@@ -630,7 +630,7 @@ func nightAnnouncementScheduleFromRow(row store.NightCueOutboxRecord) (scheduled
 	return decision.ScheduledAtNs, "", decision.FailedNodes, nil
 }
 
-// nightAnnouncementMedia is R6, the frozen ruling: an announcement's
+// nightAnnouncementMedia is ADR-049 decision 9: an announcement's
 // audio.session.apply target.params carry "media": {assetId, contentHash,
 // filename, sizeBytes}, the same shape a bed item's own media reference uses.
 type nightAnnouncementMedia struct {
@@ -644,9 +644,9 @@ func (m nightAnnouncementMedia) Complete() bool {
 	return m.AssetID != "" && m.ContentHash != "" && m.Filename != ""
 }
 
-// nightAnnouncementMediaRef reads target.params["media"] back (R6): an
-// absent or incomplete reference decodes to the zero value, which the
-// caller (readiness) reports as not_verifiable, never invented.
+// nightAnnouncementMediaRef reads target.params["media"] back (ADR-049
+// decision 9): an absent or incomplete reference decodes to the zero
+// value, which the caller (readiness) reports as not_verifiable, never invented.
 func nightAnnouncementMediaRef(params map[string]any) nightAnnouncementMedia {
 	media, _ := params["media"].(map[string]any)
 	assetID, _ := media["assetId"].(string)

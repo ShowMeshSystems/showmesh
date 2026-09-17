@@ -134,7 +134,7 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 	if err != nil {
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
 	}
-	// R7's own announcement half of the same precedence tier (announcementfallback.go).
+	// ADR-049 decisions 7 and 9's announcement half of the same precedence tier (announcementfallback.go).
 	announcementAssets, err := announcementFallbackAssets(ctx, st, showID, nodeID)
 	if err != nil {
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)

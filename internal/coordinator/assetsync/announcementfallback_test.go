@@ -9,7 +9,7 @@ import (
 )
 
 // putAnnouncementAction writes a show.action bound to nodeIDs, carrying
-// R6's own media reference (assetId/contentHash/filename/sizeBytes) in
+// the ADR-049 decision 9 media reference (assetId/contentHash/filename/sizeBytes) in
 // its apply params.
 func putAnnouncementAction(t *testing.T, st *store.Store, id, showID string, nodeIDs []string, assetID, contentHash, filename string) {
 	t.Helper()
@@ -46,9 +46,9 @@ func putAnnouncementNightSession(t *testing.T, st *store.Store, id, showID, cueN
 	putConfig(t, st, config.NightSessionConfigKind, id, payload)
 }
 
-// TestAnnouncementBindingsResolvesTheBoundActionsMediaAndNodes proves R6:
-// an announcement-role cue's own bound show.action resolves to its
-// AudioNodeIDs and its params.media reference, exactly as authored.
+// TestAnnouncementBindingsResolvesTheBoundActionsMediaAndNodes proves
+// ADR-049 decision 9: an announcement-role cue's own bound show.action
+// resolves to its AudioNodeIDs and its params.media reference, exactly as authored.
 func TestAnnouncementBindingsResolvesTheBoundActionsMediaAndNodes(t *testing.T) {
 	st := openTestStore(t)
 	showID := "halloween-2026"
@@ -77,12 +77,8 @@ func TestAnnouncementBindingsResolvesTheBoundActionsMediaAndNodes(t *testing.T) 
 }
 
 // TestExpectedAssetsForNodeAnnouncementFallbackBorrowsSoleOtherTargetsRow
-// is R7's own acceptance proof, mirroring
-// TestExpectedAssetsForNodeAudioFallbackBorrowsSoleOtherTargetsRow one
-// file over: node-b, a declared target of the announcement with no
-// registered row of its own, receives node-a's own row for the SAME
-// content - the announcement's own named asset, borrowed rather than
-// resolved to nothing.
+// is the ADR-049 decisions 7 and 9 acceptance proof, mirroring
+// TestExpectedAssetsForNodeAudioFallbackBorrowsSoleOtherTargetsRow one file over.
 func TestExpectedAssetsForNodeAnnouncementFallbackBorrowsSoleOtherTargetsRow(t *testing.T) {
 	st := openTestStore(t)
 	showID := "halloween-2026"

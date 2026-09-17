@@ -1256,7 +1256,7 @@ func TestNightAnnouncementRevisions_TripleStrictlyExceedsPersistedRevision(t *te
 }
 
 // twoNodeAnnouncementAction registers a two-node announcement action,
-// shared by this file's own R3 scheduling tests below.
+// shared by this file's own ADR-049 decisions 3, 4, 6 scheduling tests below.
 func twoNodeAnnouncementAction(t *testing.T, st *store.Store) {
 	t.Helper()
 	putNightAction(t, st, "thank-you", config.ShowActionPayload{
@@ -1282,11 +1282,8 @@ func startParamsByNode(pub *fakeAudioPublisher, from int) map[string]map[string]
 }
 
 // TestNightAnnouncement_TwoNodesShareOneScheduledInstant is the
-// acceptance proof for R3 (ADR-049 decision 3, the frozen ruling) on the
-// announcement half: both nodes' own audio.session.start carry the
-// IDENTICAL ParamScheduledAtNs, selected from exactly one schedule read
-// (one audio.session.prepare per node, never more), and the decision is
-// durably recorded as its own aligned schedule row.
+// ADR-049 decision 3 acceptance proof: both nodes' own audio.session.start
+// carry the IDENTICAL ParamScheduledAtNs, from exactly one schedule read each.
 func TestNightAnnouncement_TwoNodesShareOneScheduledInstant(t *testing.T) {
 	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
 	putAudioNodeForTest(t, st, "node-a")      // holds the media clock
@@ -1347,10 +1344,8 @@ func TestNightAnnouncement_TwoNodesShareOneScheduledInstant(t *testing.T) {
 }
 
 // TestNightAnnouncement_NoUsableClockStartsBothOnArrivalRecordedUnaligned
-// proves R3's own fallback: with no usable media clock, both nodes still
-// start (on arrival, no ParamScheduledAtNs), and the schedule row records
-// the concrete reason - never a synchronized success it did not reach,
-// and never a silent announcement either.
+// proves the ADR-049 decision 6 fallback: with no usable media clock, both
+// nodes still start on arrival, and the schedule row records the reason.
 func TestNightAnnouncement_NoUsableClockStartsBothOnArrivalRecordedUnaligned(t *testing.T) {
 	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
 	// Neither node has an audio.node config at all: no usable media clock.
@@ -1390,11 +1385,9 @@ func TestNightAnnouncement_NoUsableClockStartsBothOnArrivalRecordedUnaligned(t *
 	}
 }
 
-// TestNightAnnouncement_ReplayTickReadsNoClockAndDispatchesNothingNew
-// proves R3's own durability rule: once a multi-node announcement's
-// schedule and start steps have resolved, a second tick within the SAME
-// cycle dispatches nothing new at all - no repeated prepare read, no
-// repeated start.
+// TestNightAnnouncement_ReplayTickReadsNoClockAndDispatchesNothingNew proves
+// the ADR-049 decision 4 durability rule: once a multi-node announcement's
+// schedule and start steps have resolved, a second tick dispatches nothing new.
 func TestNightAnnouncement_ReplayTickReadsNoClockAndDispatchesNothingNew(t *testing.T) {
 	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
 	putAudioNodeForTest(t, st, "node-a")
