@@ -1253,3 +1253,173 @@ func TestNightAnnouncementRevisions_TripleStrictlyExceedsPersistedRevision(t *te
 		}
 	}
 }
+
+// twoNodeAnnouncementAction registers a two-node announcement action,
+// shared by this file's own R3 scheduling tests below.
+func twoNodeAnnouncementAction(t *testing.T, st *store.Store) {
+	t.Helper()
+	putNightAction(t, st, "thank-you", config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration:  config.ShowActionIntegrationAudio,
+			AudioNodeIDs: config.AudioNodeIDList{"node-a", "node-b"}, AudioSessionID: "announcement-1",
+			AudioAction: "audio.session.apply",
+		},
+	})
+}
+
+// startParamsByNode returns the params of every dispatched
+// audio.session.start command at or after from, keyed by node id.
+func startParamsByNode(pub *fakeAudioPublisher, from int) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, d := range pub.dispatched[from:] {
+		if d.Action == "audio.session.start" {
+			out[d.NodeID] = d.Params
+		}
+	}
+	return out
+}
+
+// TestNightAnnouncement_TwoNodesShareOneScheduledInstant is the
+// acceptance proof for R3 (ADR-049 decision 3, the frozen ruling) on the
+// announcement half: both nodes' own audio.session.start carry the
+// IDENTICAL ParamScheduledAtNs, selected from exactly one schedule read
+// (one audio.session.prepare per node, never more), and the decision is
+// durably recorded as its own aligned schedule row.
+func TestNightAnnouncement_TwoNodesShareOneScheduledInstant(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putAudioNodeForTest(t, st, "node-a")      // holds the media clock
+	putAudioNodeNoLTCForTest(t, st, "node-b") // does not
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"node-b:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+	}
+
+	ctx := context.Background()
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	var prepareCount int
+	for _, d := range pub.dispatched[before:] {
+		if d.Action == "audio.session.prepare" {
+			prepareCount++
+		}
+	}
+	if prepareCount != 2 {
+		t.Fatalf("dispatched %d audio.session.prepare commands, want exactly 2 (one schedule read per node)", prepareCount)
+	}
+
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":"+nodeID, "thank-you")
+		if err != nil {
+			t.Fatalf("%s start row: %v", nodeID, err)
+		}
+		if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("%s start = %+v, want resolved/confirmed", nodeID, startRow)
+		}
+	}
+
+	starts := startParamsByNode(pub, before)
+	aAt, aOK := starts["node-a"][pkgaudio.ParamScheduledAtNs]
+	bAt, bOK := starts["node-b"][pkgaudio.ParamScheduledAtNs]
+	if !aOK || !bOK {
+		t.Fatalf("start params = %+v / %+v, want both to carry %q", starts["node-a"], starts["node-b"], pkgaudio.ParamScheduledAtNs)
+	}
+	if aAt != bAt {
+		t.Fatalf("scheduledAtNs differ: node-a=%v node-b=%v, want identical (one shared instant)", aAt, bAt)
+	}
+
+	scheduleRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementSchedule+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("schedule row: %v", err)
+	}
+	if scheduleRow.Outcome != nightAnnouncementScheduleAligned {
+		t.Fatalf("schedule row outcome = %q, want %q", scheduleRow.Outcome, nightAnnouncementScheduleAligned)
+	}
+}
+
+// TestNightAnnouncement_NoUsableClockStartsBothOnArrivalRecordedUnaligned
+// proves R3's own fallback: with no usable media clock, both nodes still
+// start (on arrival, no ParamScheduledAtNs), and the schedule row records
+// the concrete reason - never a synchronized success it did not reach,
+// and never a silent announcement either.
+func TestNightAnnouncement_NoUsableClockStartsBothOnArrivalRecordedUnaligned(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	// Neither node has an audio.node config at all: no usable media clock.
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	ctx := context.Background()
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	scheduleRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementSchedule+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("schedule row: %v", err)
+	}
+	if scheduleRow.Outcome != nightAnnouncementScheduleUnaligned || scheduleRow.OutcomeReason == "" {
+		t.Fatalf("schedule row = %+v, want unaligned with a non-empty reason", scheduleRow)
+	}
+
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":"+nodeID, "thank-you")
+		if err != nil {
+			t.Fatalf("%s start row: %v", nodeID, err)
+		}
+		if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("%s start = %+v, want resolved/confirmed (started on arrival despite no shared instant)", nodeID, startRow)
+		}
+	}
+
+	starts := startParamsByNode(pub, before)
+	for nodeID, params := range starts {
+		if _, ok := params[pkgaudio.ParamScheduledAtNs]; ok {
+			t.Fatalf("node %q's own start carried %q with no usable clock; want it absent (start on arrival)", nodeID, pkgaudio.ParamScheduledAtNs)
+		}
+	}
+}
+
+// TestNightAnnouncement_ReplayTickReadsNoClockAndDispatchesNothingNew
+// proves R3's own durability rule: once a multi-node announcement's
+// schedule and start steps have resolved, a second tick within the SAME
+// cycle dispatches nothing new at all - no repeated prepare read, no
+// repeated start.
+func TestNightAnnouncement_ReplayTickReadsNoClockAndDispatchesNothingNew(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, 1_700_000_000_000_000_000, ""),
+		"node-b:audio.session.prepare": scheduleProbeEvidenceResult(true, 1_700_000_000_005_000_000, ""),
+	}
+
+	ctx := context.Background()
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	afterFirst := len(pub.dispatched)
+	if afterFirst == 0 {
+		t.Fatalf("first tick dispatched nothing")
+	}
+
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	if len(pub.dispatched) != afterFirst {
+		t.Fatalf("second tick dispatched %d more command(s) (%v), want none: a replay tick must read no clock and dispatch nothing new",
+			len(pub.dispatched)-afterFirst, pub.dispatched[afterFirst:])
+	}
+}

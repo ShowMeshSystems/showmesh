@@ -2,11 +2,17 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -182,6 +188,38 @@ const (
 	// when a target names one node, so a single-node installation writes
 	// no row under this phase at all.
 	nightPhaseAnnouncementApplyExtra = nightPhaseAnnouncementSession + ":applyExtra"
+
+	// nightPhaseAnnouncementPrepare is ADR-049 decision 3's own (R3, the
+	// frozen ruling) per-node prepare step a MULTI-NODE announcement adds
+	// ahead of its start, one row per target node
+	// (":"+cuePhase+":"+nodeID, matching clear/start's own suffixing):
+	// this is what reads the media-clock evidence
+	// [handlers.nightAnnouncementSchedule] selects the shared start
+	// instant from. A single-node announcement never writes a row under
+	// this phase (R5's own regression requirement - nothing about its
+	// dispatch sequence changes).
+	nightPhaseAnnouncementPrepare = nightPhaseAnnouncementSession + ":prepare"
+
+	// nightPhaseAnnouncementSchedule holds the ONE durable decision a
+	// multi-node announcement's own scheduling attempt makes
+	// (":"+cuePhase, no node suffix: the instant, or the reason it could
+	// not be selected, is shared by every listed node) - see
+	// [handlers.nightAnnouncementSchedule]'s own doc comment for why this
+	// is what lets a replay tick read no clock and dispatch nothing new.
+	nightPhaseAnnouncementSchedule = nightPhaseAnnouncementSession + ":schedule"
+)
+
+// nightAnnouncementScheduleAligned and nightAnnouncementScheduleUnaligned
+// are the [nightPhaseAnnouncementSchedule] row's own terminal Outcome
+// vocabulary - deliberately NOT drawn from this file's nightCueOutcome*
+// vocabulary (confirmed/refused/...), since this row never records a
+// dispatch outcome, only a coordinator-local SELECTION decision. Aligned's
+// own OutcomeReason carries the chosen ScheduledAtNs, formatted as a
+// plain base-10 integer ([nightAnnouncementScheduleFromRow]'s own parse);
+// unaligned's carries [audiosched.DescribeUnscheduled]'s own reason text.
+const (
+	nightAnnouncementScheduleAligned   = "aligned"
+	nightAnnouncementScheduleUnaligned = "unaligned"
 )
 
 // The step kinds these phases surface, distinct from background audio's
@@ -488,6 +526,13 @@ func nightAnnouncementApplyRowPhase(cuePhase string, target config.ShowActionTar
 	return nightPhaseAnnouncementApplyExtra + ":" + cuePhase + ":" + nodeID
 }
 
+// nightAdvanceAnnouncementStart dispatches every target node's own start,
+// exactly as before ADR-049 decision 3 for a single node (R5's own
+// regression requirement): no shared instant is ever selected for one
+// node, so [nightAdvanceAnnouncementStartUnscheduled] is untouched. A
+// target naming more than one node instead takes
+// [nightAdvanceAnnouncementStartScheduled]'s own shared-instant path
+// (R3, the frozen ruling).
 func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
 	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
 	if !ok {
@@ -498,6 +543,24 @@ func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history for start", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
+	if len(target.AudioNodeIDs) <= 1 {
+		h.nightAdvanceAnnouncementStartUnscheduled(ctx, now, rec, cuePhase, cue, target, history)
+		return
+	}
+	h.nightAdvanceAnnouncementStartScheduled(ctx, now, rec, cuePhase, cue, target, history)
+}
+
+// nightAdvanceAnnouncementStartUnscheduled is a single-node announcement's
+// own start step, byte-for-byte what this file dispatched before ADR-049
+// decision 3 existed: no [pkgaudio.ParamScheduledAtNs], no schedule row,
+// gated only on that one node's own apply being terminal.
+//
+// Gated on the apply row being terminal, not on it having confirmed. An
+// apply refused because the node already holds this exact desired state
+// is not a reason to leave the announcement silent, and an apply that
+// genuinely failed produces a start that fails in its own row, visibly,
+// rather than one that is silently never attempted.
+func (h *handlers) nightAdvanceAnnouncementStartUnscheduled(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue, target config.ShowActionTarget, history []nightBackgroundAudioHistoryRow) {
 	for _, nodeID := range target.AudioNodeIDs {
 		applyPhase := nightAnnouncementApplyRowPhase(cuePhase, target, nodeID)
 		applyRow, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, applyPhase, cue.Name)
@@ -518,6 +581,300 @@ func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.T
 			h.logWarn("night loop: announcement: start failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
 		}
 	}
+}
+
+// nightAdvanceAnnouncementStartScheduled is a multi-node announcement's
+// own start step (ADR-049 decision 3, R3, the frozen ruling): every
+// listed node starts at ONE shared instant, selected exactly once from
+// this announcement's OWN apply/prepare evidence
+// ([handlers.nightAnnouncementSchedule], never a separate probe session)
+// and durably recorded so a replay tick reads no clock and dispatches
+// nothing new.
+//
+// Gated on EVERY listed node's own apply being terminal first, unlike
+// [nightAdvanceAnnouncementStartUnscheduled]'s per-node independent gate:
+// a shared instant needs every node's own prepare evidence at once, so
+// this tick does nothing at all until every apply has landed, rather
+// than starting some nodes ahead of the rest.
+func (h *handlers) nightAdvanceAnnouncementStartScheduled(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue, target config.ShowActionTarget, history []nightBackgroundAudioHistoryRow) {
+	for _, nodeID := range target.AudioNodeIDs {
+		applyPhase := nightAnnouncementApplyRowPhase(cuePhase, target, nodeID)
+		applyRow, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, applyPhase, cue.Name)
+		if err != nil || (applyRow.State != nightCueStateResolved && applyRow.State != nightCueStateAmbiguous) {
+			return // not every node is ready yet; try again next tick.
+		}
+	}
+
+	scheduledAtNs, unalignedReason, serr := h.nightAnnouncementSchedule(ctx, now, rec, cuePhase, cue, target)
+	if serr != nil {
+		h.logWarn("night loop: announcement: could not select a shared start instant; trying again next tick", "sessionId", rec.ID, "cue", cue.Name, "error", serr)
+		return
+	}
+
+	for _, nodeID := range target.AudioNodeIDs {
+		applyPhase := nightAnnouncementApplyRowPhase(cuePhase, target, nodeID)
+		if applyRow, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, applyPhase, cue.Name); err == nil && applyRow.Outcome != nightCueOutcomeConfirmed {
+			h.logWarn("night loop: announcement: the apply did not confirm; starting anyway so a silent announcement is never the quiet outcome", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "outcome", applyRow.Outcome)
+		}
+		persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, target.AudioSessionID)
+		_, startRevision := nightAnnouncementScheduleRevisions(persisted)
+		params := map[string]any{}
+		if scheduledAtNs != nil {
+			// json.Number, never an int64 or a float64: matches
+			// alignedstart.go's own identical carrying of ScheduledAtNs -
+			// this value is around 1.79e18, and a float64 would round it.
+			params[pkgaudio.ParamScheduledAtNs] = json.Number(strconv.FormatInt(*scheduledAtNs, 10))
+		} else if unalignedReason != "" {
+			h.logWarn("night loop: announcement: no shared start instant; starting on arrival", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "reason", unalignedReason)
+		}
+		start := nightAudioTarget(nodeID, target.AudioSessionID, "audio.session.start", params)
+		phase := nightPhaseAnnouncementStart + ":" + cuePhase + ":" + nodeID
+		if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, start, startRevision, history); err != nil {
+			h.logWarn("night loop: announcement: start failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
+		}
+	}
+}
+
+// nightAnnouncementScheduleRevisions returns the prepare and start
+// revisions a MULTI-NODE announcement's own scheduling attempt mints from
+// persistedRevision, continuing directly after [nightAnnouncementRevisions]'s
+// own clear (floor+1) and apply (floor+2): prepare = floor+3, start =
+// floor+4. A single-node announcement never calls this - it keeps
+// nightAnnouncementRevisions' own floor+3 start unchanged (R5's own
+// regression requirement), so this never shifts what a single-node
+// announcement's start carries.
+func nightAnnouncementScheduleRevisions(persistedRevision int64) (prepareRevision, startRevision int64) {
+	floor := persistedRevision
+	return floor + 3, floor + 4
+}
+
+// nightRunAnnouncementPrepare dispatches nodeID's own audio.session.prepare
+// against the announcement's REAL session (R3's own "no separate probe
+// session" rule - unlike the Cue path's throwaway probe,
+// cueactivationschedule.go, an announcement reads its OWN apply/prepare
+// evidence), as one durable outbox row under phase, exactly once: a row
+// already resolved or ambiguous returns (nil, nil) without dispatching
+// again, since [handlers.nightAnnouncementSchedule] - this function's
+// only caller - never re-enters once its own schedule row is persisted.
+//
+// evidence is the node's own prepare result evidence map, present only on
+// a FRESH dispatch (nil on a replay hit, or on any resolved outcome that
+// carried none): the schedule DECISION this evidence feeds is itself the
+// durable record a later tick reads back, not this row's own resolved
+// state, so a second caller finding this row already resolved correctly
+// gets nothing back to build a new decision from.
+func (h *handlers) nightRunAnnouncementPrepare(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName, nodeID string, target config.ShowActionTarget, revision int64) (map[string]any, error) {
+	issuer := nightControllerIssuer(rec)
+	row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+	switch {
+	case err == nil:
+		if row.State == nightCueStateResolved || row.State == nightCueStateAmbiguous {
+			return nil, nil
+		}
+	case errors.Is(err, store.ErrNightCueOutboxNotFound):
+		if cerr := h.nightCommitCueRow(ctx, now, rec, phase, cueName, revision); cerr != nil && !errors.Is(cerr, store.ErrNightCueOutboxDuplicate) {
+			return nil, cerr
+		}
+		row, err = h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+		if err != nil {
+			return nil, err
+		}
+		if row.State == nightCueStateResolved || row.State == nightCueStateAmbiguous {
+			return nil, nil
+		}
+	default:
+		return nil, err
+	}
+
+	if row.State == nightCueStatePending {
+		t := now
+		row.State = nightCueStateDispatched
+		row.DispatchedAt = &t
+		if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {
+			return nil, uerr
+		}
+	}
+
+	idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cueName)
+	var evidence map[string]any
+	result, problem, derr := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.prepare", NodeID: nodeID, SessionID: target.AudioSessionID,
+		Params:   map[string]any{"sessionId": target.AudioSessionID, "invocationId": idemKey, "revision": uint64(revision)},
+		Revision: uint64(revision), IdempotencyKey: idemKey,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+		OnEvidence: func(v map[string]any) { evidence = v },
+	})
+
+	row, rerr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+	if rerr != nil {
+		return evidence, rerr
+	}
+	if derr != nil {
+		if !errors.Is(derr, broker.ErrResponseFailedBeforePublish) {
+			// Published, but the outcome is genuinely unknown: leave the
+			// row dispatched for a later attempt to retry under the SAME
+			// idempotency key, mirroring nightDispatchCueAudio's own
+			// identical branch (audiodispatch.go's own await-result error
+			// case).
+			return evidence, derr
+		}
+		row.State = nightCueStateResolved
+		row.Outcome = nightCueOutcomeFailed
+		row.OutcomeReason = "this announcement's own prepare could not be dispatched: " + derr.Error()
+		resolvedAt := now
+		row.ResolvedAt = &resolvedAt
+		if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {
+			return evidence, uerr
+		}
+		return evidence, derr
+	}
+	row.State = nightCueStateResolved
+	resolvedAt := now
+	row.ResolvedAt = &resolvedAt
+	if problem != nil {
+		row.Outcome = nightCueOutcomeRefused
+		row.OutcomeReason = problem.Detail
+	} else {
+		row.Outcome = result.Outcome
+		row.OutcomeReason = result.Reason
+	}
+	if uerr := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); uerr != nil {
+		return evidence, uerr
+	}
+	return evidence, nil
+}
+
+// nightAnnouncementSchedule is ADR-049 decision 3's own multi-node
+// scheduling step for an announcement (R3, the frozen ruling): read every
+// listed node's OWN fresh apply/prepare evidence, choose ONE shared
+// instant through [SelectAudioStartInstant], and record the decision as
+// its own durable [nightPhaseAnnouncementSchedule] row so a later tick
+// reads it back instead of reading any clock or dispatching anything new.
+//
+// Called once per announcement run: every subsequent call for the SAME
+// (rec.Cycle, cuePhase, cue.Name) finds that row already resolved and
+// returns straight from it, via [nightAnnouncementScheduleFromRow],
+// without dispatching a fresh prepare on any node.
+func (h *handlers) nightAnnouncementSchedule(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue, target config.ShowActionTarget) (scheduledAtNs *int64, unalignedReason string, err error) {
+	phase := nightPhaseAnnouncementSchedule + ":" + cuePhase
+	if row, rerr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cue.Name); rerr == nil {
+		return nightAnnouncementScheduleFromRow(row)
+	} else if !errors.Is(rerr, store.ErrNightCueOutboxNotFound) {
+		return nil, "", rerr
+	}
+
+	settings, serr := h.alignedStartSettings(ctx)
+	if serr != nil {
+		return nil, "", fmt.Errorf("read audio.settings for the announcement's own shared start instant: %w", serr)
+	}
+
+	read := func(readCtx context.Context, nodeID string) (reading AudioStartInstantReading, err error) {
+		holdsClock, herr := h.nodeHoldsMediaClock(readCtx, nodeID)
+		if herr != nil {
+			return AudioStartInstantReading{}, herr
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				reading = AudioStartInstantReading{HoldsMediaClock: holdsClock}
+				err = fmt.Errorf("panic reading node %q's own announcement prepare: %v", nodeID, r)
+			}
+		}()
+		persisted := h.nightAudioSessionPersistedRevision(readCtx, nodeID, target.AudioSessionID)
+		prepareRevision, _ := nightAnnouncementScheduleRevisions(persisted)
+		prepPhase := nightPhaseAnnouncementPrepare + ":" + cuePhase + ":" + nodeID
+		started := time.Now()
+		evidence, perr := h.nightRunAnnouncementPrepare(readCtx, now, rec, prepPhase, cue.Name, nodeID, target, prepareRevision)
+		if perr != nil {
+			return AudioStartInstantReading{HoldsMediaClock: holdsClock}, perr
+		}
+		return AudioStartInstantReading{HoldsMediaClock: holdsClock, Evidence: evidence, ProbeElapsed: time.Since(started)}, nil
+	}
+
+	sel, nodeErrs, selErr := SelectAudioStartInstant(ctx, target.AudioNodeIDs, settings, read)
+	for _, ne := range nodeErrs {
+		h.logWarn("night loop: announcement: node's own prepare reading failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", ne.NodeID, "error", ne.Err)
+	}
+
+	row := store.NightCueOutboxRecord{
+		ID: uuid.NewString(), SessionID: rec.ID, Cycle: rec.Cycle, Phase: phase, CueName: cue.Name,
+		State: nightCueStateResolved,
+	}
+	resolvedAt := now
+	row.ResolvedAt = &resolvedAt
+	if selErr != nil {
+		var noClock *audiosched.ErrNoUsableClock
+		if !errors.As(selErr, &noClock) {
+			h.logWarn("night loop: announcement: select start instant failed; every node starts on arrival", "sessionId", rec.ID, "cue", cue.Name, "error", selErr)
+		}
+		row.Outcome = nightAnnouncementScheduleUnaligned
+		row.OutcomeReason = audiosched.DescribeUnscheduled(selErr)
+	} else {
+		row.Outcome = nightAnnouncementScheduleAligned
+		row.OutcomeReason = strconv.FormatInt(sel.ScheduledAtNs, 10)
+	}
+
+	if ierr := h.deps.NightSessions.InsertNightCueOutboxRow(ctx, row, now); ierr != nil && !errors.Is(ierr, store.ErrNightCueOutboxDuplicate) {
+		return nil, "", ierr
+	}
+	persistedRow, rerr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cue.Name)
+	if rerr != nil {
+		return nil, "", rerr
+	}
+	return nightAnnouncementScheduleFromRow(persistedRow)
+}
+
+// nightAnnouncementScheduleFromRow decodes a persisted
+// [nightPhaseAnnouncementSchedule] row back into
+// [handlers.nightAnnouncementSchedule]'s own return shape.
+func nightAnnouncementScheduleFromRow(row store.NightCueOutboxRecord) (scheduledAtNs *int64, unalignedReason string, err error) {
+	if row.Outcome != nightAnnouncementScheduleAligned {
+		return nil, row.OutcomeReason, nil
+	}
+	ns, perr := strconv.ParseInt(row.OutcomeReason, 10, 64)
+	if perr != nil {
+		return nil, "", fmt.Errorf("api: announcement schedule row %q carries an unparsable instant %q: %w", row.ID, row.OutcomeReason, perr)
+	}
+	return &ns, "", nil
+}
+
+// nightAnnouncementMedia is R6, the frozen ruling: an announcement's
+// audio.session.apply target.params already carry "media": {assetId,
+// contentHash, filename, sizeBytes}, the same shape a bed item's own
+// media reference uses (nightBuildBackgroundPlaylistItems,
+// nightbackgroundaudio.go). Complete reports whether every field a
+// caller needs to trust this reference was actually present.
+type nightAnnouncementMedia struct {
+	AssetID     string
+	ContentHash string
+	Filename    string
+	SizeBytes   int64
+}
+
+func (m nightAnnouncementMedia) Complete() bool {
+	return m.AssetID != "" && m.ContentHash != "" && m.Filename != ""
+}
+
+// nightAnnouncementMediaRef reads target.params["media"] back (R6): no
+// resolution through a (show, sequence, target) lookup, since an
+// announcement has no sequence identity, only this one pinned file. An
+// absent or incomplete reference decodes to the zero value; the caller
+// (readiness) reports that as not_verifiable, never invented.
+func nightAnnouncementMediaRef(params map[string]any) nightAnnouncementMedia {
+	media, _ := params["media"].(map[string]any)
+	assetID, _ := media["assetId"].(string)
+	contentHash, _ := media["contentHash"].(string)
+	filename, _ := media["filename"].(string)
+	var sizeBytes int64
+	switch v := media["sizeBytes"].(type) {
+	case float64:
+		sizeBytes = int64(v)
+	case json.Number:
+		sizeBytes, _ = v.Int64()
+	case int64:
+		sizeBytes = v
+	}
+	return nightAnnouncementMedia{AssetID: assetID, ContentHash: contentHash, Filename: filename, SizeBytes: sizeBytes}
 }
 
 // nightAnnouncementSessionTarget resolves cue's bound show.action and

@@ -134,8 +134,14 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 	if err != nil {
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
 	}
+	// R7's own announcement half of the same precedence tier (announcementfallback.go).
+	announcementAssets, err := announcementFallbackAssets(ctx, st, showID, nodeID)
+	if err != nil {
+		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
+	}
 
 	combined := append(append(append([]store.AssetRecord{}, nodeAssets...), showAssets...), fallbackAssets...)
+	combined = append(combined, announcementAssets...)
 	assets := make([]ExpectedAsset, 0, len(combined))
 	coveredSequences := make(map[string]bool, len(combined))
 	for _, rec := range combined {
