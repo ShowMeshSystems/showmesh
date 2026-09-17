@@ -588,7 +588,12 @@ func (f fixedLockedClockSource) Now(context.Context) agentclock.MediaTime {
 
 // TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned
 // proves a StartAtPosition refused as scheduled_start_in_past starts on
-// arrival at the same position instead of going silent.
+// arrival at the same position instead of going silent, and — the Opus
+// review's own defect fix — reports the node as CONFIRMED with the
+// unaligned reason carried in the outcome value, never apply-failed: the
+// node is actually playing, just not at the scheduled instant, and a
+// coordinator reading Confirmed:false here would record a failure that
+// never happened.
 func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(t *testing.T) {
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
@@ -615,19 +620,25 @@ func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	if result.Confirmed {
-		t.Fatalf("activate confirmed a missed scheduled start: %+v", result)
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm a successful missed-instant fallback: %+v", result)
 	}
 	value, ok := result.Value.(map[string]any)
 	if !ok {
 		t.Fatalf("result.Value = %#v, want a map", result.Value)
 	}
-	reasons, _ := value["reasons"].([]string)
-	if len(reasons) != 1 || !strings.Contains(reasons[0], "unaligned") {
-		t.Fatalf("reasons = %v, want exactly one entry saying unaligned", reasons)
+	if outcome, _ := value["outcome"].(string); outcome != "authorized" {
+		t.Fatalf("outcome = %q, want authorized", outcome)
 	}
-	if !strings.Contains(reasons[0], pkgaudio.ReasonScheduledStartInPast) {
-		t.Fatalf("reasons = %v, want it to name the missed instant", reasons)
+	unalignedReason, _ := value["unalignedReason"].(string)
+	if unalignedReason == "" {
+		t.Fatalf("value = %+v, want a non-empty unalignedReason", value)
+	}
+	if !strings.Contains(unalignedReason, "unaligned") && !strings.Contains(unalignedReason, "arrival") {
+		t.Fatalf("unalignedReason = %q, want it to say the start was unaligned/on arrival", unalignedReason)
+	}
+	if !strings.Contains(unalignedReason, pkgaudio.ReasonScheduledStartInPast) {
+		t.Fatalf("unalignedReason = %q, want it to name the missed instant", unalignedReason)
 	}
 
 	snaps := mgr.Snapshot(context.Background())

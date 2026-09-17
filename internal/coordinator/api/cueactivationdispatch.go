@@ -147,6 +147,12 @@ type cueActivationDispatchOutcome struct {
 	// unconfirmed/timed-out await).
 	NodeOutcome string
 
+	// UnalignedReason is set only alongside Confirmed==true: this node's
+	// own activation missed its scheduled start instant and started on
+	// arrival instead (internal/agent/cueactivationaudio.go's
+	// startUnalignedOnArrival fallback). Empty on every other outcome.
+	UnalignedReason string
+
 	Err error
 }
 
@@ -382,8 +388,9 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 	}
 
 	nodeOutcome := cueActivationNodeOutcomeFromResult(res)
+	nodeUnalignedReason := cueActivationNodeUnalignedReasonFromResult(res)
 	resolvedAt := h.now()
-	resultJSON, _ := json.Marshal(cueActivationResultPayload{Outcome: res.Outcome, Reason: res.Reason, NodeOutcome: nodeOutcome})
+	resultJSON, _ := json.Marshal(cueActivationResultPayload{Outcome: res.Outcome, Reason: res.Reason, NodeOutcome: nodeOutcome, UnalignedReason: nodeUnalignedReason})
 	_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
 		DispatchedAt: &dispatchedAt, ResolvedAt: &resolvedAt, State: strPtr("resolved"),
 		ResultJSON: strPtr(string(resultJSON)), OutcomeState: strPtr(res.Outcome), OutcomeReason: strPtr(res.Reason),
@@ -400,7 +407,10 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 		h.writeCueActivationOutcomeAudit(ctx, now, nodeID, act, issuer, "refused", reason)
 	}
 
-	return cueActivationDispatchOutcome{NodeID: nodeID, Dispatched: true, Confirmed: confirmed, NodeOutcome: nodeOutcome, RefusedCueOutputs: cueOutputs}
+	return cueActivationDispatchOutcome{
+		NodeID: nodeID, Dispatched: true, Confirmed: confirmed, NodeOutcome: nodeOutcome,
+		UnalignedReason: nodeUnalignedReason, RefusedCueOutputs: cueOutputs,
+	}
 }
 
 // cueActivationResultPayload is the JSON this file persists into
@@ -408,9 +418,10 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 // identical role one file over (cuecatalogdeploy.go), narrowed to this
 // action's own fields.
 type cueActivationResultPayload struct {
-	Outcome     string `json:"outcome"`
-	Reason      string `json:"reason,omitempty"`
-	NodeOutcome string `json:"nodeOutcome,omitempty"`
+	Outcome         string `json:"outcome"`
+	Reason          string `json:"reason,omitempty"`
+	NodeOutcome     string `json:"nodeOutcome,omitempty"`
+	UnalignedReason string `json:"unalignedReason,omitempty"`
 }
 
 // cueActivationResultCorrelates mirrors cueCatalogDeployResultCorrelates
@@ -450,6 +461,24 @@ func cueActivationNodeOutcomeFromResult(res mqttproto.ResultPayload) string {
 	return outcome
 }
 
+// cueActivationNodeUnalignedReasonFromResult extracts the node's own
+// reported "unalignedReason" field from res.Evidence.Value, set only when
+// internal/agent/cueactivationops.go's activate confirmed the activation
+// through its missed-instant fallback (internal/agent/
+// cueactivationaudio.go's startUnalignedOnArrival). Returns "" when absent,
+// exactly as [cueActivationNodeOutcomeFromResult] does for "outcome".
+func cueActivationNodeUnalignedReasonFromResult(res mqttproto.ResultPayload) string {
+	if res.Evidence == nil {
+		return ""
+	}
+	m, ok := res.Evidence.Value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	reason, _ := m["unalignedReason"].(string)
+	return reason
+}
+
 // cueActivationOutcomeFromRecord answers a replayed idempotency key from
 // existing's own stored row — mirrors resolveCueCatalogDeployReplay's
 // identical shape one file over (cuecatalogdeploy.go): a replay must
@@ -463,6 +492,7 @@ func cueActivationOutcomeFromRecord(nodeID string, existing store.CommandRecord)
 	confirmed := res.Outcome == mqttproto.OutcomeConfirmed && res.NodeOutcome == cueActivationNodeOutcomeAuthorized
 	return cueActivationDispatchOutcome{
 		NodeID: nodeID, Dispatched: existing.DispatchedAt != nil, Confirmed: confirmed, NodeOutcome: res.NodeOutcome,
+		UnalignedReason: res.UnalignedReason,
 	}
 }
 
