@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 // This file renders types_night.go's wire types as text tables, following
@@ -36,17 +37,27 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 		_, _ = fmt.Fprintf(w, "  Background audio:    (not configured)\n")
 	} else {
 		ba := p.Resting.BackgroundAudio
-		_, _ = fmt.Fprintf(w, "  Background audio: repeat=%s resume=%s itemTransition=%s maxGainDb=%g\n",
-			ba.Repeat, ba.Resume, ba.ItemTransition, ba.MaxGainDb)
-		if ba.ItemTransition == "crossfade" && ba.CrossfadeMs != nil {
-			_, _ = fmt.Fprintf(w, "    crossfadeMs: %d\n", *ba.CrossfadeMs)
+		if ba.MediaPlaylist != "" {
+			_, _ = fmt.Fprintf(w, "  Background audio: mediaPlaylist=%s\n", ba.MediaPlaylist)
+		} else {
+			_, _ = fmt.Fprintf(w, "  Background audio: repeat=%s resume=%s itemTransition=%s maxGainDb=%g\n",
+				ba.Repeat, ba.Resume, ba.ItemTransition, ba.MaxGainDb)
+			if ba.ItemTransition == "crossfade" && ba.CrossfadeMs != nil {
+				_, _ = fmt.Fprintf(w, "    crossfadeMs: %d\n", *ba.CrossfadeMs)
+			}
+			tw := newTabWriter(w)
+			_, _ = fmt.Fprintln(tw, "    ITEM ID\tSHOW\tSEQUENCE\tTARGET")
+			for _, it := range ba.Items {
+				_, _ = fmt.Fprintf(tw, "    %s\t%s\t%s\t%s\n", it.ItemID, it.Show, it.Sequence, it.Target)
+			}
+			_ = tw.Flush()
 		}
-		tw := newTabWriter(w)
-		_, _ = fmt.Fprintln(tw, "    ITEM ID\tSHOW\tSEQUENCE\tTARGET")
-		for _, it := range ba.Items {
-			_, _ = fmt.Fprintf(tw, "    %s\t%s\t%s\t%s\n", it.ItemID, it.Show, it.Sequence, it.Target)
+		// ADR-049 decision 7: absent/empty targets is today's per-node behavior, not "no bed".
+		if len(ba.Targets) > 0 {
+			_, _ = fmt.Fprintf(w, "    Targets: %s\n", strings.Join(ba.Targets, ", "))
+		} else {
+			_, _ = fmt.Fprintf(w, "    Targets: none: each node plays its registered items\n")
 		}
-		_ = tw.Flush()
 	}
 
 	printNightSessionCues(w, "Enter-show cues", p.EnterShow.Cues)

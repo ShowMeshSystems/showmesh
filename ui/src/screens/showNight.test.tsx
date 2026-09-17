@@ -968,7 +968,7 @@ describe('Show Night', () => {
     source: 'api',
   })
 
-  function mockListConfigObjects(mediaPlaylists: { id: string; label: string }[] = []) {
+  function mockListConfigObjects(mediaPlaylists: { id: string; label: string }[] = [], audioNodes: { id: string; label?: string }[] = []) {
     stubs.listConfigObjects = ((kind: string) => {
       if (kind === 'show.action') return Promise.resolve({ serverTime: '', kind, objects: [] })
       if (kind === 'media.playlist') {
@@ -976,6 +976,13 @@ describe('Show Night', () => {
           serverTime: '',
           kind,
           objects: mediaPlaylists.map((p) => ({ id: p.id, label: p.label, show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' })),
+        })
+      }
+      if (kind === 'audio.node') {
+        return Promise.resolve({
+          serverTime: '',
+          kind,
+          objects: audioNodes.map((n) => ({ id: n.id, label: n.label ?? n.id, programChannels: [1], currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' })),
         })
       }
       return Promise.resolve({
@@ -1305,6 +1312,13 @@ describe('Show Night', () => {
     return response
   }
 
+  /** ADR-049 decision 7: attaches resting.backgroundAudio.targets to either bed form's fixture, deep-cloned so callers never share mutable state. */
+  const withTargets = <T,>(response: T, targets: string[]): T => {
+    const clone = JSON.parse(JSON.stringify(response)) as T
+    ;((clone as { payload: { resting: { backgroundAudio: Record<string, unknown> } } }).payload.resting.backgroundAudio).targets = targets
+    return clone
+  }
+
   it('picking a playlist from the reference control saves the reference form, not inline items', async () => {
     const captured: { body: Record<string, unknown> | null } = { body: null }
     mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }])
@@ -1371,5 +1385,207 @@ describe('Show Night', () => {
     const picker = await screen.findByLabelText('Or reference a media playlist')
     expect(picker).toHaveValue('stale-bed')
     expect(within(picker).getByRole('option', { name: 'stale-bed' })).toBeInTheDocument()
+  })
+
+  // ADR-049 decision 7: the checked set comes only from the saved `targets`,
+  // never from item targets or asset registration (audioAsset above always
+  // targets 'audio-01', so checking 'audio-02' proves that).
+  describe('background audio targets', () => {
+    it('loads the saved targets checked, and leaves an unlisted node unchecked', async () => {
+      mockListConfigObjects([], [{ id: 'audio-01' }, { id: 'audio-02' }, { id: 'audio-03' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(withTargets(fullDefinitionResponse('Winter Ridge'), ['audio-01', 'audio-02']))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      const group = await screen.findByRole('group', { name: 'Play on these nodes' })
+      expect(within(group).getByRole('checkbox', { name: 'audio-01' })).toBeChecked()
+      expect(within(group).getByRole('checkbox', { name: 'audio-02' })).toBeChecked()
+      expect(within(group).getByRole('checkbox', { name: 'audio-03' })).not.toBeChecked()
+    })
+
+    it('toggling checkboxes builds the payload with exactly the checked ids', async () => {
+      const captured: { body: Record<string, unknown> | null } = { body: null }
+      mockListConfigObjects([], [{ id: 'audio-01' }, { id: 'audio-02' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.putNightSessionConfig = (...args: unknown[]) => {
+        captured.body = args[1] as Record<string, unknown>
+        return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      }
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      const group = await screen.findByRole('group', { name: 'Play on these nodes' })
+      fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-01' }))
+      fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-02' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      await screen.findByDisplayValue('Winter Ridge')
+      const backgroundAudio = (captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>
+      expect(backgroundAudio.targets).toEqual(['audio-01', 'audio-02'])
+    })
+
+    it('unchecking every target omits the targets key entirely, rather than sending an empty array', async () => {
+      const captured: { body: Record<string, unknown> | null } = { body: null }
+      mockListConfigObjects([], [{ id: 'audio-01' }, { id: 'audio-02' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(withTargets(fullDefinitionResponse('Winter Ridge'), ['audio-01', 'audio-02']))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.putNightSessionConfig = (...args: unknown[]) => {
+        captured.body = args[1] as Record<string, unknown>
+        return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      }
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      const group = await screen.findByRole('group', { name: 'Play on these nodes' })
+      fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-01' }))
+      fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-02' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      await screen.findByDisplayValue('Winter Ridge')
+      const backgroundAudio = (captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>
+      expect(backgroundAudio).not.toHaveProperty('targets')
+    })
+
+    it('an older bed with no targets loads and saves the bed section unchanged', async () => {
+      const captured: { body: Record<string, unknown> | null } = { body: null }
+      mockListConfigObjects([], [{ id: 'audio-01' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.putNightSessionConfig = (...args: unknown[]) => {
+        captured.body = args[1] as Record<string, unknown>
+        return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      }
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.change(screen.getByLabelText('Failure text'), { target: { value: 'unrelated edit' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      await screen.findByDisplayValue('Winter Ridge')
+      expect((captured.body?.resting as Record<string, unknown>).backgroundAudio).toEqual(
+        fullDefinitionResponse('Winter Ridge').payload.resting.backgroundAudio,
+      )
+    })
+
+    it('a saved target no longer configured is shown, checked, and marked unknown, and can be unchecked', async () => {
+      const captured: { body: Record<string, unknown> | null } = { body: null }
+      mockListConfigObjects([], [{ id: 'audio-01' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(withTargets(fullDefinitionResponse('Winter Ridge'), ['audio-01', 'retired-node']))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      stubs.putNightSessionConfig = (...args: unknown[]) => {
+        captured.body = args[1] as Record<string, unknown>
+        return Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      }
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      const group = await screen.findByRole('group', { name: 'Play on these nodes' })
+      const unknown = within(group).getByRole('checkbox', { name: 'retired-node (not declared)' })
+      expect(unknown).toBeChecked()
+      fireEvent.click(unknown)
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      await screen.findByDisplayValue('Winter Ridge')
+      const backgroundAudio = (captured.body?.resting as Record<string, unknown>).backgroundAudio as Record<string, unknown>
+      expect(backgroundAudio.targets).toEqual(['audio-01'])
+    })
+
+    it('the reference (media.playlist) form also loads and saves targets', async () => {
+      const captured: { body: Record<string, unknown> | null } = { body: null }
+      mockListConfigObjects([{ id: 'bench-bed', label: 'Bench Bed' }], [{ id: 'audio-01' }, { id: 'audio-02' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(withTargets(referenceDefinitionResponse('Winter Ridge', 'bench-bed'), ['audio-01']))
+      stubs.putNightSessionConfig = (...args: unknown[]) => {
+        captured.body = args[1] as Record<string, unknown>
+        return Promise.resolve(referenceDefinitionResponse('Winter Ridge', 'bench-bed'))
+      }
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      const group = await screen.findByRole('group', { name: 'Play on these nodes' })
+      expect(within(group).getByRole('checkbox', { name: 'audio-01' })).toBeChecked()
+      fireEvent.click(within(group).getByRole('checkbox', { name: 'audio-02' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      await screen.findByDisplayValue('Winter Ridge')
+      expect((captured.body?.resting as Record<string, unknown>).backgroundAudio).toEqual({
+        mediaPlaylist: 'bench-bed',
+        targets: ['audio-01', 'audio-02'],
+      })
+    })
+
+    it('shows a coordinator validation error on the targets field next to the checklist, not the generic strip', async () => {
+      mockListConfigObjects([], [{ id: 'audio-01' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      expect(screen.queryByText('Definition failed')).not.toBeInTheDocument()
+    })
+
+    it('shows the targets validation error while the node list is still loading', async () => {
+      stubs.listConfigObjects = ((kind: string) => {
+        if (kind === 'audio.node') return new Promise(() => {})
+        if (kind === 'media.playlist') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        if (kind === 'show.action') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        return Promise.resolve({
+          serverTime: '',
+          kind: 'night.session',
+          objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+        })
+      }) as typeof stubs.listConfigObjects
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      expect(screen.getByText("Fetching this deployment's declared audio nodes.")).toBeInTheDocument()
+    })
+
+    it('shows the targets validation error when the node list failed to load', async () => {
+      stubs.listConfigObjects = ((kind: string) => {
+        if (kind === 'audio.node') return Promise.reject(new Error('audio node service unreachable'))
+        if (kind === 'media.playlist') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        if (kind === 'show.action') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        return Promise.resolve({
+          serverTime: '',
+          kind: 'night.session',
+          objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+        })
+      }) as typeof stubs.listConfigObjects
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      expect(await screen.findByText('audio node service unreachable')).toBeInTheDocument()
+    })
+
+    it('shows the targets validation error when no audio node is declared', async () => {
+      mockListConfigObjects([], [])
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      expect(screen.getByText('No audio node is declared.')).toBeInTheDocument()
+    })
+
+    it('clears the targets validation error when starting a new definition', async () => {
+      mockListConfigObjects([], [{ id: 'audio-01' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
+      fireEvent.click(await screen.findByLabelText('Enable background audio while resting'))
+      expect(screen.queryByText(detail)).not.toBeInTheDocument()
+    })
   })
 })
