@@ -357,14 +357,113 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 				reason: fmt.Sprintf("media.playlist %q is missing or has been deleted", ba.MediaPlaylist),
 			}}
 		}
-		resolved = nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload)
+		resolved = nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload, ba.Targets)
 	}
 	checks := []nightReadinessCheck{h.nightCheckBackgroundAudioAssets(ctx, show, resolved)}
-	for _, nodeID := range resolved.OutputNodeIDs() {
+	if resolved.HasDeclaredTargets() {
+		checks = append(checks, h.nightCheckBackgroundAudioBedTargetCoverage(ctx, show, resolved))
+		checks = append(checks, h.nightCheckBackgroundAudioBedProgramLTCCoverage(ctx, resolved))
+	}
+	for _, nodeID := range resolved.PlaybackNodeIDs() {
 		checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, nodeID, resolved))
 		checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, nodeID, resolved))
 	}
 	return checks
+}
+
+// nightCheckBackgroundAudioBedTargetCoverage is ADR-049 decision 7's own
+// readiness bullet, mirroring decision 5's identical rule for a Cue
+// (assetsync/audiofallback.go): every node this bed's declared Targets list
+// must be able to receive a copy of every configured item's file, whether
+// from its own registered row or another listed target's registered row -
+// the same registered-copy rule assetsync/nightaudiofallback.go applies at
+// delivery time. Failed, naming the node and the item, when neither source
+// exists for a listed node. A bed with no declared Targets is never called
+// here (nightCheckBackgroundAudioReadiness's own guard): it keeps today's
+// per-node routing, where a node only ever needs the assets it is itself
+// the target of, already covered by nightCheckBackgroundAudioAssets.
+func (h *handlers) nightCheckBackgroundAudioBedTargetCoverage(ctx context.Context, show string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+	name := "resting:background-audio-bed-target-coverage"
+	targets := ba.PlaybackNodeIDs()
+	var missing []string
+	for _, item := range ba.Items {
+		for _, nodeID := range targets {
+			ok, err := nightBedTargetHasDeliverableCopy(ctx, h.deps.Assets, show, item.Asset.Sequence, nodeID, targets)
+			if err != nil {
+				return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+					"could not check asset coverage for node %q item %q: %s", nodeID, item.ItemID, err.Error())}
+			}
+			if !ok {
+				filename := nightBedAnyRegisteredFilename(ctx, h.deps.Assets, show, item.Asset.Sequence)
+				if filename == "" {
+					filename = "unknown (no registered copy exists to name one)"
+				}
+				missing = append(missing, fmt.Sprintf("node %q item %q (sequence %q, file %q)", nodeID, item.ItemID, item.Asset.Sequence, filename))
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
+			"no registered copy can be delivered for: %v", missing)}
+	}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
+		"every listed node %v can receive a copy of every configured item, from its own registered row or another listed target's row", targets)}
+}
+
+// nightBedAnyRegisteredFilename best-effort names (show, sequence)'s own
+// runtime filename from any registered row, node unfiltered - for a
+// message naming the file, never for deliverability. Empty when none.
+func nightBedAnyRegisteredFilename(ctx context.Context, lister nightAssetLister, show, sequence string) string {
+	rec, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, "")
+	if err != nil || !ok {
+		return ""
+	}
+	return rec.RuntimeFilename
+}
+
+// nightCheckBackgroundAudioBedProgramLTCCoverage warns, mirroring
+// audioTargetReadiness's Cue-side rule, when a bed's declared Targets
+// name more than one node and exclude the program+ltc node.
+func (h *handlers) nightCheckBackgroundAudioBedProgramLTCCoverage(ctx context.Context, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+	name := "resting:background-audio-bed-program-ltc"
+	targets := ba.PlaybackNodeIDs()
+	if len(targets) <= 1 {
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "a single-target bed has nothing for decision 3's shared start to disagree about"}
+	}
+	for _, nodeID := range targets {
+		holds, err := h.nodeHoldsMediaClock(ctx, nodeID)
+		if err != nil {
+			return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+				"could not check node %q's program+ltc role: %s", nodeID, err.Error())}
+		}
+		if holds {
+			return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("target %q holds the installation's program+ltc role", nodeID)}
+		}
+	}
+	return nightReadinessCheck{name: name, health: nightHealthDegraded(), reason: fmt.Sprintf(
+		"this bed's targets %v exclude the installation's program+ltc node, so it can never start aligned; decision 4 still plays it unaligned", targets)}
+}
+
+// nightBedTargetHasDeliverableCopy reports whether nodeID can end up with a
+// copy of (show, sequence): its own registered row, or - the registered-
+// copy rule - another node in targets' own registered row.
+func nightBedTargetHasDeliverableCopy(ctx context.Context, lister nightAssetLister, show, sequence, nodeID string, targets []string) (bool, error) {
+	if _, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, nodeID); err != nil {
+		return false, err
+	} else if ok {
+		return true, nil
+	}
+	for _, other := range targets {
+		if other == nodeID {
+			continue
+		}
+		if _, ok, err := nightResolveCurrentAsset(ctx, lister, show, sequence, other); err != nil {
+			return false, err
+		} else if ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // nightCheckAnnouncementAssets is §13's own announcement-asset bullet (ADR-049 decisions 7 and 9):

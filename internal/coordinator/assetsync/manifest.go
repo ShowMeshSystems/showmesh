@@ -134,14 +134,27 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 	if err != nil {
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
 	}
+	for _, rec := range fallbackAssets {
+		if rec.MediaType == audioMediaType {
+			covered[rec.SequenceID] = true
+		}
+	}
+
+	// ADR-049 decision 7's own identical rule for a night.session bed with
+	// declared Targets, covered second so a sequence the Cue fallback
+	// above already resolved is never borrowed twice.
+	bedFallbackAssets, err := nightBedAudioFallbackAssets(ctx, st, showID, nodeID, covered)
+	if err != nil {
+		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
+	}
+
 	// ADR-049 decisions 7 and 9's announcement half of the same precedence tier (announcementfallback.go).
 	announcementAssets, err := announcementFallbackAssets(ctx, st, showID, nodeID)
 	if err != nil {
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
 	}
 
-	combined := append(append(append([]store.AssetRecord{}, nodeAssets...), showAssets...), fallbackAssets...)
-	combined = append(combined, announcementAssets...)
+	combined := append(append(append(append(append([]store.AssetRecord{}, nodeAssets...), showAssets...), fallbackAssets...), bedFallbackAssets...), announcementAssets...)
 	assets := make([]ExpectedAsset, 0, len(combined))
 	coveredSequences := make(map[string]bool, len(combined))
 	for _, rec := range combined {

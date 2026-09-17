@@ -93,6 +93,14 @@ type fakeAudioPublisher struct {
 	// still answers normally, which onAwaitResponse (fired for every
 	// dispatch, before the node is even known) cannot express.
 	onAwaitResponseForNode map[string]func()
+
+	// blockUntilByNode, when non-nil, makes AwaitResponse block on the
+	// channel keyed by "nodeID" (or, taking priority, "nodeID:action")
+	// once this command is already recorded in f.dispatched but before
+	// any result is returned for it - proving a concurrent fan-out never
+	// lets one node's own still-pending dispatch delay another node's own
+	// publish (see nightDispatchBedNodesConcurrently's own tests).
+	blockUntilByNode map[string]<-chan struct{}
 }
 
 // dispatchedAudioCommand is one recorded publish: the action string, the
@@ -163,6 +171,16 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 			fn()
 		} else if fn, ok := f.onAwaitResponseForNode[cmdEnv.NodeID]; ok {
 			fn()
+		}
+	}
+
+	if f.blockUntilByNode != nil {
+		ch, ok := f.blockUntilByNode[cmdEnv.NodeID+":"+cmd.Action]
+		if !ok {
+			ch, ok = f.blockUntilByNode[cmdEnv.NodeID]
+		}
+		if ok {
+			<-ch
 		}
 	}
 
