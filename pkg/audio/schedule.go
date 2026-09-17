@@ -75,3 +75,20 @@ const (
 	// has never prepared successfully; never a zero standing in for one.
 	ResultPrerollMs = "prerollMs"
 )
+
+// The audio.session.pause result's bookmark evidence (ADR-049 decision
+// 4): a coordinator resuming a multi-node bed reads the program+ltc
+// node's own bookmark from THIS node's pause result, rather than a
+// separate observation call, then pushes it to every other listed node
+// via audio.session.apply's existing Bookmark field before resuming all
+// of them at one instant.
+const (
+	// ResultBookmarkKnown is false whenever this session had nothing to
+	// bookmark (never paused with a resolvable item and position).
+	// ItemID/Index/PositionMs are meaningful only when this is true.
+	ResultBookmarkKnown = "bookmarkKnown"
+
+	ResultBookmarkItemID     = "bookmarkItemId"
+	ResultBookmarkIndex      = "bookmarkIndex"
+	ResultBookmarkPositionMs = "bookmarkPositionMs"
+)

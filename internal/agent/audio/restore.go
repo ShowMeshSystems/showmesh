@@ -485,7 +485,22 @@ func (m *Manager) watchTick(ctx context.Context) {
 			} else {
 				s.lastObservedAt = obs.ObservedAt
 				if obs.State == pkgaudio.StateCompleted {
-					s.advanceLocked(ctx, false, obs.ObservedAt)
+					// A scheduled item boundary (ADR-049 decision 8)
+					// governs this item's own end instead of the decoder,
+					// once its duration is known: the boundary check
+					// below decides when to move on, and an early decoder
+					// end here is not itself a reason to. A duration this
+					// node never learned falls back to today's decoder-end
+					// advance exactly, reported as such.
+					if s.schedule == nil || !s.schedule.boundaryKnown {
+						if s.schedule != nil {
+							m.logf("audio session %s: item %s duration unknown; advancing on decoder end instead of a scheduled boundary", s.id, s.currentItemID)
+						}
+						s.advanceLocked(ctx, false, obs.ObservedAt)
+						if s.schedule != nil && s.state == pkgaudio.StatePlaying {
+							m.reanchorScheduleAfterNaturalAdvanceLocked(ctx, s)
+						}
+					}
 				} else if obs.Reason != "" {
 					// State stays Playing, deliberately: the engine is
 					// still answering, so the fault beside it is the
@@ -495,6 +510,16 @@ func (m *Manager) watchTick(ctx context.Context) {
 					s.freezeCleanSince = time.Time{}
 				} else {
 					s.clearRecoveredFreezeLocked(obs.ObservedAt)
+				}
+			}
+		}
+		if s.state == pkgaudio.StatePlaying && s.schedule != nil {
+			m.maybeStageNextItemLocked(ctx, s)
+			if s.schedule != nil && s.schedule.boundaryKnown {
+				if source := m.clockSourceSnapshot(); source != nil {
+					if mediaNow := source.Now(ctx); mediaNow.Valid && !mediaNow.Time.Before(s.schedule.boundaryAt) {
+						m.scheduledAdvanceLocked(ctx, s, mediaNow.Time)
+					}
 				}
 			}
 		}

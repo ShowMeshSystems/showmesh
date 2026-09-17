@@ -290,6 +290,29 @@ type Session struct {
 	// nothing has re-established. See timeline.go.
 	timeline *timeline
 
+	// schedule is this session's ADR-049 decision 8 item-boundary state:
+	// non-nil only while playing under a schedule a scheduled Start or
+	// Resume actually established. Unlike timeline, it survives an
+	// ordinary item-to-item advance (re-anchored to the new item each
+	// time) rather than being cleared by [Session.releaseEngineLocked] --
+	// it is cleared explicitly at genuine schedule-ending points: Pause,
+	// Stop, Clear, Seek, a forced Advance, an engine rebind, and an
+	// unscheduled (re)start. Never persisted, for the same reason
+	// timeline never is. See itemschedule.go.
+	schedule *itemSchedule
+
+	// stage is the playlist's successor item, prepared ahead of
+	// schedule's own boundary so a scheduled item change need not pay
+	// prepare latency at the boundary itself. Nil until staging begins,
+	// cleared alongside schedule. See itemschedule.go.
+	stage *itemStage
+
+	// stageSeq gives every staging attempt's own engine handle a unique
+	// name, so a retried attempt, or a repeat lap staging the very same
+	// item id again, never collides with a handle still in use. See
+	// itemschedule.go.
+	stageSeq uint64
+
 	// lastSnapshot is the most recent [SessionSnapshot] this session
 	// itself successfully built, via [Session.snapshotLocked]. Read
 	// lock-free by [Session.snapshotWithBudget] when it could not
@@ -518,6 +541,22 @@ func (s *Session) releaseEngineLocked(ctx context.Context) {
 	}
 	s.handleLoaded = false
 	s.loadedIdentity = ""
+}
+
+// discardStageLocked releases s's staged successor item, if one is
+// loaded, and clears the stage entirely. Best effort, matching
+// [Session.releaseEngineLocked]'s own idempotent convention: a staged
+// handle that never reached Load (still probing, or probing failed) has
+// nothing to release. Caller holds s.mu.
+func (s *Session) discardStageLocked(ctx context.Context) {
+	if s.stage != nil && s.stage.ready {
+		relCtx, cancel := boundedObserveContext(ctx)
+		if err := s.mgr.engine.Release(relCtx, s.stage.handle); err != nil {
+			s.mgr.logf("audio session %s: engine release of a discarded staged handle failed: %v", s.id, err)
+		}
+		cancel()
+	}
+	s.stage = nil
 }
 
 // dispatchedResult is what every dispatch-through-revision method
@@ -810,6 +849,66 @@ func (s *Session) resolveBookmarkPositionLocked(item pkgaudio.PlaylistItem) (tim
 	return s.bookmark.Position, nil
 }
 
+// nextPlaylistIndexLocked reports which index a playlist moves to from
+// current, applying [pkgaudio.PlaylistRef.Repeat] identically for every
+// caller that walks a playlist forward: [Session.advanceLocked]'s
+// natural and forced advance, and a scheduled item boundary's own
+// look-ahead (see itemschedule.go). ok is false when current has no
+// successor (RepeatNone, or RepeatItem is not itself "no successor" --
+// it always reports current again). Caller holds s.mu.
+func nextPlaylistIndexLocked(playlist *pkgaudio.PlaylistRef, current int) (next int, ok bool) {
+	next = current
+	if playlist.Repeat != pkgaudio.RepeatItem {
+		next = current + 1
+	}
+	if next >= len(playlist.Items) || next < 0 {
+		if playlist.Repeat == pkgaudio.RepeatPlaylist {
+			return 0, true
+		}
+		return 0, false
+	}
+	return next, true
+}
+
+// consumeAppliedBookmarkLocked relocates s onto the item and position an
+// externally-applied bookmark names (s.desired.Bookmark, set via
+// audio.session.apply -- ADR-049 decision 4's cross-node resume push:
+// the coordinator reads the program+ltc node's own pause position and
+// pushes it to every other listed node ahead of a shared resume).
+// Consumed exactly once: it becomes s.bookmark and s.desired.Bookmark is
+// cleared, so a later resume with no fresh apply falls back to this
+// node's own last pause bookmark instead of replaying a stale push. A
+// no-op when no bookmark was ever pushed. Caller holds s.mu.
+func (s *Session) consumeAppliedBookmarkLocked() error {
+	applied := s.desired.Bookmark
+	if applied == nil {
+		return nil
+	}
+	var index int
+	var itemID, identity string
+	switch {
+	case s.desired.Playlist != nil:
+		item, err := applied.Resolve(*s.desired.Playlist)
+		if err != nil {
+			return err
+		}
+		index, itemID, identity = item.Index, item.ItemID, itemIdentity(item)
+	case s.desired.Media != nil:
+		item := pkgaudio.PlaylistItem{ItemID: "media", Index: 0, Media: *s.desired.Media}
+		index, itemID, identity = 0, item.ItemID, itemIdentity(item)
+	default:
+		return fmt.Errorf("%w: session has no media or playlist to resolve the applied bookmark against", pkgaudio.ErrBookmarkStale)
+	}
+	s.currentIndex = index
+	s.currentItemID = itemID
+	s.bookmark = &pkgaudio.Bookmark{
+		PlaylistRevision: applied.PlaylistRevision, ItemID: itemID, Identity: identity,
+		Index: index, Position: applied.Position,
+	}
+	s.desired.Bookmark = nil
+	return nil
+}
+
 // advanceLocked is the one path that moves s past its current item, used
 // identically by a forced [Manager.Advance] and by the natural-completion
 // watcher (forced distinguishes the two only for what happens past the
@@ -832,6 +931,14 @@ func (s *Session) resolveBookmarkPositionLocked(item pkgaudio.PlaylistItem) (tim
 // computed from; it is never derived from the requested transition or an
 // item's known duration.
 func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt time.Time) pkgaudio.OutcomeResult {
+	if forced {
+		// An operator-forced skip is a deliberate, ad hoc departure from
+		// whatever schedule was running: continuing that schedule's
+		// arithmetic afterward would report a boundary the operator never
+		// intended to keep.
+		s.schedule = nil
+		s.discardStageLocked(ctx)
+	}
 	if s.desired.Playlist == nil {
 		if s.desired.Media == nil {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to advance"}
@@ -849,26 +956,19 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 	}
 	items := s.desired.Playlist.Items
-	next := s.currentIndex
-	if s.desired.Playlist.Repeat != pkgaudio.RepeatItem {
-		next = s.currentIndex + 1
-	}
-	if next >= len(items) || next < 0 {
-		switch {
-		case s.desired.Playlist.Repeat == pkgaudio.RepeatPlaylist:
-			next = 0
-		case forced:
+	next, ok := nextPlaylistIndexLocked(s.desired.Playlist, s.currentIndex)
+	if !ok {
+		if forced {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no next playlist item"}
-		default:
-			s.releaseEngineLocked(ctx)
-			s.state = pkgaudio.StateCompleted
-			s.bookmark = nil
-			s.setGapUnknownLocked("playlist ended with no successor item")
-			s.mgr.stopLTCLocked(ctx, s)
-			s.resolveFadePendingStrandedLocked("session completed before its pending fade resolved")
-			s.persistBestEffortLocked("state change")
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 		}
+		s.releaseEngineLocked(ctx)
+		s.state = pkgaudio.StateCompleted
+		s.bookmark = nil
+		s.setGapUnknownLocked("playlist ended with no successor item")
+		s.mgr.stopLTCLocked(ctx, s)
+		s.resolveFadePendingStrandedLocked("session completed before its pending fade resolved")
+		s.persistBestEffortLocked("state change")
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeCompleted}
 	}
 
 	// The gap this advance could produce is decided here, before the

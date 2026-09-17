@@ -93,7 +93,7 @@ const maxExactFloat64Integer = 9007199254740991
 // params in process rather than off the wire, but only when it converts
 // back exactly: a rounded literal is refused rather than started
 // against.
-func parseScheduledAtNs(params map[string]any) (int64, bool, error) {
+func parseScheduledAtNs(action string, params map[string]any) (int64, bool, error) {
 	raw, ok := params[pkgaudio.ParamScheduledAtNs]
 	if !ok {
 		return 0, false, nil
@@ -102,13 +102,13 @@ func parseScheduledAtNs(params map[string]any) (int64, bool, error) {
 	case json.Number:
 		parsed, err := strconv.ParseInt(v.String(), 10, 64)
 		if err != nil {
-			return 0, false, fmt.Errorf("audio.session.start: params.%s must be a whole number of nanoseconds on this node's media clock, got %v", pkgaudio.ParamScheduledAtNs, raw)
+			return 0, false, fmt.Errorf("%s: params.%s must be a whole number of nanoseconds on this node's media clock, got %v", action, pkgaudio.ParamScheduledAtNs, raw)
 		}
 		return parsed, true, nil
 	case float64:
 		asInt := int64(v)
 		if float64(asInt) != v {
-			return 0, false, fmt.Errorf("audio.session.start: params.%s (%v) is not a whole number of nanoseconds", pkgaudio.ParamScheduledAtNs, raw)
+			return 0, false, fmt.Errorf("%s: params.%s (%v) is not a whole number of nanoseconds", action, pkgaudio.ParamScheduledAtNs, raw)
 		}
 		// Above float64's exactly-representable integer range this value
 		// cannot be trusted to be the one that was sent, whether or not
@@ -118,12 +118,12 @@ func parseScheduledAtNs(params map[string]any) (int64, bool, error) {
 		// integer and this branch exists only for a caller building
 		// params in process.
 		if asInt > maxExactFloat64Integer || asInt < -maxExactFloat64Integer {
-			return 0, false, fmt.Errorf("audio.session.start: params.%s (%v) arrived as a float64 beyond %d, where a float64 has already rounded it; send it as an exact JSON integer",
-				pkgaudio.ParamScheduledAtNs, raw, int64(maxExactFloat64Integer))
+			return 0, false, fmt.Errorf("%s: params.%s (%v) arrived as a float64 beyond %d, where a float64 has already rounded it; send it as an exact JSON integer",
+				action, pkgaudio.ParamScheduledAtNs, raw, int64(maxExactFloat64Integer))
 		}
 		return asInt, true, nil
 	default:
-		return 0, false, fmt.Errorf("audio.session.start: params.%s must be a whole number of nanoseconds on this node's media clock, got %T", pkgaudio.ParamScheduledAtNs, raw)
+		return 0, false, fmt.Errorf("%s: params.%s must be a whole number of nanoseconds on this node's media clock, got %T", action, pkgaudio.ParamScheduledAtNs, raw)
 	}
 }
 
@@ -259,7 +259,7 @@ func addMediaClockReadiness(ctx context.Context, mgr *audio.Manager, extra map[s
 // optional, and a command without it starts on arrival exactly as before
 // this seam existed.
 func startSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
-	atNs, present, err := parseScheduledAtNs(params)
+	atNs, present, err := parseScheduledAtNs("audio.session.start", params)
 	if err != nil {
 		return pkgaudio.OutcomeResult{}, "", nil, err
 	}
@@ -269,12 +269,38 @@ func startSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 	return mgr.StartAt(ctx, id, inv, rev, atNs), "node.audio_session.start", nil, nil
 }
 
+// pauseSession reports its own bookmark evidence alongside the pause
+// outcome (ADR-049 decision 4): a coordinator resuming a multi-node bed
+// reads the program+ltc node's own resume point straight from this
+// result, rather than a second observation call, before pushing it to
+// every other listed node.
 func pauseSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
-	return mgr.Pause(ctx, id, inv, rev), "node.audio_session.pause", nil, nil
+	outcome := mgr.Pause(ctx, id, inv, rev)
+	extra := map[string]any{}
+	if bookmark, known := mgr.PauseBookmark(id); known {
+		extra[pkgaudio.ResultBookmarkKnown] = true
+		extra[pkgaudio.ResultBookmarkItemID] = bookmark.ItemID
+		extra[pkgaudio.ResultBookmarkIndex] = bookmark.Index
+		extra[pkgaudio.ResultBookmarkPositionMs] = bookmark.Position.Milliseconds()
+	} else {
+		extra[pkgaudio.ResultBookmarkKnown] = false
+	}
+	return outcome, "node.audio_session.pause", extra, nil
 }
 
-func resumeSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
-	return mgr.Resume(ctx, id, inv, rev), "node.audio_session.resume", nil, nil
+// resumeSession honours pkg/audio's ParamScheduledAtNs when the command
+// carries it, mirroring startSession: T0 on THIS node's media clock, in
+// nanoseconds. The param is optional, and a command without it resumes
+// on arrival exactly as before this seam existed.
+func resumeSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
+	atNs, present, err := parseScheduledAtNs("audio.session.resume", params)
+	if err != nil {
+		return pkgaudio.OutcomeResult{}, "", nil, err
+	}
+	if !present {
+		return mgr.Resume(ctx, id, inv, rev), "node.audio_session.resume", nil, nil
+	}
+	return mgr.ResumeAt(ctx, id, inv, rev, atNs), "node.audio_session.resume", nil, nil
 }
 
 func seekSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
