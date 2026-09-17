@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -57,6 +58,14 @@ const (
 	activationStepPrepare = cueactivation.AudioSessionStepPrepare
 	activationStepStart   = cueactivation.AudioSessionStepStart
 	activationStepSeek    = cueactivation.AudioSessionStepSeek
+)
+
+// unalignedFallbackStepStart/Seek sort past AudioSessionStepStop so a
+// missed-instant fallback's own revisions never collide with the
+// already-consumed scheduled Start step or a coordinator Stop.
+const (
+	unalignedFallbackStepStart = cueactivation.AudioSessionStepStop + 1
+	unalignedFallbackStepSeek  = cueactivation.AudioSessionStepStop + 2
 )
 
 // activationRevision derives one step's [pkgaudio.Revision] from act.
@@ -248,6 +257,9 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		}
 		startOutcome := mgr.StartAtPosition(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart), *act.ScheduledAtNs, position)
 		if audioOutcomeFailed(startOutcome) {
+			if startOutcome.Outcome == pkgaudio.OutcomeRefused && strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
+				return startUnalignedOnArrival(ctx, mgr, id, act, position, startOutcome.Reason)
+			}
 			return fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 		}
 		return nil
@@ -310,4 +322,19 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		return fmt.Errorf("cue.activate: audio.session.seek for Cue %q to position %dms: %s: %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
 	}
 	return nil
+}
+
+// startUnalignedOnArrival is activateAudio's own fallback for a scheduled
+// start already missed by the time StartAtPosition runs: start on
+// arrival, seek to position, and report unaligned with the reason.
+func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, position time.Duration, missedReason string) error {
+	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(act, unalignedFallbackStepStart))
+	if audioOutcomeFailed(startOutcome) {
+		return fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+	}
+	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek-unaligned"), activationRevision(act, unalignedFallbackStepSeek), position)
+	if audioOutcomeFailed(seekOutcome) {
+		return fmt.Errorf("cue.activate: audio.session.seek for Cue %q to position %dms: %s: %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
+	}
+	return fmt.Errorf("cue.activate: unaligned for Cue %q: started on arrival instead of the scheduled instant: %s", act.CueID, missedReason)
 }

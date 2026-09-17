@@ -41,6 +41,22 @@ import (
 // comment for why a hand-fired announcement has no frozen show-mode pin
 // to reuse.
 
+// cueFireProbeSteps is how many scheduleProbeStepTimeout-bounded waits a
+// Fire's own scheduling round may pay before dispatch even starts: apply,
+// prepare and clear (readScheduleProbe) plus awaitScheduleProbeIdle.
+const cueFireProbeSteps = 4
+
+// cueFireHTTPWriteDeadlineMargin matches audioHandlerWriteDeadlineMargin
+// (audiodispatch.go), the same hazard one route over.
+const cueFireHTTPWriteDeadlineMargin = 10 * time.Second
+
+// cueFireHTTPWriteDeadline bounds this endpoint's own HTTP write deadline,
+// set before scheduling: the server's shared WriteTimeout would otherwise
+// sever the response out from under a still-working dispatch round.
+func cueFireHTTPWriteDeadline() time.Duration {
+	return cueFireProbeSteps*scheduleProbeStepTimeout + cueActivationConfirmDeadline + cueFireHTTPWriteDeadlineMargin
+}
+
 // scopeCueActivate exists only so api.go's route registration can take
 // its address - see scopeActionInvoke's identical pattern (actioninvoke.go).
 var scopeCueActivate = identity.ScopeCueActivate
@@ -89,6 +105,7 @@ func nextCueDirectActivationNonce(now time.Time) int64 {
 // Cue catalog resolves this Cue on no node).
 func (h *handlers) handleActivateCue(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
+	_ = http.NewResponseController(w).SetWriteDeadline(now.Add(cueFireHTTPWriteDeadline()))
 	ctx := r.Context()
 	cueID := r.PathValue("id")
 

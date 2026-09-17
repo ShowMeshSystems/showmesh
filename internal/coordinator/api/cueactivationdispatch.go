@@ -286,18 +286,15 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 	}
 
 	if cueOutputs.Audio != nil {
-		// ADR-049 decision 6's lifecycle rule: the real audio session on
-		// nodeID must never start while THIS node's own schedule-probe
-		// apply, prepare, or clear (cueactivationschedule.go) is still
-		// outstanding — an abandoned probe step still loads media in the
-		// background after readScheduleProbe itself gave up on it
-		// (finishScheduleProbeAfter), and racing the real session's own
-		// load against it is the exact resource contention that made every
-		// probe and the real load time out together. Bounded, never
-		// unbounded: a hung node's own probe clear must never withhold the
-		// real show from that node forever, so a wait that exceeds this
-		// sends the real command anyway.
-		awaitScheduleProbeIdle(nodeID)
+		// The real audio session must never start while this node's own
+		// schedule-probe apply/prepare/clear is still outstanding, or the
+		// two loads race the same resource. Bounded: a hung probe never
+		// withholds the real show past scheduleProbeStepTimeout.
+		waited, timedOut := awaitScheduleProbeIdle(nodeID)
+		if timedOut || waited > scheduleProbeIdleWaitLogThreshold {
+			h.logWarn("cue activation dispatch: waited for an outstanding probe before real dispatch",
+				"nodeId", nodeID, "activationId", act.ActivationID, "waited", waited, "timedOut", timedOut)
+		}
 	}
 
 	cmdTopic, err := mqttproto.CmdTopic(nodeID)

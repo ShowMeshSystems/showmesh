@@ -84,6 +84,30 @@ func scheduleProbeEvidenceResult(valid bool, nowNs int64, reason string) mqttpro
 	}
 }
 
+// awaitFinishScheduleProbeAfterForTest hooks finishScheduleProbeAfterDoneForTest
+// so a test that provokes that background goroutine can wait for its
+// clear and lock release to finish before its own store teardown runs.
+func awaitFinishScheduleProbeAfterForTest(t *testing.T) func() {
+	t.Helper()
+	done := make(chan struct{}, 1)
+	prev := finishScheduleProbeAfterDoneForTest
+	finishScheduleProbeAfterDoneForTest = func() {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() { finishScheduleProbeAfterDoneForTest = prev })
+	return func() {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(scheduleProbeStepTimeout + 2*time.Second):
+			t.Fatal("finishScheduleProbeAfter never signaled completion")
+		}
+	}
+}
+
 // twoNodeScheduleFixture builds two audio-bearing, individually-
 // authorized activations: "audio-holder" (holds the media clock) and
 // "audio-second" (does not), each for its own single-targeted Cue.
@@ -563,19 +587,13 @@ func TestReadScheduleProbeWaitsBrieflyForAHealthyOverlappingAttempt(t *testing.T
 }
 
 // TestReadScheduleProbeReportsBusyForAGenuinelyStuckNodeWithinTheBound
-// proves the other half of finding 2's own tightened rule: a node whose
-// first attempt never finishes, a genuine hang rather than a brief
-// overlap, still costs a second attempt at most scheduleProbeStepTimeout
-// before it is reported busy, never an unbounded wait for a lock nothing
-// will release in time. scheduleProbeStepTimeout is a const, not a var a
-// test can shrink (see its own doc comment: a step this bound abandons
-// keeps its own goroutine running in the background, which can outlive
-// this test, so a shared mutable override would race against it), so
-// this genuinely pays the real bound.
+// proves a genuinely stuck node still costs a second attempt at most
+// scheduleProbeStepTimeout, never an unbounded wait.
 func TestReadScheduleProbeReportsBusyForAGenuinelyStuckNodeWithinTheBound(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:test"}
+	waitFinish := awaitFinishScheduleProbeAfterForTest(t)
 
 	mediaA := pkgaudio.MediaRef{AssetID: "asset-a", RuntimeFilename: "a.wav"}
 	mediaB := pkgaudio.MediaRef{AssetID: "asset-b", RuntimeFilename: "b.wav"}
@@ -624,6 +642,7 @@ func TestReadScheduleProbeReportsBusyForAGenuinelyStuckNodeWithinTheBound(t *tes
 	case <-time.After(2 * time.Second):
 		t.Fatal("attempt A never completed after being released")
 	}
+	waitFinish()
 }
 
 // TestDispatchProbeStepRecoversAPanicInTheUnderlyingDispatch proves
@@ -777,10 +796,10 @@ func TestReadScheduleProbeGivesUpOnAHungApplyWithinTheStepTimeout(t *testing.T) 
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:test"}
 	media := pkgaudio.MediaRef{AssetID: "asset-x", RuntimeFilename: "x.wav"}
+	waitFinish := awaitFinishScheduleProbeAfterForTest(t)
 
 	release := make(chan struct{})
 	setup.pub.onAwaitResponse = func() { <-release }
-	defer close(release)
 
 	start := time.Now()
 	evidence, elapsed, err := h.readScheduleProbe(context.Background(), testNow, "hung-node", media, issuer)
@@ -792,6 +811,8 @@ func TestReadScheduleProbeGivesUpOnAHungApplyWithinTheStepTimeout(t *testing.T) 
 	if took > 2*scheduleProbeStepTimeout {
 		t.Fatalf("readScheduleProbe took %v to return, want at most about one step timeout (%v): a hung node must not cost anywhere near its own 15s dispatch deadline", took, scheduleProbeStepTimeout)
 	}
+	close(release)
+	waitFinish()
 }
 
 // TestReadScheduleProbeNeverClearsBeforeALateApplyLands is the ordering
@@ -808,6 +829,7 @@ func TestReadScheduleProbeNeverClearsBeforeALateApplyLands(t *testing.T) {
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:test"}
 	media := pkgaudio.MediaRef{AssetID: "asset-x", RuntimeFilename: "x.wav"}
+	waitFinish := awaitFinishScheduleProbeAfterForTest(t)
 
 	release := make(chan struct{})
 	var held atomic.Bool
@@ -829,21 +851,15 @@ func TestReadScheduleProbeNeverClearsBeforeALateApplyLands(t *testing.T) {
 	}
 
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		found := false
-		for _, d := range setup.pub.dispatchedSnapshot() {
-			if d.Action == "audio.session.clear" {
-				found = true
-			}
+	waitFinish()
+	found := false
+	for _, d := range setup.pub.dispatchedSnapshot() {
+		if d.Action == "audio.session.clear" {
+			found = true
 		}
-		if found {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("audio.session.clear was never dispatched after the late apply resolved")
-		}
-		time.Sleep(5 * time.Millisecond)
+	}
+	if !found {
+		t.Fatal("audio.session.clear was never dispatched after the late apply resolved")
 	}
 }
 
@@ -943,16 +959,9 @@ func TestScheduleCueActivationsWithARealMultiTargetCueStartsBothNodesTogether(t 
 	}
 }
 
-// TestScheduleCueActivationsToleratesARealisticSlowPrepare proves ADR-049
-// decision 6's own bound fix directly: the fake publisher delays its
-// first four AwaitResponse calls (both nodes' own apply and prepare
-// steps, whichever specific step Go's own goroutine scheduling happens to
-// land them on) by 1500ms — past the FORMER 400ms bound, comfortably
-// under the new one — and the probe must still complete with one shared
-// ScheduledAtNs on both nodes rather than timing out. 1500ms sits between
-// the two rehearsal-rig measurements this bound is sized from (1.4s on
-// the program+ltc node, 2.4s on a Raspberry Pi 3B+, ADR-049 decision 6's
-// own doc comment).
+// TestScheduleCueActivationsToleratesARealisticSlowPrepare proves the
+// probe bound tolerates a realistic slow prepare (1500ms, between the
+// 1.4s and 2.4s rehearsal-rig measurements) without falling back unaligned.
 func TestScheduleCueActivationsToleratesARealisticSlowPrepare(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
@@ -995,12 +1004,9 @@ func TestScheduleCueActivationsToleratesARealisticSlowPrepare(t *testing.T) {
 	}
 }
 
-// TestScheduleCueActivationsProbesEachNodeExactlyOnce proves ADR-049
-// decision 6's "one media-clock probe sequence per activation": a
-// successful two-node scheduling attempt dispatches exactly one
-// audio.session.apply, one audio.session.prepare, and one
-// audio.session.clear against [cueactivation.ScheduleProbeSessionID] for
-// EACH node, never more.
+// TestScheduleCueActivationsProbesEachNodeExactlyOnce proves one
+// media-clock probe sequence per activation: exactly one apply, one
+// prepare, and one clear against the probe session for each node.
 func TestScheduleCueActivationsProbesEachNodeExactlyOnce(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
@@ -1039,11 +1045,8 @@ func TestScheduleCueActivationsProbesEachNodeExactlyOnce(t *testing.T) {
 }
 
 // TestDispatchCueActivationsReplayTickProbesNothingAndDispatchesNothingNew
-// proves ADR-049 decision 6 at the full dispatchCueActivations level: a
-// second tick over the identical, unchanged activations map (the
-// Playlist loop's own every-1s replay while a Cue is still active)
-// dispatches no new probe command and no new cue.activate for either
-// node — it answers entirely from what the first tick already recorded.
+// proves a second tick over an unchanged activations map dispatches
+// nothing new, answering entirely from what the first tick recorded.
 func TestDispatchCueActivationsReplayTickProbesNothingAndDispatchesNothingNew(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
@@ -1087,14 +1090,8 @@ func TestDispatchCueActivationsReplayTickProbesNothingAndDispatchesNothingNew(t 
 }
 
 // TestScheduleCueActivationsPartialReplayGivesLateNodeTheRecordedInstant
-// proves REQUIRED BEHAVIOR 1's late-joining-node case: "audio-holder" was
-// already scheduled and dispatched on an earlier tick (seeded directly,
-// standing in for a prior tick this test does not need to replay in
-// full); "audio-second" appears in the SAME activation for the first
-// time on this tick. scheduleCueActivations must not probe either node
-// again — it gives audio-second the identical ScheduledAtNs already
-// recorded for audio-holder, because the configured lead has not yet
-// elapsed since that row was created.
+// proves a late-joining audio-second gets audio-holder's own already
+// recorded ScheduledAtNs, never a fresh probe, while the lead still covers it.
 func TestScheduleCueActivationsPartialReplayGivesLateNodeTheRecordedInstant(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
@@ -1138,11 +1135,8 @@ func TestScheduleCueActivationsPartialReplayGivesLateNodeTheRecordedInstant(t *t
 }
 
 // TestScheduleCueActivationsPartialReplayLateNodeUnalignedAfterLeadElapses
-// is the same partial-replay case, past the point this function can still
-// vouch for the recorded instant: with no fresh clock read available
-// (ADR-049 decision 6), audio-second is reported unaligned with a
-// concrete reason naming it, rather than handed a start already behind
-// it.
+// proves the same case past the point the recorded instant can be
+// vouched for: audio-second reports unaligned, never a start already behind it.
 func TestScheduleCueActivationsPartialReplayLateNodeUnalignedAfterLeadElapses(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
@@ -1184,15 +1178,8 @@ func TestScheduleCueActivationsPartialReplayLateNodeUnalignedAfterLeadElapses(t 
 }
 
 // TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch
-// proves REQUIRED BEHAVIOR 3's lifecycle rule directly: a probe step that
-// exceeds the bound leaves nodeID's own [scheduleProbeNodeLock] held by
-// [handlers.finishScheduleProbeAfter] until the abandoned step actually
-// resolves and audio.session.clear is sent. A real cue.activate dispatch
-// for that SAME node, started while the probe is still outstanding, must
-// not reach the wire until that clear has gone out (or the gate's own
-// bound expires) — proving the real session never races the probe's own
-// still-loading media. An unrelated second node, whose own probe was
-// never touched, dispatches immediately regardless.
+// proves a real cue.activate waits for an outstanding probe's own clear
+// to resolve rather than racing it.
 func TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
@@ -1204,6 +1191,7 @@ func TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch
 	deps.AssetManifests = setup.st
 	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
 	issuer := cueActivationIssuer{PrincipalID: "system:test"}
+	waitFinish := awaitFinishScheduleProbeAfterForTest(t)
 
 	release := make(chan struct{})
 	var held atomic.Bool
@@ -1229,12 +1217,6 @@ func TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch
 		t.Fatal("readScheduleProbe never gave up on the hung apply")
 	}
 
-	// An unrelated node the gate never touches dispatches immediately
-	// regardless of nodeID's own outstanding probe:
-	// TestDispatchOneCueActivationSingleTargetUnaffectedByTheProbeGate
-	// already proves that near-zero cost directly; this test's own focus
-	// is nodeID's own gated wait below.
-
 	realDone := make(chan cueActivationDispatchOutcome, 1)
 	go func() {
 		realDone <- h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
@@ -1244,8 +1226,7 @@ func TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch
 	case out := <-realDone:
 		t.Fatalf("the real dispatch for %q returned (%+v) before its own outstanding probe was released; it must wait for the clear or the bound", nodeID, out)
 	case <-time.After(50 * time.Millisecond):
-		// Still waiting, as required: the probe's own abandoned apply is
-		// still hung on <-release, so nodeID's own lock is still held.
+		// Still waiting, as required.
 	}
 
 	close(release)
@@ -1280,13 +1261,12 @@ func TestDispatchOneCueActivationWaitsForAnOutstandingProbeBeforeTheRealDispatch
 	if clearIdx > activateIdx {
 		t.Fatalf("cue.activate (dispatch #%d) reached the wire before audio.session.clear (dispatch #%d) for %q", activateIdx, clearIdx, nodeID)
 	}
+	waitFinish()
 }
 
 // TestDispatchOneCueActivationSingleTargetUnaffectedByTheProbeGate proves
-// REQUIRED BEHAVIOR 5: a single-target activation, which never triggers
-// scheduleCueActivations at all (len(activations) < 2), finds its own
-// [scheduleProbeNodeLock] uncontended and dispatches exactly as it did
-// before this seam's own gate was added — no measurable added latency.
+// a single-target activation finds its own probe lock uncontended and
+// dispatches with no measurable added latency.
 func TestDispatchOneCueActivationSingleTargetUnaffectedByTheProbeGate(t *testing.T) {
 	now := testNow
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
@@ -1306,10 +1286,8 @@ func TestDispatchOneCueActivationSingleTargetUnaffectedByTheProbeGate(t *testing
 	if !outcome.Confirmed {
 		t.Fatalf("outcome = %+v, want confirmed", outcome)
 	}
-	// A generous ceiling, well under scheduleProbeStepTimeout (the gate's
-	// own bound), not a tight one: this only needs to prove the gate did
-	// not block, not bound ordinary dispatch latency under a slow or
-	// -race-instrumented test run.
+	// A generous ceiling: this only needs to prove the gate did not
+	// block, not bound ordinary dispatch latency under a slow test run.
 	if took >= scheduleProbeStepTimeout/2 {
 		t.Fatalf("dispatchOneCueActivation took %s, want well under scheduleProbeStepTimeout (%s): the probe-idle gate must be an uncontended, near-instant check for a node no probe ever touched", took, scheduleProbeStepTimeout)
 	}
