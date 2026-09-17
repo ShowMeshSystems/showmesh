@@ -588,8 +588,8 @@ func (f fixedLockedClockSource) Now(context.Context) agentclock.MediaTime {
 
 // TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned
 // proves a StartAtPosition refused as scheduled_start_in_past starts on
-// arrival at the same position instead of going silent, and — the Opus
-// review's own defect fix — reports the node as CONFIRMED with the
+// arrival at the same position instead of going silent, and (the Opus
+// review's own defect fix) reports the node as CONFIRMED with the
 // unaligned reason carried in the outcome value, never apply-failed: the
 // node is actually playing, just not at the scheduled instant, and a
 // coordinator reading Confirmed:false here would record a failure that

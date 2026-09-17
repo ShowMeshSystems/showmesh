@@ -48,11 +48,7 @@ type CueActivationNodeOutcome struct {
 	// "confirmed", the same rule [ActionInvocationResult.OutcomeReason]
 	// already follows.
 	OutcomeReason string `json:"outcomeReason,omitempty"`
-	// UnalignedReason is set only when Outcome is "confirmed" but this
-	// node missed its scheduled start instant and started on arrival
-	// instead (the node's own missed-instant fallback still confirms —
-	// it is playing, just not at the scheduled instant). Distinct from the
-	// response-level UnalignedReason, which is ADR-049 decision 3's
-	// multi-node scheduling verdict, not one node's own fallback.
+	// UnalignedReason is set only when this node confirmed but missed
+	// its scheduled start instant and started on arrival instead.
 	UnalignedReason string `json:"unalignedReason,omitempty"`
 }

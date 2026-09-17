@@ -16107,6 +16107,9 @@ components:
         outcomeReason:
           type: string
           description: Always present except when outcome is "confirmed".
+        unalignedReason:
+          type: string
+          description: Set only when this node confirmed but missed the shared start instant and started on arrival instead.
     MacroRunsListResponse:
       type: object
       description: The body of GET /macro-runs.

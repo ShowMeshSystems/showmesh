@@ -330,7 +330,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 // startUnalignedOnArrival is activateAudio's own fallback for a scheduled
 // start already missed by the time StartAtPosition runs: start on arrival,
 // seek to position, and report the node as confirmed with the unaligned
-// reason (not apply-failed) once both actually succeed — the node is
+// reason (not apply-failed) once both actually succeed: the node is
 // playing, just not at the scheduled instant. A failed start or seek here
 // still returns an error: the fallback did not actually take effect.
 func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, position time.Duration, missedReason string) (string, error) {

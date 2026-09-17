@@ -141,7 +141,7 @@ func cueActivationNodeResultPayload(confirmed bool, nodeOutcome string) mqttprot
 // for a Cue confirmed through its missed-instant fallback
 // (internal/agent/cueactivationaudio.go's startUnalignedOnArrival): the
 // node's own value map carries "outcome":"authorized" AND a non-empty
-// "unalignedReason", never a refusal — the node actually played.
+// "unalignedReason", never a refusal: the node actually played.
 func cueActivationNodeConfirmedUnalignedResultPayload(unalignedReason string) mqttproto.ResultPayload {
 	return mqttproto.ResultPayload{
 		Outcome: mqttproto.OutcomeConfirmed,
@@ -202,7 +202,7 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 // cueactivationaudio.go's startUnalignedOnArrival) reports Confirmed true
 // with a non-empty unalignedReason, never apply-failed, and that reason
 // reaches this node's own [cueActivationDispatchOutcome] and, through
-// [cueActivateWireOutcome], the per-node Fire response outcome — never
+// [cueActivateWireOutcome], the per-node Fire response outcome, never
 // silently dropped on the floor between the node's result and the API
 // response.
 func TestDispatchOneCueActivationSurfacesUnalignedReasonFromNodeResult(t *testing.T) {
