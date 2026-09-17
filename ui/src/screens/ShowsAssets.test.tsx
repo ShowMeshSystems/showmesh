@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, type Asset, type Model, type SessionResponse } from '../api'
+import { ApiError, type Asset, type Model, type NodeAssetManifest, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 
@@ -12,6 +12,7 @@ const stubs = vi.hoisted(() => ({
   uploadAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAssetContent: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   resyncNodeAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAssetManifest: (() => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', nodes: [] })) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -24,6 +25,7 @@ vi.mock('../api', async () => {
     uploadAsset: (...args: never[]) => stubs.uploadAsset(...args),
     getAssetContent: (...args: never[]) => stubs.getAssetContent(...args),
     resyncNodeAssets: (...args: never[]) => stubs.resyncNodeAssets(...args),
+    getAssetManifest: (...args: never[]) => stubs.getAssetManifest(...args),
   }
 })
 
@@ -81,6 +83,10 @@ function assetsResponse(assets: Asset[]) {
   return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', assets })
 }
 
+function manifestResponse(nodes: NodeAssetManifest[]) {
+  return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', nodes })
+}
+
 async function sha256HexFor(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   const hex = Array.from(new Uint8Array(digest))
@@ -110,27 +116,28 @@ describe('Shows · Assets tab', () => {
     vi.restoreAllMocks()
   })
 
-  function setup(scopes: string[], assets: Asset[]) {
+  function setup(scopes: string[], assets: Asset[], nodes: NodeAssetManifest[] = []) {
     stubs.getShow = showHead
     // The workspace shell reads every config kind for its tab counts. Leaving
     // this unstubbed let a real network call decide when the screen painted.
     stubs.listConfigObjects = (kind: string) =>
       Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [] })
     stubs.listAssets = () => assetsResponse(assets)
+    stubs.getAssetManifest = () => manifestResponse(nodes)
     return renderWorkspace({ session: signedIn(scopes) })
   }
 
-  it('renders the section heading and a current asset grouped under its logical sequence', async () => {
+  it('renders the section heading and one row per current file', async () => {
     setup(['asset:write'], [asset()])
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Assets in this show' })).toBeInTheDocument())
-    const region = await screen.findByRole('region', { name: "This show's current assets, grouped by sequence, scrollable" })
+    const region = await screen.findByRole('region', { name: "This show's current assets, one row per file, scrollable" })
     await waitFor(() => expect(within(region).getByText('carol-of-the-bells')).toBeInTheDocument())
-    expect(within(region).getByText('media-front')).toBeInTheDocument()
+    expect(within(region).getByText(/media-front/)).toBeInTheDocument()
   })
 
   it('a settled-empty show is distinguishable from loading and from a read failure', async () => {
     setup(['asset:write'], [])
-    const region = await screen.findByRole('region', { name: "This show's current assets, grouped by sequence, scrollable" })
+    const region = await screen.findByRole('region', { name: "This show's current assets, one row per file, scrollable" })
     await waitFor(() => expect(within(region).getByText('None')).toBeInTheDocument())
     expect(within(region).getByText('No asset matches here.')).toBeInTheDocument()
   })
@@ -315,5 +322,39 @@ describe('Shows · Assets tab', () => {
     expect(await screen.findByText('This will be a rollback')).toBeInTheDocument()
     const submit = (await screen.findAllByRole('button', { name: 'Roll back' }))[0] as HTMLElement
     expect(submit).toBeInTheDocument()
+  })
+
+  it('a night-bed copy on a node with no own row names the source node and the bed, not just "expected"', async () => {
+    const a = asset({ id: 'a-node01', target: 'showmesh-node-01' })
+    setup(['asset:write'], [a], [
+      {
+        node: 'pi-audio-01',
+        state: 'ready',
+        reason: null,
+        missing: [],
+        gaps: [],
+        extra: [],
+        observedAt: '2026-08-30T20:55:00Z',
+        verdicts: [
+          {
+            assetId: a.id,
+            sequence: a.sequence,
+            filename: a.runtimeFilename,
+            contentHash: a.contentHash,
+            sizeBytes: a.sizeBytes,
+            state: 'held',
+            source: { kind: 'bed_copy', registeredTarget: 'showmesh-node-01', referencedBy: ['halloween-2026'] },
+          },
+        ],
+      },
+    ])
+    fireEvent.click(await screen.findByRole('row', { name: 'View carol-of-the-bells for showmesh-node-01' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
+
+    expect(screen.getByText('pi-audio-01')).toBeInTheDocument()
+    expect(screen.getByText('Copied from showmesh-node-01 because night bed halloween-2026 plays on this node.')).toBeInTheDocument()
+    // The node this asset row was itself uploaded for still shows, Unknown, since this fixture gave it no manifest entry of its own.
+    expect(screen.getAllByText('showmesh-node-01').length).toBeGreaterThan(0)
+    expect(screen.getByText('Uploaded for this node.')).toBeInTheDocument()
   })
 })

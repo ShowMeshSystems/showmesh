@@ -83,13 +83,28 @@ type v1ExtraAssetForTest struct {
 	SizeBytes   int64  `json:"sizeBytes"`
 }
 
+type v1AssetVerdictSourceForTest struct {
+	Kind             string   `json:"kind"`
+	RegisteredTarget string   `json:"registeredTarget"`
+	ReferencedBy     []string `json:"referencedBy"`
+}
+
+type v1AssetLastFetchForTest struct {
+	DispatchedAt  *string `json:"dispatchedAt"`
+	State         string  `json:"state"`
+	FailureReason *string `json:"failureReason"`
+	FailedAt      *string `json:"failedAt"`
+}
+
 type v1AssetSyncVerdictForTest struct {
-	AssetID     string `json:"assetId"`
-	Sequence    string `json:"sequence"`
-	Filename    string `json:"filename"`
-	ContentHash string `json:"contentHash"`
-	SizeBytes   int64  `json:"sizeBytes"`
-	State       string `json:"state"`
+	AssetID     string                      `json:"assetId"`
+	Sequence    string                      `json:"sequence"`
+	Filename    string                      `json:"filename"`
+	ContentHash string                      `json:"contentHash"`
+	SizeBytes   int64                       `json:"sizeBytes"`
+	State       string                      `json:"state"`
+	Source      v1AssetVerdictSourceForTest `json:"source"`
+	LastFetch   *v1AssetLastFetchForTest    `json:"lastFetch"`
 }
 
 type v1ResyncRequestStatusForTest struct {
@@ -101,15 +116,16 @@ type v1ResyncRequestStatusForTest struct {
 }
 
 type v1NodeAssetManifestForTest struct {
-	Node          string                        `json:"node"`
-	State         string                        `json:"state"`
-	Reason        *string                       `json:"reason"`
-	Missing       []v1MissingAssetForTest       `json:"missing"`
-	Gaps          []v1AssetGapForTest           `json:"gaps"`
-	Extra         []v1ExtraAssetForTest         `json:"extra"`
-	ObservedAt    *string                       `json:"observedAt"`
-	Verdicts      []v1AssetSyncVerdictForTest   `json:"verdicts"`
-	ResyncRequest *v1ResyncRequestStatusForTest `json:"resyncRequest"`
+	Node           string                        `json:"node"`
+	State          string                        `json:"state"`
+	Reason         *string                       `json:"reason"`
+	Missing        []v1MissingAssetForTest       `json:"missing"`
+	Gaps           []v1AssetGapForTest           `json:"gaps"`
+	Extra          []v1ExtraAssetForTest         `json:"extra"`
+	ObservedAt     *string                       `json:"observedAt"`
+	Verdicts       []v1AssetSyncVerdictForTest   `json:"verdicts"`
+	ResyncRequest  *v1ResyncRequestStatusForTest `json:"resyncRequest"`
+	LastSyncPassAt *string                       `json:"lastSyncPassAt"`
 }
 
 type v1NodeAssetManifestResponseForTest struct {
@@ -591,6 +607,62 @@ func TestNodeAssetManifestVerdictHeldOverHTTP(t *testing.T) {
 	v := decoded.Manifest.Verdicts[0]
 	if v.AssetID != asset.ID || v.ContentHash != asset.ContentHash || v.State != "held" {
 		t.Errorf("verdicts[0] = %+v, want assetId=%q contentHash=%q state=held", v, asset.ID, asset.ContentHash)
+	}
+	if v.Source.Kind != "node" || v.Source.RegisteredTarget != "render-01" || len(v.Source.ReferencedBy) != 0 {
+		t.Errorf("verdicts[0].source = %+v, want kind=node registeredTarget=render-01 referencedBy=[]", v.Source)
+	}
+	if v.LastFetch != nil {
+		t.Errorf("verdicts[0].lastFetch = %+v, want nil: this coordinator process never dispatched or observed a failure for it", v.LastFetch)
+	}
+}
+
+// TestNodeAssetManifestVerdictAbsentStatesKnownLastFetchFailure proves
+// AssetSyncVerdict.LastFetch reaches the wire, distinct from
+// notReadyReason's own free-text summary: a node missing its expected
+// asset, with a known asset.fetch failure on record, names the failure
+// structurally on the verdict itself, never fabricating a dispatch time
+// this process does not remember.
+func TestNodeAssetManifestVerdictAbsentStatesKnownLastFetchFailure(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	fake := &fakeAssetFetchFailureSource{}
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AssetFetchFailures = fake
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	mustPutShowActive(t, api, token, "halloween-2026")
+	asset := uploadOneAsset(t, api, auth, "render-01", "opening", "Thriller.fseq", []byte("content"))
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01", nil,
+		store.NodeAssetReportRecord{ReportedAt: testNow, Complete: true}); err != nil {
+		t.Fatalf("seed empty report: %v", err)
+	}
+
+	const wantReason = "asset.fetch: download failed: dial tcp 203.0.113.1:443: connect: connection refused"
+	failedAt := testNow.Add(-time.Minute)
+	fake.set("render-01", asset.ContentHash, wantReason, failedAt)
+	fake.setAttempt("render-01", asset.ContentHash, assetsync.LastFetchAttemptRecord{State: assetsync.LastFetchFailed, FailureReason: wantReason, FailedAt: failedAt})
+	fake.lastSyncPassAt = testNow
+
+	_, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if len(decoded.Manifest.Verdicts) != 1 {
+		t.Fatalf("verdicts = %+v, want exactly one entry; body: %s", decoded.Manifest.Verdicts, body)
+	}
+	v := decoded.Manifest.Verdicts[0]
+	if v.State != "absent" {
+		t.Fatalf("verdicts[0].state = %q, want absent; body: %s", v.State, body)
+	}
+	if v.LastFetch == nil {
+		t.Fatalf("verdicts[0].lastFetch = nil, want the known failure; body: %s", body)
+	}
+	if v.LastFetch.State != "failed" || v.LastFetch.FailureReason == nil || *v.LastFetch.FailureReason != wantReason {
+		t.Errorf("verdicts[0].lastFetch = %+v, want state=failed failureReason=%q", v.LastFetch, wantReason)
+	}
+	if decoded.Manifest.LastSyncPassAt == nil {
+		t.Errorf("manifest.lastSyncPassAt = nil, want the sync service's own last-pass time")
 	}
 }
 

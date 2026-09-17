@@ -34,6 +34,37 @@ type ExtraAsset struct {
 	SizeBytes   int64  `json:"sizeBytes"`
 }
 
+// AssetVerdictSource names WHY a node was expected to hold one asset:
+// which of ADR-049's precedence tiers matched (see
+// assetsync.AssetSourceKind), the node the row was actually uploaded for
+// (RegisteredTarget, empty for a show-wide row), and, for a borrowed
+// copy, the Cue or night.session id(s) whose declared target list put
+// this node on the hook (ReferencedBy, always empty for "node"/"show").
+type AssetVerdictSource struct {
+	Kind             string   `json:"kind"`
+	RegisteredTarget string   `json:"registeredTarget"`
+	ReferencedBy     []string `json:"referencedBy"`
+}
+
+// AssetLastFetch is the asset-sync service's own process-lifetime record
+// of its most recent asset.fetch dispatch for one expected asset:
+// in-memory only, reset on every coordinator restart, and never a
+// persisted commands-table row (unlike [ResyncRequestStatus]'s
+// asset.inventory.request rows, which ARE persisted: asset.fetch
+// dispatch is deliberately not, see assetsync.Service's own doc comment).
+// Absent when this coordinator process has never dispatched or observed a
+// failure for this exact (node, asset). state is "in_flight" (dispatched,
+// no result yet) or "failed" (the node's own result reported a
+// non-success outcome); failureReason/failedAt are set only when failed.
+// dispatchedAt is null when this process no longer remembers a dispatch
+// time but still remembers the failure.
+type AssetLastFetch struct {
+	DispatchedAt  *string `json:"dispatchedAt"`
+	State         string  `json:"state"`
+	FailureReason *string `json:"failureReason"`
+	FailedAt      *string `json:"failedAt"`
+}
+
 // AssetSyncVerdict is one expected asset's per-node sync verdict (D-016
 // item 2), added additively (ADR-020): a client that has never heard of
 // this field keeps reading node/state/reason/missing/gaps/extra/observedAt
@@ -42,14 +73,17 @@ type ExtraAsset struct {
 // "held", "superseded" (the node holds bytes this exact asset identity
 // used to serve, before being superseded), or "absent" (the node holds
 // nothing recognizable for this identity at all). See
-// assetsync.AssetVerdictState for the derivation.
+// assetsync.AssetVerdictState for the derivation. Source and LastFetch are
+// each additive in the identical sense.
 type AssetSyncVerdict struct {
-	AssetID     string `json:"assetId"`
-	Sequence    string `json:"sequence"`
-	Filename    string `json:"filename"`
-	ContentHash string `json:"contentHash"`
-	SizeBytes   int64  `json:"sizeBytes"`
-	State       string `json:"state"`
+	AssetID     string             `json:"assetId"`
+	Sequence    string             `json:"sequence"`
+	Filename    string             `json:"filename"`
+	ContentHash string             `json:"contentHash"`
+	SizeBytes   int64              `json:"sizeBytes"`
+	State       string             `json:"state"`
+	Source      AssetVerdictSource `json:"source"`
+	LastFetch   *AssetLastFetch    `json:"lastFetch,omitempty"`
 }
 
 // NodeAssetManifest is one node's asset readiness verdict: the body of
@@ -88,6 +122,12 @@ type NodeAssetManifest struct {
 	// had one. Additive: every other field above is unaffected by its
 	// presence or absence.
 	ResyncRequest *ResyncRequestStatus `json:"resyncRequest,omitempty"`
+	// LastSyncPassAt is the asset-sync service's own process-lifetime
+	// record of when it last ran a check against this node. Additive,
+	// in-memory only, reset on restart, and distinct from ObservedAt (the
+	// NODE's own report time): omitted when this process has never run a
+	// pass against this node.
+	LastSyncPassAt *string `json:"lastSyncPassAt,omitempty"`
 }
 
 // ResyncRequestStatus is one asset.inventory.request commands row,

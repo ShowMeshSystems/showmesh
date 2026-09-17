@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
@@ -728,20 +729,21 @@ type AssetSettingsSource interface {
 	InventoryInterval() time.Duration
 }
 
-// AssetFetchFailureSource is this package's live view of the last known
-// asset.fetch failure for a node/content-hash pair, declared here at the
-// consumer for the identical reason [AssetSyncNudger] and
+// AssetFetchFailureSource is this package's live view of asset-sync's own
+// process-lifetime evidence about one node's asset transfers, declared
+// here at the consumer for the identical reason [AssetSyncNudger] and
 // [AssetSettingsSource] are: the real implementation is
-// *assetsync.Service's own LastFetchFailure method, which already
-// satisfies this one-method interface with no adapter needed.
+// *assetsync.Service, whose LastFetchFailure/LastFetchAttempt/
+// LastSyncPassAt methods already satisfy this interface with no adapter
+// needed.
 //
 // This closes the bug this seam exists for: an asset.fetch that failed on
 // a node used to leave no trace anywhere on the coordinator: no event, no
 // reason, and the manifest's own "missing" reason read identically to a
 // sync pass that simply had not run yet. assetmanifest.go's notReadyReason
-// consults this to say WHY, not only THAT, a node cannot be confirmed
-// ready, whenever a real failure is on record for the exact asset it is
-// reporting missing.
+// consults LastFetchFailure to say WHY, not only THAT, a node cannot be
+// confirmed ready; LastFetchAttempt and LastSyncPassAt back the same
+// file's per-verdict lastFetch and per-node lastSyncPassAt wire fields.
 type AssetFetchFailureSource interface {
 	// LastFetchFailure reports the most recent asset.fetch failure this
 	// coordinator has observed for nodeID attempting contentHash, if any.
@@ -753,6 +755,20 @@ type AssetFetchFailureSource interface {
 	// own doc comment) but never over-reports a failure that did not
 	// happen.
 	LastFetchFailure(nodeID, contentHash string) (reason string, failedAt time.Time, ok bool)
+
+	// LastFetchAttempt reports what this coordinator process currently
+	// remembers about its most recent asset.fetch dispatch to nodeID for
+	// contentHash: in-flight or failed, never a persisted commands-table
+	// row (see assetsync.Service.LastFetchAttempt's own doc comment for
+	// why asset.fetch dispatch is deliberately not one). ok is false when
+	// this process has nothing on record for the pair.
+	LastFetchAttempt(nodeID, contentHash string) (assetsync.LastFetchAttemptRecord, bool)
+
+	// LastSyncPassAt reports the last time this coordinator process ran a
+	// sync pass against nodeID, if ever. In-memory only, reset on
+	// restart, distinct from NodeAssetManifest.ObservedAt (the NODE's own
+	// report time).
+	LastSyncPassAt(nodeID string) (time.Time, bool)
 }
 
 // DeclarationStore is what this package needs from seam 0's

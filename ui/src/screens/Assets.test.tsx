@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { type Asset, type Model, type SessionResponse } from '../api'
+import { type Asset, type Model, type NodeAssetManifest, type SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 
@@ -9,6 +9,7 @@ const stubs = vi.hoisted(() => ({
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   uploadAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAssetManifest: (() => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', nodes: [] })) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -18,6 +19,7 @@ vi.mock('../api', async () => {
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     uploadAsset: (...args: never[]) => stubs.uploadAsset(...args),
+    getAssetManifest: (...args: never[]) => stubs.getAssetManifest(...args),
   }
 })
 
@@ -68,6 +70,10 @@ function showsResponse(shows: { id: string; label: string }[]) {
   })
 }
 
+function manifestResponse(nodes: NodeAssetManifest[]) {
+  return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', nodes })
+}
+
 function renderLibrary(model: Partial<Model> = {}) {
   return render(
     <ModelContext.Provider value={{ ...initialModel(), ...model }}>
@@ -86,13 +92,14 @@ describe('Assets library', () => {
     vi.restoreAllMocks()
   })
 
-  function setup(scopes: string[], assets: Asset[], shows: { id: string; label: string }[] = []) {
+  function setup(scopes: string[], assets: Asset[], shows: { id: string; label: string }[] = [], nodes: NodeAssetManifest[] = []) {
     stubs.listAssets = () => assetsResponse(assets)
     stubs.listConfigObjects = () => showsResponse(shows)
+    stubs.getAssetManifest = () => manifestResponse(nodes)
     return renderLibrary({ session: signedIn(scopes) })
   }
 
-  it('lists current assets across every show, with each show named by its sequence group', async () => {
+  it('lists current assets across every show, one row per file, naming the show on every row', async () => {
     const winterRidge = asset({ id: 'a1', show: 'winter-ridge-2026' })
     const hallowedHollow = asset({
       id: 'a2',
@@ -104,13 +111,14 @@ describe('Assets library', () => {
     setup(['asset:write'], [winterRidge, hallowedHollow])
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Assets' })).toBeInTheDocument())
-    const region = await screen.findByRole('region', { name: "Every show's current assets, grouped by sequence, scrollable" })
+    const region = await screen.findByRole('region', { name: "Every show's current assets, one row per file, scrollable" })
     await waitFor(() => expect(within(region).getByText('carol-of-the-bells')).toBeInTheDocument())
     expect(within(region).getByText('graveyard-shuffle')).toBeInTheDocument()
     expect(within(region).getByText('winter-ridge-2026')).toBeInTheDocument()
     expect(within(region).getByText('hallowed-hollow-2026')).toBeInTheDocument()
-    expect(within(region).queryByRole('columnheader', { name: 'Show' })).not.toBeInTheDocument()
-    expect(within(region).getByRole('columnheader', { name: 'Target' })).toBeInTheDocument()
+    expect(within(region).getByRole('columnheader', { name: 'Show' })).toBeInTheDocument()
+    expect(within(region).getByRole('columnheader', { name: 'Internal name' })).toBeInTheDocument()
+    expect(within(region).getByRole('columnheader', { name: 'Status' })).toBeInTheDocument()
   })
 
   it('the show filter narrows the list to one show', async () => {
@@ -124,7 +132,7 @@ describe('Assets library', () => {
     })
     setup(['asset:write'], [winterRidge, hallowedHollow])
 
-    const region = await screen.findByRole('region', { name: "Every show's current assets, grouped by sequence, scrollable" })
+    const region = await screen.findByRole('region', { name: "Every show's current assets, one row per file, scrollable" })
     await waitFor(() => expect(within(region).getByText('carol-of-the-bells')).toBeInTheDocument())
 
     fireEvent.change(screen.getByLabelText('Filter by show'), { target: { value: 'winter-ridge-2026' } })
@@ -158,5 +166,77 @@ describe('Assets library', () => {
     expect(screen.queryByText('Hash mismatch')).not.toBeInTheDocument()
     expect(screen.queryByText('Not synced')).not.toBeInTheDocument()
     expect(screen.queryByText('Rolled back')).not.toBeInTheDocument()
+  })
+
+  it('a row with no manifest evidence at all reads Unknown, never green or red', async () => {
+    setup(['asset:write'], [asset()], [], [])
+    const region = await screen.findByRole('region', { name: "Every show's current assets, one row per file, scrollable" })
+    await waitFor(() => expect(within(region).getByText('carol-of-the-bells')).toBeInTheDocument())
+    expect(within(region).getByText('Unknown')).toBeInTheDocument()
+  })
+
+  it('a node holding the current hash reads Ready, the row summary for a held file', async () => {
+    const a = asset()
+    setup(['asset:write'], [a], [], [
+      {
+        node: 'media-front',
+        state: 'ready',
+        reason: null,
+        missing: [],
+        gaps: [],
+        extra: [],
+        observedAt: '2026-08-30T20:55:00Z',
+        verdicts: [
+          {
+            assetId: a.id,
+            sequence: a.sequence,
+            filename: a.runtimeFilename,
+            contentHash: a.contentHash,
+            sizeBytes: a.sizeBytes,
+            state: 'held',
+            source: { kind: 'node', registeredTarget: 'media-front', referencedBy: [] },
+          },
+        ],
+      },
+    ])
+    const region = await screen.findByRole('region', { name: "Every show's current assets, one row per file, scrollable" })
+    await waitFor(() => expect(within(region).getByText('Ready')).toBeInTheDocument())
+
+    fireEvent.click(within(region).getByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+    expect(await screen.findByText('Held')).toBeInTheDocument()
+    expect(screen.getByText('Uploaded for this node.')).toBeInTheDocument()
+  })
+
+  it("a node's failed last fetch reads red, naming the failure in the inspector", async () => {
+    const a = asset()
+    setup(['asset:write'], [a], [], [
+      {
+        node: 'media-front',
+        state: 'not_ready',
+        reason: 'missing 1 expected asset(s)',
+        missing: [{ assetId: a.id, sequence: a.sequence, filename: a.runtimeFilename, contentHash: a.contentHash, sizeBytes: a.sizeBytes }],
+        gaps: [],
+        extra: [],
+        observedAt: '2026-08-30T20:55:00Z',
+        verdicts: [
+          {
+            assetId: a.id,
+            sequence: a.sequence,
+            filename: a.runtimeFilename,
+            contentHash: a.contentHash,
+            sizeBytes: a.sizeBytes,
+            state: 'absent',
+            source: { kind: 'node', registeredTarget: 'media-front', referencedBy: [] },
+            lastFetch: { state: 'failed', dispatchedAt: null, failureReason: 'dial tcp: connection refused', failedAt: '2026-08-30T20:50:00Z' },
+          },
+        ],
+      },
+    ])
+    const region = await screen.findByRole('region', { name: "Every show's current assets, one row per file, scrollable" })
+    await waitFor(() => expect(within(region).getByText('Missing')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('row', { name: 'View carol-of-the-bells for media-front' }))
+    expect(await screen.findByText(/Failed at/)).toBeInTheDocument()
+    expect(screen.getByText(/dial tcp: connection refused/)).toBeInTheDocument()
   })
 })

@@ -221,9 +221,18 @@ func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool, failures A
 			verdicts = append(verdicts, v1.AssetSyncVerdict{
 				AssetID: v.AssetID, Sequence: v.SequenceID, Filename: v.Filename,
 				ContentHash: v.ContentHash, SizeBytes: v.SizeBytes, State: string(v.State),
+				Source:    mapAssetSource(v.Source),
+				LastFetch: mapLastFetch(m.NodeID, v.ContentHash, failures),
 			})
 		}
 		out.Verdicts = verdicts
+	}
+
+	if failures != nil {
+		if t, ok := failures.LastSyncPassAt(m.NodeID); ok {
+			lastPass := formatTime(t)
+			out.LastSyncPassAt = &lastPass
+		}
 	}
 
 	switch m.State {
@@ -243,6 +252,42 @@ func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool, failures A
 		out.ObservedAt = &observedAt
 	}
 
+	return out
+}
+
+// mapAssetSource renders one assetsync.AssetSource onto the wire verbatim
+// - this function classifies nothing, it only names its own field.
+func mapAssetSource(s assetsync.AssetSource) v1.AssetVerdictSource {
+	return v1.AssetVerdictSource{
+		Kind:             string(s.Kind),
+		RegisteredTarget: s.RegisteredTarget,
+		ReferencedBy:     append([]string{}, s.ReferencedBy...),
+	}
+}
+
+// mapLastFetch renders [AssetFetchFailureSource.LastFetchAttempt]'s result
+// for (nodeID, contentHash) onto the wire, nil when there is nothing on
+// record: see assetsync.LastFetchAttemptRecord's own doc comment for why
+// this is process-lifetime evidence, never a persisted row.
+func mapLastFetch(nodeID, contentHash string, failures AssetFetchFailureSource) *v1.AssetLastFetch {
+	if failures == nil {
+		return nil
+	}
+	rec, ok := failures.LastFetchAttempt(nodeID, contentHash)
+	if !ok {
+		return nil
+	}
+	out := &v1.AssetLastFetch{State: string(rec.State)}
+	if !rec.DispatchedAt.IsZero() {
+		dispatchedAt := formatTime(rec.DispatchedAt)
+		out.DispatchedAt = &dispatchedAt
+	}
+	if rec.State == assetsync.LastFetchFailed {
+		reason := rec.FailureReason
+		out.FailureReason = &reason
+		failedAt := formatTime(rec.FailedAt)
+		out.FailedAt = &failedAt
+	}
 	return out
 }
 

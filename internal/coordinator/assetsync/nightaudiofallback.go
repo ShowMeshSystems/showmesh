@@ -55,7 +55,7 @@ func nightBedItemSequences(ctx context.Context, st *store.Store, ba config.Night
 // nightBedAudioFallbackAssets borrows, for nodeID, a node-scoped row from
 // another declared target of the SAME bed, for any sequence still
 // uncovered. The first other target (in declared order) holding one wins.
-func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string, covered map[string]bool) ([]store.AssetRecord, error) {
+func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string, covered map[string]bool) ([]borrowedAsset, error) {
 	objs, err := st.ListConfigObjects(ctx, config.NightSessionConfigKind)
 	if err != nil {
 		return nil, fmt.Errorf("assetsync: night bed fallback assets for node %q: list night.session objects: %w", nodeID, err)
@@ -64,7 +64,7 @@ func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, n
 
 	seenSequences := make(map[string]bool)
 	rowsByTarget := make(map[string][]store.AssetRecord)
-	var out []store.AssetRecord
+	var out []borrowedAsset
 
 	for _, obj := range objs {
 		if obj.CurrentRevision == 0 {
@@ -132,7 +132,7 @@ func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, n
 				found := false
 				for _, rec := range rows {
 					if rec.SequenceID == seq && rec.MediaType == audioMediaType {
-						out = append(out, rec)
+						out = append(out, borrowedAsset{AssetRecord: rec, ReferencedBy: obj.ID})
 						found = true
 						break
 					}

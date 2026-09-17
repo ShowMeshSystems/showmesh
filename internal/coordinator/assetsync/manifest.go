@@ -63,6 +63,40 @@ func ResolveActiveShow(ctx context.Context, st *store.Store) (ActiveShow, error)
 	return ActiveShow{Configured: true, ShowID: payload.Show, Generation: obj.CurrentRevision}, nil
 }
 
+// AssetSourceKind names which of ADR-049's precedence tiers put a node on
+// the hook for one expected asset.
+type AssetSourceKind string
+
+const (
+	// AssetSourceNode: the node's own node-targeted row.
+	AssetSourceNode AssetSourceKind = "node"
+	// AssetSourceShow: a show-wide row, no node-targeted row shadowing it.
+	AssetSourceShow AssetSourceKind = "show"
+	// AssetSourceCueCopy: a show.cue's (or a night.session announcement
+	// cue's) audio/announcement Targets borrowed this node onto another
+	// listed target's own node-scoped row (ADR-049 decisions 5 and 9).
+	AssetSourceCueCopy AssetSourceKind = "cue_copy"
+	// AssetSourceBedCopy: a night.session bed's declared Targets borrowed
+	// this node onto another listed target's own node-scoped row
+	// (ADR-049 decision 7).
+	AssetSourceBedCopy AssetSourceKind = "bed_copy"
+)
+
+// AssetSource names WHY [ExpectedAssetsForNode] expects a node to hold one
+// asset, for an operator staring at a node that holds nothing and asking
+// why it was ever expected to. RegisteredTarget is the node the asset row
+// was actually uploaded for: the node itself for [AssetSourceNode],
+// empty for [AssetSourceShow], and the OTHER node the copy was borrowed
+// from for [AssetSourceCueCopy]/[AssetSourceBedCopy]. ReferencedBy names
+// the Cue or night.session id(s) whose declared target list put this node
+// on the hook for a borrowed copy; always empty for [AssetSourceNode] and
+// [AssetSourceShow], which need no such reference.
+type AssetSource struct {
+	Kind             AssetSourceKind
+	RegisteredTarget string
+	ReferencedBy     []string
+}
+
 // ExpectedAsset is one asset a node is expected to hold, per §4.1 point 2:
 // a current asset whose show is the active show and whose target is
 // either this node or the whole show.
@@ -73,6 +107,18 @@ type ExpectedAsset struct {
 	ContentHash string
 	Filename    string
 	SizeBytes   int64
+	Source      AssetSource
+}
+
+// borrowedAsset is a store.AssetRecord borrowed from another target's own
+// current row, tagged with the id of the Cue or night.session whose
+// declared target list put the borrowing node on the hook: the fallback
+// files' own evidence for [AssetSource.ReferencedBy], carried alongside
+// the record rather than re-derived by a caller that no longer has the
+// config object in hand.
+type borrowedAsset struct {
+	store.AssetRecord
+	ReferencedBy string
 }
 
 // SurfaceGap names a sequence the active show has SOME current asset for,
@@ -154,15 +200,32 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 		return ExpectedSet{}, fmt.Errorf("assetsync: expected assets for node %q: %w", nodeID, err)
 	}
 
-	combined := append(append(append(append(append([]store.AssetRecord{}, nodeAssets...), showAssets...), fallbackAssets...), bedFallbackAssets...), announcementAssets...)
-	assets := make([]ExpectedAsset, 0, len(combined))
-	coveredSequences := make(map[string]bool, len(combined))
-	for _, rec := range combined {
+	totalLen := len(nodeAssets) + len(showAssets) + len(fallbackAssets) + len(bedFallbackAssets) + len(announcementAssets)
+	assets := make([]ExpectedAsset, 0, totalLen)
+	combined := make([]store.AssetRecord, 0, totalLen)
+	coveredSequences := make(map[string]bool, totalLen)
+	addExpected := func(rec store.AssetRecord, source AssetSource) {
 		assets = append(assets, ExpectedAsset{
 			AssetID: rec.ID, SequenceID: rec.SequenceID, MediaType: rec.MediaType, ContentHash: rec.ContentHash,
-			Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes,
+			Filename: rec.RuntimeFilename, SizeBytes: rec.SizeBytes, Source: source,
 		})
+		combined = append(combined, rec)
 		coveredSequences[rec.SequenceID] = true
+	}
+	for _, rec := range nodeAssets {
+		addExpected(rec, AssetSource{Kind: AssetSourceNode, RegisteredTarget: nodeID})
+	}
+	for _, rec := range showAssets {
+		addExpected(rec, AssetSource{Kind: AssetSourceShow})
+	}
+	for _, b := range fallbackAssets {
+		addExpected(b.AssetRecord, AssetSource{Kind: AssetSourceCueCopy, RegisteredTarget: b.TargetID, ReferencedBy: []string{b.ReferencedBy}})
+	}
+	for _, b := range bedFallbackAssets {
+		addExpected(b.AssetRecord, AssetSource{Kind: AssetSourceBedCopy, RegisteredTarget: b.TargetID, ReferencedBy: []string{b.ReferencedBy}})
+	}
+	for _, b := range announcementAssets {
+		addExpected(b.AssetRecord, AssetSource{Kind: AssetSourceCueCopy, RegisteredTarget: b.TargetID, ReferencedBy: []string{b.ReferencedBy}})
 	}
 
 	supersededHashes, err := supersededHashesByAssetID(ctx, st, showID, combined)
@@ -436,6 +499,10 @@ type AssetVerdict struct {
 	ContentHash string
 	SizeBytes   int64
 	State       AssetVerdictState
+	// Source is the expected asset's own [AssetSource], carried through
+	// unchanged: this function classifies nothing about why a node was
+	// expected to hold something, only what its inventory says about it.
+	Source AssetSource
 }
 
 // NodeManifest is [ComputeNodeManifest]'s result for one node.
@@ -564,7 +631,7 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		if held[a.ContentHash] {
 			verdicts = append(verdicts, AssetVerdict{
 				AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
-				ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: AssetVerdictHeld,
+				ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: AssetVerdictHeld, Source: a.Source,
 			})
 			continue
 		}
@@ -581,7 +648,7 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		}
 		verdicts = append(verdicts, AssetVerdict{
 			AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
-			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: state,
+			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, State: state, Source: a.Source,
 		})
 	}
 	m.Verdicts = verdicts

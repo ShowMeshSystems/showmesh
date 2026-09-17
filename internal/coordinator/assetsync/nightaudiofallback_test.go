@@ -76,6 +76,61 @@ func TestExpectedAssetsForNodeNightBedFallbackBorrowsOtherTargetsRow(t *testing.
 	}
 }
 
+// TestExpectedAssetsForNodeNightBedFallbackNamesItsSource proves the
+// AssetSource this package attaches for a borrowed night-bed copy: the
+// borrowing node (nodeB, with no row of its own) gets source kind
+// bed_copy, RegisteredTarget naming the node the row was actually
+// uploaded for (nodeA), and ReferencedBy naming the bed that put it on
+// the hook.
+func TestExpectedAssetsForNodeNightBedFallbackNamesItsSource(t *testing.T) {
+	st := openTestStore(t)
+	showID := "halloween-2026"
+	nodeA, nodeB := "showmesh-node-01", "pi-audio-01"
+	putShow(t, st, showID, "Halloween 2026")
+	declareNode(t, st, nodeA)
+	declareNode(t, st, nodeB)
+	putAudioNode(t, st, nodeA)
+	putAudioNode(t, st, nodeB)
+	putNightSessionBed(t, st, "halloween-2026-bed", showID, []string{nodeA, nodeB}, nodeA, []string{"bed-1"})
+	createAssetWithMediaType(t, st, showID, "bed-1", store.AssetTargetKindNode, nodeA, "audio", "sha256:bed1", "bed1.mp3")
+
+	gotB, err := ExpectedAssetsForNode(context.Background(), st, showID, nodeB)
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode(%s) error = %v", nodeB, err)
+	}
+	var found *ExpectedAsset
+	for i := range gotB.Assets {
+		if gotB.Assets[i].SequenceID == "bed-1" {
+			found = &gotB.Assets[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("ExpectedAssetsForNode(%s) has no bed-1 entry to check Source on", nodeB)
+	}
+	if found.Source.Kind != AssetSourceBedCopy {
+		t.Errorf("Source.Kind = %q, want %q", found.Source.Kind, AssetSourceBedCopy)
+	}
+	if found.Source.RegisteredTarget != nodeA {
+		t.Errorf("Source.RegisteredTarget = %q, want %q (the node this row was actually uploaded for)", found.Source.RegisteredTarget, nodeA)
+	}
+	if len(found.Source.ReferencedBy) != 1 || found.Source.ReferencedBy[0] != "halloween-2026-bed" {
+		t.Errorf("Source.ReferencedBy = %v, want [halloween-2026-bed]", found.Source.ReferencedBy)
+	}
+
+	gotA, err := ExpectedAssetsForNode(context.Background(), st, showID, nodeA)
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode(%s) error = %v", nodeA, err)
+	}
+	for _, a := range gotA.Assets {
+		if a.SequenceID != "bed-1" {
+			continue
+		}
+		if a.Source.Kind != AssetSourceNode {
+			t.Errorf("nodeA's own row Source.Kind = %q, want %q: it holds its own registered row, not a borrowed copy", a.Source.Kind, AssetSourceNode)
+		}
+	}
+}
+
 // TestExpectedAssetsForNodeNightBedWithoutTargetsGetsNoFallback proves the
 // regression rule: a bed with no declared Targets never lends a node
 // anything beyond its own OutputNodeIDs-scoped rows - nightBedAudioFallbackAssets
