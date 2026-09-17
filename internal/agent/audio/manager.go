@@ -936,15 +936,8 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			s.bookmark = nil
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
 		}
-		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, &atNs)
-		if refusal != nil {
-			return *refusal
-		}
-		if sched != nil {
-			if err := sched.waitUntilT0(ctx); err != nil {
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled resume instant: " + err.Error()}
-			}
-		}
+		// Release and prepare before waiting for the instant, as [Manager.start]
+		// does, so preparation time never delays presentation.
 		s.releaseEngineLocked(ctx)
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			if errors.Is(err, ErrNoEngineBinding) {
@@ -953,6 +946,19 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+		}
+		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, &atNs)
+		if refusal != nil {
+			// The fresh handle was never started: drop it so the session stays
+			// Paused and the next resume re-prepares from the bookmark.
+			s.releaseEngineLocked(ctx)
+			return *refusal
+		}
+		if sched != nil {
+			if err := sched.waitUntilT0(ctx); err != nil {
+				s.releaseEngineLocked(ctx)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled resume instant: " + err.Error()}
+			}
 		}
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Start(ctx, s.handle, position)
