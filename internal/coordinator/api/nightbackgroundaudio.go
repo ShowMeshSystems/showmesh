@@ -297,12 +297,14 @@ func nightBackgroundAudioStepsForNode(history []nightBackgroundAudioHistoryRow, 
 // media.playlist can be tombstoned, or edited to fewer targets, while a
 // night is running, and the stop path must still reach every node it
 // actually put audio on, not only the ones the playlist still names.
+// [nightBedScheduleNodeID]'s own schedule rows are never a real node and
+// are excluded: nothing is ever dispatchable to that sentinel.
 // Deduplicated, in history's own first-appearance order.
 func nightBackgroundAudioDispatchedNodeIDs(history []nightBackgroundAudioHistoryRow) []string {
 	seen := make(map[string]bool, len(history))
 	out := make([]string, 0, len(history))
 	for _, row := range nightBackgroundAudioSteps(history) {
-		if seen[row.NodeID] {
+		if row.NodeID == nightBedScheduleNodeID || seen[row.NodeID] {
 			continue
 		}
 		seen[row.NodeID] = true

@@ -1723,6 +1723,72 @@ func TestNightClearBackgroundAudioAtEndSession_InlineBackgroundAudioClearsUnaffe
 	}
 }
 
+// TestNightBackgroundAudioSuspendAndEndSessionClearNeverDispatchToScheduleSentinel
+// is Defect A's own regression guard: a multi-node bed's history always
+// carries a resolved [nightBGStepSchedule] row recorded under
+// [nightBedScheduleNodeID], a sentinel that has never been, and can never
+// be, a real dispatch target (that constant's own doc comment). Before the
+// fix, nightBackgroundAudioDispatchedNodeIDs read that row's own NodeID
+// straight off history like any other step, so both the suspend path
+// (nightStopBackgroundAudioIfRunning) and the end-session clear
+// (nightClearBackgroundAudioAtEndSession) committed a fresh pause/clear
+// outbox row under the sentinel's own phase every time they ran - observed
+// on a bench coordinator as revisions 6 to 23 in one minute, each attempt
+// left permanently unconfirmable ([pkg/mqttproto.ValidateNodeID] refuses
+// the sentinel's own underscores as a topic segment, so the command never
+// even reaches a wire, and the next tick retries under a fresh revision
+// forever). Asserting on the committed row, not the wire dispatch, is what
+// catches this regardless of whether the underlying validation happens to
+// reject the sentinel before or after publish.
+func TestNightBackgroundAudioSuspendAndEndSessionClearNeverDispatchToScheduleSentinel(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	sentinelStepsBefore := nightBackgroundAudioStepsForNode(history, nightBedScheduleNodeID)
+	if len(sentinelStepsBefore) == 0 {
+		t.Fatalf("history has no schedule row recorded under the sentinel node id; this test proves nothing without one")
+	}
+
+	pub.result = confirmedResultForAction("x", nightBackgroundAudioSessionID(rec), "stopped")
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	for _, d := range pub.dispatchedSnapshot() {
+		if d.NodeID == nightBedScheduleNodeID {
+			t.Fatalf("dispatched %s to the schedule sentinel %q; the suspend and end-session-clear paths must never treat a schedule row's own NodeID as a real dispatch target", d.Action, d.NodeID)
+		}
+	}
+
+	history, err = h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history after suspend/end-session: %v", err)
+	}
+	sentinelStepsAfter := nightBackgroundAudioStepsForNode(history, nightBedScheduleNodeID)
+	if len(sentinelStepsAfter) != len(sentinelStepsBefore) {
+		t.Fatalf("sentinel node id gained %d new outbox row(s) after suspend/end-session (kinds: %v), want none: the suspend and end-session-clear paths must never commit a step under the schedule sentinel's own phase",
+			len(sentinelStepsAfter)-len(sentinelStepsBefore), stepKinds(sentinelStepsAfter))
+	}
+}
+
+// stepKinds is a small formatting helper for a failing assertion's own
+// message: the Kind of every row in steps, in order.
+func stepKinds(steps []nightBackgroundAudioHistoryRow) []string {
+	out := make([]string, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, s.Step.Kind)
+	}
+	return out
+}
+
 // countActionDispatches counts every command pub actually put on the wire
 // (never one that failed before publish) whose action is action.
 func countActionDispatches(pub *fakeAudioPublisher, action string) int {
