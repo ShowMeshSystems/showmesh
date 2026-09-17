@@ -538,7 +538,7 @@ func TestPutFPPMQTTConfigMigrationDeferredRefusesWithDifferentRemedy(t *testing.
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), "Do NOT remove") {
+	if !strings.Contains(string(body), "do not clear") {
 		t.Errorf("body = %s, want the deferred-migration remedy, not the standard one", body)
 	}
 }

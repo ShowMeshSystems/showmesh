@@ -389,7 +389,7 @@ func (p *interlockGateProblem) detail() string {
 		}
 		reasons += fmt.Sprintf("%q: %s", w.Rule.Name, w.Reason)
 	}
-	return fmt.Sprintf("blocked by %d configured interlock(s) for phase %q: %s", len(p.withheld), p.phase, reasons)
+	return fmt.Sprintf("%d rule(s) blocked %q: %s", len(p.withheld), p.phase, reasons)
 }
 
 // A caller computing an overall budget for several rules

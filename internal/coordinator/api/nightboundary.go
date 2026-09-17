@@ -407,15 +407,15 @@ func nightBoundaryContradicted(anchor nightContentAnchor, obs nightPlaybackObser
 		// F0's own "Needs real hardware" list: pause was not exercised,
 		// and the deadline arithmetic (rule 3) cannot be assumed to still
 		// hold while paused. Invalidate rather than guess.
-		return true, "playback is paused; the armed boundary no longer reflects real elapsed time"
+		return true, "playback is paused, so the expected timing no longer applies"
 	case fppStatusValueUnknown:
-		return true, "fpp.status reads \"unknown\"; this coordinator cannot tell whether the armed boundary still holds"
+		return true, "FPP status is unknown, so the expected timing can't be confirmed"
 	}
 	if obs.Item != "" && anchor.Item != "" && obs.Item != anchor.Item {
-		return true, "a different item is now playing than the one this boundary was armed from"
+		return true, "a different item is now playing than expected"
 	}
 	if obs.Playlist != "" && anchor.Playlist != "" && obs.Playlist != anchor.Playlist {
-		return true, "a different playlist is now playing than the one this boundary was armed from"
+		return true, "a different playlist is now playing than expected"
 	}
 	if anchor.Purpose == nightAnchorPurposeRestingOneShot && obs.RepeatCurrent && obs.RepeatMode {
 		return true, "FPP reports repeat mode active for a one-shot resting item"
@@ -463,7 +463,7 @@ func nightStoppedPlaybackContradicts(anchor nightContentAnchor, now time.Time) (
 	}
 	if now.Before(b.ExpectedAt.Add(-nightBoundaryCompletionTolerance)) {
 		return true, fmt.Sprintf(
-			"FPP is idle %s before this boundary's expected end; the playback it was derived from stopped early",
+			"FPP went idle %s before playback was expected to end, so it appears to have stopped early",
 			b.ExpectedAt.Sub(now).Round(time.Second))
 	}
 	return false, ""

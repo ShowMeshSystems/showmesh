@@ -493,13 +493,13 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 	if persisted, hasBoundary := decodeNightBoundary(rec.BoundaryJSON); hasBoundary && persisted.State == nightBoundaryStateInvalid {
 		if nightBoundaryRetryEligible(persisted) && anchor.DerivationInvalidAttempts < nightDerivationInvalidRetryLimit {
 			anchor.DerivationInvalidAttempts++
-			reason := fmt.Sprintf("retrying an automatically-derived boundary that came back invalid (%s); attempt %d of %d", persisted.Reason, anchor.DerivationInvalidAttempts, nightDerivationInvalidRetryLimit)
+			reason := fmt.Sprintf("retrying an automatically-derived timing that came back invalid (%s); attempt %d of %d", persisted.Reason, anchor.DerivationInvalidAttempts, nightDerivationInvalidRetryLimit)
 			h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateUnknown, Reason: reason})
 			return
 		}
-		reason := "resting-intershow's content boundary was invalidated (" + persisted.Reason + ") and is never recomputed; run end-session, then prepare-site, to recover"
+		reason := "resting-intershow's timing was invalidated (" + persisted.Reason + ") and won't be recomputed"
 		if nightBoundaryRetryEligible(persisted) {
-			reason = fmt.Sprintf("resting-intershow's content boundary stayed invalid (%s) after %d automatic re-derive attempts; run end-session, then prepare-site, to recover", persisted.Reason, nightDerivationInvalidRetryLimit)
+			reason = fmt.Sprintf("resting-intershow's timing stayed invalid (%s) after %d automatic re-derive attempts", persisted.Reason, nightDerivationInvalidRetryLimit)
 		}
 		h.nightDegradeSession(ctx, now, rec, reason)
 		return
@@ -513,7 +513,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		// waits for playback that is gone, so this would otherwise hold
 		// silently for the rest of the night.
 		if obsNow.Status == fppStatusValueIdle {
-			h.nightDegradeSession(ctx, now, rec, "resting playback stopped before its expected end and nothing is playing to re-derive a boundary from ("+reason+"); run end-session, then prepare-site, to recover")
+			h.nightDegradeSession(ctx, now, rec, "resting playback stopped before its expected end, with nothing playing to re-derive timing from ("+reason+")")
 		}
 		return
 	}
@@ -523,7 +523,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 		return
 	}
 	if now.Before(anchor.ObservedAt.Add(-nightClockBackstepTolerance)) {
-		reason := "the local clock now reads earlier than this boundary's own anchoring observation; treating as a clock correction"
+		reason := "the local clock now reads earlier than the observation this timing was anchored to; treating as a clock correction"
 		h.nightCommitAnchor(ctx, now, rec, nightInvalidateAnchor(anchor, reason), nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 		return
 	}
@@ -628,7 +628,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 					cur.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateInvalid, Reason: reason, Kind: nightBoundaryKindContradiction})
 					if obsNow.Status == fppStatusValueIdle {
 						cur.Degraded = true
-						cur.DegradedReason = "resting playback stopped during the transition into a show and nothing is playing to re-derive a boundary from (" + reason + "); run end-session, then prepare-site, to recover"
+						cur.DegradedReason = "resting playback stopped during the transition into a show, with nothing playing to re-derive timing from (" + reason + ")"
 					}
 					return cur
 				})
@@ -881,18 +881,18 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 	var unmet string
 	switch {
 	case !obs.Current:
-		unmet = fmt.Sprintf("playback status/position evidence for FPP instance %q is not current", anchor.FPPInstanceID)
+		unmet = fmt.Sprintf("playback status or position for FPP instance %q isn't current", anchor.FPPInstanceID)
 	case obs.Status != fppStatusValueIdle:
 		unmet = fmt.Sprintf("playback status is %q, not idle", obs.Status)
 	case !obs.PlaylistCurrent:
-		unmet = fmt.Sprintf("current-playlist evidence for FPP instance %q is not current", anchor.FPPInstanceID)
+		unmet = fmt.Sprintf("the current playlist for FPP instance %q isn't confirmed", anchor.FPPInstanceID)
 	case obs.Playlist != "":
 		unmet = fmt.Sprintf("current playlist is still named %q, not cleared", obs.Playlist)
 	}
 	if unmet != "" {
 		if now.Sub(rec.StateEnteredAt) >= nightAdvanceLiveDeadline {
 			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-				"live has produced no end-of-show completion evidence for %s: %s; run end-session, then prepare-site, to recover",
+				"live hasn't confirmed the show ended after %s: %s",
 				nightAdvanceLiveDeadline, unmet))
 		}
 		return
@@ -1019,7 +1019,7 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 			return cur, false, false
 		case now.Sub(cur.FirstAttemptAt) >= nightDispatchRetryWindow:
 			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
-				"playlist %q could not be started on FPP instance %q for %s: %s; run end-session, then prepare-site, to recover",
+				"playlist %q could not be started on FPP instance %q for %s: %s",
 				playlist, instanceID, nightDispatchRetryWindow, cur.Source))
 			return cur, false, false
 		case now.Sub(cur.AttemptedAt) < nightDispatchRetryBackoff:
