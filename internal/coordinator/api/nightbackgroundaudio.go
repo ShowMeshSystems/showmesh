@@ -2,12 +2,15 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audiosched"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -119,7 +122,34 @@ const (
 	nightBGStepFadeDown      = "fadedown"
 	nightBGStepFadeUp        = "fadeup"
 	nightBGStepExpiryRefresh = "expiryrefresh"
+
+	// nightBGStepSchedule and nightBGStepBookmark are ADR-049 decisions 7-9's
+	// own additions, for a multi-node (declared-Targets) bed only - see
+	// this file's own "multi-node bed" section further down.
+	//
+	// nightBGStepSchedule is a BED-LEVEL step (its "node" is
+	// [nightBedScheduleNodeID], a sentinel never a real audio.node id): the
+	// one shared start/resume instant chosen once per (session record,
+	// cycle), recorded so a replay tick reads no clock and dispatches
+	// nothing new (nightGetOrComputeBedSchedule).
+	nightBGStepSchedule = "schedule"
+
+	// nightBGStepBookmark is the program+ltc node's own bookmark, pushed
+	// via audio.session.apply onto one OTHER listed node before a
+	// multi-node bed's scheduled resume (decision 8).
+	nightBGStepBookmark = "bookmark"
 )
+
+// nightBedScheduleNodeID is the sentinel "node" [nightBGStepSchedule] rows
+// are recorded under: a bed-level decision, not any one real audio.node's
+// own step, but recorded under nightPhaseRestingBackgroundNode's own
+// per-node phase shape (so it shares this session's single revision
+// counter and history read - see that constant's own doc comment) rather
+// than a second phase family. Chosen to be unmistakably not a real node
+// id (audio.node ids come from operator-authored config objects, never
+// containing this shape) so a coincidental real id can never collide with
+// it.
+const nightBedScheduleNodeID = "__bed-schedule__"
 
 // nightBackgroundAudioExpiryTTL is how long the agent keeps a bed session
 // alive, per audio.session.apply's own expiresInMs param, before
@@ -149,6 +179,8 @@ func nightBackgroundAudioCueNameFadeUp(seq int) string   { return fmt.Sprintf("b
 func nightBackgroundAudioCueNameExpiryRefresh(seq int) string {
 	return fmt.Sprintf("bg-%04d-expiryrefresh", seq)
 }
+func nightBackgroundAudioCueNameSchedule(seq int) string { return fmt.Sprintf("bg-%04d-schedule", seq) }
+func nightBackgroundAudioCueNameBookmark(seq int) string { return fmt.Sprintf("bg-%04d-bookmark", seq) }
 
 // nightBackgroundAudioSeqFromCueName extracts the leading "bg-%04d-"
 // sequence number. The suffix after the second hyphen is always one of
@@ -206,6 +238,10 @@ func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (step nightBac
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepFadeUp}, nodeID, true
 	case strings.HasSuffix(row.CueName, "-expiryrefresh"):
 		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepExpiryRefresh}, nodeID, true
+	case strings.HasSuffix(row.CueName, "-schedule"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepSchedule}, nodeID, true
+	case strings.HasSuffix(row.CueName, "-bookmark"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepBookmark}, nodeID, true
 	}
 	return nightBackgroundAudioStep{}, "", false
 }
@@ -463,7 +499,14 @@ func nightResolveMediaPlaylist(ctx context.Context, deps Dependencies, id string
 // (mediaPlaylistID-index): media.playlist items carry no itemId of their
 // own (mediaplaylist.go), and this file's own itemId is otherwise only a
 // wire/debug label, never an identity a lookup keys on.
-func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.MediaPlaylistPayload) *config.NightSessionBackgroundAudio {
+// targets is the referencing session's own resting.backgroundAudio.Targets
+// (ADR-049 decision 7): a media.playlist object carries no targets field of
+// its own (mediaplaylist.go), so the reference form's Targets always lives
+// on the OUTER wrapper the session itself pins, and must be carried through
+// here explicitly or every reference-form bed would silently fall back to
+// OutputNodeIDs/ItemsForTarget's per-item routing regardless of what the
+// session actually declared.
+func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.MediaPlaylistPayload, targets []string) *config.NightSessionBackgroundAudio {
 	items := make([]config.NightSessionBackgroundAudioItem, 0, len(payload.Items))
 	for i, it := range payload.Items {
 		items = append(items, config.NightSessionBackgroundAudioItem{
@@ -474,6 +517,7 @@ func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.Me
 		Items: items, Repeat: payload.Repeat, Resume: payload.Resume, ItemTransition: payload.ItemTransition,
 		CrossfadeMs: payload.CrossfadeMs, MaxGainDb: payload.MaxGainDb,
 		FadeOutMs: payload.FadeOutMs, FadeInMs: payload.FadeInMs,
+		Targets: targets,
 	}
 }
 
@@ -492,7 +536,7 @@ func (h *handlers) nightResolveBackgroundAudio(ctx context.Context, rec store.Ni
 	if !ok {
 		return nil, nightBackgroundAudioOwner{}, false
 	}
-	return nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload), nightBackgroundAudioOwner{Kind: config.MediaPlaylistConfigKind, ID: ba.MediaPlaylist, Revision: revision}, true
+	return nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload, ba.Targets), nightBackgroundAudioOwner{Kind: config.MediaPlaylistConfigKind, ID: ba.MediaPlaylist, Revision: revision}, true
 }
 
 // nightBuildBackgroundPlaylistItems resolves ba's configured items into
@@ -716,9 +760,24 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 		h.logWarn("night loop: background audio: failed to read history", "sessionId", rec.ID, "error", err)
 		return
 	}
-	for _, nodeID := range resolved.OutputNodeIDs() {
+	if nightBackgroundAudioIsMultiNode(resolved) {
+		h.nightAdvanceMultiNodeBackgroundAudio(ctx, now, rec, payload.Show, resolved, owner, history)
+		return
+	}
+	for _, nodeID := range resolved.PlaybackNodeIDs() {
 		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, payload.Show, nodeID, resolved, owner, history)
 	}
+}
+
+// nightBackgroundAudioIsMultiNode reports whether ba is a declared-Targets
+// bed (ADR-049 decision 7) naming more than one node: decisions 8 and 9's
+// own shared-instant start/resume and bookmark push apply only to this
+// case. A bed with no declared Targets, or one declaring a single target,
+// behaves exactly as it always has (ADR-049's own regression rule) - see
+// [nightAdvanceBackgroundAudioForNode]'s own gates for the two transitions
+// this changes.
+func nightBackgroundAudioIsMultiNode(ba *config.NightSessionBackgroundAudio) bool {
+	return ba.HasDeclaredTargets() && len(ba.PlaybackNodeIDs()) > 1
 }
 
 // nightAdvanceBackgroundAudioForNode is [nightAdvanceBackgroundAudio]'s
@@ -740,7 +799,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		return
 	}
 
-	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ItemsForTarget(nodeID))
+	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.PlaybackItemsFor(nodeID))
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to resolve playlist items", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
 		return
@@ -748,6 +807,8 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	if len(items) == 0 {
 		return
 	}
+
+	multiNode := nightBackgroundAudioIsMultiNode(ba)
 
 	steps := nightBackgroundAudioStepsForNode(history, nodeID)
 	if len(steps) == 0 {
@@ -757,6 +818,15 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	latest := steps[len(steps)-1]
 
 	if latest.Row.State == nightCueStatePending || latest.Row.State == nightCueStateDispatched {
+		if multiNode && (latest.Step.Kind == nightBGStepStart || latest.Step.Kind == nightBGStepResume) {
+			// The bed-level orchestration ([nightAdvanceMultiNodeBackgroundAudio])
+			// owns retrying these two kinds for a multi-node bed: it alone
+			// holds the durable schedule/bookmark this node's own retry must
+			// reuse rather than re-deciding, so this per-node pass leaves it
+			// alone rather than resuming it through the generic, schedule-
+			// unaware path below.
+			return
+		}
 		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, owner, items, latest, history)
 		return
 	}
@@ -774,6 +844,12 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	case nightBGStepGain:
 		if !confirmed {
 			h.nightBackgroundAudioGain(ctx, now, rec, nodeID, sessionID, nightBackgroundAudioInitialGainDb(ba), history) // retry under a fresh revision: never wedge here.
+			return
+		}
+		if multiNode {
+			// [nightAdvanceMultiNodeBackgroundAudio] dispatches the actual
+			// start, carrying the bed's shared schedule, once every listed
+			// node has reached this same point.
 			return
 		}
 		h.nightBackgroundAudioStart(ctx, now, rec, nodeID, sessionID, history)
@@ -812,6 +888,12 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	case nightBGStepPause:
 		if !confirmed {
 			h.logWarn("night loop: background audio: a prior pause did not confirm; leaving it for an operator", "sessionId", rec.ID, "outcome", latest.Row.Outcome)
+			return
+		}
+		if multiNode {
+			// [nightAdvanceMultiNodeBackgroundAudio] pushes the program+ltc
+			// node's bookmark and dispatches the actual resume, carrying the
+			// bed's shared schedule, once every listed node has paused.
 			return
 		}
 		h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, ba, history)
@@ -1113,7 +1195,19 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 	}
 
 	if latest.Row.State == nightCueStatePending || latest.Row.State == nightCueStateDispatched {
-		items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ItemsForTarget(nodeID))
+		if nightBackgroundAudioIsMultiNode(ba) && latest.Step.Kind == nightBGStepPause {
+			// A multi-node bed's own in-flight pause is retried by
+			// re-attempting [nightBackgroundAudioSuspend] below under the
+			// SAME already-committed identity (nightRunBedAudioCommand's own
+			// resume-in-flight branch), not through the generic,
+			// evidence-blind nightResumeBackgroundStep path: see
+			// nightBackgroundAudioSuspend's own doc comment for why only
+			// this dispatcher may capture the bookmark decision 8's resume
+			// push needs.
+			h.nightBackgroundAudioSuspend(ctx, now, rec, nodeID, sessionID, ba, history)
+			return
+		}
+		items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.PlaybackItemsFor(nodeID))
 		if err != nil {
 			return
 		}
@@ -1122,7 +1216,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 	}
 
 	if ba.FadeOutMs == nil {
-		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
+		h.nightBackgroundAudioSuspend(ctx, now, rec, nodeID, sessionID, ba, history)
 		return
 	}
 
@@ -1139,7 +1233,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 		if !nightBackgroundAudioFadeSettled(h.deps.Audio, now, fadeDispatchedAt, nodeID, sessionID) {
 			return // the ramp is still running; never let pause/stop race it (see nightBackgroundAudioFadeSettled's own doc comment).
 		}
-		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
+		h.nightBackgroundAudioSuspend(ctx, now, rec, nodeID, sessionID, ba, history)
 		return
 	}
 	// Either the fadedown step has never been dispatched yet, or its own
@@ -1476,4 +1570,661 @@ func (h *handlers) nightCommitEndSessionClearAnchor(ctx context.Context, now tim
 		cur.ContentAnchorJSON = encodeNightContentAnchor(anchor)
 		return cur
 	})
+}
+
+// ADR-049 decisions 7-9: a multi-node bed's shared start/resume instant
+// (decision 8, mirroring decision 3's identical rule for a Cue,
+// cueactivationschedule.go) and the program+ltc node's own bookmark push
+// before a scheduled resume. Only reached for a bed whose declared Targets
+// (decision 7) name more than one node ([nightBackgroundAudioIsMultiNode]);
+// every other bed keeps the per-node state machine above completely
+// unchanged, including a bed whose distinct per-item Asset.Target values
+// happen to span several nodes without ever declaring Targets (ADR-049's
+// own regression rule - decisions 8 and 9 do not apply to it).
+//
+// Unlike the Cue path (cueactivationschedule.go), this never dispatches a
+// throwaway probe session: the coordinator reads the clock from the bed's
+// OWN real audio.session.prepare, the same session every listed node
+// already plays from, per this task's own R3 instruction ("no separate
+// probe session"). Only the program+ltc node is actually read - the one
+// reading [audiosched.Select] ever derives T0 from - so one schedule
+// decision costs exactly one real network round trip, not one per node.
+
+// nightAdvanceMultiNodeBackgroundAudio is [nightAdvanceBackgroundAudio]'s
+// own multi-node body. It first lets every listed node's ordinary per-node
+// state machine advance (apply, gain, pause's own suspend, fade-up, expiry
+// refresh - everything [nightAdvanceBackgroundAudioForNode] still owns
+// unconditionally), then - once every node has converged on the SAME
+// point, either "ready to start" or "ready to resume" - drives the shared
+// schedule and dispatches the actual start or resume itself, since only
+// this bed-level view can tell that every node has actually arrived.
+func (h *handlers) nightAdvanceMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, show string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, history []nightBackgroundAudioHistoryRow) {
+	nodeIDs := ba.PlaybackNodeIDs()
+	for _, nodeID := range nodeIDs {
+		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, show, nodeID, ba, owner, history)
+	}
+
+	history, err := h.nightBackgroundAudioHistory(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: background audio: failed to re-read history for bed-level scheduling", "sessionId", rec.ID, "error", err)
+		return
+	}
+
+	switch {
+	case nightBedStartPending(history, nodeIDs):
+		h.nightStartMultiNodeBackgroundAudio(ctx, now, rec, history, nodeIDs)
+	case nightBedResumePending(history, nodeIDs):
+		h.nightResumeMultiNodeBackgroundAudio(ctx, now, rec, ba, history, nodeIDs)
+	}
+}
+
+// nightBackgroundAudioLatestStepForNode is [nightBackgroundAudioStepsForNode]
+// narrowed to nodeID's own single most recent step, or false when nodeID
+// has never recorded one.
+func nightBackgroundAudioLatestStepForNode(history []nightBackgroundAudioHistoryRow, nodeID string) (nightBackgroundAudioHistoryRow, bool) {
+	steps := nightBackgroundAudioStepsForNode(history, nodeID)
+	if len(steps) == 0 {
+		return nightBackgroundAudioHistoryRow{}, false
+	}
+	return steps[len(steps)-1], true
+}
+
+// nightBedStartPending reports whether the multi-node bed's cohort is at,
+// or partway through, its shared start: every listed node's own latest
+// step is either a confirmed gain (has not yet been asked to start at
+// all) or an unresolved start (asked, not yet confirmed or failed) - a
+// node that has moved past this (a resolved start, or anything later)
+// takes it out of scope, exactly as [nightAdvanceBackgroundAudioForNode]'s
+// own confirmed-start case already leaves a refused start for an operator
+// rather than auto-retrying it.
+func nightBedStartPending(history []nightBackgroundAudioHistoryRow, nodeIDs []string) bool {
+	for _, nodeID := range nodeIDs {
+		latest, ok := nightBackgroundAudioLatestStepForNode(history, nodeID)
+		if !ok {
+			return false
+		}
+		switch {
+		case latest.Step.Kind == nightBGStepGain && latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed:
+		case latest.Step.Kind == nightBGStepStart && latest.Row.State != nightCueStateResolved:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// nightBedResumePending is [nightBedStartPending]'s own mirror for the
+// shared resume: every listed node's own latest step is either a
+// confirmed pause or an unresolved resume.
+func nightBedResumePending(history []nightBackgroundAudioHistoryRow, nodeIDs []string) bool {
+	for _, nodeID := range nodeIDs {
+		latest, ok := nightBackgroundAudioLatestStepForNode(history, nodeID)
+		if !ok {
+			return false
+		}
+		switch {
+		case latest.Step.Kind == nightBGStepPause && latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed:
+		case latest.Step.Kind == nightBGStepResume && latest.Row.State != nightCueStateResolved:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// nightBedScheduleResult is [nightGetOrComputeBedSchedule]'s own outcome,
+// JSON-encoded into the bed-level [nightBGStepSchedule] row's
+// OutcomeReason: the one durable record of what R3's single schedule read
+// decided for this (session record, cycle), so a later tick - even across
+// a coordinator restart - reuses it rather than reading the clock again.
+type nightBedScheduleResult struct {
+	Aligned         bool   `json:"aligned"`
+	ScheduledAtNs   int64  `json:"scheduledAtNs,omitempty"`
+	ClockNodeID     string `json:"clockNodeId,omitempty"`
+	UnalignedReason string `json:"unalignedReason,omitempty"`
+}
+
+func encodeNightBedScheduleResult(r nightBedScheduleResult) string {
+	b, _ := json.Marshal(r)
+	return string(b)
+}
+
+func decodeNightBedScheduleResult(s string) (nightBedScheduleResult, bool) {
+	if s == "" {
+		return nightBedScheduleResult{}, false
+	}
+	var r nightBedScheduleResult
+	if err := json.Unmarshal([]byte(s), &r); err != nil {
+		return nightBedScheduleResult{}, false
+	}
+	return r, true
+}
+
+// nightBedScheduleForCycle finds THIS cycle's own already-resolved
+// [nightBGStepSchedule] row, if one exists - R3's "recorded... so a
+// replay tick reads no clock and dispatches nothing new". A schedule row
+// belongs to exactly one cycle (rec.Cycle at the time it was committed):
+// decision 8's structure means a cycle sees at most one of a first start
+// or a resume, never both, so cycle alone (never a start/resume flavor
+// tag) is enough to find it.
+func nightBedScheduleForCycle(history []nightBackgroundAudioHistoryRow, cycle int64) (nightBedScheduleResult, bool) {
+	for _, row := range nightBackgroundAudioStepsForNode(history, nightBedScheduleNodeID) {
+		if row.Step.Kind != nightBGStepSchedule || row.Row.Cycle != cycle || row.Row.State != nightCueStateResolved {
+			continue
+		}
+		if r, ok := decodeNightBedScheduleResult(row.Row.OutcomeReason); ok {
+			return r, true
+		}
+	}
+	return nightBedScheduleResult{}, false
+}
+
+// nightGetOrComputeBedSchedule returns this cycle's own bed-level schedule
+// decision: the already-recorded one when it exists (no clock read, no
+// dispatch), or a freshly computed one, committed as a resolved
+// [nightBGStepSchedule] row before returning. Two nodes both converging on
+// "ready to start" in the SAME tick both call this; the second finds the
+// row the first just committed and reads it back rather than reading the
+// clock a second time, so "one schedule read" holds regardless of how many
+// nodes are waiting on it.
+func (h *handlers) nightGetOrComputeBedSchedule(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeIDs []string, history []nightBackgroundAudioHistoryRow, issuer FPPCommandIssuer) (nightBedScheduleResult, error) {
+	if existing, ok := nightBedScheduleForCycle(history, rec.Cycle); ok {
+		return existing, nil
+	}
+
+	result := h.nightComputeBedSchedule(ctx, now, rec, nodeIDs, issuer)
+
+	phase := nightPhaseRestingBackgroundNode(nightBedScheduleNodeID)
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameSchedule(int(revision))
+	if err := h.nightCommitCueRow(ctx, now, rec, phase, cueName, revision); err != nil && !errors.Is(err, store.ErrNightCueOutboxDuplicate) {
+		return nightBedScheduleResult{}, err
+	}
+	row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+	if err != nil {
+		return nightBedScheduleResult{}, err
+	}
+	if row.State == nightCueStateResolved {
+		// A concurrent caller already resolved this exact row (the
+		// duplicate-insert race above): its own recorded decision wins,
+		// never this call's own freshly computed one, so every caller in
+		// this tick agrees on one value.
+		if existing, ok := decodeNightBedScheduleResult(row.OutcomeReason); ok {
+			return existing, nil
+		}
+	}
+	row.State = nightCueStateResolved
+	row.Outcome = nightCueOutcomeConfirmed
+	row.OutcomeReason = encodeNightBedScheduleResult(result)
+	resolvedAt := now
+	row.ResolvedAt = &resolvedAt
+	if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
+		return nightBedScheduleResult{}, err
+	}
+	return result, nil
+}
+
+// nightComputeBedSchedule is R3's own single schedule read: a fresh
+// audio.session.prepare dispatched to the program+ltc node ALONE (the
+// only reading [audiosched.Select] ever derives T0 from - every other
+// listed node contributes no evidence of its own, matching "one schedule
+// read" rather than one per node), through
+// [SelectAudioStartInstant]/[audiosched.Select] exactly as the Cue path
+// and the aligned-start endpoint do. No usable clock (no listed node holds
+// program+ltc, or its own reading is invalid) is decision 4's own
+// fallback: every node starts or resumes on arrival, reported unaligned
+// with the reason.
+func (h *handlers) nightComputeBedSchedule(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeIDs []string, issuer FPPCommandIssuer) nightBedScheduleResult {
+	settings, err := h.alignedStartSettings(ctx)
+	if err != nil {
+		return nightBedScheduleResult{UnalignedReason: "could not read audio.settings to select a shared start instant: " + err.Error()}
+	}
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	read := func(ctx context.Context, nodeID string) (AudioStartInstantReading, error) {
+		holdsClock, err := h.nodeHoldsMediaClock(ctx, nodeID)
+		if err != nil {
+			return AudioStartInstantReading{}, err
+		}
+		if !holdsClock {
+			// Only the clock holder's own reading feeds Select; every
+			// other listed node is reported present but without evidence,
+			// costing this schedule decision no extra network round trip.
+			return AudioStartInstantReading{HoldsMediaClock: false}, nil
+		}
+		var evidence map[string]any
+		prepareStart := time.Now()
+		invocation := fmt.Sprintf("night-bed-schedule-prepare:%s:%s:%d", rec.ID, nodeID, rec.Cycle)
+		revision := uint64(h.nightAudioSessionPersistedRevision(ctx, nodeID, sessionID) + 1)
+		result, problem, derr := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+			Action: "audio.session.prepare", NodeID: nodeID, SessionID: sessionID,
+			Params:   map[string]any{"sessionId": sessionID, "invocationId": invocation, "revision": revision},
+			Revision: revision, IdempotencyKey: invocation,
+			IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+			IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+			OnEvidence: func(v map[string]any) { evidence = v },
+		})
+		elapsed := time.Since(prepareStart)
+		if derr != nil {
+			return AudioStartInstantReading{HoldsMediaClock: true}, derr
+		}
+		if problem != nil {
+			return AudioStartInstantReading{HoldsMediaClock: true}, fmt.Errorf("prepare refused: %s", problem.Detail)
+		}
+		if result.Outcome == "refused" || result.Outcome == "failed" {
+			return AudioStartInstantReading{HoldsMediaClock: true}, fmt.Errorf("prepare reported %s: %s", result.Outcome, result.Reason)
+		}
+		return AudioStartInstantReading{HoldsMediaClock: true, Evidence: evidence, ProbeElapsed: elapsed}, nil
+	}
+
+	sel, nodeErrs, selErr := SelectAudioStartInstant(ctx, nodeIDs, settings, read)
+	for _, ne := range nodeErrs {
+		h.logWarn("night loop: background audio: bed schedule node read failed", "sessionId", rec.ID, "nodeId", ne.NodeID, "error", ne.Err)
+	}
+	if selErr != nil {
+		return nightBedScheduleResult{UnalignedReason: audiosched.DescribeUnscheduled(selErr)}
+	}
+	return nightBedScheduleResult{Aligned: true, ScheduledAtNs: sel.ScheduledAtNs, ClockNodeID: sel.ClockNodeID}
+}
+
+// nightStartMultiNodeBackgroundAudio resolves this cycle's shared schedule
+// once, then dispatches audio.session.start to every listed node carrying
+// the identical instant (or none, unaligned).
+func (h *handlers) nightStartMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, history []nightBackgroundAudioHistoryRow, nodeIDs []string) {
+	issuer := nightBackgroundAudioIssuer(rec)
+	sched, err := h.nightGetOrComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer)
+	if err != nil {
+		h.logWarn("night loop: background audio: bed schedule failed", "sessionId", rec.ID, "error", err)
+		return
+	}
+	sessionID := nightBackgroundAudioSessionID(rec)
+	for _, nodeID := range nodeIDs {
+		h.nightBackgroundAudioStartScheduled(ctx, now, rec, nodeID, sessionID, sched, history)
+	}
+}
+
+// nightBackgroundAudioStartScheduled dispatches nodeID's own
+// audio.session.start, carrying sched's instant when aligned. Once
+// resolved, the ordinary per-node state machine
+// ([nightAdvanceBackgroundAudioForNode]'s own unconditional
+// nightBGStepStart case) takes over fade-up and expiry refresh exactly as
+// it does for a single-node bed's start - nothing further is scheduling-
+// sensitive.
+func (h *handlers) nightBackgroundAudioStartScheduled(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, sched nightBedScheduleResult, history []nightBackgroundAudioHistoryRow) {
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameStart(int(revision))
+	params := map[string]any{}
+	note := nightBedScheduleNote("start", sched)
+	if sched.Aligned {
+		params[pkgaudio.ParamScheduledAtNs] = json.Number(fmt.Sprintf("%d", sched.ScheduledAtNs))
+	}
+	composeReason := func(reason string, _ map[string]any) string { return nightCueReasonWith(reason, note) }
+	if _, _, err := h.nightRunBedAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, "audio.session.start", nodeID, sessionID, params, revision, history, composeReason); err != nil {
+		h.logWarn("night loop: background audio: bed start failed", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
+	}
+}
+
+// nightBedScheduleNote is the human-readable text
+// [nightBackgroundAudioStartScheduled]/[nightBackgroundAudioResumeScheduled]
+// append to their own outbox row's OutcomeReason - the "existing night
+// session status fields only" surface this task's own design gate asks
+// for: [NightBackgroundAudioStep.Reason] (v1, via nightMapAudioStep,
+// nightsessioncontrol.go) already exposes this same field for every other
+// step, unchanged, so a bed's own aligned/unaligned verdict rides it
+// without any new API surface.
+func nightBedScheduleNote(verb string, sched nightBedScheduleResult) string {
+	if sched.Aligned {
+		return fmt.Sprintf("bed-aligned %s at scheduledAtNs=%d (clock read from %q)", verb, sched.ScheduledAtNs, sched.ClockNodeID)
+	}
+	return fmt.Sprintf("bed %s unaligned: %s", verb, sched.UnalignedReason)
+}
+
+// nightBedBookmark is R4's own decoded evidence: the program+ltc node's
+// pause bookmark ([nightBedBookmarkFromEvidence]), or what this
+// coordinator pushes onto another listed node before a scheduled resume
+// ([nightBackgroundAudioApplyBookmark]).
+type nightBedBookmark struct {
+	Known      bool   `json:"known"`
+	ItemID     string `json:"itemId,omitempty"`
+	Index      int    `json:"index,omitempty"`
+	PositionMs int64  `json:"positionMs,omitempty"`
+}
+
+// nightBedBookmarkFromEvidence decodes audio.session.pause's own NEW
+// result-evidence keys (R1: bookmarkKnown/bookmarkItemId/bookmarkIndex/
+// bookmarkPositionMs, nightbedwire.go). Known is false whenever the node
+// reported nothing bookmark-shaped at all, or explicitly reported
+// bookmarkKnown false (the session had nothing to bookmark) - never
+// inferred from a present-but-empty item id.
+func nightBedBookmarkFromEvidence(evidence map[string]any) nightBedBookmark {
+	if evidence == nil {
+		return nightBedBookmark{}
+	}
+	known, _ := evidence[bookmarkKnown].(bool)
+	if !known {
+		return nightBedBookmark{}
+	}
+	itemID, _ := evidence[bookmarkItemId].(string)
+	if itemID == "" {
+		return nightBedBookmark{}
+	}
+	index, _ := evidenceInt64(evidence[bookmarkIndex])
+	positionMs, _ := evidenceInt64(evidence[bookmarkPositionMs])
+	return nightBedBookmark{Known: true, ItemID: itemID, Index: int(index), PositionMs: positionMs}
+}
+
+// nightBedBookmarkNotePrefix tags the JSON fragment
+// [nightBackgroundAudioSuspend] appends to a multi-node bed's own pause
+// row OutcomeReason, so [nightBedNodeLatestPauseBookmark] can find and
+// decode it back out of a plain free-text reason field without a second,
+// dedicated column.
+const nightBedBookmarkNotePrefix = "bedBookmark="
+
+func encodeNightBedBookmarkNote(bm nightBedBookmark) string {
+	if !bm.Known {
+		return ""
+	}
+	b, _ := json.Marshal(bm)
+	return nightBedBookmarkNotePrefix + string(b)
+}
+
+func decodeNightBedBookmarkFromReason(reason string) (nightBedBookmark, bool) {
+	idx := strings.Index(reason, nightBedBookmarkNotePrefix)
+	if idx < 0 {
+		return nightBedBookmark{}, false
+	}
+	var bm nightBedBookmark
+	if err := json.Unmarshal([]byte(reason[idx+len(nightBedBookmarkNotePrefix):]), &bm); err != nil {
+		return nightBedBookmark{}, false
+	}
+	return bm, bm.Known
+}
+
+// nightBedNodeLatestPauseBookmark reads nodeID's own most recent
+// confirmed pause step's bookmark note, or the zero (unknown) value when
+// it has none - either it never paused, its pause never confirmed, or
+// (the known crash-window gap this file's own doc comment on
+// nightBackgroundAudioSuspend accepts) a crash-recovery retry of that
+// pause resolved through the generic, evidence-blind path instead.
+func nightBedNodeLatestPauseBookmark(history []nightBackgroundAudioHistoryRow, nodeID string) nightBedBookmark {
+	latest, ok := nightBackgroundAudioLatestStepForNode(history, nodeID)
+	if !ok || latest.Step.Kind != nightBGStepPause || latest.Row.State != nightCueStateResolved || latest.Row.Outcome != nightCueOutcomeConfirmed {
+		return nightBedBookmark{}
+	}
+	bm, _ := decodeNightBedBookmarkFromReason(latest.Row.OutcomeReason)
+	return bm
+}
+
+// nightBedProgramLTCNode returns the first of nodeIDs holding the
+// program+ltc role, or ok=false when none does - decision 8's own
+// fallback: "the program+ltc node is not listed" resumes every node
+// unaligned, from its own bookmark, on arrival.
+func (h *handlers) nightBedProgramLTCNode(ctx context.Context, nodeIDs []string) (string, bool, error) {
+	for _, nodeID := range nodeIDs {
+		holds, err := h.nodeHoldsMediaClock(ctx, nodeID)
+		if err != nil {
+			return "", false, err
+		}
+		if holds {
+			return nodeID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// nightResumeMultiNodeBackgroundAudio is R4's own entry point. With no
+// listed program+ltc node, or its own bookmark unknown, every node
+// resumes from its own bookmark on arrival (decision 8's own fallback,
+// recorded unaligned with the reason); otherwise this pushes that
+// bookmark onto every OTHER listed node before resolving the shared
+// schedule and resuming every node at it.
+func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow, nodeIDs []string) {
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	programLTC, hasProgramLTC, err := h.nightBedProgramLTCNode(ctx, nodeIDs)
+	if err != nil {
+		h.logWarn("night loop: background audio: bed resume: failed to resolve the program+ltc node", "sessionId", rec.ID, "error", err)
+		return
+	}
+
+	var bookmark nightBedBookmark
+	if hasProgramLTC {
+		bookmark = nightBedNodeLatestPauseBookmark(history, programLTC)
+	}
+
+	if !hasProgramLTC || !bookmark.Known {
+		reason := "the program+ltc node's own pause bookmark is unknown"
+		if !hasProgramLTC {
+			reason = "no listed node holds the program+ltc role"
+		}
+		sched := nightBedScheduleResult{UnalignedReason: reason}
+		for _, nodeID := range nodeIDs {
+			h.nightBackgroundAudioResumeScheduled(ctx, now, rec, nodeID, sessionID, sched, history)
+		}
+		return
+	}
+
+	for _, nodeID := range nodeIDs {
+		if nodeID == programLTC {
+			continue
+		}
+		h.nightBackgroundAudioApplyBookmark(ctx, now, rec, nodeID, sessionID, bookmark, history)
+	}
+
+	issuer := nightBackgroundAudioIssuer(rec)
+	sched, err := h.nightGetOrComputeBedSchedule(ctx, now, rec, nodeIDs, history, issuer)
+	if err != nil {
+		h.logWarn("night loop: background audio: bed schedule failed", "sessionId", rec.ID, "error", err)
+		return
+	}
+	for _, nodeID := range nodeIDs {
+		h.nightBackgroundAudioResumeScheduled(ctx, now, rec, nodeID, sessionID, sched, history)
+	}
+}
+
+// nightBackgroundAudioApplyBookmark pushes bm onto nodeID via
+// audio.session.apply's existing Bookmark field (R1: no new apply param),
+// on the wire as the flat bookmarkItemId/bookmarkIndex/bookmarkPositionMs
+// keys nightbedwire.go names - this lane's own choice of wire shape for
+// the PUSH direction, since the frozen contract this task hands both
+// lanes only names the RESULT-evidence keys; reusing the identical flat
+// names for the push keeps one vocabulary rather than inventing a second,
+// nested one.
+func (h *handlers) nightBackgroundAudioApplyBookmark(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, bm nightBedBookmark, history []nightBackgroundAudioHistoryRow) {
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameBookmark(int(revision))
+	params := map[string]any{
+		bookmarkItemId:     bm.ItemID,
+		bookmarkIndex:      bm.Index,
+		bookmarkPositionMs: bm.PositionMs,
+	}
+	if _, _, err := h.nightRunBedAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, "audio.session.apply", nodeID, sessionID, params, revision, history, nil); err != nil {
+		h.logWarn("night loop: background audio: bed bookmark push failed", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
+	}
+}
+
+// nightBackgroundAudioResumeScheduled is [nightBackgroundAudioStartScheduled]'s
+// own mirror for resume.
+func (h *handlers) nightBackgroundAudioResumeScheduled(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, sched nightBedScheduleResult, history []nightBackgroundAudioHistoryRow) {
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameResume(int(revision))
+	params := map[string]any{}
+	note := nightBedScheduleNote("resume", sched)
+	if sched.Aligned {
+		params[pkgaudio.ParamScheduledAtNs] = json.Number(fmt.Sprintf("%d", sched.ScheduledAtNs))
+	}
+	composeReason := func(reason string, _ map[string]any) string { return nightCueReasonWith(reason, note) }
+	if _, _, err := h.nightRunBedAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, "audio.session.resume", nodeID, sessionID, params, revision, history, composeReason); err != nil {
+		h.logWarn("night loop: background audio: bed resume failed", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
+	}
+}
+
+// nightBackgroundAudioSuspend is [nightStopBackgroundAudioIfRunningForNode]'s
+// own suspend dispatch. It branches only for a multi-node bed's own pause:
+// R4's resume push needs the program+ltc node's own bookmark from ITS OWN
+// pause result evidence, which the generic dispatch path
+// (nightBackgroundAudioStop, via nightDispatchCueTarget/
+// nightDispatchCueAudio) has no OnEvidence hook to capture - see
+// nightRunBedAudioCommand's own doc comment for why this file dispatches
+// directly instead for every scheduling-sensitive step. A bed with no
+// declared Targets, a single declared target, or a suspend that resolves
+// to stop (resume policy "restart", no bookmark to capture) is unaffected:
+// it always takes nightBackgroundAudioStop, unchanged.
+//
+// KNOWN GAP, accepted rather than fixed here: a crash between this pause's
+// own dispatch and its resolution, recovered through
+// [nightStopBackgroundAudioIfRunningForNode]'s own generic pending/
+// dispatched retry, would resolve through the SAME idempotency key (so
+// never double-sent) but without this function's own composeReason - the
+// bookmark note would then read as unknown, and the eventual resume falls
+// back to decision 8's own "on arrival" case rather than failing or
+// blocking the show. Safe to defer: this coordinator's own crash window
+// here is narrow, and the fallback is the same one an unlisted program+ltc
+// node already uses.
+func (h *handlers) nightBackgroundAudioSuspend(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
+	if !nightBackgroundAudioIsMultiNode(ba) || nightBackgroundSuspendKind(ba.Resume) != nightBGStepPause {
+		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
+		return
+	}
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNamePause(int(revision))
+	composeReason := func(reason string, evidence map[string]any) string {
+		return nightCueReasonWith(reason, encodeNightBedBookmarkNote(nightBedBookmarkFromEvidence(evidence)))
+	}
+	if _, _, err := h.nightRunBedAudioCommand(ctx, now, rec, nightPhaseRestingBackgroundNode(nodeID), cueName, "audio.session.pause", nodeID, sessionID, map[string]any{}, revision, history, composeReason); err != nil {
+		h.logWarn("night loop: background audio: bed pause failed", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
+	}
+}
+
+// nightRunBedAudioCommand is [nightRunAudioCommand]'s own counterpart for
+// a multi-node bed's scheduling-sensitive steps (a scheduled start, a
+// bookmark push, a scheduled resume, or a bookmark-capturing pause): it
+// dispatches directly through [handlers.executeAudioSessionDispatch],
+// never through nightDispatchCueTarget (nightcue.go), so this file can
+// attach onEvidence (R3's clock reading, R4's bookmark) and compose the
+// bed's own alignment or bookmark note onto the persisted reason - text
+// the generic cue-dispatch path has no way to carry, since
+// nightDispatchCueAudio exposes neither. It otherwise shares
+// nightRunAudioCommand's identical commit-then-dispatch, resume-in-flight,
+// and revision-floor shape (via the SAME shared
+// [nightBackgroundAudioRevisionState]), so a step this dispatches is
+// exactly as crash-safe and exactly as retryable-by-identity as every
+// other background-audio step. composeReason may be nil, meaning the
+// dispatch outcome's own reason is recorded verbatim.
+//
+// Returns the resolved (or still in-flight) row and the raw evidence map
+// [AudioDispatchInput.OnEvidence] captured, so a caller that needs the
+// evidence itself (not just its note) - none does today, but
+// nightBackgroundAudioSuspend's composeReason closes over it directly
+// instead - is not forced to re-derive it from the persisted reason text.
+func (h *handlers) nightRunBedAudioCommand(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName, action, nodeID, sessionID string, params map[string]any, revision int64, history []nightBackgroundAudioHistoryRow, composeReason func(reason string, evidence map[string]any) string) (store.NightCueOutboxRecord, map[string]any, error) {
+	row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+	switch {
+	case err == nil:
+		if row.State == nightCueStateResolved || row.State == nightCueStateAmbiguous {
+			return row, nil, nil
+		}
+	case errors.Is(err, store.ErrNightCueOutboxNotFound):
+		rs := nightBackgroundAudioRevisionState(sessionID, history)
+		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cueName)
+		decision := rs.Apply(pkgaudio.InvocationID(idemKey), pkgaudio.Revision(revision))
+		if !decision.Accepted {
+			reason := "revision not accepted"
+			if decision.Result != nil {
+				reason = decision.Result.Reason
+			}
+			return store.NightCueOutboxRecord{}, nil, fmt.Errorf("api: background audio: refusing to commit %s/%s at revision %d: %s (current %d)", phase, cueName, revision, reason, decision.Revision)
+		}
+		if cerr := h.nightCommitCueRow(ctx, now, rec, phase, cueName, revision); cerr != nil {
+			if !errors.Is(cerr, store.ErrNightCueOutboxDuplicate) {
+				return store.NightCueOutboxRecord{}, nil, cerr
+			}
+		}
+		row, err = h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+		if err != nil {
+			return store.NightCueOutboxRecord{}, nil, err
+		}
+		if row.State == nightCueStateResolved || row.State == nightCueStateAmbiguous {
+			return row, nil, nil
+		}
+	default:
+		return store.NightCueOutboxRecord{}, nil, err
+	}
+
+	idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cueName)
+	if row.State == nightCueStatePending {
+		t := now
+		row.State = nightCueStateDispatched
+		row.DispatchedAt = &t
+		if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
+			return store.NightCueOutboxRecord{}, nil, err
+		}
+	}
+
+	issuer := nightBackgroundAudioIssuer(rec)
+	var evidence map[string]any
+	result, problem, derr := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: action, NodeID: nodeID, SessionID: sessionID, Params: params,
+		Revision: uint64(revision), IdempotencyKey: idemKey,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+		OnEvidence: func(v map[string]any) { evidence = v },
+	})
+
+	row, gerr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+	if gerr != nil {
+		return store.NightCueOutboxRecord{}, evidence, gerr
+	}
+
+	reason := func(base string) string {
+		if composeReason != nil {
+			return composeReason(base, evidence)
+		}
+		return base
+	}
+
+	switch {
+	case derr != nil:
+		if !errors.Is(derr, broker.ErrResponseFailedBeforePublish) {
+			// The command reached the wire and its outcome is genuinely
+			// unknown (mirrors nightDispatchCueAudio's identical branch,
+			// nightcue.go): leave unresolved for a later retry under the
+			// SAME idempotency key.
+			return row, evidence, nil
+		}
+		row.State = nightCueStateResolved
+		row.Outcome = nightCueOutcomeFailed
+		row.OutcomeReason = reason("this step could not be dispatched: " + derr.Error())
+		resolvedAt := now
+		row.ResolvedAt = &resolvedAt
+		if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
+			return store.NightCueOutboxRecord{}, evidence, err
+		}
+		return row, evidence, nil
+	case problem != nil:
+		row.State = nightCueStateResolved
+		row.Outcome = nightCueOutcomeRefused
+		row.OutcomeReason = reason(problem.Detail)
+		resolvedAt := now
+		row.ResolvedAt = &resolvedAt
+		if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
+			return store.NightCueOutboxRecord{}, evidence, err
+		}
+		return row, evidence, nil
+	}
+
+	if result.DispatchedAt != "" {
+		if t, perr := parseTime(result.DispatchedAt); perr == nil {
+			row.DispatchedAt = &t
+		}
+	}
+	row.State = nightCueStateResolved
+	row.Outcome = nightAudioCueOutcome(result.Outcome)
+	row.OutcomeReason = reason(result.Reason)
+	resolvedAt := now
+	row.ResolvedAt = &resolvedAt
+	if err := h.deps.NightSessions.UpdateNightCueOutboxRow(ctx, row); err != nil {
+		return store.NightCueOutboxRecord{}, evidence, err
+	}
+	return row, evidence, nil
 }
