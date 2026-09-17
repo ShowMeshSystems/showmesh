@@ -936,15 +936,11 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			s.bookmark = nil
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
 		}
-		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, &atNs)
-		if refusal != nil {
-			return *refusal
-		}
-		if sched != nil {
-			if err := sched.waitUntilT0(ctx); err != nil {
-				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled resume instant: " + err.Error()}
-			}
-		}
+		// Everything that can take real time — release and re-prepare —
+		// happens BEFORE the wait, not after: mirrors [Manager.start], and
+		// is why a scheduled start presents on time while an unfixed
+		// scheduled resume used to present late by however long prepare
+		// took on this node.
 		s.releaseEngineLocked(ctx)
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			if errors.Is(err, ErrNoEngineBinding) {
@@ -953,6 +949,24 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+		}
+		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, &atNs)
+		if refusal != nil {
+			// Prepare already released the prior handle and loaded a fresh
+			// one that was never started: leaving it loaded here while
+			// s.state stays Paused would make a later plain Resume call
+			// Engine.Resume on a handle that was never actually paused.
+			// Drop it instead, the same "keep Paused, lose the handle"
+			// shape Resume's own Engine.Resume failure already uses, so
+			// the next resume attempt re-prepares from the bookmark.
+			s.releaseEngineLocked(ctx)
+			return *refusal
+		}
+		if sched != nil {
+			if err := sched.waitUntilT0(ctx); err != nil {
+				s.releaseEngineLocked(ctx)
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled resume instant: " + err.Error()}
+			}
 		}
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Start(ctx, s.handle, position)
