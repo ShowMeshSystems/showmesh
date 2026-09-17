@@ -875,8 +875,14 @@ func (s *Session) resolveBookmarkPositionLocked(item pkgaudio.PlaylistItem) (tim
 // natural and forced advance, and a scheduled item boundary's own
 // look-ahead (see itemschedule.go). ok is false when current has no
 // successor (RepeatNone, or RepeatItem is not itself "no successor" --
-// it always reports current again). Caller holds s.mu.
+// it always reports current again), and also when playlist is nil -- a
+// single-media session's item schedule reaches this same look-ahead
+// (ADR-049 decision 8 anchors one for every scheduled start) and has no
+// successor of its own. Caller holds s.mu.
 func nextPlaylistIndexLocked(playlist *pkgaudio.PlaylistRef, current int) (next int, ok bool) {
+	if playlist == nil {
+		return 0, false
+	}
 	next = current
 	if playlist.Repeat != pkgaudio.RepeatItem {
 		next = current + 1

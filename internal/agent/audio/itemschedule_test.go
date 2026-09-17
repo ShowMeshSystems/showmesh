@@ -220,6 +220,16 @@ func (f *boundaryFixture) resumeAt(t *testing.T, invocation pkgaudio.InvocationI
 	}
 }
 
+// applyMedia applies a single-media (non-playlist) session: ADR-049
+// decision 8 anchors an item schedule for every scheduled start,
+// including one with no playlist and so no successor.
+func (f *boundaryFixture) applyMedia(t *testing.T, media pkgaudio.MediaRef) {
+	t.Helper()
+	if out := f.m.Apply(context.Background(), f.id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(media)}); out.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("Apply refused: %s", out.Reason)
+	}
+}
+
 func (f *boundaryFixture) session(t *testing.T) *Session {
 	t.Helper()
 	s, ok := f.m.get(f.id)
@@ -788,5 +798,57 @@ func TestResumeAtPastInstantIsRefused(t *testing.T) {
 	}
 	if got := f.state(t); got != pkgaudio.StatePaused {
 		t.Fatalf("state after a refused scheduled resume = %q, want still paused", got)
+	}
+}
+
+// TestScheduledSingleMediaSessionCompletesAtItsBoundaryWithoutPanic is a
+// regression: a single-media (non-playlist) session started with a
+// scheduled instant still gets an item schedule -- ADR-049
+// decision 8 anchors one for every scheduled start, not only a playlist
+// -- and once a known probe duration gives it a known boundary, reaching
+// that boundary through the watcher tick path must not panic, since
+// nextPlaylistIndexLocked has no playlist to walk. It must instead
+// behave exactly as before the item schedule existed: the schedule
+// drops (no successor), and the item still ends on its own decoder end.
+func TestScheduledSingleMediaSessionCompletesAtItsBoundaryWithoutPanic(t *testing.T) {
+	f := newBoundaryFixture(t)
+	ctx := context.Background()
+	media := writeTestAsset(t, f.dir, "solo.wav", "asset-solo", []byte("solo"))
+	f.dec.setResult("solo.wav", knownDurationResult(2*time.Second))
+	f.applyMedia(t, media)
+
+	out, _ := f.startAt(t, 20*time.Millisecond)
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("StartAt = %q (%s), want started", out.Outcome, out.Reason)
+	}
+
+	s := f.session(t)
+	s.mu.Lock()
+	scheduleKnown := s.schedule != nil && s.schedule.boundaryKnown
+	s.mu.Unlock()
+	if !scheduleKnown {
+		t.Fatal("precondition: single-media session has no known-boundary schedule")
+	}
+
+	// Drive the engine's own clock past the item's decoded length AND the
+	// media clock past its scheduled boundary, then tick the watcher --
+	// this is exactly the sequence that panicked on main. The boundary
+	// check runs before the decoder-end check settles anything, so the
+	// first tick only drops the now-successorless schedule; the second
+	// tick is what completes the item on its own decoder end.
+	f.clk.advance(2500 * time.Millisecond)
+	f.media.advance(2500 * time.Millisecond)
+	f.m.watchTick(ctx)
+
+	s.mu.Lock()
+	scheduleDropped := s.schedule == nil
+	s.mu.Unlock()
+	if !scheduleDropped {
+		t.Fatal("schedule survived reaching its boundary with no successor")
+	}
+
+	f.m.watchTick(ctx)
+	if got := f.state(t); got != pkgaudio.StateCompleted {
+		t.Fatalf("state after the boundary = %q, want completed", got)
 	}
 }
