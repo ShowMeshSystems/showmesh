@@ -1724,7 +1724,7 @@ func TestNightClearBackgroundAudioAtEndSession_InlineBackgroundAudioClearsUnaffe
 }
 
 // TestNightBackgroundAudioSuspendAndEndSessionClearNeverDispatchToScheduleSentinel
-// is Defect A's own regression guard: a multi-node bed's history always
+// guards that a multi-node bed's history always
 // carries a resolved [nightBGStepSchedule] row recorded under
 // [nightBedScheduleNodeID], a sentinel that has never been, and can never
 // be, a real dispatch target (that constant's own doc comment). Before the

@@ -896,12 +896,8 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 	case nightBGStepResume:
 		if !confirmed {
 			if multiNode {
-				// Mirrors nightBGStepStart's own "not auto-retrying" rule
-				// above: a resolved refused/failed/unconfirmable resume row
-				// already carries its own reason (mapNightBackgroundAudio
-				// surfaces it from history unchanged), and re-dispatching a
-				// fresh revision every tick only produces more of the same
-				// refusal, exactly Defect C.
+				// Like start: a resume that did not confirm keeps its row and
+				// reason and is not re-sent every tick.
 				h.logWarn("night loop: background audio: resume did not confirm; not auto-retrying", "sessionId", rec.ID, "nodeId", nodeID, "outcome", latest.Row.Outcome, "reason", latest.Row.OutcomeReason)
 				return
 			}

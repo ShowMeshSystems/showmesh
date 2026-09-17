@@ -464,7 +464,7 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstan
 }
 
 // TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume is
-// Defect B's own regression guard. nightComputeBedSchedule used to read
+// guards the schedule clock read. nightComputeBedSchedule used to read
 // the clock by preparing the REAL bed session directly
 // (audio.session.prepare against nightBackgroundAudioSessionID(rec)), on
 // both the shared start and the shared resume - and the agent's own
@@ -537,12 +537,12 @@ func TestNightBedScheduleReadNeverTouchesTheBedSessionOnStartOrResume(t *testing
 	// driveNightAdvanceBackgroundAudioUntilStableAt's own doc comment.
 	driveNightAdvanceBackgroundAudioUntilStableAt(t, h, pub, rec, testNow.Add(time.Hour), 10)
 
-	// The core of Defect B: between the confirmed pause above and here, not
+	// Between the confirmed pause above and here, not
 	// one prepare (of any kind, on any session) may have reached the
 	// PAUSED bed session - that is exactly what silently un-pauses it.
 	for _, d := range pub.dispatchedSnapshot()[dispatchedBeforeResume:] {
 		if d.Action == "audio.session.prepare" && d.Params["sessionId"] == bedSessionID {
-			t.Fatalf("a prepare was dispatched against the paused bed session %q between pause and resume; this is exactly Defect B (internal/agent/audio.Manager.Prepare ends a paused session)", bedSessionID)
+			t.Fatalf("a prepare was dispatched against the paused bed session %q between pause and resume (internal/agent/audio.Manager.Prepare ends a paused session)", bedSessionID)
 		}
 	}
 	assertNoScheduleReadTouchesSession(dispatchedBeforeResume)
@@ -1229,7 +1229,7 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeDispatchesNodesConcurrently(
 }
 
 // TestNightAdvanceMultiNodeBackgroundAudio_RefusedResumeIsNotRedispatched
-// is Defect C's own regression guard. The per-node start path
+// guards resume retries. The per-node start path
 // (nightAdvanceBackgroundAudioForNode's own nightBGStepStart case) logs
 // "start did not confirm; not auto-retrying" and stops; before the fix,
 // its nightBGStepResume sibling had no such gate for a multi-node bed, and
