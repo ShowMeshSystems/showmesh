@@ -1569,3 +1569,89 @@ func TestRestorePlayingFallsBackToDecoderEndWhenMediaClockIsInvalid(t *testing.T
 		t.Fatalf("no warning naming the session and the media clock fallback reason; log = %q", logBuf.String())
 	}
 }
+
+// TestRestoredSingleMediaSessionPastItsBoundaryDoesNotPanic is the
+// SM-634 regression's restore case: a persisted single-media
+// (non-playlist) session that was scheduled and playing, restored after
+// its item's boundary has already passed on the media clock, must not
+// panic when the watcher tick reaches [Manager.scheduledAdvanceLocked] --
+// restoreItemScheduleLocked rebuilds an item schedule for this session
+// exactly as it does for a playlist, and that schedule has no successor.
+func TestRestoredSingleMediaSessionPastItsBoundaryDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Unix(1_700_000_000, 0))
+	store := NewFileSessionStore(dir)
+	dec := newPerFileDecoder(knownDurationResult(2 * time.Second))
+	media := newFakeClockSource(time.Unix(4_000_000_000, 0))
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("solo-restore-schedule")
+
+	mediaRef := writeTestAsset(t, dir, "solo-restore.wav", "asset-solo-restore", []byte("solo"))
+
+	engine1 := newScheduleTestEngine(c.now)
+	m1 := NewManager(engine1, store, dir, dec, c.now, nil)
+	m1.SetClockSource(media)
+	if out := m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(mediaRef)}); out.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("Apply refused: %s", out.Reason)
+	}
+
+	t0 := media.Now(ctx).Time.Add(20 * time.Millisecond)
+	before := media.reads()
+	done := make(chan pkgaudio.OutcomeResult, 1)
+	go func() {
+		done <- m1.StartAt(ctx, id, "inv-start", 2, t0.UnixNano())
+	}()
+	media.waitForReads(t, before+1)
+	media.advance(20 * time.Millisecond)
+	select {
+	case out := <-done:
+		if out.Outcome != pkgaudio.OutcomeStarted {
+			t.Fatalf("StartAt = %q (%s), want started", out.Outcome, out.Reason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartAt never returned after the media clock reached T0")
+	}
+
+	// Reach the boundary on the media clock before "restarting" --
+	// exactly the persisted state a real restart after the crash landed
+	// in: a scheduled item boundary already in the past.
+	media.advance(2 * time.Second)
+
+	engine2 := newScheduleTestEngine(c.now)
+	m2 := NewManager(engine2, store, dir, dec, c.now, nil)
+	m2.SetClockSource(media)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s2.mu.Lock()
+	scheduleKnown := s2.schedule != nil && s2.schedule.boundaryKnown
+	s2.mu.Unlock()
+	if !scheduleKnown {
+		t.Fatal("precondition: restored single-media session has no known-boundary schedule")
+	}
+
+	// The regression: driving the watcher tick against an already-passed
+	// boundary must not panic.
+	m2.watchTick(ctx)
+
+	s2.mu.Lock()
+	scheduleDropped := s2.schedule == nil
+	s2.mu.Unlock()
+	if !scheduleDropped {
+		t.Fatal("schedule survived reaching its boundary with no successor")
+	}
+
+	// The decoder's own end still completes the item, on a later tick.
+	c.advance(2500 * time.Millisecond)
+	m2.watchTick(ctx)
+	s2.mu.Lock()
+	defer s2.mu.Unlock()
+	if s2.state != pkgaudio.StateCompleted {
+		t.Fatalf("state after the restored boundary = %q, want completed", s2.state)
+	}
+}
