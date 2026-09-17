@@ -936,11 +936,8 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 			s.bookmark = nil
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
 		}
-		// Everything that can take real time — release and re-prepare —
-		// happens BEFORE the wait, not after: mirrors [Manager.start], and
-		// is why a scheduled start presents on time while an unfixed
-		// scheduled resume used to present late by however long prepare
-		// took on this node.
+		// Release and prepare before waiting for the instant, as [Manager.start]
+		// does, so preparation time never delays presentation.
 		s.releaseEngineLocked(ctx)
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			if errors.Is(err, ErrNoEngineBinding) {
@@ -952,13 +949,8 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 		}
 		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, &atNs)
 		if refusal != nil {
-			// Prepare already released the prior handle and loaded a fresh
-			// one that was never started: leaving it loaded here while
-			// s.state stays Paused would make a later plain Resume call
-			// Engine.Resume on a handle that was never actually paused.
-			// Drop it instead, the same "keep Paused, lose the handle"
-			// shape Resume's own Engine.Resume failure already uses, so
-			// the next resume attempt re-prepares from the bookmark.
+			// The fresh handle was never started: drop it so the session stays
+			// Paused and the next resume re-prepares from the bookmark.
 			s.releaseEngineLocked(ctx)
 			return *refusal
 		}
