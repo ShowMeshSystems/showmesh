@@ -1571,12 +1571,13 @@ func TestRestorePlayingFallsBackToDecoderEndWhenMediaClockIsInvalid(t *testing.T
 }
 
 // TestRestoredSingleMediaSessionPastItsBoundaryDoesNotPanic is the
-// SM-634 regression's restore case: a persisted single-media
-// (non-playlist) session that was scheduled and playing, restored after
-// its item's boundary has already passed on the media clock, must not
-// panic when the watcher tick reaches [Manager.scheduledAdvanceLocked] --
-// restoreItemScheduleLocked rebuilds an item schedule for this session
-// exactly as it does for a playlist, and that schedule has no successor.
+// restore case of the single-media boundary regression: a persisted
+// single-media (non-playlist) session that was scheduled and playing,
+// restored after its item's boundary has already passed on the media
+// clock, must not panic when the watcher tick reaches
+// [Manager.scheduledAdvanceLocked] -- restoreItemScheduleLocked rebuilds
+// an item schedule for this session exactly as it does for a playlist,
+// and that schedule has no successor.
 func TestRestoredSingleMediaSessionPastItsBoundaryDoesNotPanic(t *testing.T) {
 	dir := t.TempDir()
 	c := newClock(time.Unix(1_700_000_000, 0))

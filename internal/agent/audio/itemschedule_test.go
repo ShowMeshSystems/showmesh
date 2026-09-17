@@ -801,9 +801,9 @@ func TestResumeAtPastInstantIsRefused(t *testing.T) {
 	}
 }
 
-// TestScheduledSingleMediaSessionCompletesAtItsBoundaryWithoutPanic is
-// the SM-634 regression: a single-media (non-playlist) session started
-// with a scheduled instant still gets an item schedule -- ADR-049
+// TestScheduledSingleMediaSessionCompletesAtItsBoundaryWithoutPanic is a
+// regression: a single-media (non-playlist) session started with a
+// scheduled instant still gets an item schedule -- ADR-049
 // decision 8 anchors one for every scheduled start, not only a playlist
 // -- and once a known probe duration gives it a known boundary, reaching
 // that boundary through the watcher tick path must not panic, since
