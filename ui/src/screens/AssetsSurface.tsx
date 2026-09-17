@@ -3,19 +3,24 @@ import { Link } from 'react-router-dom'
 import {
   assetContentUrl,
   getAssetContent,
+  getAssetManifest,
   listAssets,
   listConfigObjects,
   resyncNodeAssets,
   uploadAsset,
   type Asset,
+  type AssetLastFetch,
+  type AssetSyncVerdict,
+  type AssetVerdictSource,
   type ConfigObjectSummary,
+  type NodeAssetManifest,
   type UploadProgress,
 } from '../api'
-import { Button, ButtonRow, Callout, Field, Input, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, Field, Input, Notice, Panes, RuledStrip, Section, Segmented, Select, SelectableRow, StatusPair, Table, TableWrap, type Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
-import { type AssetGroup, assetGroups, assetHistory, assetIdentityKey, formatBytes, hashLabel, targetLabel } from './showsModel'
+import { assetHistory, assetIdentityKey, formatBytes, hashLabel, targetLabel } from './showsModel'
 
 /**
  * A rehashed identity, used to decide when re-uploading a file would
@@ -94,6 +99,39 @@ function useShowOptions(enabled: boolean): ConfigObjectSummary[] {
   return shows
 }
 
+type ManifestListState =
+  | { kind: 'loading'; nodes: NodeAssetManifest[] }
+  | { kind: 'loaded'; nodes: NodeAssetManifest[] }
+  | { kind: 'failed'; reason: string; nodes: NodeAssetManifest[] }
+
+/**
+ * GET /assets/manifest, fleet-wide (it carries no per-show filter): the
+ * readiness evidence behind every row's badge and the inspector's Nodes
+ * section. A read failure degrades every badge to Unknown rather than
+ * blocking the file list itself, which GET /assets already answered.
+ */
+function useAssetManifestList(): { state: ManifestListState; reload: () => void } {
+  const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<ManifestListState>({ kind: 'loading', nodes: [] })
+
+  useEffect(() => {
+    let cancelled = false
+    getAssetManifest()
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', nodes: response.nodes })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setState((prev) => ({ kind: 'failed', reason: describeApiError(err), nodes: prev.nodes }))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [attempt])
+
+  return { state, reload: () => setAttempt((n) => n + 1) }
+}
+
 const MEDIA_FILTERS: readonly { value: 'all' | Asset['mediaType']; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'fseq', label: 'FSEQ' },
@@ -103,22 +141,129 @@ const MEDIA_FILTERS: readonly { value: 'all' | Asset['mediaType']; label: string
 
 const MEDIA_CHIP: Record<Asset['mediaType'], string> = { fseq: 'FSEQ', audio: 'Audio', media: 'Media' }
 
+/** One node's readiness for one file, folding the manifest's own verdict (when fresh evidence exists) onto a directly-known expectation (a node-targeted or show-wide row needs no fresh report to be "expected"). */
+type NodeEntry = {
+  nodeId: string
+  label: string | null
+  source: AssetVerdictSource
+  tone: Tone
+  stateLabel: string
+  lastFetch: AssetLastFetch | null
+  observedAt: string | null
+  nodeReason: string | null
+}
+
+/** A verdict's own state (plus lastFetch for "absent") to a tone and word, per the badge rule: unknown never renders green or red. */
+function verdictTone(verdict: AssetSyncVerdict): { tone: Tone; label: string } {
+  if (verdict.state === 'held') return { tone: 'good', label: 'Held' }
+  if (verdict.state === 'superseded') return { tone: 'warn', label: 'Behind' }
+  if (verdict.lastFetch?.state === 'in_flight') return { tone: 'warn', label: 'Sending' }
+  if (verdict.lastFetch?.state === 'failed') return { tone: 'bad', label: 'Failed' }
+  return { tone: 'bad', label: 'Missing' }
+}
+
+const NODE_SOURCE: AssetVerdictSource = { kind: 'node', registeredTarget: '', referencedBy: [] }
+const SHOW_SOURCE: AssetVerdictSource = { kind: 'show', registeredTarget: '', referencedBy: [] }
+
+/**
+ * Every node expected to hold `asset`, or that a fresh verdict names for
+ * it: a node-targeted or show-wide row is expected directly from the
+ * asset's own fields, evidence or not, and renders Unknown rather than
+ * being silently dropped when that node has no fresh report; a borrowed
+ * (cue_copy/bed_copy) copy is knowable only through another node's own
+ * fresh verdict naming this exact assetId, so it appears only when one
+ * does.
+ */
+function nodeEntriesForAsset(
+  asset: Asset,
+  declaredNodes: readonly { nodeId: string; label: string | null }[],
+  manifestByNode: Map<string, NodeAssetManifest>,
+  verdictIndex: Map<string, Map<string, AssetSyncVerdict>>,
+): NodeEntry[] {
+  const nodeIds = new Set<string>()
+  if (asset.targetKind === 'node') {
+    nodeIds.add(asset.target)
+  } else {
+    for (const n of declaredNodes) nodeIds.add(n.nodeId)
+  }
+  for (const [nodeId, byAsset] of verdictIndex) {
+    if (byAsset.has(asset.id)) nodeIds.add(nodeId)
+  }
+
+  const impliedSource: AssetVerdictSource = asset.targetKind === 'node' ? { ...NODE_SOURCE, registeredTarget: asset.target } : SHOW_SOURCE
+
+  return Array.from(nodeIds)
+    .sort((a, b) => a.localeCompare(b))
+    .map((nodeId) => {
+      const manifest = manifestByNode.get(nodeId) ?? null
+      const verdict = verdictIndex.get(nodeId)?.get(asset.id) ?? null
+      const label = declaredNodes.find((n) => n.nodeId === nodeId)?.label ?? null
+      if (verdict !== null) {
+        const { tone, label: stateLabel } = verdictTone(verdict)
+        return {
+          nodeId, label, source: verdict.source, tone, stateLabel,
+          lastFetch: verdict.lastFetch ?? null, observedAt: manifest?.observedAt ?? null, nodeReason: manifest?.reason ?? null,
+        }
+      }
+      return {
+        nodeId, label, source: impliedSource, tone: 'unknown' as Tone, stateLabel: 'Unknown',
+        lastFetch: null, observedAt: manifest?.observedAt ?? null, nodeReason: manifest?.reason ?? 'This node has not reported.',
+      }
+    })
+}
+
+const TONE_RANK: Record<Tone, number> = { bad: 3, warn: 2, good: 1, unknown: 0, pending: 0 }
+const SUMMARY_LABEL: Record<Tone, string> = { good: 'Ready', warn: 'Behind', bad: 'Missing', unknown: 'Unknown', pending: 'Unknown' }
+
+/** The row's own compact badge: the worst of its nodes, grey only when every node is unknown. */
+function summarizeEntries(entries: NodeEntry[]): { tone: Tone; label: string } {
+  if (entries.length === 0 || entries.every((e) => e.tone === 'unknown')) return { tone: 'unknown', label: 'Unknown' }
+  const worst = entries.reduce((acc, e) => (TONE_RANK[e.tone] > TONE_RANK[acc.tone] ? e : acc))
+  return { tone: worst.tone, label: SUMMARY_LABEL[worst.tone] }
+}
+
+/** The plain-words "why" line for one node entry's source. */
+function sourceReason(source: AssetVerdictSource): string {
+  const referencedBy = source.referencedBy.join(', ')
+  switch (source.kind) {
+    case 'node':
+      return 'Uploaded for this node.'
+    case 'show':
+      return 'Uploaded for the whole show.'
+    case 'cue_copy':
+      return `Copied from ${source.registeredTarget || 'another node'} because Cue ${referencedBy || 'an unnamed cue'} plays on this node.`
+    case 'bed_copy':
+      return `Copied from ${source.registeredTarget || 'another node'} because night bed ${referencedBy || 'an unnamed session'} plays on this node.`
+    default:
+      return 'Expected for an unrecorded reason.'
+  }
+}
+
+/** The last-transfer line, or null when this process has nothing on record: never rendered as a failure in that case. */
+function lastFetchLine(lastFetch: AssetLastFetch | null): string | null {
+  if (lastFetch === null) return null
+  if (lastFetch.state === 'in_flight') {
+    const since = lastFetch.dispatchedAt !== null ? formatDateClock(lastFetch.dispatchedAt) ?? 'an unrecorded time' : null
+    return since !== null ? `Sending since ${since} (since the coordinator started).` : 'Sending; the dispatch time is not recorded.'
+  }
+  const at = lastFetch.failedAt !== null ? formatDateClock(lastFetch.failedAt) ?? 'an unrecorded time' : 'an unrecorded time'
+  return `Failed at ${at}: ${lastFetch.failureReason ?? 'no reason recorded'} (since the coordinator started).`
+}
+
 export function AssetsSurface({ scope }: { scope: AssetScope }) {
   const model = useModelContext()
   const { state, reload } = useScopedAssets(scope)
+  const manifest = useAssetManifestList()
   const showOptions = useShowOptions(scope.kind === 'all')
-  const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null)
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [filterText, setFilterText] = useState('')
   const [filterMedia, setFilterMedia] = useState<'all' | Asset['mediaType']>('all')
   const [filterShow, setFilterShow] = useState('all')
 
   const sectionTitle = scope.kind === 'show' ? 'Assets in this show' : 'All assets'
-  const tableLabel =
-    scope.kind === 'show'
-      ? "This show's current assets, grouped by sequence, scrollable"
-      : "Every show's current assets, grouped by sequence, scrollable"
-  const columnCount = 3
+  const tableLabel = scope.kind === 'show' ? "This show's current assets, one row per file, scrollable" : "Every show's current assets, one row per file, scrollable"
+  const columnCount = 7
 
   if (state.kind === 'loading') {
     return (
@@ -145,26 +290,41 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
     )
   }
 
-  const scopedAssets = scope.kind === 'all' && filterShow !== 'all' ? state.assets.filter((a) => a.show === filterShow) : state.assets
+  const currentAssets = state.assets.filter((a) => a.current)
+  const scopedAssets = scope.kind === 'all' && filterShow !== 'all' ? currentAssets.filter((a) => a.show === filterShow) : currentAssets
 
-  const groups = assetGroups(scopedAssets).filter((group) => {
-    if (filterMedia !== 'all' && group.mediaType !== filterMedia) return false
-    if (filterText === '') return true
-    const needle = filterText.toLowerCase()
-    return group.sequence.toLowerCase().includes(needle) || group.current.some((a) => a.target.toLowerCase().includes(needle))
-  })
+  const rows = scopedAssets
+    .filter((a) => filterMedia === 'all' || a.mediaType === filterMedia)
+    .filter((a) => {
+      if (filterText === '') return true
+      const needle = filterText.toLowerCase()
+      return a.sequence.toLowerCase().includes(needle) || a.runtimeFilename.toLowerCase().includes(needle) || targetLabel(a).toLowerCase().includes(needle)
+    })
+    .sort((a, b) => a.show.localeCompare(b.show) || a.sequence.localeCompare(b.sequence) || targetLabel(a).localeCompare(targetLabel(b)))
 
-  const selectedIdentityAsset = selectedIdentity === null ? null : state.assets.find((a) => assetIdentityKey(a) === selectedIdentity) ?? null
+  const manifestNodes = manifest.state.nodes
+  const manifestByNode = new Map(manifestNodes.map((m) => [m.node, m]))
+  const verdictIndex = new Map<string, Map<string, AssetSyncVerdict>>()
+  for (const m of manifestNodes) {
+    if (m.verdicts === undefined) continue
+    verdictIndex.set(m.node, new Map(m.verdicts.map((v) => [v.assetId, v])))
+  }
+
+  const selectedAsset = selectedAssetId === null ? null : state.assets.find((a) => a.id === selectedAssetId) ?? null
   const knownSequences = Array.from(new Set(state.assets.map((a) => a.sequence))).sort()
   const knownShows = Array.from(new Set(state.assets.map((a) => a.show))).sort()
-  const closeInspector = () => { setUploading(false); setSelectedIdentity(null) }
+  const closeInspector = () => {
+    setUploading(false)
+    setSelectedAssetId(null)
+  }
 
   return (
     <div className="sm-assets-surface">
       <Panes
-        inspectorOpen={uploading || selectedIdentityAsset !== null}
+        inspectorOpen={uploading || selectedAsset !== null}
         onInspectorClose={closeInspector}
         inspectorLabelledBy={uploading ? 'assets-upload-heading' : 'assets-detail-heading'}
+        inspectorWidth="wide"
       >
         <div>
           <Section
@@ -175,7 +335,7 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
                 variant="primary"
                 onClick={() => {
                   setUploading(true)
-                  setSelectedIdentity(null)
+                  setSelectedAssetId(null)
                 }}
               >
                 Upload
@@ -184,14 +344,18 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
           >
             <Callout>
               Sync runs on upload and on a timer, never because a show started. Nodes always play from their own disk, so a node missing an asset is a
-              readiness fault found before a show, not during one. Node-by-node sync state is Monitor &rsaquo; Manifest's own facet, not this tab; see{' '}
+              readiness fault found before a show, not during one. Click a row for the full per-node breakdown; see also{' '}
               <Link to="/monitor/manifest">Monitor &rsaquo; Manifest</Link>.
             </Callout>
 
             <p className="sm-small sm-muted sm-stack-4">
-              Grouped by logical sequence, because one sequence produces a different file per target and xLights gives them all the same name. The
-              filename belongs to the group; identity belongs to the row.
+              One row per current file. Status summarises every node expected to hold it; open a row for what each node holds, why it was expected to, and
+              its last transfer.
             </p>
+
+            {manifest.state.kind === 'failed' && (
+              <RuledStrip absence="stale" label="Readiness unread" fact={manifest.state.reason} detail="Status shows as Unknown below until this succeeds." />
+            )}
 
             <div className="sm-assets-filters sm-stack-3">
               <Input aria-label="Filter assets" placeholder="Filter assets…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
@@ -216,30 +380,34 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
 
             <div className="sm-assets-table sm-stack-3">
               <TableWrap label={tableLabel}>
-                <Table minWidth={scope.kind === 'all' ? 560 : 520}>
+                <Table minWidth={scope.kind === 'all' ? 720 : 680}>
                   <thead>
                     <tr>
-                      <th scope="col">Target</th>
-                      <th scope="col">Hash</th>
+                      <th scope="col">Show</th>
+                      <th scope="col">Internal name</th>
+                      <th scope="col">Runtime filename</th>
+                      <th scope="col">Type</th>
                       <th scope="col" className="sm-table__num">Size</th>
+                      <th scope="col">Hash</th>
+                      <th scope="col">Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {groups.length === 0 ? (
+                    {rows.length === 0 ? (
                       <tr>
                         <td colSpan={columnCount}>
                           <RuledStrip absence="empty" label="None" fact="No asset matches here." />
                         </td>
                       </tr>
                     ) : (
-                      groups.map((group) => (
-                        <AssetGroupRows
-                          key={`${group.show} ${group.sequence} ${group.mediaType}`}
-                          group={group}
-                          showColumn={scope.kind === 'all'}
-                          selectedIdentity={selectedIdentity}
-                          onSelect={(identity) => {
-                            setSelectedIdentity(identity)
+                      rows.map((asset) => (
+                        <AssetRow
+                          key={asset.id}
+                          asset={asset}
+                          entries={nodeEntriesForAsset(asset, model.nodes, manifestByNode, verdictIndex)}
+                          selected={selectedAssetId === asset.id}
+                          onSelect={() => {
+                            setSelectedAssetId(asset.id)
                             setUploading(false)
                           }}
                         />
@@ -263,17 +431,22 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
               model={model}
               onUploaded={() => {
                 reload()
+                manifest.reload()
               }}
               onCancel={() => setUploading(false)}
             />
           )}
-          {!uploading && selectedIdentityAsset !== null && (
+          {!uploading && selectedAsset !== null && (
             <AssetDetail
-              key={selectedIdentity}
-              asset={selectedIdentityAsset}
-              history={assetHistory(state.assets, selectedIdentity ?? '')}
+              key={selectedAssetId}
+              asset={selectedAsset}
+              history={assetHistory(state.assets, assetIdentityKey(selectedAsset))}
+              entries={nodeEntriesForAsset(selectedAsset, model.nodes, manifestByNode, verdictIndex)}
               model={model}
-              onRolledBack={() => reload()}
+              onRolledBack={() => {
+                reload()
+                manifest.reload()
+              }}
             />
           )}
         </aside>
@@ -282,51 +455,37 @@ export function AssetsSurface({ scope }: { scope: AssetScope }) {
   )
 }
 
-function AssetGroupRows({
-  group,
-  showColumn,
-  selectedIdentity,
+function AssetRow({
+  asset,
+  entries,
+  selected,
   onSelect,
 }: {
-  group: AssetGroup
-  showColumn: boolean
-  selectedIdentity: string | null
-  onSelect: (identity: string) => void
+  asset: Asset
+  entries: NodeEntry[]
+  selected: boolean
+  onSelect: () => void
 }) {
-  const columnCount = 3
+  const summary = summarizeEntries(entries)
   return (
-    <>
-      <tr className="sm-table__group">
-        <td colSpan={columnCount}>
-          <div className="sm-assets-table__group-heading">
-            {showColumn && (
-              <>
-                <span className="sm-assets-table__show">{group.show}</span>
-                <span className="sm-assets-table__separator" aria-hidden="true">/</span>
-              </>
-            )}
-            <span className="sm-subhead">{group.sequence}</span>
-            <span className="sm-chip">{MEDIA_CHIP[group.mediaType]}</span>
-            <span className="sm-data sm-small sm-faint">
-              {group.runtimeFilename} · {group.current.length} {group.current.length === 1 ? 'target shares' : 'targets share'} this filename
-            </span>
-          </div>
-        </td>
-      </tr>
-      {group.current.map((asset) => {
-        const identity = assetIdentityKey(asset)
-        return (
-          <SelectableRow key={identity} selected={selectedIdentity === identity} onActivate={() => onSelect(identity)} ariaLabel={`View ${group.sequence} for ${targetLabel(asset)}`}>
-            <td>
-              <strong>{targetLabel(asset)}</strong>
-              {selectedIdentity === identity && <span className="sm-viewing">Viewing</span>}
-            </td>
-            <td className="sm-data sm-small sm-muted">{hashLabel(asset.contentHash)}</td>
-            <td className="sm-table__num" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
-          </SelectableRow>
-        )
-      })}
-    </>
+    <SelectableRow selected={selected} onActivate={onSelect} ariaLabel={`View ${asset.sequence} for ${targetLabel(asset)}`}>
+      <td className="sm-data">{asset.show}</td>
+      <td>
+        <strong>{asset.sequence}</strong>
+        <br />
+        <span className="sm-data sm-small sm-faint">for {targetLabel(asset)}</span>
+        {selected && <span className="sm-viewing">Viewing</span>}
+      </td>
+      <td className="sm-data sm-small sm-muted">{asset.runtimeFilename}</td>
+      <td>
+        <span className="sm-chip">{MEDIA_CHIP[asset.mediaType]}</span>
+      </td>
+      <td className="sm-table__num" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
+      <td className="sm-data sm-small sm-muted">{hashLabel(asset.contentHash)}</td>
+      <td>
+        <StatusPair tone={summary.tone} label={summary.label} />
+      </td>
+    </SelectableRow>
   )
 }
 
@@ -357,11 +516,13 @@ type RollbackState =
 function AssetDetail({
   asset,
   history,
+  entries,
   model,
   onRolledBack,
 }: {
   asset: Asset
   history: Asset[]
+  entries: NodeEntry[]
   model: ReturnType<typeof useModelContext>
   onRolledBack: () => void
 }) {
@@ -437,6 +598,53 @@ function AssetDetail({
           Identity is those four facts. The runtime filename <span className="sm-data">{asset.runtimeFilename}</span> is not one of them; a different
           asset can carry the same filename.
         </p>
+      </section>
+
+      <section className="sm-inspector__group">
+        <h3 className="sm-subsection__title">File details</h3>
+        <div className="sm-inspector__row">
+          <span className="sm-inspector__label">Runtime filename</span>
+          <p className="sm-inspector__value sm-data">{asset.runtimeFilename}</p>
+        </div>
+        <div className="sm-inspector__row">
+          <span className="sm-inspector__label">Type</span>
+          <p className="sm-inspector__value sm-data">{MEDIA_CHIP[asset.mediaType]}</p>
+        </div>
+        <div className="sm-inspector__row">
+          <span className="sm-inspector__label">Size</span>
+          <p className="sm-inspector__value sm-data" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</p>
+        </div>
+        <div className="sm-inspector__row">
+          <span className="sm-inspector__label">Uploaded</span>
+          <p className="sm-inspector__value sm-data">
+            {formatDateClock(asset.createdAt) ?? 'at an unrecorded time'} by {asset.createdByPrincipalName ?? 'an unknown principal'}
+          </p>
+        </div>
+      </section>
+
+      <section className="sm-inspector__group">
+        <h3 className="sm-subsection__title">Nodes</h3>
+        <p className="sm-small sm-muted">Every node expected to hold this file, why, and its last transfer.</p>
+        {entries.length === 0 ? (
+          <RuledStrip absence="empty" label="None" fact="No node is declared." />
+        ) : (
+          entries.map((entry) => {
+            const transfer = lastFetchLine(entry.lastFetch)
+            return (
+              <div key={entry.nodeId} className="sm-readout">
+                <StatusPair tone={entry.tone} label={entry.stateLabel} />
+                <div>
+                  <p className="sm-data sm-flat">{entry.label ?? entry.nodeId}</p>
+                  <p className="sm-readout__fact">{sourceReason(entry.source)}</p>
+                  {transfer !== null && <p className="sm-readout__fact">{transfer}</p>}
+                  <p className="sm-readout__fact sm-small sm-muted">
+                    {entry.observedAt !== null ? `Reported ${formatDateClock(entry.observedAt) ?? 'at an unrecorded time'}.` : entry.nodeReason ?? 'This node has not reported.'}
+                  </p>
+                </div>
+              </div>
+            )
+          })
+        )}
       </section>
 
       <section className="sm-inspector__group">

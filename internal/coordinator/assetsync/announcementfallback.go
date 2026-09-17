@@ -114,7 +114,7 @@ func AnnouncementBindings(ctx context.Context, st *store.Store, showID string) (
 // announcementFallbackAssets is [ExpectedAssetsForNode]'s own wiring point
 // for ADR-049 decisions 7 and 9's registered-copy rule: a listed node with no current row of its
 // own matching content borrows another listed node's current row, keyed by content hash rather than sequence (an announcement has no sequence identity).
-func announcementFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string) ([]store.AssetRecord, error) {
+func announcementFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string) ([]borrowedAsset, error) {
 	bindings, err := AnnouncementBindings(ctx, st, showID)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func announcementFallbackAssets(ctx context.Context, st *store.Store, showID, no
 
 	rowsByTarget := make(map[string][]store.AssetRecord)
 	seenAssetIDs := make(map[string]bool)
-	var out []store.AssetRecord
+	var out []borrowedAsset
 	for _, b := range bindings {
 		if !b.Media.Complete() || !containsNodeID(b.NodeIDs, nodeID) {
 			continue
@@ -157,7 +157,7 @@ func announcementFallbackAssets(ctx context.Context, st *store.Store, showID, no
 				rowsByTarget[t] = rows
 			}
 			if rec, found := findAudioContentHash(rows, b.Media.ContentHash); found {
-				out = append(out, rec)
+				out = append(out, borrowedAsset{AssetRecord: rec, ReferencedBy: b.CueName})
 				seenAssetIDs[b.Media.AssetID] = true
 				break
 			}
