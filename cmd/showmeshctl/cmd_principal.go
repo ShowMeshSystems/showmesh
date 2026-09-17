@@ -62,19 +62,19 @@ func cmdPrincipal(args []string, stdout, stderr io.Writer, clock func() time.Tim
 func printPrincipalUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl principal <subcommand> [flags]
 
-Identity administration (Track G seam G-5, ADR-024, ADR-039 decision 8):
-principals, their role and enabled state, and their passwords. "showmeshctl
+Identity administration: principals, their role and enabled state, and
+their passwords. "showmeshctl
 token" (a sibling command) manages one principal's API tokens.
 
 Reads require principal:read; every write requires principal:write and is
 audited. Disabling the coordinator's last enabled administrator, or
 changing its role away from one that holds principal:write, is refused
-with 409 — this is a deliberate refusal (ADR-039 decision 8), not a bug:
+with 409, a deliberate refusal, not a bug:
 it costs an administrative retry rather than an unrecoverable coordinator
 with no shell to recover it from.
 
-Creating the FIRST principal (bootstrap) is not here — ADR-024 decision 9
-keeps that coordinator-local, since no principal exists yet to authenticate
+Creating the FIRST principal (bootstrap) is not here: it stays
+coordinator-local, since no principal exists yet to authenticate
 this surface's own writes against. See "showmesh-coordinator bootstrap" on
 the coordinator host.
 
@@ -275,8 +275,7 @@ func cmdPrincipalSetDisabled(args []string, stdout, stderr io.Writer, clock func
 		_, _ = fmt.Fprintf(stderr, "usage: showmeshctl principal %s [flags] <id>\n", verb)
 		_, _ = fmt.Fprintf(stderr, "\n%s a principal (requires principal:write).\n", action)
 		if disabled {
-			_, _ = fmt.Fprintln(stderr, "Refused with 409 if this is the coordinator's last enabled administrator")
-			_, _ = fmt.Fprintln(stderr, "(ADR-039 decision 8).")
+			_, _ = fmt.Fprintln(stderr, "Refused with 409 if this is the coordinator's last enabled administrator.")
 		}
 		fs.PrintDefaults()
 	}
@@ -379,8 +378,7 @@ func cmdPrincipalSetRole(args []string, stdout, stderr io.Writer, clock func() t
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl principal set-role [flags] <id> <role>")
 		_, _ = fmt.Fprintln(stderr, "\nChange a principal's role (requires principal:write). Refused with 409")
-		_, _ = fmt.Fprintln(stderr, "if this would leave no enabled principal able to reach principal:write")
-		_, _ = fmt.Fprintln(stderr, "(ADR-039 decision 8).")
+		_, _ = fmt.Fprintln(stderr, "if this would leave no enabled principal able to reach principal:write.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

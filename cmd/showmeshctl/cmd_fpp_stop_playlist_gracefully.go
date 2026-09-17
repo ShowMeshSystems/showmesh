@@ -39,7 +39,7 @@ func cmdFPPStopPlaylistGracefully(args []string, stdout, stderr io.Writer, clock
 		_, _ = fmt.Fprintln(stderr, "here does NOT mean the show has stopped — it means FPP accepted the")
 		_, _ = fmt.Fprintln(stderr, "graceful stop and is winding down; the printed outcome reason says so")
 		_, _ = fmt.Fprintln(stderr, "explicitly every time.")
-		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success (ADR-003): this command prints and")
+		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success: this command prints and")
 		_, _ = fmt.Fprintln(stderr, "exits on the response body's own \"confirmed\"/\"unconfirmed\" outcome, never")
 		_, _ = fmt.Fprintln(stderr, "on the HTTP status alone. A fresh idempotency key is minted for every")
 		_, _ = fmt.Fprintln(stderr, "invocation of this command.")

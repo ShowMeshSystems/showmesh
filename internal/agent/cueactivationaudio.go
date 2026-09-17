@@ -180,7 +180,7 @@ func announcementMixPolicy(policy string) (pkgaudio.MixPolicy, error) {
 // every other successful path.
 func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput, announcement *cuecatalog.AnnouncementOutput) (string, error) {
 	if out.Filename == "" {
-		return "", fmt.Errorf("Cue %q's audio asset %q has not been uploaded to this node. Upload it and redeploy.", act.CueID, out.Asset)
+		return "", fmt.Errorf("cue %q's audio asset %q has not been uploaded to this node, upload it and redeploy", act.CueID, out.Asset)
 	}
 
 	contentHash := firstAssetHash(out.AssetHashes)
@@ -227,7 +227,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 
 	applyOutcome := mgr.Apply(ctx, id, activationInvocation(act, "apply"), activationRevision(act, activationStepApply), req)
 	if audioOutcomeFailed(applyOutcome) {
-		return "", fmt.Errorf("Cue %q's audio setup failed (%s): %s", act.CueID, applyOutcome.Outcome, applyOutcome.Reason)
+		return "", fmt.Errorf("cue %q's audio setup failed (%s): %s", act.CueID, applyOutcome.Outcome, applyOutcome.Reason)
 	}
 
 	position := time.Duration(act.PositionMS) * time.Millisecond
@@ -259,14 +259,14 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		}
 		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
 		if audioOutcomeFailed(prepOutcome) {
-			return "", fmt.Errorf("Cue %q's audio was not ready (%s): %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
+			return "", fmt.Errorf("cue %q's audio was not ready (%s): %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
 		}
 		startOutcome := mgr.StartAtPosition(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart), *act.ScheduledAtNs, position)
 		if audioOutcomeFailed(startOutcome) {
 			if startOutcome.Outcome == pkgaudio.OutcomeRefused && strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
 				return startUnalignedOnArrival(ctx, mgr, id, act, position, startOutcome.Reason)
 			}
-			return "", fmt.Errorf("Cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+			return "", fmt.Errorf("cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 		}
 		// A started outcome still carries [pkgaudio.ReasonScheduledStartIgnored]
 		// in its Reason when this node's own clock could not honor the
@@ -325,18 +325,18 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 	if !started {
 		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
 		if audioOutcomeFailed(prepOutcome) {
-			return "", fmt.Errorf("Cue %q's audio was not ready (%s): %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
+			return "", fmt.Errorf("cue %q's audio was not ready (%s): %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
 		}
 
 		startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart))
 		if audioOutcomeFailed(startOutcome) {
-			return "", fmt.Errorf("Cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+			return "", fmt.Errorf("cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 		}
 	}
 
 	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek"), activationRevision(act, activationStepSeek), position)
 	if audioOutcomeFailed(seekOutcome) {
-		return "", fmt.Errorf("Cue %q's audio did not move to %dms (%s): %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
+		return "", fmt.Errorf("cue %q's audio did not move to %dms (%s): %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
 	}
 	return "", nil
 }
@@ -350,11 +350,11 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, position time.Duration, missedReason string) (string, error) {
 	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(act, unalignedFallbackStepStart))
 	if audioOutcomeFailed(startOutcome) {
-		return "", fmt.Errorf("Cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+		return "", fmt.Errorf("cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 	}
 	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek-unaligned"), activationRevision(act, unalignedFallbackStepSeek), position)
 	if audioOutcomeFailed(seekOutcome) {
-		return "", fmt.Errorf("Cue %q's audio did not move to %dms (%s): %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
+		return "", fmt.Errorf("cue %q's audio did not move to %dms (%s): %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
 	}
 	return fmt.Sprintf("Started on arrival instead of at the scheduled time: %s", missedReason), nil
 }

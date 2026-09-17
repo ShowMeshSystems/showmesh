@@ -23,7 +23,7 @@ import (
 func cmdWatch(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl watch", stderr)
 	var deltas bool
-	fs.BoolVar(&deltas, "deltas", false, "opt into observation-level delta frames (ADR-023): GET /api/v1/stream?deltas=1")
+	fs.BoolVar(&deltas, "deltas", false, "opt into observation-level delta frames: GET /api/v1/stream?deltas=1")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl watch [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nFetch the authoritative snapshot, then stream live changes from")
@@ -34,7 +34,7 @@ func cmdWatch(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		_, _ = fmt.Fprintln(stderr, "reconnect attempts, not to the open stream itself, which is long-lived")
 		_, _ = fmt.Fprintln(stderr, "by design.")
 		_, _ = fmt.Fprintln(stderr, "\nWith --deltas, this connection also receives fpp.observations.changed")
-		_, _ = fmt.Fprintln(stderr, "frames (ADR-023): an FPP instance's observation-level changes arrive")
+		_, _ = fmt.Fprintln(stderr, "frames: an FPP instance's observation-level changes arrive")
 		_, _ = fmt.Fprintln(stderr, "as just the signals that moved, rather than repeating every one of that")
 		_, _ = fmt.Fprintln(stderr, "instance's observations inside fpp.changed. Without it (the default),")
 		_, _ = fmt.Fprintln(stderr, "this command behaves exactly as it always has: fpp.observations.changed")

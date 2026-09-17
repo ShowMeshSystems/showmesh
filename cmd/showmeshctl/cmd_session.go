@@ -43,7 +43,7 @@ func cmdSession(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl session [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nShow the principal, role, and effective scopes the configured")
-		_, _ = fmt.Fprintln(stderr, "credential resolves to (GET /api/v1/session, ADR-024).")
+		_, _ = fmt.Fprintln(stderr, "credential resolves to (GET /api/v1/session).")
 		_, _ = fmt.Fprintln(stderr, "\nAlways reachable with no credential at all: with no --token and no")
 		_, _ = fmt.Fprintln(stderr, "$SHOWMESH_CTL_TOKEN set, this reports \"not authenticated\" rather than")
 		_, _ = fmt.Fprintln(stderr, "failing — that is this one endpoint's own contract (being signed out")

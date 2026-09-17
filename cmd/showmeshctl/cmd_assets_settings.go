@@ -85,8 +85,8 @@ func cmdAssetsSettings(args []string, stdout, stderr io.Writer, clock func() tim
 func printAssetsSettingsUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl assets settings <subcommand> [flags]
 
-Read or write the coordinator's assets.settings configuration (Track G
-seam G-4, ADR-039): the asset store's content base URL, upload byte limit,
+Read or write the coordinator's assets.settings configuration: the asset
+store's content base URL, upload byte limit,
 and sync/inventory intervals, moved out of SHOWMESH_ASSET_CONTENT_BASE_URL/
 SHOWMESH_ASSET_MAX_UPLOAD_BYTES/SHOWMESH_ASSET_SYNC_INTERVAL/
 SHOWMESH_ASSET_INVENTORY_INTERVAL into the coordinator's authoritative
@@ -100,7 +100,7 @@ Subcommands:
   set   write a new configuration revision; only the flags you pass are
         changed — an omitted flag leaves the stored value alone
 
-A configuration change here takes effect without a restart (ADR-036): the
+A configuration change here takes effect without a restart: the
 live asset sync service follows within about ten seconds. "assets settings
 set" and "assets settings get" both print this fact.
 
@@ -172,8 +172,8 @@ func cmdAssetsSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new assets.settings configuration revision (requires config:write,")
 		_, _ = fmt.Fprintln(stderr, "admin only). Only the flags you pass are changed — an omitted flag leaves")
 		_, _ = fmt.Fprintln(stderr, "the stored (or default) value alone. Validated before activation: an")
-		_, _ = fmt.Fprintln(stderr, "invalid payload appends no revision (ADR-009).")
-		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): the live asset sync")
+		_, _ = fmt.Fprintln(stderr, "invalid payload appends no revision.")
+		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart: the live asset sync")
 		_, _ = fmt.Fprintln(stderr, "service follows within about ten seconds.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
 		_, _ = fmt.Fprintln(stderr, "configuration changed since it was read.")

@@ -47,10 +47,10 @@ import (
 func (o *renderOperations) activateRender(act cueactivation.Activation, out cuecatalog.RenderOutput, now func() time.Time) error {
 	assignments, err := o.store.Load()
 	if err != nil {
-		return fmt.Errorf("Could not load this node's surface assignments: %w", err)
+		return fmt.Errorf("could not load this node's surface assignments: %w", err)
 	}
 	if len(assignments) == 0 {
-		return fmt.Errorf("No surface is assigned on this node, so Cue %q's projection could not be activated.", act.CueID)
+		return fmt.Errorf("no surface is assigned on this node, so Cue %q's projection could not be activated", act.CueID)
 	}
 
 	var errs []string
@@ -84,7 +84,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 
 	if out.Filename == "" {
 		return fmt.Errorf(
-			"Surface %q's Cue %q (revision %d) uses render sequence %q, which has not been uploaded to this node. Upload it and redeploy.",
+			"surface %q's Cue %q (revision %d) uses render sequence %q, which has not been uploaded to this node, upload it and redeploy",
 			a.SurfaceID, act.CueID, act.CueRevision, out.Sequence)
 	}
 
@@ -100,7 +100,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// if healthy.
 	if snap := o.timeline.Snapshot(); snap.Filename != "" && snap.Filename != out.Filename {
 		return fmt.Errorf(
-			"Surface %q is currently playing %q, which does not match Cue %q (revision %d)'s expected file %q. Content was not switched.",
+			"surface %q is currently playing %q, which does not match Cue %q (revision %d)'s expected file %q, content was not switched",
 			a.SurfaceID, snap.Filename, act.CueID, act.CueRevision, out.Filename)
 	}
 
@@ -138,7 +138,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 
 	var params map[string]any
 	if err := json.Unmarshal(a.RawParams, &params); err != nil {
-		return fmt.Errorf("Surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
 	}
 	params["fseqFilename"] = out.Filename
 	params["fseqContentHash"] = firstAssetHash(out.AssetHashes)
@@ -156,14 +156,14 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	rawParams, err := json.Marshal(params)
 	if err != nil {
 		_ = f.Close()
-		return fmt.Errorf("Surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
 	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
 	if err := o.store.Upsert(pipeline.Assignment{
 		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("Surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
 
 	// Only now, with the new file already open and validated and the new
@@ -177,7 +177,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	o.stopFrameWriter(a.SurfaceID)
 	if err := o.startFrameWriter(a.SurfaceID, f, parsedA); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("Surface %q: could not start playback of the new sequence: %w", a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not start playback of the new sequence: %w", a.SurfaceID, err)
 	}
 	// The SHARED timeline step time moves only after the new writer is
 	// actually running — never before, or a startFrameWriter failure above
@@ -206,7 +206,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 func (o *renderOperations) refreshAssignmentAuth(a pipeline.Assignment, act cueactivation.Activation, now func() time.Time) error {
 	var params map[string]any
 	if err := json.Unmarshal(a.RawParams, &params); err != nil {
-		return fmt.Errorf("Surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not read its saved assignment: %w", a.SurfaceID, err)
 	}
 	params["show"] = act.Show
 	params["generation"] = float64(act.Generation)
@@ -214,13 +214,13 @@ func (o *renderOperations) refreshAssignmentAuth(a pipeline.Assignment, act cuea
 
 	rawParams, err := json.Marshal(params)
 	if err != nil {
-		return fmt.Errorf("Surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its updated assignment: %w", a.SurfaceID, err)
 	}
 	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
 	if err := o.store.Upsert(pipeline.Assignment{
 		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
-		return fmt.Errorf("Surface %q: could not save its refreshed assignment: %w", a.SurfaceID, err)
+		return fmt.Errorf("surface %q: could not save its refreshed assignment: %w", a.SurfaceID, err)
 	}
 	return nil
 }

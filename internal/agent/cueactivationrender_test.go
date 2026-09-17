@@ -193,7 +193,7 @@ func TestActivateRenderSucceedsOnAnEstablishedNoSequenceAssignment(t *testing.T)
 		t.Fatalf("activate result Value = %#v (%T), want a map", before.Value, before.Value)
 	}
 	reasons, _ := value["reasons"].([]string)
-	if len(reasons) != 1 || reasons[0] != `No surface is assigned on this node, so Cue "cue-2"'s projection could not be activated.` {
+	if len(reasons) != 1 || reasons[0] != `no surface is assigned on this node, so Cue "cue-2"'s projection could not be activated` {
 		t.Fatalf("activate refusal reasons = %#v, want exactly the no-assignment refusal", value["reasons"])
 	}
 

@@ -104,7 +104,7 @@ func cmdShowMode(args []string, stdout, stderr io.Writer, clock func() time.Time
 func printShowModeUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl show mode [get|set|revisions] [flags]
 
-Read or write the installation-wide operating mode (ADR-033): one value for
+Read or write the installation-wide operating mode: one value for
 the whole installation, "program" or "show". Not per-node, not per-device,
 and never a per-subsystem flag.
 
@@ -120,7 +120,7 @@ definition being set up.
 
 The mode changes what the system does, never who may do it, and it gates no
 command path: no mode may refuse, delay, or degrade blackout, stop, or
-power-off (ADR-033 decision 4).
+power-off.
 
 What reads the mode today: the Resolume WebSocket wake-up channel, held open
 in program and closed in show, applied without a coordinator restart in both
@@ -189,7 +189,7 @@ func cmdShowModeSet(args []string, stdout, stderr io.Writer, clock func() time.T
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl show mode set [flags] <program|show>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new show.mode revision (requires config:write, admin only).")
 		_, _ = fmt.Fprintln(stderr, "A full replacement, validated before activation: an invalid value is")
-		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision (ADR-009). Applies without a")
+		_, _ = fmt.Fprintln(stderr, "rejected and appends no revision. Applies without a")
 		_, _ = fmt.Fprintln(stderr, "coordinator restart, in both directions.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (a fresh read), refusing with a 409 if the")
 		_, _ = fmt.Fprintln(stderr, "mode changed since it was read.")

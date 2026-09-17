@@ -150,7 +150,7 @@ func TestCmdFPPConnectStatusPrintsDroppedState(t *testing.T) {
 			`"declaration":`+validDeclarationJSONForFPPConnectTest+`,"render":[],"audio":[],`+
 			`"fppConnect":[`+
 			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.state","value":"dropped","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null},`+
-			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.reason","value":"This surface's channel ranges are too long to advertise to xLights (over 120 bytes): 187 bytes","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null}`+
+			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.reason","value":"this surface's channel ranges are too long to advertise to xLights (over 120 bytes): 187 bytes","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null}`+
 			`]}}`)
 	}))
 	defer ts.Close()

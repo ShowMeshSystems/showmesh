@@ -246,7 +246,7 @@ func loadCredential() (string, error) {
 	}
 	if mode := info.Mode().Perm(); mode != requiredCredentialMode {
 		return "", fmt.Errorf(
-			"Credential file %s has mode %04o. It must be exactly 0600 (owner read/write only) before this program will run. Fix the file permissions.",
+			"credential file %s has mode %04o; it must be exactly 0600 (owner read/write only) before this program will run, fix the file permissions",
 			path, mode)
 	}
 	raw, err := os.ReadFile(path)

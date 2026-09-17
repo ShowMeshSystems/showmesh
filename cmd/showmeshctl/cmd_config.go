@@ -60,8 +60,8 @@ func cmdConfig(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 func printConfigUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl config <subcommand> [flags]
 
-Read or write the coordinator's fpp.endpoints configuration (Step 7,
-RES-008 D1): the list of FPP instances the coordinator polls, moved out
+Read or write the coordinator's fpp.endpoints configuration: the list
+of FPP instances the coordinator polls, moved out
 of SHOWMESH_FPP_ENDPOINTS into the coordinator's authoritative store.
 Every subcommand requires the config:write scope (admin only) — there is
 no config:read scope; reading this surface is exactly as sensitive as
@@ -80,7 +80,7 @@ piped through an edit in between) genuinely round-trips. It refuses,
 before sending anything, if it cannot find an "endpoints" key in either
 shape; it never sends a request with a nil or absent endpoints list.
 
-A configuration change here takes effect without a restart (ADR-036):
+A configuration change here takes effect without a restart:
 command dispatch resolves the endpoint list per request, and the
 collector set follows within about ten seconds. "showmeshctl config set"
 and "showmeshctl config get" both print this fact; do not skip it when
@@ -162,8 +162,8 @@ func cmdConfigSet(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl config set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new fpp.endpoints configuration revision (requires config:write,")
 		_, _ = fmt.Fprintln(stderr, "admin only). Validated before activation: an invalid payload is rejected")
-		_, _ = fmt.Fprintln(stderr, "and appends no revision (ADR-009).")
-		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart (ADR-036): dispatch resolves the")
+		_, _ = fmt.Fprintln(stderr, "and appends no revision.")
+		_, _ = fmt.Fprintln(stderr, "\nThis takes effect without a restart: dispatch resolves the")
 		_, _ = fmt.Fprintln(stderr, "endpoint list per request, and the collector set follows within about")
 		_, _ = fmt.Fprintln(stderr, "ten seconds.")
 		_, _ = fmt.Fprintln(stderr, "\nAccepts either a bare {\"endpoints\":[...]} payload, or the full object \"config get --output json\" prints.")
@@ -392,7 +392,7 @@ func cmdConfigRevisions(args []string, stdout, stderr io.Writer, clock func() ti
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl config revisions [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nList fpp.endpoints revision history, newest first. Metadata only —")
-		_, _ = fmt.Fprintln(stderr, "no payload; rollback tooling is deliberately out of scope (RES-008).")
+		_, _ = fmt.Fprintln(stderr, "no payload; rollback tooling is deliberately out of scope.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

@@ -76,9 +76,9 @@ func cmdPlaylist(args []string, stdout, stderr io.Writer, clock func() time.Time
 func printPlaylistUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl playlist <subcommand> [flags]
 
-Read or write the coordinator's "show.playlist" configuration objects
-(Track H, ADR-043: a Playlist is the show-scoped ordered program of Cues,
-bound to a runner). Reads require show:macro:run OR config:write; writes
+Read or write the coordinator's "show.playlist" configuration objects: a
+Playlist is the show-scoped ordered program of Cues, bound to a runner.
+Reads require show:macro:run OR config:write; writes
 require config:write.
 
 Subcommands:

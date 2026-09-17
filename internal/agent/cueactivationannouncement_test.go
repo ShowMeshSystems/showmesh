@@ -245,7 +245,7 @@ func TestAnnouncementCueCoexistsWithBackgroundMusic(t *testing.T) {
 // TestSecondAnnouncementRefusedWhileFirstIsPlaying proves TRACK-H-cues-
 // and-playlists.md section H5 build item 3's own ruling: a second,
 // DIFFERENT announcement Cue arriving while the first is still Playing in
-// [cueactivation.AnnouncementSessionID] is REFUSED — naming both Cue ids —
+// [cueactivation.AnnouncementSessionID] is REFUSED (naming both Cue ids),
 // never superseded. Before this fix,
 // activateAudio routed every announcement to the SAME session
 // unconditionally, so the second Cue's own Apply tore the first down

@@ -25,7 +25,7 @@ func cmdFPPPausePlaylist(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "paused (fpp.status = \"paused\"). FPP answers 200 even while idle, with")
 		_, _ = fmt.Fprintln(stderr, "nothing paused (docs/bench/fpp-command-vocabulary.md section 2) — this")
 		_, _ = fmt.Fprintln(stderr, "command reports that case \"unconfirmed\", never \"confirmed\" on the HTTP")
-		_, _ = fmt.Fprintln(stderr, "status alone (ADR-003). A fresh idempotency key is minted for every")
+		_, _ = fmt.Fprintln(stderr, "status alone. A fresh idempotency key is minted for every")
 		_, _ = fmt.Fprintln(stderr, "invocation of this command.")
 		fs.PrintDefaults()
 	}

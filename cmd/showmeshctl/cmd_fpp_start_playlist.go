@@ -57,7 +57,7 @@ func cmdFPPStartPlaylist(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "Pass --if-busy=replace to interrupt the running show deliberately. This")
 		_, _ = fmt.Fprintln(stderr, "guard is evaluated against the coordinator's own evidence, which can be")
 		_, _ = fmt.Fprintln(stderr, "stale, and does not prevent a race against FPP's own scheduler.")
-		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success (ADR-003): this command prints and")
+		_, _ = fmt.Fprintln(stderr, "\nA 200 response is not itself success: this command prints and")
 		_, _ = fmt.Fprintln(stderr, "exits on the response body's own \"confirmed\"/\"unconfirmed\" outcome, never")
 		_, _ = fmt.Fprintln(stderr, "on the HTTP status alone. A fresh idempotency key is minted for every")
 		_, _ = fmt.Fprintln(stderr, "invocation of this command.")

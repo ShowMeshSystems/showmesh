@@ -274,8 +274,8 @@ func printResolumeUsage(w io.Writer) {
 
 Subcommands:
   instance      connect this coordinator to a Resolume Arena instance:
-                read, write, or remove the resolume.instances configuration
-                (Track G seam G-2, ADR-039) — the step that has to happen
+                read, write, or remove the resolume.instances configuration,
+                the step that has to happen
                 before any of the subcommands below can do anything
   composition   upload or show the stored Resolume Arena composition: the
                 id map of decks, layers, columns and clips every ShowMesh

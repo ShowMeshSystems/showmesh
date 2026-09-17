@@ -220,7 +220,7 @@ func TestCmdCueSetUsageNamesTargetsList(t *testing.T) {
 	if !strings.Contains(out, `"targets"`) {
 		t.Errorf("usage = %q, want it to name the \"targets\" list field", out)
 	}
-	if !strings.Contains(out, "ADR-049") {
-		t.Errorf("usage = %q, want it to cite ADR-049", out)
+	if !strings.Contains(out, "one aligned instant") {
+		t.Errorf("usage = %q, want it to explain the targets list plainly", out)
 	}
 }

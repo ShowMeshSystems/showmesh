@@ -162,7 +162,7 @@ func cmdAudio(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 func printAudioUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio <subcommand> [flags]
 
-The audio engine's own configuration (ADR-039). "settings" is the
+The audio engine's own configuration. "settings" is the
 audio.settings singleton: engine-wide operator defaults (drift ignore
 threshold, default fade curve/duration, default background gain ceiling).
 "node" is the audio.node collection: which discovered output route on one
@@ -222,7 +222,7 @@ func cmdAudioSettings(args []string, stdout, stderr io.Writer, clock func() time
 func printAudioSettingsUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio settings <subcommand> [flags]
 
-Read or write the coordinator's audio.settings configuration (ADR-039):
+Read or write the coordinator's audio.settings configuration:
 driftIgnoreThresholdMs (default 40, derived from a measured sink whose
 routine skew correction is 20.0 ms), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
 defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB;
@@ -326,7 +326,7 @@ func cmdAudioSettingsSet(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "is refused by name, never silently defaulted or carried forward from the")
 		_, _ = fmt.Fprintln(stderr, "previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
-		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "revision.")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"audio settings get --output json\" prints.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is that get command's own shape, otherwise a fresh read), refusing with a")
@@ -487,7 +487,7 @@ func printAudioNodeUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio node <subcommand> [flags]
 
 Read or write the coordinator's audio.node configuration objects, one per
-node (ADR-018, ADR-039): which discovered output route carries program and
+node: which discovered output route carries program and
 which channels on it, which channel on that SAME route carries LTC, and
 the clock domain the operator declares them to share (never inferred — no
 software call proves two outputs share a hardware clock). Reads and
@@ -504,14 +504,14 @@ positive, 1-based indices (1,2 for reference stereo, 1 for mono);
 --program-channels. Advertise the node first (the agent must be running
 and have probed its audio hardware) before configuring it here.
 
---role (ADR-045) is one of "program", "program+ltc", or "zone"; omitted,
-the coordinator defaults it to "program+ltc" (the role every node had by
-implication before ADR-045). At most one node across the installation may
+--role is one of "program", "program+ltc", or "zone"; omitted,
+the coordinator defaults it to "program+ltc" (the role every node had
+before this flag existed). At most one node across the installation may
 carry "program+ltc" at a time — a second is refused, naming both node ids.
 --zone names the independent speaker zone this node drives and is accepted
 only when --role is "zone".
 
---sink-backend (ADR-046) is one of "alsasink" or "pipewiresink"; omitted,
+--sink-backend is one of "alsasink" or "pipewiresink"; omitted,
 the coordinator defaults it to "alsasink". --pipewire-target-node names
 the PipeWire node program audio targets and is accepted only when
 --sink-backend is "pipewiresink". Neither flag is required: "set" reads
@@ -631,13 +631,13 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (omit with --ltc-route for a program-only node)")
 	fs.StringVar(&clockDomain, "clock-domain", "", "the operator's own name for the shared clock domain (required)")
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
-	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone (ADR-045); omitted, defaults to program+ltc")
+	fs.StringVar(&role, "role", "", "one of program, program+ltc, or zone; omitted, defaults to program+ltc")
 	fs.StringVar(&zone, "zone", "", "the independent speaker zone name this node drives; only accepted with --role zone")
-	fs.StringVar(&sinkBackend, "sink-backend", "", "one of alsasink or pipewiresink (ADR-046); omitted, carried forward from the node's current definition, or defaults to alsasink for a new node")
+	fs.StringVar(&sinkBackend, "sink-backend", "", "one of alsasink or pipewiresink; omitted, carried forward from the node's current definition, or defaults to alsasink for a new node")
 	fs.StringVar(&pipewireTargetNode, "pipewire-target-node", "", "the PipeWire node name program audio targets; only accepted with --sink-backend pipewiresink; omitted, carried forward from the node's current definition")
 	var outputLatencyUs int
 	var outputLatencyMethod, outputLatencyMeasuredAt, outputLatencyReference, outputLatencyConfidence, outputLatencyConfiguration string
-	fs.IntVar(&outputLatencyUs, "output-latency-us", 0, "calibrated output offset in signed microseconds (RES-019 section 8); required with a measured --output-latency-method")
+	fs.IntVar(&outputLatencyUs, "output-latency-us", 0, "calibrated output offset in signed microseconds; required with a measured --output-latency-method")
 	fs.StringVar(&outputLatencyMethod, "output-latency-method", "", "one of unmeasured, loopback, acoustic, declared; required with the other four --output-latency-* flags for a measured method, or given alone as unmeasured to clear a stored calibration")
 	fs.StringVar(&outputLatencyMeasuredAt, "output-latency-measured-at", "", "RFC 3339 timestamp when --output-latency-us was measured; required with a measured method")
 	fs.StringVar(&outputLatencyReference, "output-latency-reference", "", "what --output-latency-us was measured against; required with a measured method")
@@ -662,7 +662,7 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
 		_, _ = fmt.Fprintln(stderr, "has no channel to spare for a discrete LTC signal. Passing one without")
 		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
-		_, _ = fmt.Fprintln(stderr, "\n--output-latency-* (RES-019 section 8) is this node's calibrated static")
+		_, _ = fmt.Fprintln(stderr, "\n--output-latency-* is this node's calibrated static")
 		_, _ = fmt.Fprintln(stderr, "output-chain delay. Every field is required together with a measured")
 		_, _ = fmt.Fprintln(stderr, "--output-latency-method (loopback, acoustic, or declared). Omitting every")
 		_, _ = fmt.Fprintln(stderr, "--output-latency-* flag carries this node's currently stored value forward")

@@ -27,12 +27,12 @@ func cmdDiscover(args []string, stdout, stderr io.Writer, clock func() time.Time
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl discover [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nRun a discovery pass (POST /api/v1/discovery/runs) and print what it found.")
-		_, _ = fmt.Fprintln(stderr, "\nRequires config:write (ADR-024 decision 4). A discovery run reads what this")
+		_, _ = fmt.Fprintln(stderr, "\nRequires config:write. A discovery run reads what this")
 		_, _ = fmt.Fprintln(stderr, "coordinator already observes — agent hellos already in inventory, and")
 		_, _ = fmt.Fprintln(stderr, "configured FPP instances — and proposes what is not currently declared. It")
 		_, _ = fmt.Fprintln(stderr, "performs NO active probing (no mDNS, no subnet sweep, no MultiSync discover")
 		_, _ = fmt.Fprintln(stderr, "ping) and cannot find equipment that has never talked to ShowMesh. It never")
-		_, _ = fmt.Fprintln(stderr, "creates, modifies, or deletes a declaration by itself (RES-008 D2/D6) — use")
+		_, _ = fmt.Fprintln(stderr, "creates, modifies, or deletes a declaration by itself, use")
 		_, _ = fmt.Fprintln(stderr, "`showmeshctl declare` to promote a proposal.")
 		fs.PrintDefaults()
 	}
@@ -80,8 +80,8 @@ func cmdDeclare(args []string, stdout, stderr io.Writer, clock func() time.Time)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl declare [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nPromote a node to declared, or update its label/notes")
-		_, _ = fmt.Fprintln(stderr, "(POST /api/v1/nodes/{nodeId}/declaration). Requires config:write (ADR-024")
-		_, _ = fmt.Fprintln(stderr, "decision 4). Idempotent: declaring an already-declared node with NEITHER")
+		_, _ = fmt.Fprintln(stderr, "(POST /api/v1/nodes/{nodeId}/declaration). Requires config:write.")
+		_, _ = fmt.Fprintln(stderr, "Idempotent: declaring an already-declared node with NEITHER")
 		_, _ = fmt.Fprintln(stderr, "flag set leaves its label/notes exactly as they already were — only a flag")
 		_, _ = fmt.Fprintln(stderr, "you actually pass changes anything, including setting one to empty with")
 		_, _ = fmt.Fprintln(stderr, "-label='' — and never disturbs who first declared it or when.")
@@ -150,9 +150,9 @@ func cmdUndeclare(args []string, stdout, stderr io.Writer, _ func() time.Time) i
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl undeclare --confirm <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nRemove a node's declaration (DELETE /api/v1/nodes/{nodeId}/declaration).")
-		_, _ = fmt.Fprintln(stderr, "Requires config:write (ADR-024 decision 4) and --confirm — a mis-issued")
+		_, _ = fmt.Fprintln(stderr, "Requires config:write and --confirm, a mis-issued")
 		_, _ = fmt.Fprintln(stderr, "call cannot quietly remove inventory. This is the ONLY path that removes a")
-		_, _ = fmt.Fprintln(stderr, "declaration: a discovery run never deletes one (RES-008 D6).")
+		_, _ = fmt.Fprintln(stderr, "declaration: a discovery run never deletes one.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

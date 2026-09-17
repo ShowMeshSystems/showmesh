@@ -65,7 +65,7 @@ type cueActivationOperation struct {
 func (o *cueActivationOperation) heldStateAndEntry(cueID string) (held cueauth.HeldState, entry cuecatalog.Entry, entryFound bool, err error) {
 	rec, ok, loadErr := o.catalogStore.Load()
 	if loadErr != nil {
-		return cueauth.HeldState{}, cuecatalog.Entry{}, false, fmt.Errorf("Could not load the held cue catalog: %w", loadErr)
+		return cueauth.HeldState{}, cuecatalog.Entry{}, false, fmt.Errorf("could not load the held cue catalog: %w", loadErr)
 	}
 	if !ok {
 		return cueauth.HeldState{}, cuecatalog.Entry{}, false, nil
@@ -176,10 +176,10 @@ func refusalOutcomeValue(act cueactivation.Activation, outcome cueauth.Outcome) 
 func (o *cueActivationOperation) activate(ctx context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
 	act, err := cueactivation.DecodeParams(params)
 	if err != nil {
-		return OperationResult{}, fmt.Errorf("This activation could not be read: %w", err)
+		return OperationResult{}, fmt.Errorf("this activation could not be read: %w", err)
 	}
 	if err := act.Validate(); err != nil {
-		return OperationResult{}, fmt.Errorf("This activation is invalid: %w", err)
+		return OperationResult{}, fmt.Errorf("this activation is invalid: %w", err)
 	}
 
 	executedAt := now()
