@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -387,34 +388,50 @@ func (h *handlers) nightAdvanceAnnouncementStartScheduled(ctx context.Context, n
 		return
 	}
 
+	// One goroutine per node, mirroring cueactivationdispatch.go's own
+	// dispatchCueActivationsConcurrently: an agent given scheduledAtNs
+	// withholds its start result until that instant arrives, so a serial
+	// loop here would deliver every node after the first its start past
+	// the shared instant, refused as scheduled_start_in_past.
+	var wg sync.WaitGroup
 	for _, nodeID := range target.AudioNodeIDs {
-		applyPhase := nightAnnouncementApplyRowPhase(cuePhase, target, nodeID)
-		if applyRow, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, applyPhase, cue.Name); err == nil && applyRow.Outcome != nightCueOutcomeConfirmed {
-			h.logWarn("night loop: announcement: the apply did not confirm; starting anyway so a silent announcement is never the quiet outcome", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "outcome", applyRow.Outcome)
-		}
-		persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, target.AudioSessionID)
-		_, startRevision := nightAnnouncementScheduleRevisions(persisted)
-		params := map[string]any{}
-		switch {
-		case failedNodes[nodeID] != "":
-			// ADR-049 decision 4: a node this coordinator never got fresh
-			// evidence from is never told to wait for someone else's
-			// instant, even when the rest of the group aligned.
-			h.logWarn("night loop: announcement: this node's own schedule reading failed; starting on arrival", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "reason", failedNodes[nodeID])
-		case scheduledAtNs != nil:
-			// json.Number, never an int64 or a float64: matches
-			// alignedstart.go's own identical carrying of ScheduledAtNs -
-			// this value is around 1.79e18, and a float64 would round it.
-			params[pkgaudio.ParamScheduledAtNs] = json.Number(strconv.FormatInt(*scheduledAtNs, 10))
-		case unalignedReason != "":
-			h.logWarn("night loop: announcement: no shared start instant; starting on arrival", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "reason", unalignedReason)
-		}
-		start := nightAudioTarget(nodeID, target.AudioSessionID, "audio.session.start", params)
-		phase := nightPhaseAnnouncementStart + ":" + cuePhase + ":" + nodeID
-		if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, start, startRevision, history); err != nil {
-			h.logWarn("night loop: announcement: start failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
-		}
+		wg.Add(1)
+		go func(nodeID string) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					h.logWarn("night loop: announcement: panic starting node", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "panic", r)
+				}
+			}()
+			applyPhase := nightAnnouncementApplyRowPhase(cuePhase, target, nodeID)
+			if applyRow, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, applyPhase, cue.Name); err == nil && applyRow.Outcome != nightCueOutcomeConfirmed {
+				h.logWarn("night loop: announcement: the apply did not confirm; starting anyway so a silent announcement is never the quiet outcome", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "outcome", applyRow.Outcome)
+			}
+			persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, target.AudioSessionID)
+			_, startRevision := nightAnnouncementScheduleRevisions(persisted)
+			params := map[string]any{}
+			switch {
+			case failedNodes[nodeID] != "":
+				// ADR-049 decision 4: a node this coordinator never got fresh
+				// evidence from is never told to wait for someone else's
+				// instant, even when the rest of the group aligned.
+				h.logWarn("night loop: announcement: this node's own schedule reading failed; starting on arrival", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "reason", failedNodes[nodeID])
+			case scheduledAtNs != nil:
+				// json.Number, never an int64 or a float64: matches
+				// alignedstart.go's own identical carrying of ScheduledAtNs -
+				// this value is around 1.79e18, and a float64 would round it.
+				params[pkgaudio.ParamScheduledAtNs] = json.Number(strconv.FormatInt(*scheduledAtNs, 10))
+			case unalignedReason != "":
+				h.logWarn("night loop: announcement: no shared start instant; starting on arrival", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "reason", unalignedReason)
+			}
+			start := nightAudioTarget(nodeID, target.AudioSessionID, "audio.session.start", params)
+			phase := nightPhaseAnnouncementStart + ":" + cuePhase + ":" + nodeID
+			if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, start, startRevision, history); err != nil {
+				h.logWarn("night loop: announcement: start failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
+			}
+		}(nodeID)
 	}
+	wg.Wait()
 }
 
 // nightAnnouncementScheduleRevisions computes prepare (floor+3) and start

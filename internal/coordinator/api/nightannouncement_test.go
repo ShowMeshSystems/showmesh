@@ -1559,3 +1559,81 @@ func TestNightAnnouncement_ScheduleRowInsertFailureRetriesToAlignedInstant(t *te
 		}
 	}
 }
+
+// TestNightAnnouncement_StartsScheduledNodesConcurrently is the defect
+// proof: on real hardware, an agent given scheduledAtNs withholds its own
+// start RESULT until that instant arrives, so a serial per-node loop here
+// would deliver every node after the first its own start command past the
+// shared instant - refused as scheduled_start_in_past. node-a's own start
+// is held open (its AwaitResponse never returns) and node-b's own start
+// must still be dispatched while node-a's is still blocked; a regression
+// to the old serial loop hangs this test until it times out.
+func TestNightAnnouncement_StartsScheduledNodesConcurrently(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putAudioNodeForTest(t, st, "node-a")      // holds the media clock
+	putAudioNodeNoLTCForTest(t, st, "node-b") // does not
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"node-b:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+	}
+	release := make(chan struct{})
+	pub.onAwaitResponseForNode = map[string]func(){
+		"node-a:audio.session.start": func() { <-release },
+	}
+
+	ctx := context.Background()
+	before := len(pub.dispatched)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	}()
+
+	nodeBStartDispatched := func() bool {
+		pub.mu.Lock()
+		defer pub.mu.Unlock()
+		for _, d := range pub.dispatched[before:] {
+			if d.Action == "audio.session.start" && d.NodeID == "node-b" {
+				return true
+			}
+		}
+		return false
+	}
+
+	deadline := time.After(5 * time.Second)
+	for !nodeBStartDispatched() {
+		select {
+		case <-deadline:
+			close(release)
+			<-done
+			t.Fatal("node-b's own start was never dispatched while node-a's own start was still blocked; the two nodes are not starting concurrently")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	select {
+	case <-done:
+		t.Fatal("nightAdvanceCueList returned before node-a's own blocked start was released; node-a's own wait is still delaying node-b")
+	default:
+	}
+
+	close(release)
+	<-done
+
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":"+nodeID, "thank-you")
+		if err != nil {
+			t.Fatalf("%s start row: %v", nodeID, err)
+		}
+		if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("%s start = %+v, want resolved/confirmed", nodeID, startRow)
+		}
+	}
+}
