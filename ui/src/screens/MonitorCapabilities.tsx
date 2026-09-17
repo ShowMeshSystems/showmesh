@@ -52,7 +52,7 @@ function CapabilityNodeGroup({ group }: { group: CapabilityGroup }) {
           absence="unobserved"
           label="Never advertised"
           fact="Nothing to observe"
-          detail="This node has never advertised a capability. Distinct from a capability that is failing."
+          detail="This node has never advertised a capability. That is not the same as a capability that is failing."
         />
       ) : (
         group.capabilities.map((capability, index) => (

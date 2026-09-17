@@ -584,8 +584,8 @@ export function ResolumeConfig() {
         }
       >
         <p className="sm-small sm-muted">
-          When on, ShowMesh records which clip each layer had connected, so it can put them back after Arena restarts. It restores layers it
-          recorded, it does not reconstruct a composition it never saw. Changing this creates a coordinator revision attributed to you.
+          When on, ShowMesh records which clip each layer had connected, so it can restore them after Arena restarts. It only restores what
+          it recorded; it cannot reconstruct a composition it never saw.
         </p>
 
         {recoveryState.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for recovery state." />}

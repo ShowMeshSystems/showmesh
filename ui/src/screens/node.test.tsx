@@ -205,7 +205,7 @@ describe('Node detail', () => {
   it('says a node never advertised audio rather than showing it as failing, in the Signals section', () => {
     renderScreen([node({ audio: [] })])
     expect(screen.getByText(/never claimed an audio capability/)).toBeInTheDocument()
-    expect(screen.getByText(/Distinct from an audio path that is failing/)).toBeInTheDocument()
+    expect(screen.getByText(/That is not the same as an audio path that is failing/)).toBeInTheDocument()
   })
 
   it('never wraps a Signals row value in a status chip', () => {

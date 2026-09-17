@@ -189,14 +189,12 @@ export function readinessChecks(checks: readonly NightReadinessCheck[]): Readine
  */
 export function pinnedCeilingFact(audio: NightBackgroundAudio): string {
   if (audio.pinnedMaxGainDb === undefined) {
-    return "This build has not reported a pinned ceiling for this session, distinct from night.session's own config."
+    return 'This session has not reported a pinned volume ceiling yet.'
   }
   if (audio.pinnedMaxGainDb === null) {
-    return audio.reason !== ''
-      ? `Pinned ceiling: none. ${audio.reason}`
-      : "This session pinned no background-audio ceiling: its pinned revision configures no background audio."
+    return audio.reason !== '' ? `Pinned ceiling: none. ${audio.reason}` : 'This session pinned no background-audio ceiling.'
   }
-  return `Pinned ceiling for this running session: ${audio.pinnedMaxGainDb} dB - the value this session locked in when it started, not whatever night.session's config currently holds.`
+  return `Pinned ceiling for this running session: ${audio.pinnedMaxGainDb} dB. This session locked that in when it started; later config changes do not affect it.`
 }
 
 /**
@@ -222,13 +220,13 @@ function phaseLabel(name: string, state: string): string {
 export function boundaryHeadline(boundary: NightSessionState['boundary']): string {
   switch (boundary.state) {
     case 'armed':
-      return `Boundary armed for ${formatClock(boundary.expectedAt) ?? 'an unrecorded time'}`
+      return `Next transition armed for ${formatClock(boundary.expectedAt) ?? 'an unrecorded time'}`
     case 'invalid':
-      return 'Boundary invalidated'
+      return 'Next transition invalidated'
     case 'none':
-      return 'No boundary for this purpose'
+      return 'No transition for this purpose'
     default:
-      return 'Boundary unknown'
+      return 'Next transition unknown'
   }
 }
 

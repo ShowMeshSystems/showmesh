@@ -605,7 +605,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
 
       <Section id="st-clock" title="Clock domain">
         <div className="sm-panel" style={{ borderStyle: 'dashed' }}>
-          <p className="sm-small sm-faint" style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>No API evidence</p>
+          <p className="sm-small sm-faint" style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>Not reported by the API</p>
           <p className="sm-small sm-muted">
             The coordinator does not advertise authoritative clock choices, so there is nothing to pick from and no
             browser clock is used. These two fields are your declaration, and they are recorded as such.
@@ -623,7 +623,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
                 />
               )}
             </Field>
-            <Field label="How you know" help="Recorded with the revision so a later reader knows what this claim rests on.">
+            <Field label="How you know" help="Recorded alongside the change, so a later reader knows what this claim rests on.">
               {(props) => (
                 <Input
                   {...props}
@@ -641,10 +641,9 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
 
       <Section id="st-output-latency" title="Output latency">
         <p className="sm-small sm-muted">
-          This node's calibrated static output-chain delay (RES-019 section 8), subtracted from a scheduled start so
-          the sample reaches the air at the intended instant. Unmeasured applies zero. A measured value is only valid
-          for the buffer/quantum/sample-rate configuration it was recorded under, and moves between engine restarts,
-          so its configuration is recorded and shown here rather than hidden.
+          This node's measured output delay is subtracted from a scheduled start so the sample lands at the right
+          instant. Unmeasured applies zero. A measured value only holds for the buffer, quantum, and sample rate it
+          was recorded under, and it changes when the engine restarts, so that configuration is shown here too.
         </p>
         <div className="sm-grid sm-form-column">
           <Segmented
@@ -995,7 +994,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
         </Field>
         <Field
           label="PTP domain number"
-          help="The ptp4l domain number, 0 to 255. Distinct from the clock domain declared in the Clock domain section above, which is this node's manual audio-sync declaration, not a PTP protocol value."
+          help="The ptp4l domain number, 0 to 255."
         >
           {(props) => (
             <Input
