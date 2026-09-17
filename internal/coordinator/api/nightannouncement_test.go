@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -1421,5 +1422,147 @@ func TestNightAnnouncement_ReplayTickReadsNoClockAndDispatchesNothingNew(t *test
 	if len(pub.dispatched) != afterFirst {
 		t.Fatalf("second tick dispatched %d more command(s) (%v), want none: a replay tick must read no clock and dispatch nothing new",
 			len(pub.dispatched)-afterFirst, pub.dispatched[afterFirst:])
+	}
+}
+
+// TestNightAnnouncement_OneNodesPrepareNeverAnswersSelectionBoundedAndIsolated
+// proves finding 1's own fix: a node whose own prepare read never answers
+// costs the whole scheduling step at most about one scheduleProbeStepTimeout,
+// never anywhere near its own 15s dispatch deadline. The healthy holder's
+// own reading still produces a shared instant, and the hung node starts on
+// arrival instead, isolated from the rest of the group.
+func TestNightAnnouncement_OneNodesPrepareNeverAnswersSelectionBoundedAndIsolated(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putAudioNodeForTest(t, st, "node-a")      // holds the media clock
+	putAudioNodeNoLTCForTest(t, st, "node-b") // does not
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+	}
+	release := make(chan struct{})
+	pub.onAwaitResponseForNode = map[string]func(){
+		"node-b:audio.session.prepare": func() { <-release },
+	}
+
+	ctx := context.Background()
+	started := time.Now()
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	took := time.Since(started)
+
+	if took > 3*scheduleProbeStepTimeout {
+		t.Fatalf("nightAdvanceCueList took %v, want at most about one scheduleProbeStepTimeout (%v): node-b's own hung prepare must never stall the whole tick", took, scheduleProbeStepTimeout)
+	}
+
+	starts := startParamsByNode(pub, 0)
+	if _, ok := starts["node-a"][pkgaudio.ParamScheduledAtNs]; !ok {
+		t.Fatalf("node-a start params = %+v, want %q: the healthy holder's own reading must still produce a shared instant", starts["node-a"], pkgaudio.ParamScheduledAtNs)
+	}
+	if _, ok := starts["node-b"][pkgaudio.ParamScheduledAtNs]; ok {
+		t.Fatalf("node-b start params = %+v, want no %q: a node whose own prepare never answered must start on arrival, not on the group's shared instant", starts["node-b"], pkgaudio.ParamScheduledAtNs)
+	}
+
+	bStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-b", "thank-you")
+	if err != nil {
+		t.Fatalf("node-b start row: %v", err)
+	}
+	if bStart.State != nightCueStateResolved || bStart.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b start = %+v, want resolved/confirmed: node-b's own start must not be held up by its own hung prepare", bStart)
+	}
+
+	// Release node-b's own hung prepare and wait for its background
+	// finisher to persist before this test's own store closes underneath it.
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, rerr := st.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseAnnouncementPrepare)
+		if rerr != nil {
+			t.Fatalf("list prepare rows: %v", rerr)
+		}
+		pending := false
+		for _, r := range rows {
+			if r.State != nightCueStateResolved && r.State != nightCueStateAmbiguous {
+				pending = true
+			}
+		}
+		if !pending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node-b's own abandoned prepare never resolved in the background within %s", 2*time.Second)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// onceFailingScheduleInsert makes exactly one InsertNightCueOutboxRow call
+// under the announcement schedule phase fail, so
+// TestNightAnnouncement_ScheduleRowInsertFailureRetriesToAlignedInstant can
+// prove finding 2's own fix.
+type onceFailingScheduleInsert struct {
+	NightSessionStore
+	failed bool
+}
+
+func (f *onceFailingScheduleInsert) InsertNightCueOutboxRow(ctx context.Context, rec store.NightCueOutboxRecord, now time.Time) error {
+	if !f.failed && strings.HasPrefix(rec.Phase, nightPhaseAnnouncementSchedule+":") {
+		f.failed = true
+		return errors.New("simulated transient store error")
+	}
+	return f.NightSessionStore.InsertNightCueOutboxRow(ctx, rec, now)
+}
+
+// TestNightAnnouncement_ScheduleRowInsertFailureRetriesToAlignedInstant
+// proves finding 2's own fix: a transient failure persisting the schedule
+// row must not permanently strand the announcement unaligned when the
+// nodes' own clocks are healthy - the next tick dispatches a fresh prepare
+// and still reaches an aligned instant.
+func TestNightAnnouncement_ScheduleRowInsertFailureRetriesToAlignedInstant(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"node-b:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+	}
+	h.deps.NightSessions = &onceFailingScheduleInsert{NightSessionStore: h.deps.NightSessions}
+
+	ctx := context.Background()
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementSchedule+":"+nightPhaseEnterResting, "thank-you"); err == nil {
+		t.Fatalf("schedule row exists after a tick whose own insert was made to fail; want none yet")
+	}
+
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	scheduleRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementSchedule+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("schedule row after retry: %v", err)
+	}
+	if scheduleRow.Outcome != nightAnnouncementScheduleAligned {
+		t.Fatalf("schedule row outcome = %q, want %q: a transient insert failure must not strand the announcement unaligned", scheduleRow.Outcome, nightAnnouncementScheduleAligned)
+	}
+
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":"+nodeID, "thank-you")
+		if err != nil {
+			t.Fatalf("%s start row: %v", nodeID, err)
+		}
+		if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("%s start = %+v, want resolved/confirmed", nodeID, startRow)
+		}
 	}
 }

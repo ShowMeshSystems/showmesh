@@ -367,21 +367,9 @@ func (h *handlers) nightCheckBackgroundAudioReadiness(ctx context.Context, now t
 	return checks
 }
 
-// nightCheckAnnouncementAssets is §13's own announcement-asset bullet,
-// rewritten from its own former always-not_verifiable stub now that R6
-// (nightAnnouncementMediaRef, nightannouncement.go) reads an
-// announcement's own bound audio.session.apply target.params.media
-// reference and R7 (assetsync.AnnouncementNodesWithoutCopy,
-// announcementfallback.go) can check it against the asset store: healthy
-// when every announcement-role cue names a complete media reference
-// deliverable to every one of its bound action's listed nodes; failed,
-// naming the node and file, when a listed node genuinely cannot get it
-// (no registered copy exists anywhere among that action's own listed
-// nodes - R7's own fallback rule means partial coverage always rescues
-// the rest); not_verifiable, with a reason naming the cue and action,
-// when this coordinator cannot check at all (an unresolvable action, a
-// non-apply target, an incomplete media reference, or no asset manifest
-// store configured) - never invented as a pass.
+// nightCheckAnnouncementAssets is §13's own announcement-asset bullet (R6/R7):
+// healthy when every announcement-role cue's own media reference is deliverable to every one of its bound action's listed nodes;
+// failed, naming the node and file, when a listed node genuinely cannot get it; not_verifiable, naming the cue and action, otherwise.
 func (h *handlers) nightCheckAnnouncementAssets(ctx context.Context, cues []config.NightSessionCue, payload config.NightSessionPayload) nightReadinessCheck {
 	name := "announcement-assets"
 	var announcements int

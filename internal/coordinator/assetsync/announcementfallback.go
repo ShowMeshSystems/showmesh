@@ -9,21 +9,11 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// This file is R7's own announcement half of ADR-049 decision 5's
-// registered-copy rule: a listed node without its own registered asset
-// row for an announcement's named file uses another listed node's
-// registered row for it, exactly as audiofallback.go's
-// [audioFallbackAssets] already does for a Cue's own audio/announcement
-// output targets. The two files stay separate because the identity each
-// resolves against differs: a Cue's own output names a SEQUENCE
-// (resolved through (show, sequence, target)); an announcement's own
-// bound audio.session.apply names one pinned file directly (R6, no
-// sequence identity at all), read back from the action's own params.
+// This file is R7's own announcement half of ADR-049 decision 5's registered-copy rule: a listed node without
+// its own registered row for an announcement's named file borrows another listed node's row for it, the direct analog of audiofallback.go's [audioFallbackAssets] for a Cue.
 
-// AnnouncementMedia is the file identity an announcement cue's own bound
-// audio.session.apply target.params carries (R6, the frozen ruling):
-// {assetId, contentHash, filename, sizeBytes}, the same shape a bed
-// item's own media reference uses.
+// AnnouncementMedia is the file identity an announcement cue's own bound audio.session.apply target.params
+// carries (R6, the frozen ruling): {assetId, contentHash, filename, sizeBytes}, the same shape a bed item's own media reference uses.
 type AnnouncementMedia struct {
 	AssetID     string
 	ContentHash string
@@ -39,11 +29,7 @@ func (m AnnouncementMedia) Complete() bool {
 
 // decodeAnnouncementMedia is this package's own copy of
 // nightannouncement.go's identical decode (R6): this package must never
-// import internal/coordinator/api (api already imports assetsync, so the
-// reverse would cycle), so the same small shape is read back twice
-// rather than shared - matching this codebase's established literal-
-// mirror convention across this exact package boundary (e.g.
-// nightaudioreadiness.go's own audioEngineStateSignalID).
+// import internal/coordinator/api, so the shape is read back twice rather than shared.
 func decodeAnnouncementMedia(params map[string]any) AnnouncementMedia {
 	media, _ := params["media"].(map[string]any)
 	assetID, _ := media["assetId"].(string)
@@ -63,9 +49,7 @@ func decodeAnnouncementMedia(params map[string]any) AnnouncementMedia {
 
 // AnnouncementBinding is one announcement-role night.session cue,
 // resolved far enough to answer asset-delivery questions: which nodes
-// need the file (its bound show.action's own AudioNodeIDs) and what file
-// they need (R6's own media reference, decoded from that action's
-// params).
+// need the file, and what file (R6's own media reference) they need.
 type AnnouncementBinding struct {
 	CueName  string
 	ActionID string
@@ -74,22 +58,8 @@ type AnnouncementBinding struct {
 }
 
 // AnnouncementBindings resolves showID's own configured announcement-role
-// night.session cues (enterShow and enterResting, across every
-// night.session object bound to showID) into their bound show.action
-// targets. A night.session, show.action, or cue this package cannot
-// cleanly read back is skipped, never a hard error - mirroring
-// audioFallbackAssets' own decode-failure tolerance one file over: this
-// runs for the unrelated ExpectedAssetsForNode call of every node the
-// coordinator serves, not only ones with a sound announcement
-// configuration.
-//
-// A plain json.Unmarshal, not a validating Decode*Payload call: every
-// revision reached here already passed validation on write (this file's
-// own top comment for why alwaysTrue exists one file over in
-// manifest.go), and re-running that validation's cross-reference checks
-// against a row this package only ever reads back would reject a payload
-// that was valid when written - matching nightResolveShowAction's own
-// identical jsonUnmarshalStrict read-back one layer up.
+// night.session cues into their bound show.action targets. A night.session,
+// show.action, or cue this package cannot cleanly read back is skipped, never a hard error.
 func AnnouncementBindings(ctx context.Context, st *store.Store, showID string) ([]AnnouncementBinding, error) {
 	sessionObjs, err := st.ListConfigObjects(ctx, config.NightSessionConfigKind)
 	if err != nil {
@@ -141,14 +111,9 @@ func AnnouncementBindings(ctx context.Context, st *store.Store, showID string) (
 	return out, nil
 }
 
-// announcementFallbackAssets is [ExpectedAssetsForNode]'s own wiring
-// point for R7's registered-copy rule: every node an announcement-role
-// cue's bound action lists in AudioNodeIDs needs that cue's own named
-// asset; a node with no CURRENT row of its own matching content receives
-// the file borrowed from another listed node's current row, keyed by
-// content hash rather than sequence (an announcement has no sequence
-// identity, R6) - the direct analog of [audioFallbackAssets]'s identical
-// borrow-from-a-declared-sibling-target rule one file over.
+// announcementFallbackAssets is [ExpectedAssetsForNode]'s own wiring point
+// for R7's registered-copy rule: a listed node with no current row of its
+// own matching content borrows another listed node's current row, keyed by content hash rather than sequence (an announcement has no sequence identity, R6).
 func announcementFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string) ([]store.AssetRecord, error) {
 	bindings, err := AnnouncementBindings(ctx, st, showID)
 	if err != nil {
@@ -201,15 +166,9 @@ func announcementFallbackAssets(ctx context.Context, st *store.Store, showID, no
 	return out, nil
 }
 
-// AnnouncementNodesWithoutCopy reports, among nodeIDs (an announcement
-// cue's own bound action AudioNodeIDs), which ones hold NO current copy
-// of media anywhere in showID - neither their own row, a show-wide one,
-// nor any sibling's borrowable one - the exact set
-// [announcementFallbackAssets] cannot rescue. R7's own fallback rule
-// means partial coverage always fully rescues everyone: if ANY listed
-// node (or a show-wide row) already holds the content, every other
-// listed node receives it via the borrow above, so the return is either
-// empty or every one of nodeIDs, never a partial set.
+// AnnouncementNodesWithoutCopy reports which of nodeIDs hold no current
+// copy of media anywhere in showID and cannot be rescued by
+// [announcementFallbackAssets]'s own borrow: the result is always empty or every one of nodeIDs, never a partial set.
 func AnnouncementNodesWithoutCopy(ctx context.Context, st *store.Store, showID string, nodeIDs []string, media AnnouncementMedia) ([]string, error) {
 	if !media.Complete() {
 		return nil, fmt.Errorf("assetsync: announcement media reference is incomplete")

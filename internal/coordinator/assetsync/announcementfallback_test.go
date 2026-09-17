@@ -170,3 +170,23 @@ func TestAnnouncementNodesWithoutCopy(t *testing.T) {
 		}
 	})
 }
+
+// TestAnnouncementNodesWithoutCopy_CopyOnANonListedNodeDoesNotCount proves
+// coverage is scoped to the announcement's own listed nodes: a copy that
+// exists only on a node this announcement never lists never rescues the
+// nodes that are actually listed.
+func TestAnnouncementNodesWithoutCopy_CopyOnANonListedNodeDoesNotCount(t *testing.T) {
+	st := openTestStore(t)
+	showID := "halloween-2026"
+	putShow(t, st, showID, "Halloween 2026")
+	media := AnnouncementMedia{AssetID: "ann-1", ContentHash: "sha256:thankyou", Filename: "thankyou.mp3", SizeBytes: 4096}
+	createAssetWithMediaType(t, st, showID, "announcement", store.AssetTargetKindNode, "node-c", "audio", "sha256:thankyou", "thankyou.mp3")
+
+	missing, err := AnnouncementNodesWithoutCopy(context.Background(), st, showID, []string{"node-a", "node-b"}, media)
+	if err != nil {
+		t.Fatalf("AnnouncementNodesWithoutCopy() error = %v", err)
+	}
+	if len(missing) != 2 {
+		t.Fatalf("missing = %v, want both node-a and node-b: node-c's own copy is not one of this announcement's own listed targets", missing)
+	}
+}
