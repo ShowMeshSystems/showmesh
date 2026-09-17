@@ -379,14 +379,14 @@ func twoNodeMultiNodeBedThroughStart(t *testing.T, h *handlers, st *store.Store,
 	return next
 }
 
-// TestNightAdvanceMultiNodeBackgroundAudio_ResumePushesBookmarkAndSharedInstant
-// is R4's own acceptance proof: the program+ltc node's own pause bookmark
-// is pushed onto the other listed node via audio.session.apply before
-// resume, and both nodes resume at one shared instant from one schedule
-// read.
-func TestNightAdvanceMultiNodeBackgroundAudio_ResumePushesBookmarkAndSharedInstant(t *testing.T) {
+// TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstant
+// proves the program+ltc node's own pause bookmark travels on
+// audio.session.resume itself, to every listed node, at one shared instant.
+func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstant(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
+
+	applyCountBeforeResume := countDispatchedAction(pub, "audio.session.apply")
 
 	pub.resultsByNode = map[string]mqttproto.ResultPayload{
 		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
@@ -399,18 +399,27 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumePushesBookmarkAndSharedInsta
 	}
 	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
 
-	bookmarkParams, ok := dispatchedByNodeAction(pub, "node-b", "audio.session.apply")
-	if !ok {
-		t.Fatalf("node-b: no audio.session.apply (bookmark push) dispatched")
-	}
-	if bookmarkParams[bookmarkItemId] != "track-2" {
-		t.Fatalf("node-b: bookmark push params = %v, want bookmarkItemId=track-2", bookmarkParams)
+	if got := countDispatchedAction(pub, "audio.session.apply"); got != applyCountBeforeResume {
+		t.Fatalf("audio.session.apply dispatch count went from %d to %d, want unchanged (the resume point travels on resume itself, never a separate apply push)", applyCountBeforeResume, got)
 	}
 
 	resumeA, okA := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
 	resumeB, okB := dispatchedByNodeAction(pub, "node-b", "audio.session.resume")
 	if !okA || !okB {
 		t.Fatalf("resumes dispatched: node-a=%v node-b=%v, want both", okA, okB)
+	}
+	for nodeID, params := range map[string]map[string]any{"node-a": resumeA, "node-b": resumeB} {
+		if params[resumeItemId] != "track-2" {
+			t.Fatalf("node %q: resume params = %v, want resumeItemId=track-2", nodeID, params)
+		}
+		index, _ := evidenceInt64(params[resumeIndex])
+		if index != 1 {
+			t.Fatalf("node %q: resume params = %v, want resumeIndex=1", nodeID, params)
+		}
+		positionMs, _ := evidenceInt64(params[resumePositionMs])
+		if positionMs != 4500 {
+			t.Fatalf("node %q: resume params = %v, want resumePositionMs=4500", nodeID, params)
+		}
 	}
 	atA, presentA := resumeA[pkgaudio.ParamScheduledAtNs]
 	atB, presentB := resumeB[pkgaudio.ParamScheduledAtNs]
@@ -507,20 +516,251 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeNoProgramLTCTargetOnArrival(
 	}
 }
 
+// TestNightAdvanceMultiNodeBackgroundAudio_BoundedStartThenLateArrivalUnaligned
+// proves a node that never confirms its own gain never silences the bed:
+// node-a starts aligned once the bound elapses; node-b starts unaligned later.
+func TestNightAdvanceMultiNodeBackgroundAudio_BoundedStartThenLateArrivalUnaligned(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	pub.result = confirmedResultForAction("x", nightBackgroundAudioSessionID(rec), "started")
+	const clockReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, clockReading, ""),
+		"node-b:audio.gain.set":        refusedResultForAction("gain", "node-b never confirms gain"),
+	}
+
+	now := testNow
+	for i := 0; i < 3; i++ {
+		h.nightAdvanceBackgroundAudio(context.Background(), now, rec)
+	}
+	if _, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start"); ok {
+		t.Fatalf("node-a started before the bound elapsed")
+	}
+
+	now = now.Add(nightBedReadyStepBound)
+	h.nightAdvanceBackgroundAudio(context.Background(), now, rec)
+
+	startA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.start dispatched once the bound elapsed")
+	}
+	if _, present := startA[pkgaudio.ParamScheduledAtNs]; !present {
+		t.Fatalf("node-a: start params = %v, want scheduledAtNs (node-a is the sole ready node and it holds program+ltc)", startA)
+	}
+	if _, ok := dispatchedByNodeAction(pub, "node-b", "audio.session.start"); ok {
+		t.Fatalf("node-b started before ever confirming its own gain")
+	}
+
+	delete(pub.resultsByNode, "node-b:audio.gain.set")
+	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+
+	startB, ok := dispatchedByNodeAction(pub, "node-b", "audio.session.start")
+	if !ok {
+		t.Fatalf("node-b: no audio.session.start dispatched after it finally confirmed gain")
+	}
+	if _, present := startB[pkgaudio.ParamScheduledAtNs]; present {
+		t.Fatalf("node-b: start params = %v, want no scheduledAtNs (a late arrival after the bed's shared start window)", startB)
+	}
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestB, ok := nightBackgroundAudioLatestStepForNode(history, "node-b")
+	if !ok || latestB.Step.Kind != nightBGStepStart || latestB.Row.Outcome != nightCueOutcomeConfirmed || latestB.Row.OutcomeReason == "" {
+		t.Fatalf("node-b latest step = %+v, want a confirmed start recording a non-empty unaligned reason", latestB)
+	}
+}
+
+// TestNightAdvanceMultiNodeBackgroundAudio_ProgramLTCScheduleAndStartRevisionsStrictlyIncrease
+// proves node-a's own confirmed gain revision (the history maximum, after
+// retrying behind node-b) still lets its prepare and start strictly increase.
+func TestNightAdvanceMultiNodeBackgroundAudio_ProgramLTCScheduleAndStartRevisionsStrictlyIncrease(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	pub.result = confirmedResultForAction("x", nightBackgroundAudioSessionID(rec), "started")
+	const clockReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, clockReading, ""),
+		"node-a:audio.gain.set":        refusedResultForAction("gain", "node-a's own gain lags behind node-b's"),
+	}
+
+	for i := 0; i < 3; i++ {
+		h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	}
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestA, ok := nightBackgroundAudioLatestStepForNode(history, "node-a")
+	if !ok || latestA.Step.Kind != nightBGStepGain || latestA.Row.Outcome == nightCueOutcomeConfirmed {
+		t.Fatalf("node-a latest step = %+v, want an unconfirmed gain (still lagging behind node-b)", latestA)
+	}
+	latestB, ok := nightBackgroundAudioLatestStepForNode(history, "node-b")
+	if !ok || latestB.Step.Kind != nightBGStepGain || latestB.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b latest step = %+v, want a confirmed gain (ready ahead of node-a)", latestB)
+	}
+
+	delete(pub.resultsByNode, "node-a:audio.gain.set")
+	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+
+	prepareParams, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.prepare")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.prepare dispatched")
+	}
+	startParams, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.start dispatched")
+	}
+	prepareRev, _ := evidenceInt64(prepareParams["revision"])
+	startRev, _ := evidenceInt64(startParams["revision"])
+	if startRev <= prepareRev {
+		t.Fatalf("node-a's own start revision (%v) is not strictly greater than its own prepare revision (%v); a real agent would refuse the start as stale", startRev, prepareRev)
+	}
+
+	finalHistory, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	latestAFinal, ok := nightBackgroundAudioLatestStepForNode(finalHistory, "node-a")
+	if !ok || latestAFinal.Step.Kind != nightBGStepStart || latestAFinal.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-a latest step = %+v, want a confirmed start", latestAFinal)
+	}
+}
+
+// TestNightAdvanceMultiNodeBackgroundAudio_StalePendingScheduleRowIsAbandonedForAFreshDecision
+// simulates a crash leaving a pending schedule row behind; the next tick
+// reaches a genuinely aligned decision rather than concluding no clock.
+func TestNightAdvanceMultiNodeBackgroundAudio_StalePendingScheduleRowIsAbandonedForAFreshDecision(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	pub.result = confirmedResultForAction("x", nightBackgroundAudioSessionID(rec), "started")
+	const clockReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, clockReading, ""),
+		"node-b:audio.gain.set":        refusedResultForAction("gain", "node-b lags behind so the bound (not immediate convergence) drives this test"),
+	}
+
+	now := testNow
+	for i := 0; i < 3; i++ {
+		h.nightAdvanceBackgroundAudio(context.Background(), now, rec)
+	}
+	if _, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start"); ok {
+		t.Fatalf("node-a started before the simulated crash; test setup drove too far")
+	}
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	phase := nightPhaseRestingBackgroundNode(nightBedScheduleNodeID)
+	staleRevision := nightNextBackgroundAudioRevision(history)
+	staleCueName := nightBackgroundAudioCueNameSchedule(int(staleRevision))
+	if err := h.nightCommitCueRow(context.Background(), now, rec, phase, staleCueName, staleRevision); err != nil {
+		t.Fatalf("simulate a crashed schedule row: %v", err)
+	}
+
+	now = now.Add(nightBedReadyStepBound)
+	h.nightAdvanceBackgroundAudio(context.Background(), now, rec)
+
+	startA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.start")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.start dispatched once the bound elapsed; the stale pending row must not block a fresh decision")
+	}
+	if _, present := startA[pkgaudio.ParamScheduledAtNs]; !present {
+		t.Fatalf("node-a: start params = %v, want scheduledAtNs (a genuinely aligned decision, not \"no clock\")", startA)
+	}
+
+	history, err = h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	var pending, resolved int
+	for _, row := range nightBackgroundAudioStepsForNode(history, nightBedScheduleNodeID) {
+		if row.Step.Kind != nightBGStepSchedule {
+			continue
+		}
+		if row.Row.State == nightCueStateResolved {
+			resolved++
+		} else {
+			pending++
+		}
+	}
+	if resolved != 1 {
+		t.Fatalf("resolved schedule rows = %d, want exactly 1 (a fresh decision)", resolved)
+	}
+	if pending != 1 {
+		t.Fatalf("pending schedule rows = %d, want exactly 1 (the abandoned, simulated-crash row)", pending)
+	}
+}
+
+// TestNightCheckBackgroundAudioBedProgramLTCCoverage_WarnsNamingTheBedWhenTargetsExcludeProgramLTC
+// proves a multi-node bed whose targets exclude the program+ltc node
+// warns, never fails - decision 4 still plays it unaligned.
+func TestNightCheckBackgroundAudioBedProgramLTCCoverage_WarnsNamingTheBedWhenTargetsExcludeProgramLTC(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putAudioNodeNoLTCForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+
+	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba)
+	if check.health != nightHealthDegraded() {
+		t.Fatalf("health = %v, reason = %q, want degraded (a warning, not a failure)", check.health, check.reason)
+	}
+	if !reasonMentionsAll(check.reason, "node-a", "node-b") {
+		t.Fatalf("reason = %q, want it to name the bed's own targets", check.reason)
+	}
+}
+
+// TestNightCheckBackgroundAudioBedProgramLTCCoverage_HealthyWhenATargetHoldsProgramLTC
+// is the positive case: one listed target holds the role.
+func TestNightCheckBackgroundAudioBedProgramLTCCoverage_HealthyWhenATargetHoldsProgramLTC(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putAudioNodeForTest(t, st, "node-a")
+	putAudioNodeNoLTCForTest(t, st, "node-b")
+	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
+
+	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba)
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("health = %v, reason = %q, want healthy (node-a holds program+ltc)", check.health, check.reason)
+	}
+}
+
 // TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile
-// proves decision 7's own readiness bullet: a listed node with no way to
-// receive a copy - no registered row of its own and no other listed
-// target has one either - fails, naming the node and the item.
+// proves a listed node with no way to receive a copy fails, naming the
+// node, the item, and the file (when a copy is registered elsewhere).
 func TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile(t *testing.T) {
-	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-c", "asset-2")
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
 	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), "halloween", ba)
 	if check.health != nightHealthFailed() {
-		t.Fatalf("health = %v, want failed (no node has a registered copy at all)", check.health)
+		t.Fatalf("health = %v, want failed (no listed target has a registered copy)", check.health)
 	}
 	if !reasonMentionsAll(check.reason, "node-a", "node-b", "track-1", "track-2") {
 		t.Fatalf("reason = %q, want it to name both nodes and both items", check.reason)
+	}
+	if !strings.Contains(check.reason, "asset-2.mp3") {
+		t.Fatalf("reason = %q, want it to name track-2's own registered file (asset-2.mp3), even though node-c is not a listed target", check.reason)
 	}
 }
 

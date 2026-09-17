@@ -11,22 +11,13 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// This file is ADR-049 decision 7's own registered-copy rule, mirroring
-// audiofallback.go's identical rule for a Cue (decision 5): a night.session
-// bed's declared Targets list nodes that play every item regardless of
-// which node the item's own Asset.Target names, so a listed node without
-// its own registered row for a file must still end up expecting it, by
-// borrowing another listed target's own registered row. Wired into
-// [ExpectedAssetsForNode] (manifest.go) alongside audioFallbackAssets.
+// This file is ADR-049 decision 7's registered-copy rule, mirroring
+// audiofallback.go's Cue rule: a bed's declared Targets list nodes without
+// their own registered row still expect it, borrowed from another target.
 
 // nightBedItemSequences resolves ba's own configured items to their
-// sequence ids, in order: ba.Items directly for the inline form, or the
-// referenced media.playlist's own current revision's items for the
-// reference form. ok is false only when a referenced media.playlist is
-// missing or tombstoned, mirroring nightResolveMediaPlaylist's own
-// (api package) "unavailable, never a distinguished error" rule - a
-// dangling reference contributes nothing here, exactly as it is warned
-// and left for an operator everywhere else this reference is resolved.
+// sequence ids, in order. ok is false only when a referenced
+// media.playlist is missing or tombstoned.
 func nightBedItemSequences(ctx context.Context, st *store.Store, ba config.NightSessionBackgroundAudio) ([]string, bool, error) {
 	if ba.MediaPlaylist == "" {
 		seqs := make([]string, 0, len(ba.Items))
@@ -51,10 +42,7 @@ func nightBedItemSequences(ctx context.Context, st *store.Store, ba config.Night
 	}
 	var payload config.MediaPlaylistPayload
 	if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
-		// An already-stored, already-validated revision that no longer
-		// decodes is unexpected in practice; treated the same as a missing
-		// reference (unavailable) rather than failing every node's own
-		// resolution over one corrupted, unrelated object.
+		// A corrupt stored revision reads as unavailable, never a failure.
 		return nil, false, nil
 	}
 	seqs := make([]string, 0, len(payload.Items))
@@ -64,18 +52,9 @@ func nightBedItemSequences(ctx context.Context, st *store.Store, ba config.Night
 	return seqs, true, nil
 }
 
-// nightBedAudioFallbackAssets implements ADR-049 decision 7's registered-
-// copy rule for a night.session bed with declared Targets: for nodeID,
-// borrow the current node-scoped "audio" row of another node THIS SAME BED
-// already lists as a target, for a sequence covered names as still
-// uncovered (neither nodeID's own row nor a show-scoped row per
-// [preferNodeOverShowAudioAssets]'s output).
-//
-// nodeID must itself be a declared target of the bed for its sequences to
-// be borrowed at all. Among the OTHER declared targets, in the bed's own
-// declared order, the first one holding a node-scoped row wins,
-// deterministically, regardless of store iteration order - identical to
-// [audioFallbackAssets]'s own tie-break for a Cue.
+// nightBedAudioFallbackAssets borrows, for nodeID, a node-scoped row from
+// another declared target of the SAME bed, for any sequence still
+// uncovered. The first other target (in declared order) holding one wins.
 func nightBedAudioFallbackAssets(ctx context.Context, st *store.Store, showID, nodeID string, covered map[string]bool) ([]store.AssetRecord, error) {
 	objs, err := st.ListConfigObjects(ctx, config.NightSessionConfigKind)
 	if err != nil {
