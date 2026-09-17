@@ -607,7 +607,7 @@ func TestRestartThenResumeRecoversAPausedSession(t *testing.T) {
 		t.Fatalf("restored state = %q, want paused", restoredState)
 	}
 
-	r := m2.Resume(ctx, id, "inv-resume", 4)
+	r := m2.Resume(ctx, id, "inv-resume", 4, nil)
 	if r.Outcome == pkgaudio.OutcomeRefused {
 		t.Fatalf("resume after restart unexpectedly refused: %+v", r)
 	}

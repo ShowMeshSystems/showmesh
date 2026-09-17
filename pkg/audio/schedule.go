@@ -80,8 +80,8 @@ const (
 // 4): a coordinator resuming a multi-node bed reads the program+ltc
 // node's own bookmark from THIS node's pause result, rather than a
 // separate observation call, then pushes it to every other listed node
-// via audio.session.apply's existing Bookmark field before resuming all
-// of them at one instant.
+// via audio.session.resume's own [ParamResumeItemID]/[ParamResumeIndex]/
+// [ParamResumePositionMs] before resuming all of them at one instant.
 const (
 	// ResultBookmarkKnown is false whenever this session had nothing to
 	// bookmark (never paused with a resolvable item and position).
@@ -91,4 +91,20 @@ const (
 	ResultBookmarkItemID     = "bookmarkItemId"
 	ResultBookmarkIndex      = "bookmarkIndex"
 	ResultBookmarkPositionMs = "bookmarkPositionMs"
+)
+
+// ParamResumeItemID, ParamResumeIndex, and ParamResumePositionMs are
+// audio.session.resume's optional named resume target (ADR-049 decision
+// 4, amended): the exact playlist item and position a coordinator wants
+// every listed node to resume at, read from [ResultBookmarkItemID]/
+// [ResultBookmarkIndex]/[ResultBookmarkPositionMs] on the program+ltc
+// node's own pause result and pushed onto resume itself, never onto
+// audio.session.apply. All three present together or none; a partial
+// set is refused. A node resumes the named item at the named position
+// using ITS OWN current playlist revision, never one carried on the
+// wire.
+const (
+	ParamResumeItemID     = "resumeItemId"
+	ParamResumeIndex      = "resumeIndex"
+	ParamResumePositionMs = "resumePositionMs"
 )

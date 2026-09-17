@@ -197,13 +197,14 @@ func (f *boundaryFixture) startAt(t *testing.T, lead time.Duration) (pkgaudio.Ou
 }
 
 // resumeAt resumes f's session at instant t0 on the media clock,
-// blocking (via a background goroutine) exactly like startAt.
-func (f *boundaryFixture) resumeAt(t *testing.T, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, t0 time.Time) pkgaudio.OutcomeResult {
+// blocking (via a background goroutine) exactly like startAt. point is
+// forwarded to [Manager.ResumeAt] verbatim; nil means no override.
+func (f *boundaryFixture) resumeAt(t *testing.T, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, t0 time.Time, point *ResumePoint) pkgaudio.OutcomeResult {
 	t.Helper()
 	before := f.media.reads()
 	done := make(chan pkgaudio.OutcomeResult, 1)
 	go func() {
-		done <- f.m.ResumeAt(context.Background(), f.id, invocation, revision, t0.UnixNano())
+		done <- f.m.ResumeAt(context.Background(), f.id, invocation, revision, t0.UnixNano(), point)
 	}()
 	f.media.waitForReads(t, before+1)
 	lead := t0.Sub(f.media.Now(context.Background()).Time)
@@ -374,6 +375,41 @@ func TestScheduledItemBoundarySameForGaplessTransition(t *testing.T) {
 	}
 }
 
+// TestScheduledItemBoundarySameForCrossfadeTransition is
+// TestScheduledItemBoundarySameForGaplessTransition's own crossfade
+// case: RequestedTransition is never read anywhere in this package's
+// scheduling path, so Crossfade follows the identical scheduled boundary
+// rule too.
+func TestScheduledItemBoundarySameForCrossfadeTransition(t *testing.T) {
+	f := newBoundaryFixture(t)
+	ctx := context.Background()
+	itemA := f.item(t, "item-a", "a.wav", "asset-a", 0)
+	itemB := f.item(t, "item-b", "b.wav", "asset-b", 1)
+	f.dec.setResult("a.wav", knownDurationResult(3*time.Second))
+	f.dec.setResult("b.wav", knownDurationResult(4*time.Second))
+	f.applyPlaylist(t, []pkgaudio.PlaylistItem{itemA, itemB}, pkgaudio.RepeatNone, pkgaudio.ItemTransitionCrossfade)
+
+	out, _ := f.startAt(t, 20*time.Millisecond)
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("StartAt = %q (%s), want started", out.Outcome, out.Reason)
+	}
+
+	f.media.advance(3*time.Second - 50*time.Millisecond)
+	f.m.watchTick(ctx)
+	if got := f.engine.startCount(); got != 1 {
+		t.Fatalf("Start call count before the boundary = %d, want 1", got)
+	}
+
+	f.media.advance(50 * time.Millisecond)
+	f.m.watchTick(ctx)
+	if got := f.engine.startCount(); got != 2 {
+		t.Fatalf("Start call count at the boundary = %d, want 2 (Crossfade follows the same scheduled boundary rule as Sequential)", got)
+	}
+	if got := f.currentItemID(t); got != "item-b" {
+		t.Fatalf("current item at the boundary = %q, want item-b", got)
+	}
+}
+
 // TestScheduledItemNotReadyByBoundaryStartsWhenReady proves R2's "the
 // next item is prepared early enough" fallback: a successor whose probe
 // cannot run yet at the boundary does not fail the session, and does not
@@ -428,6 +464,48 @@ func TestScheduledItemNotReadyByBoundaryStartsWhenReady(t *testing.T) {
 	}
 	if !strings.Contains(f.logBuf.String(), "late") {
 		t.Fatalf("no warn log naming the lateness; log = %q", f.logBuf.String())
+	}
+}
+
+// TestScheduledBoundaryMissedWarnsWhenSuccessorNeverReady proves a
+// boundary reached with a durably not-ready successor (its probe keeps
+// returning MediaUnknown, never resolving) still leaves log evidence on
+// the very first tick that finds it stuck, and reports the gap as
+// unknown rather than a stale or fabricated value while it waits.
+func TestScheduledBoundaryMissedWarnsWhenSuccessorNeverReady(t *testing.T) {
+	f := newBoundaryFixture(t)
+	ctx := context.Background()
+	itemA := f.item(t, "item-a", "a.wav", "asset-a", 0)
+	itemB := f.item(t, "item-b", "b.wav", "asset-b", 1)
+	f.dec.setResult("a.wav", knownDurationResult(1*time.Second))
+	f.dec.setResult("b.wav", unavailableResult("decoder busy"))
+	f.applyPlaylist(t, []pkgaudio.PlaylistItem{itemA, itemB}, pkgaudio.RepeatNone, pkgaudio.ItemTransitionSequential)
+
+	out, _ := f.startAt(t, 20*time.Millisecond)
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("StartAt = %q (%s), want started", out.Outcome, out.Reason)
+	}
+
+	// Reach the boundary; item-b's probe never resolves within this test.
+	f.media.advance(1 * time.Second)
+	f.m.watchTick(ctx)
+
+	if !strings.Contains(f.logBuf.String(), "not ready") {
+		t.Fatalf("no warn log for a missed boundary whose successor is still not ready; log = %q", f.logBuf.String())
+	}
+	if got := f.state(t); got != pkgaudio.StatePlaying {
+		t.Fatalf("state while durably stuck on a not-ready successor = %q, want playing (not failed)", got)
+	}
+
+	s := f.session(t)
+	s.mu.Lock()
+	gapKnown, gapReason := s.gapKnown, s.gapReason
+	s.mu.Unlock()
+	if gapKnown {
+		t.Fatal("gap reported known while stuck on a not-ready successor")
+	}
+	if gapReason == "" {
+		t.Fatal("gap reason empty while stuck on a not-ready successor, want the current lateness stated")
 	}
 }
 
@@ -558,11 +636,11 @@ func TestSessionStartedOnArrivalKeepsDecoderEndAdvance(t *testing.T) {
 	}
 }
 
-// TestResumeAtReanchorsBoundaryAfterAppliedBookmark proves R1+R2
-// together: a scheduled resume at R after an applied Bookmark naming
-// item k at position p resumes item k at p at R, and re-anchors the next
-// boundary to R - p + d_k.
-func TestResumeAtReanchorsBoundaryAfterAppliedBookmark(t *testing.T) {
+// TestResumeAtWithPointResumesTheNamedPointAtTheInstant proves R1+R2
+// together, amended: a scheduled resume at R carrying a resume point
+// naming item k at position p resumes item k at p at R, and re-anchors
+// the next boundary to R - p + d_k.
+func TestResumeAtWithPointResumesTheNamedPointAtTheInstant(t *testing.T) {
 	f := newBoundaryFixture(t)
 	ctx := context.Background()
 	itemA := f.item(t, "item-a", "a.wav", "asset-a", 0)
@@ -578,22 +656,19 @@ func TestResumeAtReanchorsBoundaryAfterAppliedBookmark(t *testing.T) {
 		t.Fatalf("Pause = %q (%s), want position", out.Outcome, out.Reason)
 	}
 
-	// The coordinator pushes a shared bookmark naming a DIFFERENT item
-	// (item-b) than the one this node happens to be paused on (item-a),
-	// exactly ADR-049 decision 4's cross-node push.
+	// The coordinator names a resume point on a DIFFERENT item (item-b)
+	// than the one this node happens to be paused on (item-a), exactly
+	// ADR-049 decision 4's amended cross-node push.
 	const wantPosition = 1500 * time.Millisecond
-	pushed := pkgaudio.Bookmark{PlaylistRevision: 1, ItemID: "item-b", Position: wantPosition}
-	if out := f.m.Apply(ctx, f.id, "inv-apply-bookmark", 4, pkgaudio.ApplyRequest{Bookmark: pkgaudio.SetField(pushed)}); out.Outcome != pkgaudio.OutcomePosition {
-		t.Fatalf("Apply(bookmark) = %q (%s), want position", out.Outcome, out.Reason)
-	}
+	point := &ResumePoint{ItemID: "item-b", Index: 1, Position: wantPosition}
 
 	r := f.media.Now(ctx).Time.Add(30 * time.Millisecond)
-	out := f.resumeAt(t, "inv-resume", 5, r)
+	out := f.resumeAt(t, "inv-resume", 4, r, point)
 	if out.Outcome != pkgaudio.OutcomeStarted {
 		t.Fatalf("ResumeAt = %q (%s), want started", out.Outcome, out.Reason)
 	}
 	if got := f.currentItemID(t); got != "item-b" {
-		t.Fatalf("current item after the scheduled resume = %q, want item-b (the pushed bookmark's item, not this node's own pause item)", got)
+		t.Fatalf("current item after the scheduled resume = %q, want item-b (the named resume point's item, not this node's own pause item)", got)
 	}
 
 	snap := f.m.Snapshot(ctx)
@@ -624,6 +699,40 @@ func TestResumeAtReanchorsBoundaryAfterAppliedBookmark(t *testing.T) {
 	}
 }
 
+// TestResumeAtWithMismatchedPointIsRefused proves a resume point naming
+// an item that does not match this session's own playlist at that index
+// is refused, naming both, rather than silently substituting whatever IS
+// there.
+func TestResumeAtWithMismatchedPointIsRefused(t *testing.T) {
+	f := newBoundaryFixture(t)
+	ctx := context.Background()
+	itemA := f.item(t, "item-a", "a.wav", "asset-a", 0)
+	itemB := f.item(t, "item-b", "b.wav", "asset-b", 1)
+	f.dec.setResult("a.wav", knownDurationResult(10*time.Second))
+	f.dec.setResult("b.wav", knownDurationResult(4*time.Second))
+	f.applyPlaylist(t, []pkgaudio.PlaylistItem{itemA, itemB}, pkgaudio.RepeatNone, pkgaudio.ItemTransitionSequential)
+
+	if out := f.m.Start(ctx, f.id, "inv-start", 2); out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("Start = %q (%s), want started", out.Outcome, out.Reason)
+	}
+	if out := f.m.Pause(ctx, f.id, "inv-pause", 3); out.Outcome != pkgaudio.OutcomePosition {
+		t.Fatalf("Pause = %q (%s), want position", out.Outcome, out.Reason)
+	}
+
+	// Refused before ever resolving the schedule, so this calls ResumeAt
+	// directly rather than through f.resumeAt, which blocks waiting for a
+	// media-clock read that a refusal this early never makes.
+	point := &ResumePoint{ItemID: "item-does-not-exist", Index: 1, Position: time.Second}
+	r := f.media.Now(ctx).Time.Add(30 * time.Millisecond)
+	out := f.m.ResumeAt(ctx, f.id, "inv-resume", 4, r.UnixNano(), point)
+	if out.Outcome != pkgaudio.OutcomeRefused {
+		t.Fatalf("ResumeAt(mismatched point) = %q (%s), want refused", out.Outcome, out.Reason)
+	}
+	if !containsString(out.Reason, "item-does-not-exist") || !containsString(out.Reason, "index 1") {
+		t.Fatalf("refusal reason = %q, want it to name the mismatched item and index", out.Reason)
+	}
+}
+
 // TestResumeWithoutScheduledParamIsUnchanged proves R1: a plain Resume
 // with no ParamScheduledAtNs behaves exactly as before this seam
 // existed, and never establishes a schedule.
@@ -640,7 +749,7 @@ func TestResumeWithoutScheduledParamIsUnchanged(t *testing.T) {
 	if out := f.m.Pause(ctx, f.id, "inv-pause", 3); out.Outcome != pkgaudio.OutcomePosition {
 		t.Fatalf("Pause = %q (%s), want position", out.Outcome, out.Reason)
 	}
-	if out := f.m.Resume(ctx, f.id, "inv-resume", 4); out.Outcome != pkgaudio.OutcomeStarted {
+	if out := f.m.Resume(ctx, f.id, "inv-resume", 4, nil); out.Outcome != pkgaudio.OutcomeStarted {
 		t.Fatalf("Resume = %q (%s), want started", out.Outcome, out.Reason)
 	}
 
@@ -670,7 +779,7 @@ func TestResumeAtPastInstantIsRefused(t *testing.T) {
 	}
 
 	past := f.media.Now(ctx).Time.Add(-500 * time.Millisecond)
-	out := f.m.ResumeAt(ctx, f.id, "inv-resume", 4, past.UnixNano())
+	out := f.m.ResumeAt(ctx, f.id, "inv-resume", 4, past.UnixNano(), nil)
 	if out.Outcome != pkgaudio.OutcomeRefused {
 		t.Fatalf("ResumeAt(past) outcome = %q (reason %q), want refused", out.Outcome, out.Reason)
 	}

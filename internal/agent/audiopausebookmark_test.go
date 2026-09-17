@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
@@ -156,5 +157,134 @@ func TestResumeSessionHonoursScheduledAtNs(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("session not found in snapshot")
+	}
+}
+
+// resumePointPlaylistFixture applies a two-item playlist, starts it, and
+// pauses it on item-a (position irrelevant), for the resume-point wire
+// tests below.
+func resumePointPlaylistFixture(t *testing.T, mgr *audio.Manager, ctx context.Context, id pkgaudio.SessionID, dir string) {
+	t.Helper()
+	hashA := writeAssetFixture(t, dir, "resume-point-a.wav", []byte("item a audio"))
+	hashB := writeAssetFixture(t, dir, "resume-point-b.wav", []byte("item b audio"))
+	playlist := pkgaudio.PlaylistRef{
+		OwnerKind: "show", OwnerID: "night-session", OwnerRevision: 1,
+		Repeat: pkgaudio.RepeatNone, Resume: pkgaudio.ResumePolicyRestart, RequestedTransition: pkgaudio.ItemTransitionSequential,
+		Items: []pkgaudio.PlaylistItem{
+			{ItemID: "item-a", Index: 0, Media: pkgaudio.MediaRef{AssetID: "resume-point-asset-a", ContentHash: hashA, RuntimeFilename: "resume-point-a.wav"}},
+			{ItemID: "item-b", Index: 1, Media: pkgaudio.MediaRef{AssetID: "resume-point-asset-b", ContentHash: hashB, RuntimeFilename: "resume-point-b.wav"}},
+		},
+	}
+	if out := mgr.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Playlist: pkgaudio.SetField(playlist)}); out.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("Apply refused: %s", out.Reason)
+	}
+	if out := mgr.Start(ctx, id, "inv-start", 2); out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("Start = %q (%s), want started", out.Outcome, out.Reason)
+	}
+	if out := mgr.Pause(ctx, id, "inv-pause", 3); out.Outcome != pkgaudio.OutcomePosition {
+		t.Fatalf("Pause = %q (%s), want position", out.Outcome, out.Reason)
+	}
+}
+
+// TestResumeSessionWithFullResumePointResumesNamedItemAtInstant proves
+// the wire-level resume point (ADR-049 decision 4, amended): all three
+// of resumeItemId/resumeIndex/resumePositionMs, sent together with
+// ParamScheduledAtNs, resume the named item at the named position, not
+// this node's own pause item.
+func TestResumeSessionWithFullResumePointResumesNamedItemAtInstant(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 16, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	ops := audioSessionOperations(mgr)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("bed-resume-point-1")
+
+	resumePointPlaylistFixture(t, mgr, ctx, id, dir)
+
+	resumeOp := ops[string(pkgaudio.OperationSessionResume)]
+	res, err := resumeOp(ctx, wireCmdParams(t, "audio.session.resume", map[string]any{
+		"sessionId": string(id), "invocationId": "inv-resume", "revision": 4,
+		pkgaudio.ParamScheduledAtNs:    clock.now().UnixNano(),
+		pkgaudio.ParamResumeItemID:     "item-b",
+		pkgaudio.ParamResumeIndex:      1,
+		pkgaudio.ParamResumePositionMs: 1500,
+	}), clock.now)
+	if err != nil {
+		t.Fatalf("resumeOp: %v", err)
+	}
+	outcome, reason := sessionOutcomeReason(t, res)
+	if outcome != string(pkgaudio.OutcomeStarted) {
+		t.Fatalf("resume outcome = %q (%s), want started", outcome, reason)
+	}
+
+	var found bool
+	for _, snap := range mgr.Snapshot(ctx) {
+		if snap.ID != id {
+			continue
+		}
+		found = true
+		if snap.ItemID != "item-b" || snap.ItemIndex != 1 {
+			t.Fatalf("resumed item = %q index %d, want item-b index 1", snap.ItemID, snap.ItemIndex)
+		}
+		if !snap.PositionKnown || snap.Position < 1400*time.Millisecond || snap.Position > 1600*time.Millisecond {
+			t.Fatalf("resumed position = %v (known=%v), want ~1500ms", snap.Position, snap.PositionKnown)
+		}
+	}
+	if !found {
+		t.Fatal("session not found in snapshot")
+	}
+}
+
+// TestResumeSessionWithPartialResumePointIsRefused proves a partial send
+// (missing one of the three resume-point fields) is refused rather than
+// silently falling back to a subset of it.
+func TestResumeSessionWithPartialResumePointIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 16, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	ops := audioSessionOperations(mgr)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("bed-resume-point-2")
+
+	resumePointPlaylistFixture(t, mgr, ctx, id, dir)
+
+	resumeOp := ops[string(pkgaudio.OperationSessionResume)]
+	_, err := resumeOp(ctx, wireCmdParams(t, "audio.session.resume", map[string]any{
+		"sessionId": string(id), "invocationId": "inv-resume", "revision": 4,
+		pkgaudio.ParamResumeItemID: "item-b",
+		pkgaudio.ParamResumeIndex:  1,
+		// resumePositionMs deliberately omitted.
+	}), clock.now)
+	if err == nil {
+		t.Fatal("resumeOp with a partial resume point succeeded, want an error")
+	}
+}
+
+// TestResumeSessionWithMismatchedResumePointIsRefused proves a resume
+// point naming an item that does not match this session's own playlist
+// at that index is refused, naming both.
+func TestResumeSessionWithMismatchedResumePointIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 9, 16, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	ops := audioSessionOperations(mgr)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("bed-resume-point-3")
+
+	resumePointPlaylistFixture(t, mgr, ctx, id, dir)
+
+	resumeOp := ops[string(pkgaudio.OperationSessionResume)]
+	res, err := resumeOp(ctx, wireCmdParams(t, "audio.session.resume", map[string]any{
+		"sessionId": string(id), "invocationId": "inv-resume", "revision": 4,
+		pkgaudio.ParamResumeItemID:     "item-does-not-exist",
+		pkgaudio.ParamResumeIndex:      1,
+		pkgaudio.ParamResumePositionMs: 1000,
+	}), clock.now)
+	if err != nil {
+		t.Fatalf("resumeOp: %v", err)
+	}
+	outcome, reason := sessionOutcomeReason(t, res)
+	if outcome != string(pkgaudio.OutcomeRefused) {
+		t.Fatalf("resume outcome = %q (%s), want refused", outcome, reason)
 	}
 }

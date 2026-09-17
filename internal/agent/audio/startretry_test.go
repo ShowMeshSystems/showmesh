@@ -189,7 +189,7 @@ func TestFailedResumeRetryRecoversAtBookmarkPosition(t *testing.T) {
 
 	se.poison(handle, errors.New("engine resume failed: seek deadline exceeded"))
 
-	res := m.Resume(ctx, id, pkgaudio.InvocationID(id+"-resume1"), 4)
+	res := m.Resume(ctx, id, pkgaudio.InvocationID(id+"-resume1"), 4, nil)
 	if res.Outcome != pkgaudio.OutcomeFailed {
 		t.Fatalf("first Resume: outcome = %v, want Failed", res.Outcome)
 	}
@@ -213,7 +213,7 @@ func TestFailedResumeRetryRecoversAtBookmarkPosition(t *testing.T) {
 	// session is still Paused, so that is what an operator or an
 	// automated caller retrying under a fresh revision issues next —
 	// never a Start, which this session's own paused-guard would refuse.
-	retry := m.Resume(ctx, id, pkgaudio.InvocationID(id+"-resume2"), 5)
+	retry := m.Resume(ctx, id, pkgaudio.InvocationID(id+"-resume2"), 5, nil)
 
 	s.mu.Lock()
 	stateAfterRetry := s.state

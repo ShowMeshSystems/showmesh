@@ -275,32 +275,83 @@ func startSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID
 // result, rather than a second observation call, before pushing it to
 // every other listed node.
 func pauseSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, _ map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
-	outcome := mgr.Pause(ctx, id, inv, rev)
+	result := mgr.PauseWithBookmark(ctx, id, inv, rev)
 	extra := map[string]any{}
-	if bookmark, known := mgr.PauseBookmark(id); known {
+	if result.Known {
 		extra[pkgaudio.ResultBookmarkKnown] = true
-		extra[pkgaudio.ResultBookmarkItemID] = bookmark.ItemID
-		extra[pkgaudio.ResultBookmarkIndex] = bookmark.Index
-		extra[pkgaudio.ResultBookmarkPositionMs] = bookmark.Position.Milliseconds()
+		extra[pkgaudio.ResultBookmarkItemID] = result.Bookmark.ItemID
+		extra[pkgaudio.ResultBookmarkIndex] = result.Bookmark.Index
+		extra[pkgaudio.ResultBookmarkPositionMs] = result.Bookmark.Position.Milliseconds()
 	} else {
 		extra[pkgaudio.ResultBookmarkKnown] = false
 	}
-	return outcome, "node.audio_session.pause", extra, nil
+	return result.Outcome, "node.audio_session.pause", extra, nil
 }
 
 // resumeSession honours pkg/audio's ParamScheduledAtNs when the command
 // carries it, mirroring startSession: T0 on THIS node's media clock, in
 // nanoseconds. The param is optional, and a command without it resumes
-// on arrival exactly as before this seam existed.
+// on arrival exactly as before this seam existed. It also honours
+// ParamResumeItemID/Index/PositionMs (ADR-049 decision 4, amended): a
+// coordinator-named resume point carried on resume itself rather than a
+// separate apply -- see [parseResumePoint].
 func resumeSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {
 	atNs, present, err := parseScheduledAtNs("audio.session.resume", params)
 	if err != nil {
 		return pkgaudio.OutcomeResult{}, "", nil, err
 	}
-	if !present {
-		return mgr.Resume(ctx, id, inv, rev), "node.audio_session.resume", nil, nil
+	point, err := parseResumePoint("audio.session.resume", params)
+	if err != nil {
+		return pkgaudio.OutcomeResult{}, "", nil, err
 	}
-	return mgr.ResumeAt(ctx, id, inv, rev, atNs), "node.audio_session.resume", nil, nil
+	if !present {
+		return mgr.Resume(ctx, id, inv, rev, point), "node.audio_session.resume", nil, nil
+	}
+	return mgr.ResumeAt(ctx, id, inv, rev, atNs, point), "node.audio_session.resume", nil, nil
+}
+
+// parseResumePoint reads audio.session.resume's optional named resume
+// target: ParamResumeItemID, ParamResumeIndex, and ParamResumePositionMs
+// must all be present or all be absent. Absent returns (nil, nil) --
+// "no override", resuming from this node's own bookmark as before.
+func parseResumePoint(action string, params map[string]any) (*audio.ResumePoint, error) {
+	rawID, hasID := params[pkgaudio.ParamResumeItemID]
+	rawIndex, hasIndex := params[pkgaudio.ParamResumeIndex]
+	rawPos, hasPos := params[pkgaudio.ParamResumePositionMs]
+	if !hasID && !hasIndex && !hasPos {
+		return nil, nil
+	}
+	if !hasID || !hasIndex || !hasPos {
+		return nil, fmt.Errorf("%s: params.%s, params.%s, and params.%s must all be present together or all absent",
+			action, pkgaudio.ParamResumeItemID, pkgaudio.ParamResumeIndex, pkgaudio.ParamResumePositionMs)
+	}
+	itemID, ok := rawID.(string)
+	if !ok || itemID == "" {
+		return nil, fmt.Errorf("%s: params.%s must be a non-empty string, got %T", action, pkgaudio.ParamResumeItemID, rawID)
+	}
+	index, err := parseResumeWholeNumber(action, pkgaudio.ParamResumeIndex, rawIndex)
+	if err != nil {
+		return nil, err
+	}
+	positionMs, err := parseResumeWholeNumber(action, pkgaudio.ParamResumePositionMs, rawPos)
+	if err != nil {
+		return nil, err
+	}
+	return &audio.ResumePoint{ItemID: itemID, Index: int(index), Position: time.Duration(positionMs) * time.Millisecond}, nil
+}
+
+// parseResumeWholeNumber reads one of [parseResumePoint]'s paired
+// integer fields as an ordinary (non-nanosecond) wire number: a float64,
+// unlike [parseScheduledAtNs]'s own json.Number handling, since an index
+// or a millisecond position never approaches float64's exact-integer
+// bound the way a nanosecond epoch does.
+func parseResumeWholeNumber(action, key string, raw any) (int64, error) {
+	f, ok := raw.(float64)
+	n := int64(f)
+	if !ok || f < 0 || float64(n) != f {
+		return 0, fmt.Errorf("%s: params.%s must be a non-negative whole number, got %v", action, key, raw)
+	}
+	return n, nil
 }
 
 func seekSession(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, inv pkgaudio.InvocationID, rev pkgaudio.Revision, params map[string]any) (pkgaudio.OutcomeResult, string, map[string]any, error) {

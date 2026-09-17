@@ -103,6 +103,17 @@ type PersistedSession struct {
 	GapReason     string
 	GapObservedAt time.Time
 
+	// ScheduleActive, ScheduleItemStartAt, and ScheduleItemIndex are the
+	// minimum evidence [Manager.restoreItemScheduleLocked] needs to
+	// rebuild s.schedule (ADR-049 decision 8) after a restart: whether a
+	// schedule was running at all, its current item's own scheduled start
+	// instant T_i on the media clock, and that item's index, checked
+	// against CurrentIndex before use. ScheduleItemStartAt/Index are
+	// meaningful only when ScheduleActive is true.
+	ScheduleActive      bool
+	ScheduleItemStartAt time.Time
+	ScheduleItemIndex   int
+
 	// CollectedAt is when this snapshot's own fields were captured --
 	// distinct from ObservedAt, which is specifically Position's engine
 	// evidence time and is zero whenever PositionKnown is false. Always
@@ -297,8 +308,11 @@ type Session struct {
 	// time) rather than being cleared by [Session.releaseEngineLocked] --
 	// it is cleared explicitly at genuine schedule-ending points: Pause,
 	// Stop, Clear, Seek, a forced Advance, an engine rebind, and an
-	// unscheduled (re)start. Never persisted, for the same reason
-	// timeline never is. See itemschedule.go.
+	// unscheduled (re)start. Its own T_i and item index are persisted
+	// (PersistedSession.ScheduleItemStartAt/ScheduleItemIndex), unlike
+	// timeline: a restart must rebuild this instead of silently dropping
+	// ADR-049 decision 8 for a restored session. See itemschedule.go and
+	// [Manager.restoreItemScheduleLocked].
 	schedule *itemSchedule
 
 	// stage is the playlist's successor item, prepared ahead of
@@ -451,7 +465,7 @@ func (s *Session) retainedDecisionsLocked() map[pkgaudio.InvocationID]pkgaudio.R
 
 // persistedLocked snapshots s for [SessionStore.Save]. Caller holds s.mu.
 func (s *Session) persistedLocked() PersistedSession {
-	return PersistedSession{
+	rec := PersistedSession{
 		ID:               s.id,
 		Desired:          s.desired,
 		Revision:         s.revState.Current(),
@@ -476,6 +490,12 @@ func (s *Session) persistedLocked() PersistedSession {
 		GapReason:        s.gapReason,
 		GapObservedAt:    s.gapObservedAt,
 	}
+	if s.schedule != nil {
+		rec.ScheduleActive = true
+		rec.ScheduleItemStartAt = s.schedule.itemStartAt
+		rec.ScheduleItemIndex = s.currentIndex
+	}
+	return rec
 }
 
 // persistLocked saves s's current state and reports whether the save
@@ -870,42 +890,37 @@ func nextPlaylistIndexLocked(playlist *pkgaudio.PlaylistRef, current int) (next 
 	return next, true
 }
 
-// consumeAppliedBookmarkLocked relocates s onto the item and position an
-// externally-applied bookmark names (s.desired.Bookmark, set via
-// audio.session.apply -- ADR-049 decision 4's cross-node resume push:
-// the coordinator reads the program+ltc node's own pause position and
-// pushes it to every other listed node ahead of a shared resume).
-// Consumed exactly once: it becomes s.bookmark and s.desired.Bookmark is
-// cleared, so a later resume with no fresh apply falls back to this
-// node's own last pause bookmark instead of replaying a stale push. A
-// no-op when no bookmark was ever pushed. Caller holds s.mu.
-func (s *Session) consumeAppliedBookmarkLocked() error {
-	applied := s.desired.Bookmark
-	if applied == nil {
-		return nil
+// ResumePoint is audio.session.resume's optional named resume target
+// (ADR-049 decision 4, amended): the exact playlist item and position a
+// coordinator wants THIS node to resume at, carried on resume itself
+// rather than a separate apply. See [Session.applyResumePointLocked].
+type ResumePoint struct {
+	ItemID   string
+	Index    int
+	Position time.Duration
+}
+
+// applyResumePointLocked relocates s onto point's named item and
+// position, refusing when this session's current playlist does not hold
+// exactly that item at that index -- a coordinator and this node's own
+// playlist have gone stale relative to each other. The resulting
+// Bookmark's PlaylistRevision is this session's OWN current playlist
+// revision, never one carried on the wire (the coordinator never sends
+// one). Caller holds s.mu.
+func (s *Session) applyResumePointLocked(point ResumePoint) error {
+	if s.desired.Playlist == nil || point.Index < 0 || point.Index >= len(s.desired.Playlist.Items) {
+		return fmt.Errorf("resume point names item %q at index %d, but this session has no playlist item there", point.ItemID, point.Index)
 	}
-	var index int
-	var itemID, identity string
-	switch {
-	case s.desired.Playlist != nil:
-		item, err := applied.Resolve(*s.desired.Playlist)
-		if err != nil {
-			return err
-		}
-		index, itemID, identity = item.Index, item.ItemID, itemIdentity(item)
-	case s.desired.Media != nil:
-		item := pkgaudio.PlaylistItem{ItemID: "media", Index: 0, Media: *s.desired.Media}
-		index, itemID, identity = 0, item.ItemID, itemIdentity(item)
-	default:
-		return fmt.Errorf("%w: session has no media or playlist to resolve the applied bookmark against", pkgaudio.ErrBookmarkStale)
+	item := s.desired.Playlist.Items[point.Index]
+	if item.ItemID != point.ItemID {
+		return fmt.Errorf("resume point names item %q at index %d, but this session's playlist has %q there", point.ItemID, point.Index, item.ItemID)
 	}
-	s.currentIndex = index
-	s.currentItemID = itemID
+	s.currentIndex = point.Index
+	s.currentItemID = item.ItemID
 	s.bookmark = &pkgaudio.Bookmark{
-		PlaylistRevision: applied.PlaylistRevision, ItemID: itemID, Identity: identity,
-		Index: index, Position: applied.Position,
+		PlaylistRevision: s.desired.Playlist.OwnerRevision, ItemID: item.ItemID, Identity: itemIdentity(item),
+		Index: point.Index, Position: point.Position,
 	}
-	s.desired.Bookmark = nil
 	return nil
 }
 

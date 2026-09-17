@@ -123,7 +123,7 @@ func TestLTCResumesAtThePausedPosition(t *testing.T) {
 	// Elapsed wall time during the pause must not leak into the resumed
 	// timecode: only the frozen playback position matters.
 	c.advance(10 * time.Second)
-	m.Resume(ctx, "show", "resume", 4)
+	m.Resume(ctx, "show", "resume", 4, nil)
 
 	assertLTCRequestedAt(t, m, "00:00:03:00")
 }

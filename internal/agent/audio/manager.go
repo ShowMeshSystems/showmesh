@@ -735,12 +735,33 @@ func (m *Manager) Promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 	return res.outcome
 }
 
+// PauseResult is [Manager.PauseWithBookmark]'s pause outcome together
+// with that SAME pause's own bookmark evidence: both read under one
+// lock acquisition, never a second, separately locked read that a
+// concurrent Clear/Stop/Resume for the same session could race between
+// the two (ADR-049 decision 4's own pause-result contract).
+type PauseResult struct {
+	Outcome  pkgaudio.OutcomeResult
+	Bookmark pkgaudio.Bookmark
+	Known    bool
+}
+
 // Pause suspends the current item, marking timing unresolved until the
 // next fresh observation.
 func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
+	return m.PauseWithBookmark(ctx, id, invocation, revision).Outcome
+}
+
+// PauseWithBookmark is [Manager.Pause] plus this exact pause's own
+// bookmark evidence, read while s.mu is still held from the pause
+// itself. A coordinator needs the pushed-resume-point evidence
+// (ADR-049 decision 4) to come from the pause that produced it, never a
+// second call that could land after some other command already tore the
+// bookmark down.
+func (m *Manager) PauseWithBookmark(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) PauseResult {
 	s, ok := m.get(id)
 	if !ok {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
+		return PauseResult{Outcome: pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -773,11 +794,17 @@ func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation p
 		m.stopLTCLocked(ctx, s)
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePaused, pkgaudio.OutcomePosition, obs, dispatchedAt))
 	})
-	return res.outcome
+	if s.bookmark == nil {
+		return PauseResult{Outcome: res.outcome}
+	}
+	return PauseResult{Outcome: res.outcome, Bookmark: *s.bookmark, Known: true}
 }
 
-// Resume continues from Pause's bookmark position.
-func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
+// Resume continues from Pause's bookmark position. point, when non-nil,
+// overrides that bookmark with a coordinator-named item and position
+// instead (ADR-049 decision 4, amended) -- see
+// [Session.applyResumePointLocked].
+func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, point *ResumePoint) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
@@ -792,6 +819,11 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 		if len(s.interruptedByAll) > 0 {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is suspended by an interrupting announcement; it resumes on its own once that ends"}
 		}
+		if point != nil {
+			if err := s.applyResumePointLocked(*point); err != nil {
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
+			}
+		}
 		item, ok := s.currentItemLocked()
 		if !ok {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to resume"}
@@ -803,7 +835,12 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 		// but finishes with Engine.Start at the bookmark's position rather
 		// than Engine.Resume: a freshly loaded handle was never paused,
 		// so there is nothing for Engine.Resume to continue.
-		if !s.handleLoaded || s.loadedIdentity != itemIdentity(item) {
+		//
+		// A resume point always takes this same branch, even when the
+		// loaded handle's own identity already matches: it can still name
+		// a position different from wherever that handle is actually
+		// paused, and a bare Engine.Resume below has no way to honor that.
+		if point != nil || !s.handleLoaded || s.loadedIdentity != itemIdentity(item) {
 			s.releaseEngineLocked(ctx)
 			if _, err := s.prepareLocked(ctx, item); err != nil {
 				if errors.Is(err, ErrNoEngineBinding) {
@@ -864,14 +901,13 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 // instant, and a scheduled resume waits for T0 regardless, so there is no
 // latency an already-loaded handle would save by continuing it in place.
 //
-// If s.desired.Bookmark carries a coordinator-pushed bookmark (the
-// program+ltc node's own pause position, applied to this node ahead of
-// the resume via audio.session.apply), it is consumed here, exactly
-// once, and relocates this session onto that item and position,
-// overriding this node's own pause bookmark. Absent, this node resumes
-// from its own bookmark exactly as an on-arrival Resume would (decision
-// 4's per-node fallback).
-func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64) pkgaudio.OutcomeResult {
+// point, when non-nil (ADR-049 decision 4, amended), overrides this
+// node's own pause bookmark with a coordinator-named item and position
+// carried on this same resume call -- see
+// [Session.applyResumePointLocked]. Absent, this node resumes from its
+// own bookmark exactly as an on-arrival Resume would (decision 4's
+// per-node fallback).
+func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64, point *ResumePoint) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
@@ -886,9 +922,10 @@ func (m *Manager) ResumeAt(ctx context.Context, id pkgaudio.SessionID, invocatio
 		if len(s.interruptedByAll) > 0 {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is suspended by an interrupting announcement; it resumes on its own once that ends"}
 		}
-		if err := s.consumeAppliedBookmarkLocked(); err != nil {
-			s.bookmark = nil
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "pushed resume bookmark could not be resolved and was cleared: " + err.Error()}
+		if point != nil {
+			if err := s.applyResumePointLocked(*point); err != nil {
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
+			}
 		}
 		item, ok := s.currentItemLocked()
 		if !ok {

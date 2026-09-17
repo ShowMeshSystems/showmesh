@@ -526,26 +526,6 @@ func (m *Manager) PrerollLatency(id pkgaudio.SessionID) (time.Duration, bool) {
 	return s.prerollLatency, s.prerollKnown
 }
 
-// PauseBookmark reports id's own current bookmark, exactly as
-// [Manager.Pause] left it -- the audio.session.pause result evidence
-// ADR-049 decision 4 needs, so a coordinator can read a paused bed's
-// resume point back from this node's own pause result rather than a
-// second observation call. known is false whenever this session has
-// nothing to bookmark: it has never paused, or that bookmark was since
-// consumed by a Start or Resume.
-func (m *Manager) PauseBookmark(id pkgaudio.SessionID) (pkgaudio.Bookmark, bool) {
-	s, ok := m.get(id)
-	if !ok {
-		return pkgaudio.Bookmark{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.bookmark == nil {
-		return pkgaudio.Bookmark{}, false
-	}
-	return *s.bookmark, true
-}
-
 // MediaNow reports a fresh reading of this node's media clock, taken from
 // the clock provider's own Now and never from the tracker's status or
 // from wall time: those answer "what state is the clock in" and "what

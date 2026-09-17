@@ -240,6 +240,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = false
 		m.startLTCLocked(ctx, s, position)
+		m.restoreItemScheduleLocked(ctx, s, rec)
 		s.persistBestEffortLocked("state change")
 	case pkgaudio.StatePaused:
 		// prepareLocked only reaches a freshly-Loaded engine handle (Ready),
@@ -351,6 +352,41 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		}
 	}
 	return nil
+}
+
+// restoreItemScheduleLocked rebuilds s.schedule (ADR-049 decision 8) from
+// rec's persisted item-boundary state once this restart's own engine
+// Start for the current item has already succeeded -- a silent gap
+// otherwise, since nothing else on this path ever reconstructs it and
+// [newSession] zero-initializes it to nil. rec.ScheduleItemIndex is
+// checked against rec.CurrentIndex first: a mismatch means the persisted
+// schedule evidence predates whatever moved CurrentIndex, and is not
+// trusted.
+//
+// A media clock this node cannot read right now is refused rather than
+// anchored anyway: [Manager.watchTick]'s boundary check requires a valid
+// reading to ever fire, and a schedule with boundaryKnown true but no
+// way to reach that check would permanently suppress watchTick's own
+// decoder-end fallback (`s.schedule == nil || !s.schedule.boundaryKnown`),
+// stalling the item forever instead of degrading to today's decoder-end
+// advance. Caller holds s.mu.
+func (m *Manager) restoreItemScheduleLocked(ctx context.Context, s *Session, rec PersistedSession) {
+	if !rec.ScheduleActive || rec.ScheduleItemIndex != rec.CurrentIndex {
+		return
+	}
+	source := m.clockSourceSnapshot()
+	if source == nil {
+		m.logf("audio session %s: restore had a scheduled item boundary but no media clock is bound; falling back to decoder-end advance", s.id)
+		return
+	}
+	mediaNow := source.Now(ctx)
+	if !mediaNow.Valid {
+		m.logf("audio session %s: restore had a scheduled item boundary but the media clock is not valid (%s); falling back to decoder-end advance", s.id, mediaNow.Reason)
+		return
+	}
+	s.schedule = &itemSchedule{itemStartAt: rec.ScheduleItemStartAt}
+	s.refreshBoundaryFromProbeLocked()
+	s.discardStageLocked(ctx)
 }
 
 // deferRestoreLocked handles the "cannot restore yet" case restoreOne's

@@ -21,7 +21,19 @@ type itemSchedule struct {
 	itemStartAt   time.Time
 	boundaryKnown bool
 	boundaryAt    time.Time
+
+	// missedWarnAt is the media-clock instant [Manager.scheduledAdvanceLocked]
+	// last warned that this boundary was reached with no ready successor.
+	// Zero means no warning has been logged yet for this boundary. See
+	// missedBoundaryWarnInterval.
+	missedWarnAt time.Time
 }
+
+// missedBoundaryWarnInterval bounds how often a durably stuck boundary
+// (successor never becomes ready) re-logs its own warning, so an
+// indefinitely stuck item still leaves ongoing log evidence without
+// spamming a line every watch tick.
+const missedBoundaryWarnInterval = 5 * time.Second
 
 // itemStage is the playlist's successor item, prepared ahead of
 // schedule's own boundary (ADR-049 decision 8: "prepared early enough to
@@ -208,6 +220,18 @@ func (m *Manager) scheduledAdvanceLocked(ctx context.Context, s *Session, mediaN
 		// wait for a later tick if it still is not ready. This never
 		// holds the schedule open indefinitely, but it also never starts
 		// an item that does not exist yet.
+		//
+		// A boundary stuck here forever (the successor's probe never
+		// resolves) must still leave ongoing log evidence rather than
+		// retrying silently: warn once on the first miss, then again at
+		// most every [missedBoundaryWarnInterval], always with the
+		// current lateness, and keep the gap signal current instead of
+		// whatever it last reported.
+		if s.schedule.missedWarnAt.IsZero() || mediaNow.Sub(s.schedule.missedWarnAt) >= missedBoundaryWarnInterval {
+			m.logf("audio session %s: item %s's successor is still not ready %dms after its scheduled boundary", s.id, s.currentItemID, lateBy.Milliseconds())
+			s.schedule.missedWarnAt = mediaNow
+		}
+		s.setGapUnknownLocked(fmt.Sprintf("successor not ready %dms after scheduled boundary and counting", lateBy.Milliseconds()))
 		m.maybeStageNextItemLocked(ctx, s)
 		return
 	}
