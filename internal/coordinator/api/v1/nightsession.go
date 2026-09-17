@@ -50,6 +50,7 @@ type ConfigNightSessionBackgroundAudio struct {
 	MaxGainDb      float64
 	FadeOutMs      *int
 	FadeInMs       *int
+	Targets        []string
 }
 
 // MarshalJSON emits the reference form ({"mediaPlaylist"} alone) or the
@@ -59,8 +60,9 @@ type ConfigNightSessionBackgroundAudio struct {
 func (b ConfigNightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
 	if b.MediaPlaylist != "" {
 		return json.Marshal(struct {
-			MediaPlaylist string `json:"mediaPlaylist"`
-		}{MediaPlaylist: b.MediaPlaylist})
+			MediaPlaylist string   `json:"mediaPlaylist"`
+			Targets       []string `json:"targets,omitempty"`
+		}{MediaPlaylist: b.MediaPlaylist, Targets: b.Targets})
 	}
 	return json.Marshal(struct {
 		Items          []ConfigNightSessionBackgroundAudioItem `json:"items"`
@@ -71,9 +73,11 @@ func (b ConfigNightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
 		MaxGainDb      float64                                 `json:"maxGainDb"`
 		FadeOutMs      *int                                    `json:"fadeOutMs,omitempty"`
 		FadeInMs       *int                                    `json:"fadeInMs,omitempty"`
+		Targets        []string                                `json:"targets,omitempty"`
 	}{
 		Items: b.Items, Repeat: b.Repeat, Resume: b.Resume, ItemTransition: b.ItemTransition,
 		CrossfadeMs: b.CrossfadeMs, MaxGainDb: b.MaxGainDb, FadeOutMs: b.FadeOutMs, FadeInMs: b.FadeInMs,
+		Targets: b.Targets,
 	})
 }
 
