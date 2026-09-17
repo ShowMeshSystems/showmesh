@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -37,16 +38,9 @@ type nightSessionBackgroundAudioItem struct {
 	Target   string `json:"target"`
 }
 
-// nightSessionBackgroundAudio is night.session.resting.backgroundAudio,
-// present only when the deployment configures background audio: a
-// discriminated union of the INLINE form (Items and its own knobs) and the
-// REFERENCE form (MediaPlaylist), matching
-// ConfigNightSessionBackgroundAudio's own oneOf (api/openapi.yaml) -
-// MediaPlaylist is "" for the inline form. Targets (ADR-049 decision 7) is
-// the bed's own optional audio.node id list and applies identically to
-// both forms; MarshalJSON/UnmarshalJSON below keep it (and every other
-// field) from being dropped by "night get --output json | night set"
-// regardless of which form is on the wire.
+// nightSessionBackgroundAudio is night.session.resting.backgroundAudio: a
+// discriminated union of the INLINE (Items) and REFERENCE (MediaPlaylist)
+// forms; every field round-trips except fadeOutMs/fadeInMs, not carried here.
 type nightSessionBackgroundAudio struct {
 	MediaPlaylist  string
 	Items          []nightSessionBackgroundAudioItem
@@ -92,6 +86,14 @@ func (b *nightSessionBackgroundAudio) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
+	}
+	hasMediaPlaylist := wire.MediaPlaylist != ""
+	hasItems := len(wire.Items) > 0
+	if hasMediaPlaylist && hasItems {
+		return fmt.Errorf("resting.backgroundAudio carries both mediaPlaylist and items; the server refuses this shape on write")
+	}
+	if !hasMediaPlaylist && !hasItems {
+		return fmt.Errorf("resting.backgroundAudio carries neither mediaPlaylist nor items; the server refuses this shape on write")
 	}
 	b.MediaPlaylist = wire.MediaPlaylist
 	b.Items = wire.Items

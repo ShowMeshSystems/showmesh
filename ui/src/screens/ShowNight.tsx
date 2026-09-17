@@ -1156,11 +1156,9 @@ function nodeSecondaryText(node: AudioNodeSummary): string | undefined {
 }
 
 /**
- * ADR-049 decision 7's bed node checklist: identical for the inline and
- * media.playlist forms. The checked set is exactly the saved `targets` -
- * never derived from asset registration or an item's own target. A saved
- * id that is no longer a configured audio.node stays checked and visibly
- * marked, never silently dropped.
+ * ADR-049 decision 7's bed node checklist. The checked set is exactly the
+ * saved `targets`, never derived from asset registration or an item's own
+ * target; an id no longer configured stays checked and visibly marked.
  */
 function BackgroundAudioTargetsField({
   value,
@@ -1173,8 +1171,28 @@ function BackgroundAudioTargetsField({
   nodesState: AudioNodesState
   error?: string | undefined
 }) {
-  if (nodesState.kind === 'loading') return <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
-  if (nodesState.kind === 'failed') return <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
+  const errorNotice = error !== undefined && (
+    <span className="sm-field__error">
+      <span aria-hidden="true">✕</span>
+      {error}
+    </span>
+  )
+  if (nodesState.kind === 'loading') {
+    return (
+      <>
+        <RuledStrip absence="loading" label="Reading" fact="Fetching this deployment's declared audio nodes." />
+        {errorNotice}
+      </>
+    )
+  }
+  if (nodesState.kind === 'failed') {
+    return (
+      <>
+        <RuledStrip absence="failed" label="Read failed" fact={nodesState.reason} />
+        {errorNotice}
+      </>
+    )
+  }
   if (nodesState.nodes.length === 0) {
     return (
       <>
@@ -1184,6 +1202,7 @@ function BackgroundAudioTargetsField({
             Stored targets: <span className="sm-data">{value.join(', ')}</span>
           </p>
         )}
+        {errorNotice}
       </>
     )
   }
@@ -1309,11 +1328,11 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   ])).sort()
   const fppIds = (retained: string) => Array.from(new Set([...(retained === '' ? [] : [retained]), ...fppInstances.map((instance) => instance.instanceId)])).sort()
 
-  const closeInspector = () => { setSelected(''); setLoaded(null); setDraft(blankDefinition(showId)); setRevision(null); setError(null) }
+  const closeInspector = () => { setSelected(''); setLoaded(null); setDraft(blankDefinition(showId)); setRevision(null); setError(null); setBackgroundAudioTargetsError(null) }
   return <div id="sn-definitions" className="sm-night-session-workspace">
     <div className="sm-night-session-heading">
       <div><h2 className="sm-section__title">Night session definitions</h2><p className="sm-small sm-muted">A definition says how the night enters the show and returns to resting. Editing creates a new revision; a running night is unchanged.</p></div>
-      <Button variant="primary" onClick={() => { setSelected('__new__'); setLoaded(null); setDraft(blankDefinition(showId)); setError(null) }}>New definition</Button>
+      <Button variant="primary" onClick={() => { setSelected('__new__'); setLoaded(null); setDraft(blankDefinition(showId)); setError(null); setBackgroundAudioTargetsError(null) }}>New definition</Button>
     </div>
     <Panes
       inspectorOpen={selected !== ''}

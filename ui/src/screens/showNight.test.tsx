@@ -1387,10 +1387,9 @@ describe('Show Night', () => {
     expect(within(picker).getByRole('option', { name: 'stale-bed' })).toBeInTheDocument()
   })
 
-  // ADR-049 decision 7: the bed's own node checklist. The checked set comes
-  // only from the saved `targets`, never from item targets or asset
-  // registration (audioAsset above always targets 'audio-01', so a test
-  // checking 'audio-02' proves the checklist is not reading that).
+  // ADR-049 decision 7: the checked set comes only from the saved `targets`,
+  // never from item targets or asset registration (audioAsset above always
+  // targets 'audio-01', so checking 'audio-02' proves that).
   describe('background audio targets', () => {
     it('loads the saved targets checked, and leaves an unlisted node unchecked', async () => {
       mockListConfigObjects([], [{ id: 'audio-01' }, { id: 'audio-02' }, { id: 'audio-03' }])
@@ -1515,6 +1514,78 @@ describe('Show Night', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
       expect(await screen.findByText(detail)).toBeInTheDocument()
       expect(screen.queryByText('Definition failed')).not.toBeInTheDocument()
+    })
+
+    it('shows the targets validation error while the node list is still loading', async () => {
+      stubs.listConfigObjects = ((kind: string) => {
+        if (kind === 'audio.node') return new Promise(() => {})
+        if (kind === 'media.playlist') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        if (kind === 'show.action') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        return Promise.resolve({
+          serverTime: '',
+          kind: 'night.session',
+          objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+        })
+      }) as typeof stubs.listConfigObjects
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      expect(screen.getByText("Fetching this deployment's declared audio nodes.")).toBeInTheDocument()
+    })
+
+    it('shows the targets validation error when the node list failed to load', async () => {
+      stubs.listConfigObjects = ((kind: string) => {
+        if (kind === 'audio.node') return Promise.reject(new Error('audio node service unreachable'))
+        if (kind === 'media.playlist') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        if (kind === 'show.action') return Promise.resolve({ serverTime: '', kind, objects: [] })
+        return Promise.resolve({
+          serverTime: '',
+          kind: 'night.session',
+          objects: [{ id: 'winter-ridge-2026', label: 'Winter Ridge', show: 'winter-ridge', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+        })
+      }) as typeof stubs.listConfigObjects
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      expect(await screen.findByText('audio node service unreachable')).toBeInTheDocument()
+    })
+
+    it('shows the targets validation error when no audio node is declared', async () => {
+      mockListConfigObjects([], [])
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      expect(screen.getByText('No audio node is declared.')).toBeInTheDocument()
+    })
+
+    it('clears the targets validation error when starting a new definition', async () => {
+      mockListConfigObjects([], [{ id: 'audio-01' }])
+      stubs.getNightSessionConfig = () => Promise.resolve(fullDefinitionResponse('Winter Ridge'))
+      stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [audioAsset('asset-1', 'bed-seq', 'audio-01')] })
+      const detail = 'resting.backgroundAudio.targets[0] names an audio.node that is not configured.'
+      stubs.putNightSessionConfig = () => Promise.reject(new ApiError(detail, 400, PROBLEM_TYPE.showConfigFieldUnknownReference))
+      renderDefinitions({ session: configWriteSession })
+      await openWinterRidgeDefinition()
+      fireEvent.click(screen.getByRole('button', { name: 'Save definition' }))
+      expect(await screen.findByText(detail)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
+      fireEvent.click(await screen.findByLabelText('Enable background audio while resting'))
+      expect(screen.queryByText(detail)).not.toBeInTheDocument()
     })
   })
 })

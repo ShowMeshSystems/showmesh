@@ -135,8 +135,7 @@ func TestCmdNightGetRendersSiteControlAndInterlocks(t *testing.T) {
 
 // nightSessionSampleJSONWithInlineBackgroundAudioTargets is
 // nightSessionSampleJSON plus an inline resting.backgroundAudio carrying
-// ADR-049 decision 7's own targets list, for both the text-output and
-// round-trip coverage below.
+// ADR-049 decision 7's own targets list.
 const nightSessionSampleJSONWithInlineBackgroundAudioTargets = `{"serverTime":"2026-08-16T21:00:00Z","kind":"night.session","id":"halloween-main","revision":1,
 	"payload":{
 		"show":"halloween-2026","label":"Halloween main loop",
@@ -157,9 +156,8 @@ const nightSessionSampleJSONWithInlineBackgroundAudioTargets = `{"serverTime":"2
 	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
 
 // nightSessionSampleJSONWithReferenceBackgroundAudioTargets is the same
-// session, but with the REFERENCE (media.playlist) form of the bed, plus
-// the same targets list - ADR-049 decision 7 applies identically to both
-// forms, so this file exercises both instead of only the inline one.
+// session with the REFERENCE (media.playlist) bed form and the same
+// targets list, since ADR-049 decision 7 applies to both forms.
 const nightSessionSampleJSONWithReferenceBackgroundAudioTargets = `{"serverTime":"2026-08-16T21:00:00Z","kind":"night.session","id":"halloween-main","revision":1,
 	"payload":{
 		"show":"halloween-2026","label":"Halloween main loop",
@@ -176,9 +174,8 @@ const nightSessionSampleJSONWithReferenceBackgroundAudioTargets = `{"serverTime"
 	"updatedAt":"2026-08-16T20:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`
 
 // TestCmdNightGetRendersBackgroundAudioTargets proves "night get"'s text
-// output states the bed's own targets for both forms, and the documented
-// fallback sentence when a bed is configured but declares none (ADR-049
-// decision 7: absent/empty is today's per-node behavior, not "no bed").
+// output states the bed's own targets for both forms, and the fallback
+// sentence when a bed is configured but declares none.
 func TestCmdNightGetRendersBackgroundAudioTargets(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -237,10 +234,7 @@ func TestCmdNightGetRendersBackgroundAudioWithNoTargetsDeclared(t *testing.T) {
 
 // TestCmdNightGetSetRoundTripsBackgroundAudioTargets proves "night get
 // --output json | night set" carries resting.backgroundAudio.targets
-// through unchanged for both bed forms - the exact round trip
-// types_night.go's own doc comment promises, and the reason this test
-// drives the real "get" then "set" commands rather than hand-building a
-// draft.
+// through unchanged for both bed forms.
 func TestCmdNightGetSetRoundTripsBackgroundAudioTargets(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -384,6 +378,52 @@ func TestCmdNightGetSetPreservesAbsentBackgroundAudioTargets(t *testing.T) {
 	_ = json.Unmarshal(sent["resting"], &resting)
 	if _, hasBackgroundAudio := resting["backgroundAudio"]; hasBackgroundAudio {
 		t.Fatalf("PUT body added a backgroundAudio the original session never had: %s", gotPutBody)
+	}
+}
+
+// TestCmdNightGetRejectsBackgroundAudioWithBothForms proves a wire body
+// naming both mediaPlaylist and items is a decode error naming the
+// conflict, never a marshal that silently drops one form's fields.
+func TestCmdNightGetRejectsBackgroundAudioWithBothForms(t *testing.T) {
+	body := strings.Replace(nightSessionSampleJSONWithInlineBackgroundAudioTargets,
+		`"items":[`, `"mediaPlaylist":"holiday-bed","items":[`, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, body)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"get", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitAPIError {
+		t.Fatalf("exit code = %d, want exitAPIError; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "mediaPlaylist") || !strings.Contains(stderr.String(), "items") {
+		t.Errorf("stderr = %q, want it to name both conflicting fields", stderr.String())
+	}
+}
+
+// TestCmdNightGetRejectsBackgroundAudioWithNeitherForm proves a wire body
+// naming neither mediaPlaylist nor items is a decode error naming the
+// problem, never a marshal that emits "items":null.
+func TestCmdNightGetRejectsBackgroundAudioWithNeitherForm(t *testing.T) {
+	body := strings.Replace(nightSessionSampleJSONWithInlineBackgroundAudioTargets,
+		"\t\t\t\t\"items\":[{\"itemId\":\"track-1\",\"show\":\"halloween-2026\",\"sequence\":\"bg-track-1\",\"target\":\"player-01\"}],\n", "", 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, body)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"get", "--server", ts.URL, "halloween-main"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitAPIError {
+		t.Fatalf("exit code = %d, want exitAPIError; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "neither") {
+		t.Errorf("stderr = %q, want it to name the missing form", stderr.String())
 	}
 }
 
