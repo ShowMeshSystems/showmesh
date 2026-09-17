@@ -573,6 +573,92 @@ func TestBlackAndSilenceStopRevisionIsNotRefusedAsStale(t *testing.T) {
 	}
 }
 
+// fixedFailedClockSource is a [audio.ClockSource] whose provider reports
+// [agentclock.StateFailed] (matching a stopped ptp4l), so a test can drive
+// [audio.Manager.StartAtPosition] against a node whose own clock cannot
+// honor a coordinator-chosen shared instant at all.
+type fixedFailedClockSource struct{}
+
+func (fixedFailedClockSource) Poll(context.Context) agentclock.Status {
+	return agentclock.Status{State: agentclock.StateFailed, Reason: "read-only management socket"}
+}
+
+func (fixedFailedClockSource) Now(context.Context) agentclock.MediaTime {
+	return agentclock.MediaTime{Valid: false, Reason: "no clock reading while the provider has failed"}
+}
+
+// TestCueActivationScheduledStartUnusableClockConfirmsUnalignedNamingTheClock
+// proves the other half of the missed-instant fallback above: a Cue
+// activation carrying a coordinator-chosen ScheduledAtNs, on a node whose
+// OWN clock provider is not usable at all, still confirms (the node
+// starts on arrival, exactly as [audio.Manager.StartAt] already does) and
+// reports a non-empty unaligned reason naming the clock, rather than
+// silently dropping [audio.Manager.StartAtPosition]'s own schedule note
+// the way activateAudio used to when the scheduled start itself
+// succeeded. Before this fix, this scenario reported Confirmed with an
+// EMPTY unaligned reason: a Fire response indistinguishable from a truly
+// aligned start.
+func TestCueActivationScheduledStartUnusableClockConfirmsUnalignedNamingTheClock(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	mgr.SetClockSource(fixedFailedClockSource{})
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-unusable-clock", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-unusable-clock", "cue-unusable-clock", 1, "halloween-2026", 3, "rev-a", 4500)
+	// The instant itself is irrelevant here: resolveScheduleLocked reports
+	// the provider unusable before it ever compares the instant against a
+	// media-clock reading, on a real node exactly as it does here.
+	future := clock.t.Add(time.Second).UnixNano()
+	act.ScheduledAtNs = &future
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm a start on a node with an unusable clock: %+v", result)
+	}
+	value, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result.Value = %#v, want a map", result.Value)
+	}
+	if outcome, _ := value["outcome"].(string); outcome != "authorized" {
+		t.Fatalf("outcome = %q, want authorized", outcome)
+	}
+	unalignedReason, _ := value["unalignedReason"].(string)
+	if unalignedReason == "" {
+		t.Fatalf("value = %+v, want a non-empty unalignedReason naming the unusable clock", value)
+	}
+	if !strings.Contains(unalignedReason, pkgaudio.ReasonScheduledStartIgnored) {
+		t.Fatalf("unalignedReason = %q, want it to carry %q", unalignedReason, pkgaudio.ReasonScheduledStartIgnored)
+	}
+	if !strings.Contains(unalignedReason, string(agentclock.StateFailed)) {
+		t.Fatalf("unalignedReason = %q, want it to name the clock provider's failed state", unalignedReason)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	if len(snaps) != 1 {
+		t.Fatalf("session snapshots = %+v, want exactly one", snaps)
+	}
+	if snaps[0].State != pkgaudio.StatePlaying {
+		t.Fatalf("session state = %s, want playing: an unusable clock must not leave the node silent", snaps[0].State)
+	}
+	if snaps[0].PositionKnown && snaps[0].Position != 4500*time.Millisecond {
+		t.Fatalf("session position = %v, want 4.5s (the activation's PositionMS)", snaps[0].Position)
+	}
+}
+
 // fixedLockedClockSource is a [audio.ClockSource] locked at a fixed media
 // reading, so a test can drive [audio.Manager.StartAtPosition] against a
 // real, evaluated schedule rather than the no-clock-wired bypass.
