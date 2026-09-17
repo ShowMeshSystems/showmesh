@@ -261,21 +261,21 @@ func (p *ManagedProvider) reachedTimestampingMode() (Timestamping, bool) {
 func (p *ManagedProvider) Now(ctx context.Context) MediaTime {
 	reached, known := p.reachedTimestampingMode()
 	if !known {
-		return MediaTime{Valid: false, Reason: "no timestamping mode confirmed yet: this node's managed ptp4l has not been observed running past its startup probe"}
+		return MediaTime{Valid: false, Reason: "The clock service has not confirmed its timestamping mode yet."}
 	}
 	if reached != TimestampingHardware {
-		return MediaTime{Time: time.Now(), Valid: true, Reason: "software timestamping: reading CLOCK_REALTIME, which this node's ptp4l disciplines directly"}
+		return MediaTime{Time: time.Now(), Valid: true, Reason: "Using software timestamping, so media time comes from the system clock."}
 	}
 	index, ok, err := phcIndexForInterface(p.cfg.Interface)
 	if err != nil {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("PHC lookup for %s failed: %v", p.cfg.Interface, err)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("Could not check %s for a hardware clock: %v.", p.cfg.Interface, err)}
 	}
 	if !ok {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("interface %s has no associated PHC despite hardware timestamping being reached", p.cfg.Interface)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("%s has no hardware clock even though hardware timestamping is active.", p.cfg.Interface)}
 	}
 	t, err := readPHC(index)
 	if err != nil {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("reading /dev/ptp%d: %v (distributions ship this device root:root 0600; this agent may need a udev rule or group membership)", index, err)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("Could not read /dev/ptp%d: %v. Check the device permissions.", index, err)}
 	}
 	return MediaTime{Time: t, Valid: true}
 }
@@ -290,7 +290,7 @@ func (p *ManagedProvider) Start(ctx context.Context) error {
 	p.mu.Lock()
 	if p.stop != nil {
 		p.mu.Unlock()
-		return fmt.Errorf("clock: managed provider for %s domain %d is already started", p.cfg.Interface, p.cfg.Domain)
+		return fmt.Errorf("the clock service for %s domain %d is already running", p.cfg.Interface, p.cfg.Domain)
 	}
 	p.stop = make(chan struct{})
 	p.done = make(chan struct{})
@@ -358,14 +358,14 @@ func (p *ManagedProvider) superviseLoop() {
 
 		attemptingHardware := mode == TimestampingHardware
 		if err := writePTP4LConfig(p.confPath, p.cfg, attemptingHardware, p.rwSocket, p.roSocket); err != nil {
-			p.setRunResult(false, fmt.Sprintf("failed to write ptp4l config for a %s timestamping attempt: %v", mode, err))
+			p.setRunResult(false, fmt.Sprintf("Could not write the clock config for a %s attempt: %v.", mode, err))
 			backoff.Reset(managedRestartBackoff)
 			continue
 		}
 
 		cmd := exec.Command(ptp4lBinary, "-f", p.confPath, "-i", p.cfg.Interface, "-m")
 		if err := cmd.Start(); err != nil {
-			p.setRunResult(false, fmt.Sprintf("failed to start ptp4l: %v", err))
+			p.setRunResult(false, fmt.Sprintf("Could not start the clock service: %v.", err))
 			backoff.Reset(managedRestartBackoff)
 			continue
 		}
@@ -414,11 +414,11 @@ func (p *ManagedProvider) superviseLoop() {
 		if exitedEarly && attemptingHardware && !fellBack {
 			fellBack = true
 			mode = TimestampingSoftware
-			reason := "ptp4l exited immediately while attempting hardware timestamping"
+			reason := "The clock service exited immediately in hardware mode."
 			if exitErr != nil {
-				reason = fmt.Sprintf("%s: %v", reason, exitErr)
+				reason = fmt.Sprintf("The clock service exited immediately in hardware mode: %v.", exitErr)
 			}
-			reason += "; falling back to software timestamping and retrying"
+			reason += " Falling back to software mode and retrying."
 			p.setRunResult(false, reason)
 			if p.logger != nil {
 				p.logger.Warn("managed ptp4l fell back to software timestamping", "interface", p.cfg.Interface, "domain", p.cfg.Domain, "reason", reason)
@@ -441,9 +441,9 @@ func (p *ManagedProvider) superviseLoop() {
 			// A software attempt that failed outright, or a hardware
 			// attempt that already fell back once this Start and failed
 			// again — an ordinary crash from here on.
-			reason := "ptp4l exited"
+			reason := "The clock service exited."
 			if exitErr != nil {
-				reason = fmt.Sprintf("ptp4l exited: %v", exitErr)
+				reason = fmt.Sprintf("The clock service exited: %v.", exitErr)
 			}
 			p.setRunResult(false, reason)
 			if p.logger != nil {
@@ -471,9 +471,9 @@ func (p *ManagedProvider) superviseLoop() {
 			return
 		}
 
-		reason := "ptp4l exited"
+		reason := "The clock service exited."
 		if err != nil {
-			reason = fmt.Sprintf("ptp4l exited: %v", err)
+			reason = fmt.Sprintf("The clock service exited: %v.", err)
 		}
 		p.setRunResult(false, reason)
 		if p.logger != nil {
@@ -511,7 +511,7 @@ func (p *ManagedProvider) Poll(ctx context.Context) RawStatus {
 	p.mu.Unlock()
 
 	if !running {
-		reason := "this node's managed ptp4l is not currently running"
+		reason := "The clock service is not running."
 		if lastExit != "" {
 			reason = lastExit
 		}
@@ -519,7 +519,7 @@ func (p *ManagedProvider) Poll(ctx context.Context) RawStatus {
 	}
 
 	if _, err := os.Stat(p.roSocket); err != nil {
-		return RawStatus{Reachable: false, Reason: fmt.Sprintf("managed ptp4l process is running but its management socket %s is not yet present: %v", p.roSocket, err)}
+		return RawStatus{Reachable: false, Reason: fmt.Sprintf("The clock service is running, but its socket %s is not ready yet: %v.", p.roSocket, err)}
 	}
 
 	// p.cfg.RunDir is passed as pmc's own local-socket hint: [NewManagedProvider]

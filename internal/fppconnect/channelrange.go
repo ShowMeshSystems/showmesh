@@ -22,22 +22,22 @@ type ChannelRange struct {
 // empty. A node with no configured surface never reaches this function:
 // it advertises nothing per RES-003 section 10.1, so this refusal is for
 // a caller that meant to pass at least one range and did not.
-var ErrNoChannelRanges = errors.New("fppconnect: no channel ranges to format")
+var ErrNoChannelRanges = errors.New("This surface has no channels configured, so nothing can be advertised to xLights.")
 
 // ErrChannelRangeStartBelowOne is refused when a range's StartChannel is
 // below 1: show.surface's channel numbering is 1-based, and a value below
 // that is not a channel number this format can convert.
-var ErrChannelRangeStartBelowOne = errors.New("fppconnect: channel range start must be at least 1")
+var ErrChannelRangeStartBelowOne = errors.New("A channel range must start at channel 1 or higher.")
 
 // ErrChannelRangeCountBelowOne is refused when a range's ChannelCount is
 // below 1: a zero-length range converts to a decreasing (start > end) or
 // otherwise nonsensical pair, not a real window.
-var ErrChannelRangeCountBelowOne = errors.New("fppconnect: channel range count must be at least 1")
+var ErrChannelRangeCountBelowOne = errors.New("A channel range must include at least 1 channel.")
 
 // ErrChannelRangesTooLong is refused when the fully formatted, comma-joined
 // string would exceed [multisync.MaxPingRangesLength], the ping's
 // fixed-size ranges field cannot carry it.
-var ErrChannelRangesTooLong = fmt.Errorf("fppconnect: formatted channel ranges string exceeds the %d-byte ping field", multisync.MaxPingRangesLength)
+var ErrChannelRangesTooLong = fmt.Errorf("This surface's channel ranges are too long to advertise to xLights (over %d bytes)", multisync.MaxPingRangesLength)
 
 // ErrSingleChannelSurfaceAtChannelOne is refused when the formatted output
 // would be the literal string "0-0", the one input (a single range,
@@ -46,7 +46,7 @@ var ErrChannelRangesTooLong = fmt.Errorf("fppconnect: formatted channel ranges s
 // and silently falls back to rendering a full, non-sparse FSEQ, so this
 // formatter refuses to produce it rather than advertising a range xLights
 // would treat as no range at all.
-var ErrSingleChannelSurfaceAtChannelOne = errors.New("fppconnect: a single-channel surface at channel 1 cannot be advertised: xLights discards 0-0")
+var ErrSingleChannelSurfaceAtChannelOne = errors.New("Cannot advertise a single channel starting at channel 1, xLights ignores it. Widen the surface or start it above channel 1.")
 
 // FormatChannelRanges converts ranges (1-based, inclusive count, as
 // show.surface stores them) into the comma-joined, 0-based, inclusive-end

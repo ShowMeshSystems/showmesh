@@ -58,11 +58,11 @@ func main() {
 	outFlag := flag.String("out", "", "output JSONL capture path (default: showmesh-multisync-capture-<UTC timestamp>.jsonl in the current directory)")
 	durationFlag := flag.Duration("duration", 0, "capture duration; 0 (default) runs until interrupted with Ctrl-C or SIGTERM")
 	respondFlag := flag.Bool("respond-discover", false,
-		"answer discover pings so this probe appears in FPP's MultiSync UI, per RES-002's documented non-FPP device etiquette. "+
+		"answer discover pings so this probe appears in FPP's MultiSync UI. "+
 			"OFF BY DEFAULT: unlike every other flag here, this one TRANSMITS Ping packets onto the network when a discover ping is observed. "+
 			"Leave it off for a pure listen-only capture.")
 	stepMSFlag := flag.Int("step-ms", int(multisync.DefaultStepTime/time.Millisecond),
-		"assumed step time in milliseconds. RES-002 records that MultiSync never carries rate on the wire; this only affects position "+
+		"assumed step time in milliseconds. MultiSync never carries rate on the wire, so this only affects position "+
 			"derived from FrameNumber on packets where SecondsElapsed is unusable (zero), and the timeline snapshots and drift series this "+
 			"tool records. It is a guess, not something this tool can verify from the network.")
 	quietFlag := flag.Bool("quiet", false, "suppress the human-readable per-packet line on stdout; the JSONL capture is written either way")
@@ -840,12 +840,12 @@ func (c *capture) printSummary(w *summaryWriter, l *multisync.Listener, outPath 
 	w.Printf("Datagrams received:  %d  (decoded_ok=%d not_fppd=%d malformed=%d unknown_type=%d)\n",
 		stats.PacketsReceived, stats.DecodedOK, stats.NotFPPD, stats.Malformed, stats.UnknownType)
 	w.Println()
-	w.Println("This is evidence from a SINGLE capture run. It establishes only what this")
+	w.Println("This is a record from a SINGLE capture run. It shows only what this")
 	w.Println("run observed, on this network, at this time. It does not by itself confirm")
 	w.Println("behavior across FPP versions, network modes, or impaired conditions (delay,")
-	w.Println("loss, duplication, reordering, competing masters) that RES-002's full test")
-	w.Println("method calls for. Moving RES-002 past L1 requires a human reviewing this")
-	w.Println("evidence against what was actually done on the FPP side during the capture.")
+	w.Println("loss, duplication, reordering, competing masters). Confirming this fully")
+	w.Println("requires a human reviewing this capture against what was actually done on")
+	w.Println("the FPP side during it.")
 
 	if c.packetCount == 0 {
 		w.Println()
@@ -854,10 +854,9 @@ func (c *capture) printSummary(w *summaryWriter, l *multisync.Listener, outPath 
 		w.Println()
 		w.Println("MOST LIKELY EXPECTED CAUSE, if the target is FPP 10: a fresh FPP 10 install")
 		w.Println("ships with MultiSyncUnicast defaulting to on and MultiSyncMulticast carrying")
-		w.Println("no default at all (RES-002; upstream www/settings.json at the 10.0 tag), and")
-		w.Println("FPP 10's automatic unicast targeting only ever selects other FPP instances in")
-		w.Println("remote mode (supportsUnicast in src/MultiSync.cpp) -- never a third-party")
-		w.Println("listener such as this probe. A fresh FPP 10 player left at its shipped")
+		w.Println("no default at all, and FPP 10's automatic unicast targeting only ever selects")
+		w.Println("other FPP instances in remote mode -- never a third-party listener such as")
+		w.Println("this probe. A fresh FPP 10 player left at its shipped")
 		w.Println("defaults will therefore send this probe nothing, on ANY transport, with no")
 		w.Println("error logged on either side. THIS IS FPP 10 CONFIGURED THE WAY FPP 10 SHIPS,")
 		w.Println("not a broken listener and not a broken network. It is not distinguishable from")
@@ -865,14 +864,13 @@ func (c *capture) printSummary(w *summaryWriter, l *multisync.Listener, outPath 
 		w.Println("this probe's/ShowMesh's address to MultiSyncRemotes (or MultiSyncExtraRemotes)")
 		w.Println("under Settings -> MultiSync on the FPP 10 player -- this applies live, with no")
 		w.Println("fppd restart, on FPP 10 -- and re-running the capture. If packets then arrive,")
-		w.Println("this was the expected FPP 10 default, not a fault. See RES-002 and")
-		w.Println("docs/bench/RES-002-capture-procedure.md for the full operator procedure.")
+		w.Println("this was the expected FPP 10 default, not a fault.")
 		w.Println()
 		w.Println("Other possible (and still unruled-out) causes: FPP is not running or not")
 		w.Println("playing anything; MultiSyncEnabled is off; a firewall is dropping UDP 32320;")
-		w.Println("this host is on a different L2 segment or VLAN with no route for the")
+		w.Println("this host is on a different network segment or VLAN with no route for the")
 		w.Println("configured transport; or -iface/-listen point somewhere traffic does not")
-		w.Println("arrive. None of RES-002's five open items are answered by this run.")
+		w.Println("arrive.")
 	}
 
 	c.printItem1(w)

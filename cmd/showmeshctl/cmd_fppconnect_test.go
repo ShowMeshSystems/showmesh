@@ -150,7 +150,7 @@ func TestCmdFPPConnectStatusPrintsDroppedState(t *testing.T) {
 			`"declaration":`+validDeclarationJSONForFPPConnectTest+`,"render":[],"audio":[],`+
 			`"fppConnect":[`+
 			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.state","value":"dropped","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null},`+
-			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.reason","value":"fppconnect: formatted channel ranges string exceeds the 120-byte ping field: 187 bytes","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null}`+
+			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.reason","value":"This surface's channel ranges are too long to advertise to xLights (over 120 bytes): 187 bytes","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null}`+
 			`]}}`)
 	}))
 	defer ts.Close()
@@ -163,7 +163,7 @@ func TestCmdFPPConnectStatusPrintsDroppedState(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"node.fppconnect.channel_range.state", "dropped",
-		"node.fppconnect.channel_range.reason", "120-byte ping field",
+		"node.fppconnect.channel_range.reason", "too long to advertise to xLights",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)

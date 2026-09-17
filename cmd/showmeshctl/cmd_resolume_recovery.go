@@ -350,7 +350,7 @@ func reportResolumeRecoveryRestore(stdout io.Writer, restore resolumeRecoveryRes
 		}
 	}
 	if restore.OmittedLayerCount > 0 {
-		_, _ = fmt.Fprintf(stdout, "  %d further layer(s) were not attempted (composition larger than one restore covers) — run the restore again to continue\n", restore.OmittedLayerCount)
+		_, _ = fmt.Fprintf(stdout, "  %d further layer(s) were not attempted (composition larger than one restore covers). Run the restore again to continue.\n", restore.OmittedLayerCount)
 	}
 	return exitCodeForResolumeRecoveryRestore(restore)
 }

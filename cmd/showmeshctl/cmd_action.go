@@ -83,12 +83,12 @@ Subcommands:
                 reports the gap where it is actually used
 
 "action put" accepts a full show.action JSON payload (show, label,
-safetyClass, target) for any integration, including "resolume" — the
-target names a Resolume action and a named reference (ADR-037: clip, deck,
-layer, column, persistent, bypassed, master), never a Resolume object id.
+safetyClass, target) for any integration, including "resolume": the
+target names a Resolume action and a named reference (clip, deck, layer,
+column, persistent, bypassed, master), never a Resolume object id.
 Validated before activation: an invalid payload, or a reference that does
 not resolve against the currently stored composition, is rejected and
-appends no revision (ADR-009).
+does not create a new revision.
 
 Writing a show.macro definition is "showmeshctl macro put" — see
 "showmeshctl macro --help".
@@ -210,7 +210,7 @@ func cmdActionPut(args []string, stdout, stderr io.Writer, clock func() time.Tim
 		_, _ = fmt.Fprintln(stderr, "(PUT /api/v1/config/show.action/{id}, requires config:write, admin only).")
 		_, _ = fmt.Fprintln(stderr, "The payload is a full show.action object: show, label, safetyClass, and")
 		_, _ = fmt.Fprintln(stderr, "target. Validated before activation: an invalid payload, or a reference")
-		_, _ = fmt.Fprintln(stderr, "that does not resolve, is rejected and appends no revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "that does not resolve, is rejected and does not create a new revision.")
 		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"action show --output json\" prints.")
 		_, _ = fmt.Fprintln(stderr, "\nSends If-Match by default (an operator's payload \"revision\" if the input")
 		_, _ = fmt.Fprintln(stderr, "is \"action show --output json\"'s own shape, otherwise a fresh read), refusing")

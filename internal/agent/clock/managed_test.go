@@ -372,7 +372,7 @@ func TestManagedProviderFallsBackToSoftwareTimestampingOnEarlyExit(t *testing.T)
 	fallbackDeadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(fallbackDeadline) {
 		raw := p.Poll(context.Background())
-		if !raw.Reachable && strings.Contains(raw.Reason, "falling back to software timestamping") {
+		if !raw.Reachable && strings.Contains(raw.Reason, "Falling back to software mode") {
 			sawFallbackReason = true
 			break
 		}

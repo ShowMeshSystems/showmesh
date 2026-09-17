@@ -340,7 +340,7 @@ func TestCredentialDirCheckNoteForFailedRepair(t *testing.T) {
 		RepairErr: errors.New("permission denied"),
 	}
 	note := check.Note()
-	if !strings.Contains(note, "FAILED") {
+	if !strings.Contains(note, "could not be locked down") {
 		t.Errorf("Note() = %q, want it to say the repair failed", note)
 	}
 	if !strings.Contains(note, "permission denied") {
@@ -349,7 +349,7 @@ func TestCredentialDirCheckNoteForFailedRepair(t *testing.T) {
 	if !strings.Contains(note, "0755") || !strings.Contains(note, "0700") {
 		t.Errorf("Note() = %q, want it to name both the mode found and the mode wanted", note)
 	}
-	if !strings.Contains(note, "proceeding") {
-		t.Errorf("Note() = %q, want it to say the run proceeds anyway", note)
+	if !strings.Contains(note, "Fix the directory permissions") {
+		t.Errorf("Note() = %q, want it to tell the operator what to do", note)
 	}
 }

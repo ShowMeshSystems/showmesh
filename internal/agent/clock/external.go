@@ -77,36 +77,36 @@ func (p *ExternalProvider) Close() error       { return nil }
 func (p *ExternalProvider) Now(context.Context) MediaTime {
 	index, hasPHC, err := phcIndexForInterface(p.cfg.Interface)
 	if err != nil {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("cannot tell whether %s has a PHC, so which clock the observed ptp4l disciplines is unknown: %v", p.cfg.Interface, err)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("Could not check %s for a hardware clock: %v. Media time is unavailable until this is fixed.", p.cfg.Interface, err)}
 	}
 	if !hasPHC {
 		if p.cfg.PHCDevice != "" {
-			return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s is declared for %s, but %s has no PHC at all (ETHTOOL_GET_TS_INFO reports none): remove phcDevice or fix the declaration", p.cfg.PHCDevice, p.cfg.Interface, p.cfg.Interface)}
+			return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s is set, but %s has no hardware clock. Remove phcDevice or point it at the right interface.", p.cfg.PHCDevice, p.cfg.Interface)}
 		}
 		return MediaTime{
 			Time:   time.Now(),
 			Valid:  true,
-			Reason: fmt.Sprintf("%s has no PHC, so the observed ptp4l is necessarily software timestamped and disciplines CLOCK_REALTIME directly", p.cfg.Interface),
+			Reason: fmt.Sprintf("%s has no hardware clock, so media time comes from the system clock.", p.cfg.Interface),
 		}
 	}
 	if p.cfg.PHCDevice == "" {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("%s has a PHC, and this provider cannot tell whether the ptp4l it observes reached hardware timestamping; wire a PHC device explicitly for media time", p.cfg.Interface)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("%s has a hardware clock, but this node cannot tell if it is being used. Set phcDevice to enable media time.", p.cfg.Interface)}
 	}
 	declaredIndex, ok := phcDeviceIndex(p.cfg.PHCDevice)
 	if !ok {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %q does not name a PTP hardware clock device (want a form like \"/dev/ptp0\")", p.cfg.PHCDevice)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %q is not a valid hardware clock device. Use a path like /dev/ptp0.", p.cfg.PHCDevice)}
 	}
 	if declaredIndex != index {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s names PTP clock index %d, but %s's own PHC is /dev/ptp%d: fix phcDevice or the interface", p.cfg.PHCDevice, declaredIndex, p.cfg.Interface, index)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("phcDevice %s does not match %s's hardware clock, which is /dev/ptp%d. Fix phcDevice or the interface.", p.cfg.PHCDevice, p.cfg.Interface, index)}
 	}
 	t, err := readPHC(index)
 	if err != nil {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("reading %s: %v (distributions ship this device root:root 0600; this agent may need a udev rule or group membership)", p.cfg.PHCDevice, err)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("Could not read %s: %v. Check the device permissions.", p.cfg.PHCDevice, err)}
 	}
 	return MediaTime{
 		Time:   t,
 		Valid:  true,
-		Reason: fmt.Sprintf("media time from the operator-declared PHC %s on %s: this is an attested reading, never a verified hardware-timestamping read", p.cfg.PHCDevice, p.cfg.Interface),
+		Reason: fmt.Sprintf("Media time is from the hardware clock %s on %s.", p.cfg.PHCDevice, p.cfg.Interface),
 	}
 }
 
@@ -133,7 +133,7 @@ func phcDeviceIndex(device string) (int, bool) {
 // no socket, no evidence).
 func (p *ExternalProvider) Poll(ctx context.Context) RawStatus {
 	if _, err := os.Stat(p.cfg.UDSAddress); err != nil {
-		return RawStatus{Reachable: false, Reason: fmt.Sprintf("read-only management socket %s: %v", p.cfg.UDSAddress, err)}
+		return RawStatus{Reachable: false, Reason: fmt.Sprintf("Cannot reach the clock socket %s: %v.", p.cfg.UDSAddress, err)}
 	}
 	return pollViaUDS(ctx, p.cfg.UDSAddress, p.cfg.Domain, "external (unidentified)", p.cfg.LocalSocketDir)
 }
@@ -155,13 +155,13 @@ func pollViaUDS(ctx context.Context, uds string, domain int, owner string, socke
 			// holdover, if previously locked) exactly as it does for any
 			// other reading with no proof of sync yet.
 			return RawStatus{Reachable: true, Timescale: TimescaleUnknown, Owner: owner,
-				Reason: fmt.Sprintf("clock state unknown: %v (this node's own pmc tooling failed, not evidence ptp4l is down)", portErr)}
+				Reason: fmt.Sprintf("Clock state is unknown: %v. This does not mean the clock is down.", portErr)}
 		}
 		return RawStatus{Reachable: false, Reason: portErr.Error()}
 	}
 	port := parsePortDataSet(portOut)
 	if !port.PortStateKnown {
-		return RawStatus{Reachable: false, Reason: "no response from ptp4l's management socket (wrong domain, or ptp4l is not actually running behind this socket)"}
+		return RawStatus{Reachable: false, Reason: "No response from the clock socket. Check the domain number, or confirm the clock service is running."}
 	}
 
 	tsOut, _ := runPMC(ctx, uds, domain, "TIME_STATUS_NP", socketDirHint)

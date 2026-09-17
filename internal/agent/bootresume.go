@@ -42,16 +42,15 @@ type resumeDecision struct {
 func decideBootResume(a pipeline.Assignment, held heldcatalog.HeldCatalog, hasCatalog bool) resumeDecision {
 	if !hasCatalog {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
-			"surface %q held a persisted assignment at boot, but this node holds no Cue catalog at all; a node with no held catalog resumes nothing (TRACK-H-H3-SPEC.md section 7)", a.SurfaceID)}
+			"%q's saved assignment was cleared because this node has no cue catalog loaded. Deploy a catalog to it.", a.SurfaceID)}
 	}
 	if a.Auth == nil {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
-			"surface %q held a persisted assignment at boot with no authorization tuple (persisted before TRACK-H-H3-SPEC.md section 7 existed, or applied by a coordinator not yet sending one); treated as unauthorized, never grandfathered", a.SurfaceID)}
+			"%q's saved assignment was cleared because it has no authorization on record. Redeploy it.", a.SurfaceID)}
 	}
 	if a.Auth.Show != held.Show || a.Auth.Generation != held.Generation || a.Auth.CatalogRevision != held.Revision {
 		return resumeDecision{Authorized: false, Reason: fmt.Sprintf(
-			"surface %q held a persisted assignment authorized under show=%q generation=%d catalogRevision=%q, but this node currently holds show=%q generation=%d catalogRevision=%q",
-			a.SurfaceID, a.Auth.Show, a.Auth.Generation, a.Auth.CatalogRevision, held.Show, held.Generation, held.Revision)}
+			"%q's saved assignment is for a different show and was cleared. Redeploy it.", a.SurfaceID)}
 	}
 	return resumeDecision{Authorized: true}
 }

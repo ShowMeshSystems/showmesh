@@ -757,14 +757,14 @@ func printResolumeCompositionDetail(w io.Writer, resp resolumeCompositionRespons
 		if name := deckName[id]; name != "" {
 			label = fmt.Sprintf("%s (%s)", name, id)
 		}
-		_, _ = fmt.Fprintf(w, "  deck %s — %d clip(s):\n", label, len(clips))
+		_, _ = fmt.Fprintf(w, "  deck %s: %d clip(s):\n", label, len(clips))
 		printResolumeClipsTable(w, clips)
 	}
 	if len(deckOrder) == 0 {
 		_, _ = fmt.Fprintln(w, "  (no decks)")
 	}
 
-	_, _ = fmt.Fprintf(w, "\npersistent clips (%d, no deck — live outside any deck):\n", len(resp.PersistentClips))
+	_, _ = fmt.Fprintf(w, "\npersistent clips (%d, no deck, live outside any deck):\n", len(resp.PersistentClips))
 	printResolumeClipsTable(w, resp.PersistentClips)
 }
 

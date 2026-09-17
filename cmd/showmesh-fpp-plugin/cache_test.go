@@ -28,7 +28,7 @@ func fixtureMacroConfig(revision int, label string, steps ...configShowMacroStep
 // it. See TestLocalPolicyStatementNoCache's own doc comment for the
 // mutation this was run against to confirm that.
 func wantNoCacheStatement(macroID string) string {
-	return fmt.Sprintf("local policy for macro %q is unknown: no successful authenticated read of this macro's definition has been cached on this host yet", macroID)
+	return fmt.Sprintf("The local policy for macro %q is unknown because this host has not cached its definition yet.", macroID)
 }
 
 // TestLocalPolicyStatementNoCache asserts EXACT equality against the
