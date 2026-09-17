@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -53,19 +54,19 @@ func driveNightAdvanceBackgroundAudioUntilStable(t *testing.T, h *handlers, pub 
 }
 
 // pauseResultWithBookmark builds the audio.session.pause result R1's own
-// NEW evidence keys (nightbedwire.go) ride, exactly as
-// nightBedBookmarkFromEvidence decodes them.
+// NEW evidence keys ([pkgaudio.ResultBookmarkKnown] and siblings) ride,
+// exactly as nightBedBookmarkFromEvidence decodes them.
 func pauseResultWithBookmark(known bool, itemID string, index int, positionMs int64) mqttproto.ResultPayload {
 	return mqttproto.ResultPayload{
 		Outcome: mqttproto.OutcomeConfirmed,
 		Evidence: &mqttproto.ResultEvidence{
 			Signal: "audio.session",
 			Value: map[string]any{
-				"outcome":          "started",
-				bookmarkKnown:      known,
-				bookmarkItemId:     itemID,
-				bookmarkIndex:      json.Number(strconv.Itoa(index)),
-				bookmarkPositionMs: json.Number(strconv.FormatInt(positionMs, 10)),
+				"outcome":                         "started",
+				pkgaudio.ResultBookmarkKnown:      known,
+				pkgaudio.ResultBookmarkItemID:     itemID,
+				pkgaudio.ResultBookmarkIndex:      json.Number(strconv.Itoa(index)),
+				pkgaudio.ResultBookmarkPositionMs: json.Number(strconv.FormatInt(positionMs, 10)),
 			},
 		},
 	}
@@ -409,14 +410,14 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstan
 		t.Fatalf("resumes dispatched: node-a=%v node-b=%v, want both", okA, okB)
 	}
 	for nodeID, params := range map[string]map[string]any{"node-a": resumeA, "node-b": resumeB} {
-		if params[resumeItemId] != "track-2" {
+		if params[pkgaudio.ParamResumeItemID] != "track-2" {
 			t.Fatalf("node %q: resume params = %v, want resumeItemId=track-2", nodeID, params)
 		}
-		index, _ := evidenceInt64(params[resumeIndex])
+		index, _ := evidenceInt64(params[pkgaudio.ParamResumeIndex])
 		if index != 1 {
 			t.Fatalf("node %q: resume params = %v, want resumeIndex=1", nodeID, params)
 		}
-		positionMs, _ := evidenceInt64(params[resumePositionMs])
+		positionMs, _ := evidenceInt64(params[pkgaudio.ParamResumePositionMs])
 		if positionMs != 4500 {
 			t.Fatalf("node %q: resume params = %v, want resumePositionMs=4500", nodeID, params)
 		}
@@ -792,6 +793,46 @@ func TestNightCheckAudioAlignmentForNode_UnlockedClockIsWarning(t *testing.T) {
 	check := h.nightCheckAudioAlignmentForNode(context.Background(), testNow, "node-b")
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %v, reason = %q, want degraded (a warning, not a failure)", check.health, check.reason)
+	}
+}
+
+// TestNightAdvanceMultiNodeBackgroundAudio_ResumeParamKeysMatchSharedWireConstants
+// proves the coordinator's dispatched resume params use exactly the
+// pkg/audio wire keys, not a coordinator-local synonym that only happens
+// to share the same string today. internal/agent's own parseResumePoint
+// (the real decode side of this contract) pulls in the cgo GStreamer
+// engine chain and is not reachable from a coordinator test, so this
+// checks the outgoing key set directly against the shared constants.
+func TestNightAdvanceMultiNodeBackgroundAudio_ResumeParamKeysMatchSharedWireConstants(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
+
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.pause": pauseResultWithBookmark(true, "track-2", 1, 4500),
+	}
+	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
+
+	const resumeClockReading = int64(1_800_000_000_000_000_000)
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, resumeClockReading, ""),
+	}
+	driveNightAdvanceBackgroundAudioUntilStable(t, h, pub, rec, 10)
+
+	resumeA, ok := dispatchedByNodeAction(pub, "node-a", "audio.session.resume")
+	if !ok {
+		t.Fatalf("node-a: no audio.session.resume dispatched")
+	}
+	// "revision" is the dispatch envelope's own idempotency field, outside
+	// this rebase's shared bookmark/resume wire contract.
+	want := []string{pkgaudio.ParamResumeItemID, pkgaudio.ParamResumeIndex, pkgaudio.ParamResumePositionMs, pkgaudio.ParamScheduledAtNs, "revision"}
+	sort.Strings(want)
+	got := make([]string, 0, len(resumeA))
+	for k := range resumeA {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("node-a resume param keys = %v, want exactly %v (the shared pkg/audio wire keys)", got, want)
 	}
 }
 

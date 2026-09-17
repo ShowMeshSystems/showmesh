@@ -1977,22 +1977,23 @@ type nightBedBookmark struct {
 }
 
 // nightBedBookmarkFromEvidence decodes audio.session.pause's own result-
-// evidence keys (nightbedwire.go). Known is false for nothing bookmark-
-// shaped, bookmarkKnown false, or an empty item id - never inferred.
+// evidence keys ([pkgaudio.ResultBookmarkKnown] and siblings). Known is
+// false for nothing bookmark-shaped, ResultBookmarkKnown false, or an
+// empty item id - never inferred.
 func nightBedBookmarkFromEvidence(evidence map[string]any) nightBedBookmark {
 	if evidence == nil {
 		return nightBedBookmark{}
 	}
-	known, _ := evidence[bookmarkKnown].(bool)
+	known, _ := evidence[pkgaudio.ResultBookmarkKnown].(bool)
 	if !known {
 		return nightBedBookmark{}
 	}
-	itemID, _ := evidence[bookmarkItemId].(string)
+	itemID, _ := evidence[pkgaudio.ResultBookmarkItemID].(string)
 	if itemID == "" {
 		return nightBedBookmark{}
 	}
-	index, _ := evidenceInt64(evidence[bookmarkIndex])
-	positionMs, _ := evidenceInt64(evidence[bookmarkPositionMs])
+	index, _ := evidenceInt64(evidence[pkgaudio.ResultBookmarkIndex])
+	positionMs, _ := evidenceInt64(evidence[pkgaudio.ResultBookmarkPositionMs])
 	return nightBedBookmark{Known: true, ItemID: itemID, Index: int(index), PositionMs: positionMs}
 }
 
@@ -2110,16 +2111,16 @@ func (h *handlers) nightResumeMultiNodeBackgroundAudio(ctx context.Context, now 
 }
 
 // nightBackgroundAudioResumeScheduled mirrors [nightBackgroundAudioStartScheduled]:
-// bookmark, when known, carries resumeItemId/Index/PositionMs together;
-// sched's instant rides alongside it.
+// bookmark, when known, carries [pkgaudio.ParamResumeItemID]/Index/
+// PositionMs together; sched's instant rides alongside it.
 func (h *handlers) nightBackgroundAudioResumeScheduled(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, sched nightBedScheduleResult, bookmark nightBedBookmark, history []nightBackgroundAudioHistoryRow) {
 	revision := h.nightBedNodeDispatchRevision(ctx, nodeID, sessionID, history)
 	cueName := nightBackgroundAudioCueNameResume(int(revision))
 	params := map[string]any{}
 	if bookmark.Known {
-		params[resumeItemId] = bookmark.ItemID
-		params[resumeIndex] = bookmark.Index
-		params[resumePositionMs] = bookmark.PositionMs
+		params[pkgaudio.ParamResumeItemID] = bookmark.ItemID
+		params[pkgaudio.ParamResumeIndex] = bookmark.Index
+		params[pkgaudio.ParamResumePositionMs] = bookmark.PositionMs
 	}
 	note := nightBedScheduleNote("resume", sched)
 	if sched.Aligned {
