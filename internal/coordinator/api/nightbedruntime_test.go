@@ -15,11 +15,9 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// This file proves ADR-049 decisions 7-9's own multi-node bed runtime
-// (nightbackgroundaudio.go's own "multi-node bed" section): the shared
-// start/resume instant (R3), the program+ltc bookmark push (R4), and the
-// regression rules a bed with no declared Targets, or a single declared
-// target, must keep exactly today's behavior.
+// This file proves ADR-049 decisions 7-9's multi-node bed runtime: the
+// shared start/resume instant (decisions 3, 4, 6), the program+ltc bookmark
+// push (decision 8), and regression coverage for an untargeted bed.
 
 // multiNodeBedConfig builds a declared-Targets bed (ADR-049 decision 7)
 // naming targets, whose items are all registered against registeredOn -
@@ -53,9 +51,9 @@ func driveNightAdvanceBackgroundAudioUntilStable(t *testing.T, h *handlers, pub 
 	t.Fatalf("nightAdvanceBackgroundAudio did not stabilize within %d ticks", maxTicks)
 }
 
-// pauseResultWithBookmark builds the audio.session.pause result R1's own
-// NEW evidence keys ([pkgaudio.ResultBookmarkKnown] and siblings) ride,
-// exactly as nightBedBookmarkFromEvidence decodes them.
+// pauseResultWithBookmark builds the audio.session.pause result ADR-049
+// decision 8's own NEW evidence keys ([pkgaudio.ResultBookmarkKnown] and
+// siblings) ride, exactly as nightBedBookmarkFromEvidence decodes them.
 func pauseResultWithBookmark(known bool, itemID string, index int, positionMs int64) mqttproto.ResultPayload {
 	return mqttproto.ResultPayload{
 		Outcome: mqttproto.OutcomeConfirmed,
@@ -159,11 +157,9 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ReferenceFormAppliesCompleteItemLi
 	}
 }
 
-// TestNightAdvanceMultiNodeBackgroundAudio_SharedStartInstantOneRead is R3's
-// own acceptance proof: a two-node bed's shared first start reads the
-// clock exactly once (only node-a, the program+ltc node, is ever asked for
-// audio.session.prepare), dispatches the IDENTICAL scheduledAtNs to both
-// nodes, and a later replay tick reads no clock and dispatches nothing new.
+// TestNightAdvanceMultiNodeBackgroundAudio_SharedStartInstantOneRead proves
+// ADR-049 decisions 3, 4, and 6: a shared first start reads the clock once,
+// dispatches identical scheduledAtNs to both nodes, and a replay reads none.
 func TestNightAdvanceMultiNodeBackgroundAudio_SharedStartInstantOneRead(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
@@ -296,10 +292,8 @@ func TestNightAdvanceMultiNodeBackgroundAudio_OneNodeRefusingStartLeavesOtherSta
 }
 
 // TestNightAdvanceMultiNodeBackgroundAudio_SingleTargetDispatchesNoScheduleStep
-// proves single-node beds - even ones that DO declare Targets, naming just
-// one node - never engage R3's scheduling at all: no
-// audio.session.prepare is ever dispatched, exactly like a bed with no
-// declared Targets.
+// proves a single-target bed never engages ADR-049 decisions 3, 4, and 6's
+// scheduling: no audio.session.prepare is dispatched, same as no Targets.
 func TestNightAdvanceMultiNodeBackgroundAudio_SingleTargetDispatchesNoScheduleStep(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
@@ -436,10 +430,8 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeSendsSharedBookmarkAndInstan
 }
 
 // TestNightAdvanceMultiNodeBackgroundAudio_ResumeUnknownBookmarkOnArrival
-// is R4's own fallback: the program+ltc node's own pause result carries no
-// bookmark evidence, so every node resumes from its own bookmark on
-// arrival - no bookmark push, no scheduledAtNs - and it is recorded
-// unaligned with a reason.
+// proves ADR-049 decision 8's fallback: with no bookmark evidence, every
+// node resumes on arrival from its own bookmark, recorded unaligned.
 func TestNightAdvanceMultiNodeBackgroundAudio_ResumeUnknownBookmarkOnArrival(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	rec := twoNodeMultiNodeBedThroughStart(t, h, st, pub)
@@ -480,8 +472,8 @@ func TestNightAdvanceMultiNodeBackgroundAudio_ResumeUnknownBookmarkOnArrival(t *
 }
 
 // TestNightAdvanceMultiNodeBackgroundAudio_ResumeNoProgramLTCTargetOnArrival
-// is R4's other own fallback: no listed node holds the program+ltc role at
-// all, so resume falls back exactly the same way.
+// proves ADR-049 decision 8's other fallback: no listed node holds the
+// program+ltc role at all, so resume falls back exactly the same way.
 func TestNightAdvanceMultiNodeBackgroundAudio_ResumeNoProgramLTCTargetOnArrival(t *testing.T) {
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")

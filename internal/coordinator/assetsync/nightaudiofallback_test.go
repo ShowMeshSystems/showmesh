@@ -43,11 +43,9 @@ func putNightSessionBed(t *testing.T, st *store.Store, id, showID string, target
 	putConfig(t, st, config.NightSessionConfigKind, id, raw)
 }
 
-// TestExpectedAssetsForNodeNightBedFallbackBorrowsOtherTargetsRow is R7's
-// own acceptance proof: a bed declares two targets, only one of which has
-// its own registered "audio" row for the bed's sequence; the other,
-// lacking any row of its own, must still expect a copy - borrowed from the
-// other listed target - rather than resolving to nothing.
+// TestExpectedAssetsForNodeNightBedFallbackBorrowsOtherTargetsRow proves
+// ADR-049 decisions 7 and 9: a bed declares two targets, only one with its
+// own registered row; the other must still expect the borrowed copy.
 func TestExpectedAssetsForNodeNightBedFallbackBorrowsOtherTargetsRow(t *testing.T) {
 	st := openTestStore(t)
 	showID := "halloween-2026"
