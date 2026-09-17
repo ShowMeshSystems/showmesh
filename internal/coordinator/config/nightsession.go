@@ -167,8 +167,8 @@ var (
 	nightSessionShowPlaylistKeys   = map[string]bool{"fppInstanceId": true, "playlist": true}
 	nightSessionRestingKeys        = map[string]bool{"fppInstanceId": true, "playlist": true, "endOfNightPlaylist": true, "timelineAsset": true, "endOfNightRepeat": true, "backgroundAudio": true}
 	nightSessionAssetRefKeys       = map[string]bool{"show": true, "sequence": true, "target": true}
-	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true, "fadeOutMs": true, "fadeInMs": true}
-	nightSessionBackgroundRefKeys  = map[string]bool{"mediaPlaylist": true}
+	nightSessionBackgroundKeys     = map[string]bool{"items": true, "repeat": true, "resume": true, "itemTransition": true, "crossfadeMs": true, "maxGainDb": true, "fadeOutMs": true, "fadeInMs": true, "targets": true}
+	nightSessionBackgroundRefKeys  = map[string]bool{"mediaPlaylist": true, "targets": true}
 	nightSessionBackgroundItemKeys = map[string]bool{"itemId": true, "show": true, "sequence": true, "target": true}
 	nightSessionTransitionKeys     = map[string]bool{"cues": true, "blackoutHoldMs": true}
 	nightSessionRestingTransKeys   = map[string]bool{"cues": true, "blackoutAfterShowMs": true}
@@ -318,6 +318,16 @@ type NightSessionBackgroundAudio struct {
 	MaxGainDb      float64                           `json:"maxGainDb,omitempty"`
 	FadeOutMs      *int                              `json:"fadeOutMs,omitempty"`
 	FadeInMs       *int                              `json:"fadeInMs,omitempty"`
+
+	// Targets is ADR-049 decision 7's list of audio.node ids the bed
+	// plays on, one field on the bed applying identically to the inline
+	// and reference forms. Absent or empty means the existing per-node
+	// behavior (OutputNodeIDs/ItemsForTarget); non-empty means every
+	// listed node plays every item (PlaybackNodeIDs/PlaybackItemsFor/
+	// HasDeclaredTargets). An item's own Asset.Target still names which
+	// registered copy of the file to use, never where it plays, once
+	// Targets is declared.
+	Targets []string `json:"targets,omitempty"`
 }
 
 // MarshalJSON emits the reference form ({"mediaPlaylist"} alone) or the
@@ -327,8 +337,9 @@ type NightSessionBackgroundAudio struct {
 func (b NightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
 	if b.MediaPlaylist != "" {
 		return json.Marshal(struct {
-			MediaPlaylist string `json:"mediaPlaylist"`
-		}{MediaPlaylist: b.MediaPlaylist})
+			MediaPlaylist string   `json:"mediaPlaylist"`
+			Targets       []string `json:"targets,omitempty"`
+		}{MediaPlaylist: b.MediaPlaylist, Targets: b.Targets})
 	}
 	return json.Marshal(struct {
 		Items          []NightSessionBackgroundAudioItem `json:"items"`
@@ -339,9 +350,11 @@ func (b NightSessionBackgroundAudio) MarshalJSON() ([]byte, error) {
 		MaxGainDb      float64                           `json:"maxGainDb"`
 		FadeOutMs      *int                              `json:"fadeOutMs,omitempty"`
 		FadeInMs       *int                              `json:"fadeInMs,omitempty"`
+		Targets        []string                          `json:"targets,omitempty"`
 	}{
 		Items: b.Items, Repeat: b.Repeat, Resume: b.Resume, ItemTransition: b.ItemTransition,
 		CrossfadeMs: b.CrossfadeMs, MaxGainDb: b.MaxGainDb, FadeOutMs: b.FadeOutMs, FadeInMs: b.FadeInMs,
+		Targets: b.Targets,
 	})
 }
 
@@ -375,6 +388,39 @@ func (b NightSessionBackgroundAudio) ItemsForTarget(nodeID string) []NightSessio
 		}
 	}
 	return out
+}
+
+// HasDeclaredTargets reports whether the bed declares ADR-049 decision 7's
+// Targets list. false is the existing, unchanged behavior.
+func (b NightSessionBackgroundAudio) HasDeclaredTargets() bool {
+	return len(b.Targets) > 0
+}
+
+// PlaybackNodeIDs returns the nodes this bed plays on: Targets when
+// declared (decision 7), OutputNodeIDs() otherwise (the existing
+// per-node behavior).
+func (b NightSessionBackgroundAudio) PlaybackNodeIDs() []string {
+	if b.HasDeclaredTargets() {
+		return b.Targets
+	}
+	return b.OutputNodeIDs()
+}
+
+// PlaybackItemsFor returns every item nodeID plays. With Targets
+// declared, that is every item when nodeID is listed and nothing when it
+// is not (decision 7: every listed node plays every item, regardless of
+// which node an item's own Asset.Target names); otherwise it is
+// ItemsForTarget(nodeID), the existing per-node routing.
+func (b NightSessionBackgroundAudio) PlaybackItemsFor(nodeID string) []NightSessionBackgroundAudioItem {
+	if b.HasDeclaredTargets() {
+		for _, t := range b.Targets {
+			if t == nodeID {
+				return b.Items
+			}
+		}
+		return nil
+	}
+	return b.ItemsForTarget(nodeID)
 }
 
 // NightSessionCue is one entry of enterShow.cues or enterResting.cues.
@@ -452,14 +498,17 @@ type ActionResolver func(actionID string) (show string, ok bool)
 // configures no interlocks); mediaPlaylistCurrent is
 // resting.backgroundAudio's own reference-form check, an existence check
 // only (DecodeMediaPlaylistPayload's own showExists precedent), not a
-// show-scoped resolver. Every cross-object reference this payload
+// show-scoped resolver. audioNodeExists is ADR-049 decision 7's own check
+// for resting.backgroundAudio.targets, the same callback
+// DecodeShowCuePayload takes for outputs.audio/announcement.targets
+// (showcue.go). Every cross-object reference this payload
 // carries (cue actions, the resting timeline asset, every backgroundAudio
 // item, every siteControl action, and every interlock signal) must name
 // an object belonging to THIS session's own "show" (ADR-027: a Show is a
 // namespace precisely so that programming Christmas cannot break
 // Halloween); a reference into a different show is rejected with
 // [ValidationCodeCrossShowReference], not silently accepted.
-func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, actionResolver ActionResolver, interlockSignalResolver InterlockSignalResolver, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionPayload, *ValidationError) {
+func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, actionResolver ActionResolver, interlockSignalResolver InterlockSignalResolver, mediaPlaylistCurrent MediaPlaylistCurrent, audioNodeExists func(string) bool) (NightSessionPayload, *ValidationError) {
 	if verr := scanNightSessionForbiddenKeys(raw); verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -504,7 +553,7 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 	if verr := rejectUnknownKeysUnder(restingFields, nightSessionRestingKeys, "resting"); verr != nil {
 		return NightSessionPayload{}, verr
 	}
-	resting, verr := decodeNightSessionResting(restingFields, show, endpoints, assetCurrent, mediaPlaylistCurrent)
+	resting, verr := decodeNightSessionResting(restingFields, show, endpoints, assetCurrent, mediaPlaylistCurrent, audioNodeExists)
 	if verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -668,7 +717,7 @@ func decodeNightSessionAssetRef(fields map[string]json.RawMessage, path, session
 	return NightSessionAssetRef{Show: show, Sequence: sequence, Target: target}, nil
 }
 
-func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionResting, *ValidationError) {
+func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, mediaPlaylistCurrent MediaPlaylistCurrent, audioNodeExists func(string) bool) (NightSessionResting, *ValidationError) {
 	instanceID, verr := decodeRequiredString(fields, "fppInstanceId", "resting.fppInstanceId")
 	if verr != nil {
 		return NightSessionResting{}, verr
@@ -722,7 +771,7 @@ func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow st
 		if verr != nil {
 			return NightSessionResting{}, verr
 		}
-		b, verr := decodeNightSessionBackgroundAudio(backgroundFields, sessionShow, assetCurrent, mediaPlaylistCurrent)
+		b, verr := decodeNightSessionBackgroundAudio(backgroundFields, sessionShow, assetCurrent, mediaPlaylistCurrent, audioNodeExists)
 		if verr != nil {
 			return NightSessionResting{}, verr
 		}
@@ -741,9 +790,9 @@ func decodeNightSessionResting(fields map[string]json.RawMessage, sessionShow st
 // naming "mediaPlaylist" is validated as a reference and refuses every
 // inline-only key (including "items") as unknown, so a body naming both
 // is refused the same way a body naming neither already is.
-func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessionShow string, assetCurrent AssetCurrent, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionBackgroundAudio, *ValidationError) {
+func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessionShow string, assetCurrent AssetCurrent, mediaPlaylistCurrent MediaPlaylistCurrent, audioNodeExists func(string) bool) (NightSessionBackgroundAudio, *ValidationError) {
 	if _, referencesPlaylist := fields["mediaPlaylist"]; referencesPlaylist {
-		return decodeNightSessionBackgroundAudioRef(fields, mediaPlaylistCurrent)
+		return decodeNightSessionBackgroundAudioRef(fields, mediaPlaylistCurrent, audioNodeExists)
 	}
 
 	if verr := rejectUnknownKeysUnder(fields, nightSessionBackgroundKeys, "resting.backgroundAudio"); verr != nil {
@@ -843,18 +892,25 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 		return NightSessionBackgroundAudio{}, verr
 	}
 
+	targets, verr := decodeNightSessionBedTargets(fields, "resting.backgroundAudio.targets", audioNodeExists)
+	if verr != nil {
+		return NightSessionBackgroundAudio{}, verr
+	}
+
 	return NightSessionBackgroundAudio{
 		Items: items, Repeat: repeat, Resume: resume, ItemTransition: itemTransition,
 		CrossfadeMs: crossfadeMs, MaxGainDb: maxGainDb,
-		FadeOutMs: fadeOutMs, FadeInMs: fadeInMs,
+		FadeOutMs: fadeOutMs, FadeInMs: fadeInMs, Targets: targets,
 	}, nil
 }
 
-// decodeNightSessionBackgroundAudioRef decodes the reference form: only
-// "mediaPlaylist" is a recognized key here, so an inline-only key present
-// alongside it (starting with "items") is refused as unknown, and a
-// missing or tombstoned playlist is refused at write time.
-func decodeNightSessionBackgroundAudioRef(fields map[string]json.RawMessage, mediaPlaylistCurrent MediaPlaylistCurrent) (NightSessionBackgroundAudio, *ValidationError) {
+// decodeNightSessionBackgroundAudioRef decodes the reference form:
+// "mediaPlaylist" plus the bed's own "targets" (ADR-049 decision 7,
+// applying identically to both forms) are the only recognized keys, so an
+// inline-only key present alongside it (starting with "items") is refused
+// as unknown, and a missing or tombstoned playlist is refused at write
+// time.
+func decodeNightSessionBackgroundAudioRef(fields map[string]json.RawMessage, mediaPlaylistCurrent MediaPlaylistCurrent, audioNodeExists func(string) bool) (NightSessionBackgroundAudio, *ValidationError) {
 	if verr := rejectUnknownKeysUnder(fields, nightSessionBackgroundRefKeys, "resting.backgroundAudio"); verr != nil {
 		return NightSessionBackgroundAudio{}, verr
 	}
@@ -868,7 +924,71 @@ func decodeNightSessionBackgroundAudioRef(fields map[string]json.RawMessage, med
 			Detail: fmt.Sprintf("media.playlist %q is not a configured media.playlist object", mediaPlaylist),
 		}
 	}
-	return NightSessionBackgroundAudio{MediaPlaylist: mediaPlaylist}, nil
+	targets, verr := decodeNightSessionBedTargets(fields, "resting.backgroundAudio.targets", audioNodeExists)
+	if verr != nil {
+		return NightSessionBackgroundAudio{}, verr
+	}
+	return NightSessionBackgroundAudio{MediaPlaylist: mediaPlaylist, Targets: targets}, nil
+}
+
+// ValidationCodeNightBackgroundAudioTargetDuplicate: the same audio.node
+// id appears more than once in resting.backgroundAudio's own "targets"
+// list (ADR-049 decision 7). Its own code, on
+// ValidationCodeShowCueTargetDuplicate's precedent (showcue.go), so a
+// caller can tell "duplicate" apart from "unknown" without parsing prose.
+const ValidationCodeNightBackgroundAudioTargetDuplicate = "night-background-audio-target-duplicate"
+
+// decodeNightSessionBedTargets decodes and validates
+// resting.backgroundAudio's own "targets" (ADR-049 decision 7): an
+// optional JSON array of audio.node ids, applying identically to the
+// inline and reference forms since it lives on the bed, not on either
+// form. Absent, or an explicit empty array, both return nil (decision 2:
+// the existing per-node behavior); null is refused, mirroring items' own
+// null refusal. Each entry must be a non-empty string naming a configured
+// audio.node; a repeated id is refused. Mirrors
+// [decodeShowCueTargets]'s own "targets" half (showcue.go).
+func decodeNightSessionBedTargets(fields map[string]json.RawMessage, path string, audioNodeExists func(string) bool) ([]string, *ValidationError) {
+	raw, present := fields["targets"]
+	if !present {
+		return nil, nil
+	}
+	if isJSONNull(raw) {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldNull, Field: path,
+			Detail: fmt.Sprintf("%s must not be null; omit it, or use an empty array, for the existing per-node behavior", path),
+		}
+	}
+	var targets []string
+	if err := json.Unmarshal(raw, &targets); err != nil {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: path,
+			Detail: fmt.Sprintf("%s must be a JSON array of audio.node ids", path),
+		}
+	}
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool, len(targets))
+	for i, id := range targets {
+		itemField := fmt.Sprintf("%s[%d]", path, i)
+		if id == "" {
+			return nil, &ValidationError{Code: ValidationCodeFieldEmpty, Field: itemField, Detail: itemField + " must not be empty"}
+		}
+		if seen[id] {
+			return nil, &ValidationError{
+				Code: ValidationCodeNightBackgroundAudioTargetDuplicate, Field: itemField,
+				Detail: fmt.Sprintf("target %q is already listed earlier in %s", id, path),
+			}
+		}
+		seen[id] = true
+		if !audioNodeExists(id) {
+			return nil, &ValidationError{
+				Code: ValidationCodeFieldUnknownReference, Field: itemField,
+				Detail: fmt.Sprintf("target %q is not a configured audio.node", id),
+			}
+		}
+	}
+	return targets, nil
 }
 
 func decodeNightSessionEnterShow(fields map[string]json.RawMessage, show string, actionResolver ActionResolver) (NightSessionEnterShow, *ValidationError) {

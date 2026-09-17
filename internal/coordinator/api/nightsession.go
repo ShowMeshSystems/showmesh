@@ -215,7 +215,7 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 
 	payload, verr := config.DecodeNightSessionPayload(string(raw), endpoints,
 		h.nightSessionAssetCurrent(r.Context()), h.nightSessionActionResolver(r.Context()), h.nightInterlockSignalResolver(r.Context()),
-		h.nightSessionMediaPlaylistCurrent(r.Context()))
+		h.nightSessionMediaPlaylistCurrent(r.Context()), h.audioNodeExists(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return

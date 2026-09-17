@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -355,6 +356,64 @@ func TestPutNightSessionRejectsDanglingAsset(t *testing.T) {
 	}
 	if !containsAll(string(body), "show-config-field-unknown-reference") {
 		t.Fatalf("expected the field-unknown-reference problem type; body: %s", body)
+	}
+}
+
+// TestPutNightSessionRejectsUnknownBackgroundAudioTarget proves
+// resting.backgroundAudio.targets (ADR-049 decision 7) is validated
+// against real audio.node config objects through the actual write route,
+// not only through config.DecodeNightSessionPayload's own unit tests: an
+// id naming no configured audio.node is refused, naming the exact index
+// path.
+func TestPutNightSessionRejectsUnknownBackgroundAudioTarget(t *testing.T) {
+	api, st, token := setupNightSessionFixture(t)
+	mustPutAudioNodeDirect(t, st, "player-01")
+	mustCreateNightSessionAsset(t, st, "halloween-2026", "bg-track-1", "player-01")
+
+	body := strings.Replace(validNightSessionBody, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "backgroundAudio": {
+		"items": [{"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "player-01"}],
+		"repeat": "none", "resume": "resume", "itemTransition": "sequential", "maxGainDb": -10,
+		"targets": ["player-01", "no-such-node"]
+	}`, 1)
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, respBody)
+	}
+	if !containsAll(string(respBody), "show-config-field-unknown-reference") {
+		t.Fatalf("expected the field-unknown-reference problem type; body: %s", respBody)
+	}
+	if !containsAll(string(respBody), "resting.backgroundAudio.targets[1]") {
+		t.Fatalf("expected the problem to name resting.backgroundAudio.targets[1]; body: %s", respBody)
+	}
+}
+
+// TestPutNightSessionRejectsDuplicateBackgroundAudioTarget proves a
+// repeated id in resting.backgroundAudio.targets surfaces through the
+// actual write route as its own problem type
+// (show-config-night-background-audio-target-duplicate), not the generic
+// invalid-parameter fallback a code missing from
+// showConfigValidationProblemTypes would produce.
+func TestPutNightSessionRejectsDuplicateBackgroundAudioTarget(t *testing.T) {
+	api, st, token := setupNightSessionFixture(t)
+	mustPutAudioNodeDirect(t, st, "player-01")
+	mustCreateNightSessionAsset(t, st, "halloween-2026", "bg-track-1", "player-01")
+
+	body := strings.Replace(validNightSessionBody, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "backgroundAudio": {
+		"items": [{"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "player-01"}],
+		"repeat": "none", "resume": "resume", "itemTransition": "sequential", "maxGainDb": -10,
+		"targets": ["player-01", "player-01"]
+	}`, 1)
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
+	resp, respBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, respBody)
+	}
+	if !containsAll(string(respBody), "show-config-night-background-audio-target-duplicate") {
+		t.Fatalf("expected the night-background-audio-target-duplicate problem type; body: %s", respBody)
+	}
+	if !containsAll(string(respBody), "resting.backgroundAudio.targets[1]") {
+		t.Fatalf("expected the problem to name resting.backgroundAudio.targets[1]; body: %s", respBody)
 	}
 }
 
