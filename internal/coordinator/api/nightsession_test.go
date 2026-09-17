@@ -218,6 +218,125 @@ func TestPutAndGetNightSessionRoundTripsSiteControlInterlocksAndFadePair(t *test
 	}
 }
 
+// TestPutAndGetNightSessionRoundTripsBackgroundAudioTargetsInline proves
+// resting.backgroundAudio.targets (ADR-049 decision 7) survives the wire
+// round trip for the INLINE items form. config.DecodeNightSessionPayload
+// already decoded and stored it correctly; mapConfigNightSessionResting
+// silently dropped it from every response, so a PUT with two targets came
+// back with targets:null and a browser reload lost every checked node.
+func TestPutAndGetNightSessionRoundTripsBackgroundAudioTargetsInline(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, st, token := setupNightSessionFixture(t)
+	mustPutAudioNodeDirect(t, st, "player-01")
+	mustPutAudioNodeDirect(t, st, "player-02")
+	mustCreateNightSessionAsset(t, st, "halloween-2026", "bg-track-1", "player-01")
+
+	body := strings.Replace(validNightSessionBody, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "backgroundAudio": {
+		"items": [{"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "player-01"}],
+		"repeat": "none", "resume": "resume", "itemTransition": "sequential", "maxGainDb": -10,
+		"targets": ["player-01", "player-02"]
+	}`, 1)
+	assertMatchesSchema(t, c, "ConfigNightSessionWrite", []byte(body))
+
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
+	putResp, putBody := doRawRequest(t, api.Handler, putReq)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+	}
+	assertMatchesSchema(t, c, "NightSessionConfigResponse", putBody)
+
+	wantTargets := `"targets":["player-01","player-02"]`
+	if !containsAll(string(putBody), wantTargets) {
+		t.Fatalf("PUT response dropped resting.backgroundAudio.targets; body: %s", putBody)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/night.session/halloween-main", map[string]string{"Authorization": "Bearer " + token})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	assertMatchesSchema(t, c, "NightSessionConfigResponse", getBody)
+	if !containsAll(string(getBody), wantTargets) {
+		t.Fatalf("GET response dropped resting.backgroundAudio.targets; body: %s", getBody)
+	}
+
+	revResp, revBody := doRequest(t, api.Handler, "GET", "/api/v1/config/night.session/halloween-main/revisions/1", map[string]string{"Authorization": "Bearer " + token})
+	if revResp.StatusCode != http.StatusOK {
+		t.Fatalf("revision 1: status = %d, want 200; body: %s", revResp.StatusCode, revBody)
+	}
+	if !containsAll(string(revBody), wantTargets) {
+		t.Fatalf("revision-history read dropped resting.backgroundAudio.targets; body: %s", revBody)
+	}
+}
+
+// TestPutAndGetNightSessionRoundTripsBackgroundAudioTargetsReference is
+// TestPutAndGetNightSessionRoundTripsBackgroundAudioTargetsInline's own
+// case for the REFERENCE form (backgroundAudio.mediaPlaylist).
+func TestPutAndGetNightSessionRoundTripsBackgroundAudioTargetsReference(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	api, st, token := setupNightSessionFixture(t)
+	mustPutAudioNodeDirect(t, st, "player-01")
+	mustPutAudioNodeDirect(t, st, "player-02")
+	mustCreateNightSessionAsset(t, st, "halloween-2026", "bg-track-1", "player-01")
+	mustPutMediaPlaylist(t, api, token, "porch-loop", validMediaPlaylistBody("halloween-2026", "halloween-2026", "bg-track-1", "player-01"))
+
+	body := strings.Replace(validNightSessionBody, `"endOfNightRepeat": true`,
+		`"endOfNightRepeat": true, "backgroundAudio": {"mediaPlaylist": "porch-loop", "targets": ["player-01", "player-02"]}`, 1)
+	assertMatchesSchema(t, c, "ConfigNightSessionWrite", []byte(body))
+
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
+	putResp, putBody := doRawRequest(t, api.Handler, putReq)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+	}
+	assertMatchesSchema(t, c, "NightSessionConfigResponse", putBody)
+
+	wantTargets := `"targets":["player-01","player-02"]`
+	if !containsAll(string(putBody), wantTargets) {
+		t.Fatalf("PUT response dropped resting.backgroundAudio.targets (reference form); body: %s", putBody)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/night.session/halloween-main", map[string]string{"Authorization": "Bearer " + token})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	assertMatchesSchema(t, c, "NightSessionConfigResponse", getBody)
+	if !containsAll(string(getBody), wantTargets) {
+		t.Fatalf("GET response dropped resting.backgroundAudio.targets (reference form); body: %s", getBody)
+	}
+}
+
+// TestPutAndGetNightSessionOmitsBackgroundAudioTargetsWhenBedDeclaresNone
+// proves a bed that never declares targets still omits the key entirely
+// (never a null), matching config.NightSessionBackgroundAudio's own
+// absent/omitted convention.
+func TestPutAndGetNightSessionOmitsBackgroundAudioTargetsWhenBedDeclaresNone(t *testing.T) {
+	api, st, token := setupNightSessionFixture(t)
+	mustPutAudioNodeDirect(t, st, "player-01")
+	mustCreateNightSessionAsset(t, st, "halloween-2026", "bg-track-1", "player-01")
+
+	body := strings.Replace(validNightSessionBody, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "backgroundAudio": {
+		"items": [{"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "player-01"}],
+		"repeat": "none", "resume": "resume", "itemTransition": "sequential", "maxGainDb": -10
+	}`, 1)
+
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
+	putResp, putBody := doRawRequest(t, api.Handler, putReq)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200; body: %s", putResp.StatusCode, putBody)
+	}
+	if containsAll(string(putBody), `"targets"`) {
+		t.Fatalf("expected no targets key on a bed that declares none; body: %s", putBody)
+	}
+
+	getResp, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/night.session/halloween-main", map[string]string{"Authorization": "Bearer " + token})
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200; body: %s", getResp.StatusCode, getBody)
+	}
+	if containsAll(string(getBody), `"targets"`) {
+		t.Fatalf("expected no targets key on a bed that declares none; body: %s", getBody)
+	}
+}
+
 // TestGetNightSessionRevisionReturnsPastPayload proves the
 // /revisions/{n} route returns a SPECIFIC, possibly non-current
 // revision's full payload, unlike GET .../night.session/{id} (always the

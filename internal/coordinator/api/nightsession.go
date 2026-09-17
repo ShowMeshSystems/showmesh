@@ -444,6 +444,7 @@ func mapConfigNightSessionResting(r config.NightSessionResting) v1.ConfigNightSe
 			ItemTransition: r.BackgroundAudio.ItemTransition, CrossfadeMs: r.BackgroundAudio.CrossfadeMs,
 			MaxGainDb: r.BackgroundAudio.MaxGainDb,
 			FadeOutMs: r.BackgroundAudio.FadeOutMs, FadeInMs: r.BackgroundAudio.FadeInMs,
+			Targets: r.BackgroundAudio.Targets,
 		}
 	}
 	return out
