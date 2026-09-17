@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -57,6 +58,14 @@ const (
 	activationStepPrepare = cueactivation.AudioSessionStepPrepare
 	activationStepStart   = cueactivation.AudioSessionStepStart
 	activationStepSeek    = cueactivation.AudioSessionStepSeek
+)
+
+// unalignedFallbackStepStart/Seek sort past AudioSessionStepStop so a
+// missed-instant fallback's own revisions never collide with the
+// already-consumed scheduled Start step or a coordinator Stop.
+const (
+	unalignedFallbackStepStart = cueactivation.AudioSessionStepStop + 1
+	unalignedFallbackStepSeek  = cueactivation.AudioSessionStepStop + 2
 )
 
 // activationRevision derives one step's [pkgaudio.Revision] from act.
@@ -163,9 +172,12 @@ func announcementMixPolicy(policy string) (pkgaudio.MixPolicy, error) {
 // ltcgen, LTCGenerator.StartLTC, or multisync.Timeline directly; the
 // position crosses into the audio clock domain as data (PositionMS, a
 // plain time.Duration argument to Seek), never as a second clock.
-func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput, announcement *cuecatalog.AnnouncementOutput) error {
+// activateAudio's string return is the unaligned reason from
+// [startUnalignedOnArrival]'s missed-instant fallback when that fallback's
+// own start and seek both succeeded; empty on every other successful path.
+func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput, announcement *cuecatalog.AnnouncementOutput) (string, error) {
 	if out.Filename == "" {
-		return fmt.Errorf("cue.activate: audio output for Cue %q resolves asset %q to no runtime filename (no matching asset uploaded); refusing to open anything by asset id (ADR-043 decision 6)", act.CueID, out.Asset)
+		return "", fmt.Errorf("cue.activate: audio output for Cue %q resolves asset %q to no runtime filename (no matching asset uploaded); refusing to open anything by asset id (ADR-043 decision 6)", act.CueID, out.Asset)
 	}
 
 	contentHash := firstAssetHash(out.AssetHashes)
@@ -182,7 +194,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		sourceRole = pkgaudio.SourceRoleAnnouncement
 		mp, err := announcementMixPolicy(announcement.Policy)
 		if err != nil {
-			return err
+			return "", err
 		}
 		mixPolicy = &mp
 	}
@@ -212,7 +224,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 
 	applyOutcome := mgr.Apply(ctx, id, activationInvocation(act, "apply"), activationRevision(act, activationStepApply), req)
 	if audioOutcomeFailed(applyOutcome) {
-		return fmt.Errorf("cue.activate: audio.session.apply for Cue %q: %s: %s", act.CueID, applyOutcome.Outcome, applyOutcome.Reason)
+		return "", fmt.Errorf("cue.activate: audio.session.apply for Cue %q: %s: %s", act.CueID, applyOutcome.Outcome, applyOutcome.Reason)
 	}
 
 	position := time.Duration(act.PositionMS) * time.Millisecond
@@ -244,13 +256,16 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		}
 		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
 		if audioOutcomeFailed(prepOutcome) {
-			return fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
+			return "", fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
 		}
 		startOutcome := mgr.StartAtPosition(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart), *act.ScheduledAtNs, position)
 		if audioOutcomeFailed(startOutcome) {
-			return fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+			if startOutcome.Outcome == pkgaudio.OutcomeRefused && strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
+				return startUnalignedOnArrival(ctx, mgr, id, act, position, startOutcome.Reason)
+			}
+			return "", fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 		}
-		return nil
+		return "", nil
 	}
 
 	started := false
@@ -296,18 +311,36 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 	if !started {
 		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
 		if audioOutcomeFailed(prepOutcome) {
-			return fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
+			return "", fmt.Errorf("cue.activate: audio.session.prepare for Cue %q: %s: %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
 		}
 
 		startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart))
 		if audioOutcomeFailed(startOutcome) {
-			return fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+			return "", fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 		}
 	}
 
 	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek"), activationRevision(act, activationStepSeek), position)
 	if audioOutcomeFailed(seekOutcome) {
-		return fmt.Errorf("cue.activate: audio.session.seek for Cue %q to position %dms: %s: %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
+		return "", fmt.Errorf("cue.activate: audio.session.seek for Cue %q to position %dms: %s: %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
 	}
-	return nil
+	return "", nil
+}
+
+// startUnalignedOnArrival is activateAudio's own fallback for a scheduled
+// start already missed by the time StartAtPosition runs: start on arrival,
+// seek to position, and report the node as confirmed with the unaligned
+// reason (not apply-failed) once both actually succeed: the node is
+// playing, just not at the scheduled instant. A failed start or seek here
+// still returns an error: the fallback did not actually take effect.
+func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, position time.Duration, missedReason string) (string, error) {
+	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(act, unalignedFallbackStepStart))
+	if audioOutcomeFailed(startOutcome) {
+		return "", fmt.Errorf("cue.activate: audio.session.start for Cue %q: %s: %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
+	}
+	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek-unaligned"), activationRevision(act, unalignedFallbackStepSeek), position)
+	if audioOutcomeFailed(seekOutcome) {
+		return "", fmt.Errorf("cue.activate: audio.session.seek for Cue %q to position %dms: %s: %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
+	}
+	return fmt.Sprintf("started on arrival instead of the scheduled instant: %s", missedReason), nil
 }

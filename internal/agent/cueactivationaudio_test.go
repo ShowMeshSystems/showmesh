@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
+	agentclock "github.com/showmeshsystems/showmesh/internal/agent/clock"
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
@@ -568,5 +570,135 @@ func TestBlackAndSilenceStopRevisionIsNotRefusedAsStale(t *testing.T) {
 	}
 	if outcome.Outcome == pkgaudio.OutcomeRefused && outcome.Reason == pkgaudio.ReasonStaleRevision {
 		t.Fatalf("stop refused as stale: the coordinator's derived revision did not exceed the node's own — the exact defect this test guards against")
+	}
+}
+
+// fixedLockedClockSource is a [audio.ClockSource] locked at a fixed media
+// reading, so a test can drive [audio.Manager.StartAtPosition] against a
+// real, evaluated schedule rather than the no-clock-wired bypass.
+type fixedLockedClockSource struct{ media time.Time }
+
+func (f fixedLockedClockSource) Poll(context.Context) agentclock.Status {
+	return agentclock.Status{State: agentclock.StateLocked, Timescale: agentclock.TimescalePTP}
+}
+
+func (f fixedLockedClockSource) Now(context.Context) agentclock.MediaTime {
+	return agentclock.MediaTime{Time: f.media, Valid: true}
+}
+
+// TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned
+// proves a StartAtPosition refused as scheduled_start_in_past starts on
+// arrival at the same position instead of going silent, and (the Opus
+// review's own defect fix) reports the node as CONFIRMED with the
+// unaligned reason carried in the outcome value, never apply-failed: the
+// node is actually playing, just not at the scheduled instant, and a
+// coordinator reading Confirmed:false here would record a failure that
+// never happened.
+func TestCueActivationMissedScheduledStartFallsBackToArrivalAndReportsUnaligned(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	mediaNow := time.Date(2026, 8, 23, 20, 0, 10, 0, time.UTC)
+	mgr.SetClockSource(fixedLockedClockSource{media: mediaNow})
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-missed", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-missed", "cue-missed", 1, "halloween-2026", 3, "rev-a", 4500)
+	past := mediaNow.Add(-time.Second).UnixNano()
+	act.ScheduledAtNs = &past
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate did not confirm a successful missed-instant fallback: %+v", result)
+	}
+	value, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result.Value = %#v, want a map", result.Value)
+	}
+	if outcome, _ := value["outcome"].(string); outcome != "authorized" {
+		t.Fatalf("outcome = %q, want authorized", outcome)
+	}
+	unalignedReason, _ := value["unalignedReason"].(string)
+	if unalignedReason == "" {
+		t.Fatalf("value = %+v, want a non-empty unalignedReason", value)
+	}
+	if !strings.Contains(unalignedReason, "unaligned") && !strings.Contains(unalignedReason, "arrival") {
+		t.Fatalf("unalignedReason = %q, want it to say the start was unaligned/on arrival", unalignedReason)
+	}
+	if !strings.Contains(unalignedReason, pkgaudio.ReasonScheduledStartInPast) {
+		t.Fatalf("unalignedReason = %q, want it to name the missed instant", unalignedReason)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	if len(snaps) != 1 {
+		t.Fatalf("session snapshots = %+v, want exactly one", snaps)
+	}
+	if snaps[0].State != pkgaudio.StatePlaying {
+		t.Fatalf("session state = %s, want playing: a missed scheduled start must not leave the node silent", snaps[0].State)
+	}
+	if snaps[0].PositionKnown && snaps[0].Position != 4500*time.Millisecond {
+		t.Fatalf("session position = %v, want 4.5s (the activation's PositionMS)", snaps[0].Position)
+	}
+}
+
+// TestCueActivationScheduledStartTooFarAheadStaysARefused proves the
+// fallback is scoped to scheduled_start_in_past only: any other
+// StartAtPosition refusal keeps today's behavior, no fallback attempted.
+func TestCueActivationScheduledStartTooFarAheadStaysARefused(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+	mediaNow := time.Date(2026, 8, 23, 20, 0, 10, 0, time.UTC)
+	mgr.SetClockSource(fixedLockedClockSource{media: mediaNow})
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-too-far", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-too-far", "cue-too-far", 1, "halloween-2026", 3, "rev-a", 4500)
+	tooFar := mediaNow.Add(time.Minute).UnixNano() // beyond the 30s max scheduled start lead
+	act.ScheduledAtNs = &tooFar
+
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if result.Confirmed {
+		t.Fatalf("activate confirmed a start instant too far ahead: %+v", result)
+	}
+	value, ok := result.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result.Value = %#v, want a map", result.Value)
+	}
+	reasons, _ := value["reasons"].([]string)
+	if len(reasons) != 1 || strings.Contains(reasons[0], "unaligned") {
+		t.Fatalf("reasons = %v, want exactly one entry, not the unaligned fallback wording", reasons)
+	}
+
+	snaps := mgr.Snapshot(context.Background())
+	if len(snaps) != 1 {
+		t.Fatalf("session snapshots = %+v, want exactly one", snaps)
+	}
+	if snaps[0].State == pkgaudio.StatePlaying {
+		t.Fatalf("session state = %s, want NOT playing: this refusal reason keeps today's behavior, no fallback", snaps[0].State)
 	}
 }

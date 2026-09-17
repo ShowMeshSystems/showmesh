@@ -5545,6 +5545,8 @@ export interface components {
             outcome: "confirmed" | "unconfirmed" | "refused" | "failed";
             /** @description Always present except when outcome is "confirmed". */
             outcomeReason?: string;
+            /** @description Set only when this node confirmed but missed the shared start instant and started on arrival instead. */
+            unalignedReason?: string;
         };
         /** @description The body of GET /macro-runs. */
         MacroRunsListResponse: {

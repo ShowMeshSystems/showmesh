@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
@@ -257,5 +259,48 @@ func TestHandleActivateCueNoParticipatingNodeRefused(t *testing.T) {
 	}
 	if problem.Detail == "" {
 		t.Fatalf("problem.Detail is empty, want a stated reason")
+	}
+}
+
+// TestCueFireSurvivesServerWriteTimeout proves a Fire slower than a real
+// server's own short WriteTimeout still writes its JSON body, via
+// handleActivateCue's own SetWriteDeadline extension.
+func TestCueFireSurvivesServerWriteTimeout(t *testing.T) {
+	// A REAL current time, not a fixed testNow: SetWriteDeadline sets an
+	// absolute deadline anchored to h.now(), so a fixed-in-the-past clock
+	// would make that deadline already elapsed before this test's real
+	// wall-clock write happens.
+	now := time.Now()
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+
+	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, setup.svc, admin.ID)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	// No reply ever arrives, paced past the server's own short
+	// WriteTimeout below, while staying comfortably inside
+	// cueFireHTTPWriteDeadline.
+	setup.pub.awaitErr = broker.ErrResponseDeadlineExceeded
+	setup.pub.onAwaitResponse = func() { time.Sleep(300 * time.Millisecond) }
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	api := New(deps, Options{Clock: fixedClock(now), Logger: testLogger()})
+
+	status, body := postThroughShortWriteTimeoutServer(t, api.Handler, "/api/v1/cues/"+act.CueID+"/activate", "", auth)
+	if status != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (a dispatch slower than the server's own WriteTimeout must still succeed); body: %s", status, http.StatusAccepted, body)
+	}
+	var resp v1.CueActivateResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode response: %v; body: %s", err, body)
+	}
+	if len(resp.Nodes) != 1 {
+		t.Fatalf("len(nodes) = %d, want 1; body: %s", len(resp.Nodes), body)
+	}
+	if resp.Nodes[0].Outcome != outcomeWordUnconfirmed {
+		t.Fatalf("outcome = %q, want %q: the connection surviving the server's short WriteTimeout must have delivered the real unconfirmed body; body: %s", resp.Nodes[0].Outcome, outcomeWordUnconfirmed, body)
 	}
 }

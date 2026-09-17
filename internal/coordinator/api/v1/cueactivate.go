@@ -48,4 +48,7 @@ type CueActivationNodeOutcome struct {
 	// "confirmed", the same rule [ActionInvocationResult.OutcomeReason]
 	// already follows.
 	OutcomeReason string `json:"outcomeReason,omitempty"`
+	// UnalignedReason is set only when this node confirmed but missed
+	// its scheduled start instant and started on arrival instead.
+	UnalignedReason string `json:"unalignedReason,omitempty"`
 }

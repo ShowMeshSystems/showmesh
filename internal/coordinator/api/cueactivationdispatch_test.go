@@ -136,6 +136,25 @@ func cueActivationNodeResultPayload(confirmed bool, nodeOutcome string) mqttprot
 	}
 }
 
+// cueActivationNodeConfirmedUnalignedResultPayload builds the exact
+// evidence shape internal/agent/cueactivationops.go's activate produces
+// for a Cue confirmed through its missed-instant fallback
+// (internal/agent/cueactivationaudio.go's startUnalignedOnArrival): the
+// node's own value map carries "outcome":"authorized" AND a non-empty
+// "unalignedReason", never a refusal: the node actually played.
+func cueActivationNodeConfirmedUnalignedResultPayload(unalignedReason string) mqttproto.ResultPayload {
+	return mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.cue_activation.outcome",
+			Value: map[string]any{
+				"activationId": "cueact-test-1", "cueId": "cue-1", "cueRevision": int64(1),
+				"outcome": cueActivationNodeOutcomeAuthorized, "unalignedReason": unalignedReason,
+			},
+		},
+	}
+}
+
 // TestDispatchOneCueActivationConfirmedFromNodeResult proves confirmation
 // comes from the node's own result: a bare successful publish is not, by
 // itself, enough — the fake publisher's canned result must actually say
@@ -174,6 +193,50 @@ func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
 	}
 	if outcome.NodeOutcome != cueActivationNodeOutcomeAuthorized {
 		t.Fatalf("NodeOutcome = %q, want %q", outcome.NodeOutcome, cueActivationNodeOutcomeAuthorized)
+	}
+}
+
+// TestDispatchOneCueActivationSurfacesUnalignedReasonFromNodeResult proves
+// the Opus review's own defect fix reaches the coordinator: a node that
+// confirmed a Cue through its missed-instant fallback (internal/agent/
+// cueactivationaudio.go's startUnalignedOnArrival) reports Confirmed true
+// with a non-empty unalignedReason, never apply-failed, and that reason
+// reaches this node's own [cueActivationDispatchOutcome] and, through
+// [cueActivateWireOutcome], the per-node Fire response outcome, never
+// silently dropped on the floor between the node's result and the API
+// response.
+func TestDispatchOneCueActivationSurfacesUnalignedReasonFromNodeResult(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	const wantReason = "started on arrival instead of the scheduled instant: " + pkgaudio.ReasonScheduledStartInPast
+	setup.pub.result = cueActivationNodeConfirmedUnalignedResultPayload(wantReason)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if outcome.Err != nil {
+		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
+	}
+	if !outcome.Confirmed {
+		t.Fatalf("Confirmed = false, want true: a successful missed-instant fallback must not be reported as a failure")
+	}
+	if outcome.UnalignedReason != wantReason {
+		t.Fatalf("UnalignedReason = %q, want %q", outcome.UnalignedReason, wantReason)
+	}
+
+	wire := cueActivateWireOutcome(outcome)
+	if !wire.Confirmed || wire.Outcome != outcomeWordConfirmed {
+		t.Fatalf("wire outcome = %+v, want Confirmed true and Outcome %q", wire, outcomeWordConfirmed)
+	}
+	if wire.UnalignedReason != wantReason {
+		t.Fatalf("wire.UnalignedReason = %q, want %q (the per-node Fire response outcome)", wire.UnalignedReason, wantReason)
 	}
 }
 

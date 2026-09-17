@@ -85,15 +85,15 @@ func TestSelectAudioStartInstantCarriesAPanicReasonWhenTheHolderPanics(t *testin
 	}
 }
 
-// TestSelectAudioStartInstantFoldsOnlyTheHoldersOwnProbeElapsed proves
-// MANAGER DECISION 2's own scope: the delivery bound widens by the CLOCK
-// HOLDER's own measured probe span, never a non-holder's larger one, and
-// never a failed read's (zero, by construction).
-func TestSelectAudioStartInstantFoldsOnlyTheHoldersOwnProbeElapsed(t *testing.T) {
+// TestSelectAudioStartInstantAccountsForTheSlowestTargetsOwnProbe proves
+// a slow non-holder's own probe elapsed widens the delivery bound too, so
+// the instant chosen stays reachable by its own real prepare.
+func TestSelectAudioStartInstantAccountsForTheSlowestTargetsOwnProbe(t *testing.T) {
 	const now = int64(1_700_000_000_000_000_000)
-	const holderElapsed = 120 * time.Millisecond
-	const nonHolderElapsed = 390 * time.Millisecond // larger, must be ignored
-	settings := config.AudioSettingsPayload{ScheduledStartDeliveryBoundMs: 100, ScheduledStartMarginMs: 0}
+	const holderElapsed = 1400 * time.Millisecond
+	const peerElapsed = 3400 * time.Millisecond
+	const configuredBoundMs = 2000
+	settings := config.AudioSettingsPayload{ScheduledStartDeliveryBoundMs: configuredBoundMs, ScheduledStartMarginMs: 0}
 	read := func(_ context.Context, nodeID string) (AudioStartInstantReading, error) {
 		switch nodeID {
 		case "holder":
@@ -101,20 +101,21 @@ func TestSelectAudioStartInstantFoldsOnlyTheHoldersOwnProbeElapsed(t *testing.T)
 		case "failed":
 			return AudioStartInstantReading{}, errors.New("dispatch failed")
 		default:
-			return AudioStartInstantReading{Evidence: validEvidence(now), ProbeElapsed: nonHolderElapsed}, nil
+			return AudioStartInstantReading{Evidence: validEvidence(now), ProbeElapsed: peerElapsed}, nil
 		}
 	}
-	sel, failures, err := SelectAudioStartInstant(context.Background(), []string{"holder", "slow-non-holder", "failed"}, settings, read)
+	sel, failures, err := SelectAudioStartInstant(context.Background(), []string{"holder", "peer", "failed"}, settings, read)
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
 	if len(failures) != 1 || failures[0].NodeID != "failed" {
 		t.Fatalf("failures = %+v, want exactly one entry naming %q", failures, "failed")
 	}
-	wantBoundNs := int64(100*1_000_000) + holderElapsed.Nanoseconds()
-	if sel.DeliveryBoundNs != wantBoundNs {
-		t.Fatalf("DeliveryBoundNs = %d, want exactly %d (configured bound + the HOLDER's own %v, never the slower non-holder's %v)",
-			sel.DeliveryBoundNs, wantBoundNs, holderElapsed, nonHolderElapsed)
+	peerCompletionAfterHolder := peerElapsed - holderElapsed
+	wantMinNs := now + peerCompletionAfterHolder.Nanoseconds() + peerElapsed.Nanoseconds() + int64(configuredBoundMs)*1_000_000
+	if sel.ScheduledAtNs < wantMinNs {
+		t.Fatalf("ScheduledAtNs = %d, want at least %d: peer completion (%v) plus peer elapsed (%v) plus the configured bound past the holder's own reading",
+			sel.ScheduledAtNs, wantMinNs, peerCompletionAfterHolder, peerElapsed)
 	}
 }
 

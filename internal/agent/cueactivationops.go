@@ -209,6 +209,7 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 	}
 
 	var applyErrs []string
+	var unalignedReason string
 	if entry.Outputs.Render != nil {
 		if o.render == nil {
 			applyErrs = append(applyErrs, "cue declares a render output but this node has no render surfaces configured")
@@ -230,10 +231,13 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 			// called, so its own Apply/Prepare never tears down the
 			// in-flight announcement mid-sentence.
 			applyErrs = append(applyErrs, concurrentAnnouncementReason)
-		} else if err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement); err != nil {
+		} else if reason, err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement); err != nil {
 			applyErrs = append(applyErrs, err.Error())
-		} else if entry.Outputs.Announcement != nil {
-			o.recordAnnouncementActivation(act)
+		} else {
+			unalignedReason = reason
+			if entry.Outputs.Announcement != nil {
+				o.recordAnnouncementActivation(act)
+			}
 		}
 	} else if entry.Outputs.LTC != nil {
 		// H0.3/H4: LTC is emitted from the program-audio clock domain via
@@ -256,13 +260,17 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 		}, nil
 	}
 
+	value := map[string]any{
+		"activationId": act.ActivationID, "runner": act.Runner, "cueId": act.CueID,
+		"cueRevision": act.CueRevision, "outcome": "authorized",
+	}
+	if unalignedReason != "" {
+		value["unalignedReason"] = unalignedReason
+	}
 	return OperationResult{
-		Confirmed: true,
-		Signal:    "node.cue_activation.outcome",
-		Value: map[string]any{
-			"activationId": act.ActivationID, "runner": act.Runner, "cueId": act.CueID,
-			"cueRevision": act.CueRevision, "outcome": "authorized",
-		},
+		Confirmed:  true,
+		Signal:     "node.cue_activation.outcome",
+		Value:      value,
 		ExecutedAt: executedAt, ObservedAt: observedAt,
 	}, nil
 }

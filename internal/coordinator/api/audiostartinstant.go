@@ -83,21 +83,9 @@ type AudioStartInstantReadFailure struct {
 // node's own read down with it, mirroring cueactivationloop.go's own
 // safeDispatchPrepareAheadAudio.
 //
-// settings.ScheduledStartDeliveryBoundMs is a caller-agnostic guess, and
-// this reading round is itself a real dispatch (unlike alignedstart.go's
-// own single prepare-and-go), so the clock holder's own measured probe
-// span (ProbeElapsed) is folded into the delivery bound passed to
-// [audiosched.Select], clamped to [scheduleProbeMaxDeliveryContribution]:
-// otherwise a Cue activation's own extra hop (a probe apply, a probe
-// prepare, and a command-store round trip alignedstart.go never pays) can
-// leave T0 already in the past by the time a node resolves it, and
-// resolveScheduleLocked correctly, but misleadingly, refuses every node
-// as if the feature itself were broken. Only the HOLDER's own span
-// counts, never the slowest across every node (a non-holder's own read
-// cost has no bearing on how stale the holder's OWN reading is by the
-// time Select runs), and never a failed read's span (zero, by
-// construction: see AudioStartInstantReading.ProbeElapsed's own doc
-// comment).
+// The delivery bound passed to [audiosched.Select] widens by the largest
+// ProbeElapsed among every successfully read target plus how far past the
+// holder's reading that target's probe finished, clamped to [scheduleProbeMaxDeliveryContribution].
 func SelectAudioStartInstant(ctx context.Context, nodeIDs []string, settings config.AudioSettingsPayload, read ReadAudioStartInstantNode) (audiosched.Selection, []AudioStartInstantReadFailure, error) {
 	readings := make([]audiosched.Readiness, len(nodeIDs))
 	type result struct {
@@ -122,7 +110,7 @@ func SelectAudioStartInstant(ctx context.Context, nodeIDs []string, settings con
 		<-done
 	}
 	var failures []AudioStartInstantReadFailure
-	var holderElapsed time.Duration
+	var holderElapsed, maxElapsed time.Duration
 	for i, nodeID := range nodeIDs {
 		r := results[i]
 		if r.err != nil {
@@ -138,11 +126,18 @@ func SelectAudioStartInstant(ctx context.Context, nodeIDs []string, settings con
 		if reading.HoldsMediaClock && reading.MediaClockValid {
 			holderElapsed = r.reading.ProbeElapsed
 		}
+		if r.reading.ProbeElapsed > maxElapsed {
+			maxElapsed = r.reading.ProbeElapsed
+		}
 	}
-	if holderElapsed > scheduleProbeMaxDeliveryContribution {
-		holderElapsed = scheduleProbeMaxDeliveryContribution
+	// maxElapsed is the slowest target's own prepare; the second term is
+	// how far past the holder's reading that target's probe finished
+	// (every read starts together, so it is just maxElapsed-holderElapsed).
+	deliveryContribution := maxElapsed + (maxElapsed - holderElapsed)
+	if deliveryContribution > scheduleProbeMaxDeliveryContribution {
+		deliveryContribution = scheduleProbeMaxDeliveryContribution
 	}
-	deliveryBoundMs := settings.ScheduledStartDeliveryBoundMs + int(holderElapsed.Milliseconds())
+	deliveryBoundMs := settings.ScheduledStartDeliveryBoundMs + int(deliveryContribution.Milliseconds())
 	sel, err := audiosched.Select(readings, deliveryBoundMs, settings.ScheduledStartMarginMs)
 	return sel, failures, err
 }
