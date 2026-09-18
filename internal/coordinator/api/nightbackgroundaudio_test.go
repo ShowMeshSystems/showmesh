@@ -1437,12 +1437,22 @@ func TestNightRunAudioCommand_RefusesNonAdvancingRevision(t *testing.T) {
 	}
 	target := nightAudioTarget("node-a", sessionID, "audio.session.stop", map[string]any{})
 
-	_, err := h.nightRunAudioCommand(context.Background(), testNow, rec, nightPhaseRestingBackground, "bg-0003-stop", target, 3, history)
+	row, err := h.nightRunAudioCommand(context.Background(), testNow, rec, nightPhaseRestingBackground, "bg-0003-stop", target, 3, history)
 	if err == nil {
 		t.Fatal("expected an error refusing a stale (non-advancing) revision, got nil")
 	}
 	if pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0: a refused revision must never reach the node", pub.count())
+	}
+	// OutcomeReason is operator-facing (rendered verbatim by the UI and
+	// showmeshctl): it must carry the plain sentence, never the detailed
+	// "api: background audio: refusing to commit ... revision ..." text
+	// that belongs only in the WARN log and the returned error.
+	if row.OutcomeReason != nightLedgerRefusalOperatorReason {
+		t.Fatalf("OutcomeReason = %q, want the operator-facing sentence %q", row.OutcomeReason, nightLedgerRefusalOperatorReason)
+	}
+	if strings.Contains(row.OutcomeReason, "revision") {
+		t.Fatalf("OutcomeReason = %q, must not contain internals vocabulary such as \"revision\"", row.OutcomeReason)
 	}
 }
 

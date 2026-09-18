@@ -326,6 +326,12 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 		if err != nil {
 			h.logWarn("cue activation loop: resolve follow-stop fail-to-black targets failed", "instanceUuid", obs.InstanceUUID, "error", err)
 		} else if len(targets) > 0 {
+			// Cleared before dispatch, not after confirmation: once this
+			// tick has committed to stopping held's Cue, a later tick must
+			// never recompute the identical FollowStop and redispatch it
+			// against now-stale evidence (defect: repeated per-tick refusal
+			// logging). A fresh activation still repopulates held via observe.
+			held.clear(obs.InstanceUUID)
 			// Detached, in its own goroutine, for the identical reason the
 			// evidence-broken dispatch below is: dispatchCueScopedBlackAndSilence
 			// awaits real per-node confirmation, and this method runs once
@@ -569,6 +575,15 @@ func (t *cueHeldTracker) get(instanceUUID string) cueactivate.Held {
 	return t.held[instanceUUID]
 }
 
+// clear drops instanceUUID's own held Cue: used once its FollowStop has
+// been dispatched, so a later tick finds nothing held and asserts no
+// further FollowStop for it until a fresh activation repopulates it.
+func (t *cueHeldTracker) clear(instanceUUID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.held, instanceUUID)
+}
+
 // observe updates instanceUUID's own held Cue from dec: replaced by
 // dec.Activations whenever it is non-empty (something new now supersedes
 // whatever was held), dropped once dec.ClearNodes or
@@ -782,6 +797,7 @@ func (h *handlers) dispatchBlackAndSilenceClearSurfaces(ctx context.Context, now
 	for _, surfaceID := range surfaceIDs {
 		in := renderDispatchInput{
 			Action: "render.surface.clear", NodeID: nodeID, SurfaceID: surfaceID,
+			Params:         map[string]any{"surfaceId": surfaceID},
 			IdempotencyKey: "cueact-clear-" + nodeID + "-" + surfaceID + "-" + episode,
 			DesiredState:   "stopped",
 			IssuerID:       issuer.PrincipalID, IssuerName: issuer.PrincipalName,
