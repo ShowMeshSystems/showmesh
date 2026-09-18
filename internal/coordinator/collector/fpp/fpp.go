@@ -56,8 +56,16 @@ const (
 	SignalPositionRemaining observation.SignalID = "fpp.position.remaining.seconds"
 	SignalMultiSyncEnabled  observation.SignalID = "fpp.multisync.enabled"
 	SignalMultiSyncSystems  observation.SignalID = "fpp.multisync.systems"
-	SignalSchedulerStatus   observation.SignalID = "fpp.scheduler.status"
-	SignalUptimeSeconds     observation.SignalID = "fpp.uptime.seconds"
+
+	// SignalMultiSyncSystemHostnames is every member of
+	// /api/fppd/multiSyncSystems's own "systems" array, joined by "; " in
+	// the order FPP returned them (ADR-051 decision 4's own readiness
+	// warning needs the member identities, not only SignalMultiSyncSystems'
+	// count). A ShowMesh audio node's own hostname in this list is exactly
+	// its node ID (internal/agent/multisync.go's discoverResponse).
+	SignalMultiSyncSystemHostnames observation.SignalID = "fpp.multisync.system_hostnames"
+	SignalSchedulerStatus          observation.SignalID = "fpp.scheduler.status"
+	SignalUptimeSeconds            observation.SignalID = "fpp.uptime.seconds"
 )
 
 // Step 5 playback signals, from /api/fppd/status. See signals.go's
@@ -205,7 +213,7 @@ var AllSignals = buildAllSignals()
 
 func buildAllSignals() []observation.SignalID {
 	all := make([]observation.SignalID, 0, 2+len(allStatusSignals)+len(portsFailureSignals)+1+len(systemInfoStaticSignals))
-	all = append(all, SignalReachable, SignalMultiSyncSystems)
+	all = append(all, SignalReachable, SignalMultiSyncSystems, SignalMultiSyncSystemHostnames)
 	all = append(all, allStatusSignals...)
 	all = append(all, portsFailureSignals...)
 	all = append(all, SignalPortsDecodeFailed)
@@ -568,13 +576,18 @@ func (c *Collector) Poll(ctx context.Context) ([]observation.Observation, bool) 
 	// (unchanged from before Step 5).
 	msBody, msErr := c.fetch(ctx, "/api/fppd/multiSyncSystems")
 	if msErr != nil {
-		obs = append(obs, c.failed(SignalMultiSyncSystems, classifyFetchError(msErr), now))
+		reason := classifyFetchError(msErr)
+		obs = append(obs, c.failed(SignalMultiSyncSystems, reason, now))
+		obs = append(obs, c.failed(SignalMultiSyncSystemHostnames, reason, now))
 	} else {
-		count, err := multiSyncSystemsCount(msBody)
+		hostnames, err := multiSyncSystemHostnames(msBody)
 		if err != nil {
-			obs = append(obs, c.failed(SignalMultiSyncSystems, "decode error: "+err.Error(), now))
+			reason := "decode error: " + err.Error()
+			obs = append(obs, c.failed(SignalMultiSyncSystems, reason, now))
+			obs = append(obs, c.failed(SignalMultiSyncSystemHostnames, reason, now))
 		} else {
-			obs = append(obs, c.measured(SignalMultiSyncSystems, int64(count), now))
+			obs = append(obs, c.measured(SignalMultiSyncSystems, int64(len(hostnames)), now))
+			obs = append(obs, c.measured(SignalMultiSyncSystemHostnames, strings.Join(hostnames, "; "), now))
 		}
 	}
 

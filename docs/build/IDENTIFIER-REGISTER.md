@@ -1205,14 +1205,19 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
 | `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
+| `fpp-multisync-disabled` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
+| `audio-node-not-multisync-remote` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 
-**`cue-multisync-trigger-missing` is warning-only, not a `failingCondition`.**
-Every condition above this row can make `ready` false; this one never does
-(ADR-051 decision 2: a Cue with an audio output and no trigger still plays,
-from the coordinator's own fallback, only later). It is registered here
-because it is still part of the same closed, script-branchable vocabulary
-this section exists to protect, even though it surfaces on `warning`
-rather than `failingCondition`.
+**`cue-multisync-trigger-missing`, `fpp-multisync-disabled` and
+`audio-node-not-multisync-remote` are warning-only, not a
+`failingCondition`.** Every condition above this row can make `ready`
+false; these three never do (ADR-051 decisions 2 and 4: a Cue with an
+audio output and no trigger, an FPP instance with MultiSync turned off, or
+a target audio node absent from that instance's own MultiSync systems
+list still plays, from the coordinator's own fallback, only later). They
+are registered here because they are still part of the same closed,
+script-branchable vocabulary this section exists to protect, even though
+they surface on `warning` rather than `failingCondition`.
 
 **Lane 20.1's three audio-target conditions are registered here after the
 fact.** SM-314 shipped them on `dev/multi-audio` (PR #210) without a

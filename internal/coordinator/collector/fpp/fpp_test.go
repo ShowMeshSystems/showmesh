@@ -334,6 +334,51 @@ func TestPollUnreachableProducesCollectionFailedNeverFabricatedFalse(t *testing.
 	}
 }
 
+// TestPollMultiSyncSystemHostnamesFromRealCapture proves the readiness
+// warning ADR-051 decision 4 needs (a target audio node missing from the
+// player's MultiSync systems list) has real evidence to compare against:
+// the hostname of the one system in multisync_systems_enabled.json's real
+// FPP 9.5.3 capture, joined into the new signal exactly as
+// [multiSyncSystemHostnames] decodes it.
+func TestPollMultiSyncSystemHostnamesFromRealCapture(t *testing.T) {
+	srv := newFPPServer()
+	srv.serveBody("/api/fppd/status", loadTestdata(t, "status_multisync_enabled.json"))
+	srv.serveBody("/api/fppd/multiSyncSystems", loadTestdata(t, "multisync_systems_enabled.json"))
+	ts := srv.start(t)
+
+	c := newTestCollector(t, ts.URL, Options{})
+	obs, _ := c.Poll(context.Background())
+
+	got := findSignal(t, obs, SignalMultiSyncSystemHostnames)
+	if got.Absence != "" {
+		t.Fatalf("fpp.multisync.system_hostnames Absence = %q, want a value", got.Absence)
+	}
+	if got.Value != "fpp-master" {
+		t.Errorf("fpp.multisync.system_hostnames value = %v, want %q", got.Value, "fpp-master")
+	}
+}
+
+// TestPollMultiSyncSystemHostnamesCollectionFailed mirrors the count
+// signal's own identical unreachable-instance behavior one test above:
+// the hostnames signal must fail the same way, never fabricate an empty
+// list that would read as "confirmed no remotes."
+func TestPollMultiSyncSystemHostnamesCollectionFailed(t *testing.T) {
+	srv := newFPPServer()
+	ts := srv.start(t)
+	ts.Close()
+
+	c := newTestCollector(t, ts.URL, Options{})
+	obs, _ := c.Poll(context.Background())
+
+	got := findSignal(t, obs, SignalMultiSyncSystemHostnames)
+	if got.Value != nil {
+		t.Fatalf("fpp.multisync.system_hostnames Value = %v, want nil on collection failure", got.Value)
+	}
+	if got.Absence != observation.StateCollectionFailed {
+		t.Errorf("fpp.multisync.system_hostnames Absence = %q, want collection_failed", got.Absence)
+	}
+}
+
 // TestPollHTTPErrorStatusProducesCollectionFailed verifies a non-2xx HTTP
 // response (a real, if less common, FPP failure mode — e.g. mid-restart)
 // is treated the same as a network failure: collection_failed, with the

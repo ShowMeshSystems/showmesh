@@ -324,21 +324,52 @@ func (d rawDoc) nestedStringField(outerKey, innerKey string) (string, error) {
 	return nested.stringField(innerKey)
 }
 
-// multiSyncSystemsCount decodes the /api/fppd/multiSyncSystems response
+// multiSyncSystemHostnames decodes the /api/fppd/multiSyncSystems response
 // shape, verified against a real FPP 9.5.3 (see testdata):
 //
 //	{"Message":"","Status":"OK","respCode":200,"systems":[...]}
 //
-// and returns len(systems). This is intentionally its own small decoder
-// rather than routed through rawDoc: the response is an envelope around an
-// array, not the flat object /api/fppd/status returns, so reusing rawDoc's
-// field extractors would not fit cleanly.
-func multiSyncSystemsCount(body []byte) (int, error) {
+// into the "hostname" field of every listed system, in the order FPP
+// returned them. A remote system with no "hostname" key, or a non-string
+// one, contributes an empty string rather than being dropped, so the
+// returned slice's length always still matches the systems count — that
+// count is what [SignalMultiSyncSystems] itself reports, via
+// len(hostnames), so both signals come from one decode.
+//
+// A ShowMesh audio node answering FPP's own MultiSync discover ping always
+// reports its Hostname field as its own node ID verbatim
+// (internal/agent/multisync.go's discoverResponse, pinned by RES-003/
+// ADR-044) — this is what lets a readiness check compare this list
+// directly against declared node IDs with no separate identity mapping.
+func multiSyncSystemHostnames(body []byte) ([]string, error) {
+	systems, err := decodeMultiSyncSystems(body)
+	if err != nil {
+		return nil, err
+	}
+	hostnames := make([]string, len(systems))
+	for i, raw := range systems {
+		var s struct {
+			Hostname string `json:"hostname"`
+		}
+		if err := json.Unmarshal(raw, &s); err == nil {
+			hostnames[i] = s.Hostname
+		}
+	}
+	return hostnames, nil
+}
+
+// decodeMultiSyncSystems decodes the /api/fppd/multiSyncSystems response's
+// own "systems" array, leaving each element undecoded: this is
+// intentionally its own small decoder rather than routed through rawDoc,
+// since the response is an envelope around an array, not the flat object
+// /api/fppd/status returns, so reusing rawDoc's field extractors would not
+// fit cleanly.
+func decodeMultiSyncSystems(body []byte) ([]json.RawMessage, error) {
 	var envelope struct {
 		Systems []json.RawMessage `json:"systems"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return 0, fmt.Errorf("response body is not the expected multiSyncSystems envelope: %w", err)
+		return nil, fmt.Errorf("response body is not the expected multiSyncSystems envelope: %w", err)
 	}
-	return len(envelope.Systems), nil
+	return envelope.Systems, nil
 }
