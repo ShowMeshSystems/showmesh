@@ -294,6 +294,49 @@ func TestReplaceNodeAssetInventoryTxForm(t *testing.T) {
 	}
 }
 
+// TestReplaceNodeAssetInventoryStoresSameHashUnderTwoFilenames pins the
+// rehearsal-rig fix (schemaV37's own doc comment): asset sync deliberately
+// delivers a second copy of an already-held content hash under a second
+// runtime filename when a node is told to play another node's upload, so a
+// report naming one content hash under two different filenames must store
+// both rows and return no error, never reject the whole report on a
+// UNIQUE constraint violation.
+func TestReplaceNodeAssetInventoryStoresSameHashUnderTwoFilenames(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	items := []NodeAssetInventoryRecord{
+		{ContentHash: "sha256:aaa", RuntimeFilename: "Opening.fseq", SizeBytes: 100, VerifiedAt: now},
+		{ContentHash: "sha256:aaa", RuntimeFilename: "BorrowedFromRender01.fseq", SizeBytes: 100, VerifiedAt: now},
+	}
+	report := NodeAssetReportRecord{ReportedAt: now, Complete: true}
+	if err := st.ReplaceNodeAssetInventory(ctx, "pi-audio-01", items, report); err != nil {
+		t.Fatalf("replace with one content hash under two filenames: %v", err)
+	}
+
+	inv, err := st.GetNodeAssetInventory(ctx, "pi-audio-01")
+	if err != nil {
+		t.Fatalf("get inventory: %v", err)
+	}
+	if len(inv) != 2 {
+		t.Fatalf("inventory = %+v, want 2 rows (one per filename)", inv)
+	}
+	byFilename := make(map[string]NodeAssetInventoryRecord, len(inv))
+	for _, item := range inv {
+		if item.ContentHash != "sha256:aaa" {
+			t.Errorf("item %+v has an unexpected content hash", item)
+		}
+		byFilename[item.RuntimeFilename] = item
+	}
+	if _, ok := byFilename["Opening.fseq"]; !ok {
+		t.Errorf("inventory missing Opening.fseq: %+v", inv)
+	}
+	if _, ok := byFilename["BorrowedFromRender01.fseq"]; !ok {
+		t.Errorf("inventory missing BorrowedFromRender01.fseq: %+v", inv)
+	}
+}
+
 // TestReplaceNodeAssetInventoryEmptyNodeIDFails proves the method rejects
 // an empty node id rather than silently deleting/upserting against "" —
 // which would be a real, matchable row under this schema (node_id has no
