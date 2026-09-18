@@ -15,6 +15,9 @@ const (
 	wavDataID = "data"
 
 	wavFormatPCM = 1
+
+	// wavMaxFmtChunk bounds the fmt chunk read so a corrupt size cannot force a large allocation.
+	wavMaxFmtChunk = 4096
 )
 
 // wavHeaderDuration walks the RIFF/WAVE chunks read from r and computes the
@@ -53,6 +56,9 @@ func wavHeaderDuration(r io.Reader, fileSize int64) (time.Duration, bool) {
 
 		switch chunkID {
 		case wavFmtID:
+			if chunkSize > wavMaxFmtChunk {
+				return 0, false
+			}
 			body := make([]byte, chunkSize)
 			if _, err := io.ReadFull(br, body); err != nil {
 				return 0, false
