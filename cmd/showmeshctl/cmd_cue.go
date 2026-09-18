@@ -395,11 +395,33 @@ type cueActivateResponse struct {
 // cueActivationNodeOutcome mirrors v1.CueActivationNodeOutcome field for
 // field.
 type cueActivationNodeOutcome struct {
-	NodeID        string `json:"nodeId"`
-	Dispatched    bool   `json:"dispatched"`
-	Confirmed     bool   `json:"confirmed"`
-	Outcome       string `json:"outcome"`
-	OutcomeReason string `json:"outcomeReason,omitempty"`
+	NodeID                  string `json:"nodeId"`
+	Dispatched              bool   `json:"dispatched"`
+	Confirmed               bool   `json:"confirmed"`
+	Outcome                 string `json:"outcome"`
+	OutcomeReason           string `json:"outcomeReason,omitempty"`
+	UnalignedReason         string `json:"unalignedReason,omitempty"`
+	StartTrigger            string `json:"startTrigger,omitempty"`
+	TriggerSequenceFilename string `json:"triggerSequenceFilename,omitempty"`
+	TriggerArrivalNs        int64  `json:"triggerArrivalNs,omitempty"`
+	StartLeadMs             int    `json:"startLeadMs,omitempty"`
+	PreparedLate            bool   `json:"preparedLate,omitempty"`
+}
+
+// cueActivationStartTriggerLine renders n's own ADR-051 decision 6
+// evidence as the exact operator copy the copy standard fixes: fact
+// first, then the action. Empty when n carries no StartTrigger at all
+// (a render-only activation, or one that used ADR-049's own shared
+// start instant instead).
+func cueActivationStartTriggerLine(n cueActivationNodeOutcome) string {
+	switch n.StartTrigger {
+	case "multisync":
+		return fmt.Sprintf("Started by MultiSync, %d ms lead", n.StartLeadMs)
+	case "coordinator":
+		return "Started by coordinator (fallback: no MultiSync packet)"
+	default:
+		return ""
+	}
 }
 
 // cmdCueActivate implements "showmeshctl cue activate <cue-id>":
@@ -476,6 +498,9 @@ func reportCueActivateResponse(stdout io.Writer, resp cueActivateResponse) int {
 	}
 	for _, n := range resp.Nodes {
 		_, _ = fmt.Fprintf(stdout, "%s: %s %s: %s\n", n.Outcome, resp.CueID, n.NodeID, n.OutcomeReason)
+		if line := cueActivationStartTriggerLine(n); line != "" {
+			_, _ = fmt.Fprintf(stdout, "  %s\n", line)
+		}
 	}
 	return exitCodeForCueActivateResponse(resp)
 }

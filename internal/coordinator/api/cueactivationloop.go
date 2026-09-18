@@ -941,6 +941,140 @@ func prepareAheadCatalogEntry(catalog assetsync.Catalog, cueID string) (cuecatal
 	return cuecatalog.Entry{}, false
 }
 
+// dispatchArmCurrentAudio best-effort applies and prepares act's OWN Cue
+// audio content directly onto [cueactivation.AudioSessionID] — ADR-051
+// decision 3's own arming step: "the current cue arms on its own cue
+// session." Called before [handlers.dispatchOneCueActivation] dispatches
+// the real cue.activate for act, on every tick, so the media is already
+// loaded on nodeID by the time that command (or, once ADR-051's
+// MultiSync-triggered start is wired in on the node, a MultiSync START
+// packet) actually starts it — closing the same video-leads-audio gap
+// [dispatchPrepareAheadAudio] closes for the NEXT cue, one cue earlier.
+//
+// Deliberately NOT an authorization decision, mirroring
+// dispatchPrepareAheadAudio's identical reasoning: cue.activate's own
+// dispatch, immediately after this call, is what actually authorizes and
+// starts it. A wrong or stale read here (a since-superseded catalog, a
+// since-removed asset) costs nothing beyond one wasted apply/prepare —
+// dispatchOneCueActivation's own [cueactivate.Authorize] call still runs
+// independently, and every failure here is logged and swallowed rather
+// than delaying or blocking that dispatch.
+//
+// t is act.EvidenceAt, the identical timestamp
+// internal/agent/cueactivationaudio.go's own activateAudio steps derive
+// their AudioSessionID revisions from for this same activation — so a
+// repeat tick over an unchanged act (the ordinary case while an entry's
+// own FPP observation stays current) derives the identical
+// [cueactivation.AudioSessionRevision] every time, and this call's own
+// idempotency key (act.ActivationID-derived, checked against the commands
+// table before dispatch, exactly as [dispatchPrepareAheadAudio] already
+// does) answers from the replay path with no publish and no await after
+// the first tick — never re-arming media a node already holds for this
+// activation.
+func (h *handlers) dispatchArmCurrentAudio(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) {
+	if h.deps.Config == nil || h.deps.AssetManifests == nil {
+		return
+	}
+	// Unlike dispatchPrepareAheadAudio's guessed next Cue, act is already
+	// this tick's own real, decided activation — the identical evidence
+	// dispatchOneCueActivation is about to re-check independently a moment
+	// later, so reusing [cueactivate.Authorize] here, rather than a bare
+	// catalog lookup, is what keeps an asset-missing (or otherwise refused)
+	// Cue from ever reaching the wire twice: once here, wastefully, and
+	// once from the real dispatch that was always going to refuse it
+	// anyway. This is still not itself an authorization DECISION — nothing
+	// here writes an outcome or an audit entry; dispatchOneCueActivation's
+	// own call is what actually decides and records this activation.
+	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
+	reconnectedAt := h.deps.BrokerConnection.ConnectedSince()
+	_, _, outputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, reconnectedAt, nodeID, act, pin)
+	if err != nil {
+		h.logWarn("cue activation loop: authorize for arm-ahead failed", "nodeId", nodeID, "cueId", act.CueID, "error", err)
+		return
+	}
+	if !ok || outputs.Audio == nil || outputs.Audio.Filename == "" {
+		// Nothing to arm: this node's activation would be refused, this
+		// Cue has no audio output on it, or no asset has ever been
+		// uploaded for it — the ordinary Apply+Prepare+Start path at real
+		// activation time covers this exactly as it always has, unarmed.
+		return
+	}
+	contentHash := ""
+	if len(outputs.Audio.AssetHashes) > 0 {
+		contentHash = outputs.Audio.AssetHashes[0]
+	}
+
+	t := act.EvidenceAt
+	session := cueactivation.AudioSessionID
+	applyInvocation := act.ActivationID + ":arm-apply"
+	prepareInvocation := act.ActivationID + ":arm-prepare"
+	applyRevision := cueactivation.AudioSessionRevision(t, cueactivation.AudioSessionStepApply)
+	prepareRevision := cueactivation.AudioSessionRevision(t, cueactivation.AudioSessionStepPrepare)
+
+	if h.deps.Commands != nil {
+		if _, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, applyInvocation); err == nil {
+			h.logDebug("cue activation loop: arm-ahead audio already dispatched for this activation; skipping repeat tick", "nodeId", nodeID, "cueId", act.CueID, "activationId", act.ActivationID)
+			return
+		} else if !errors.Is(err, store.ErrCommandNotFound) {
+			h.logWarn("cue activation loop: look up arm-ahead audio apply by idempotency key failed", "nodeId", nodeID, "cueId", act.CueID, "error", err)
+			return
+		}
+	}
+
+	applyResult, applyProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.apply", NodeID: nodeID, SessionID: session,
+		Params: map[string]any{
+			"sessionId": session, "invocationId": applyInvocation, "revision": applyRevision,
+			"sourceRole": string(pkgaudio.SourceRoleShow),
+			"media": map[string]any{
+				"assetId": outputs.Audio.Asset, "contentHash": contentHash, "filename": outputs.Audio.Filename,
+			},
+		},
+		Revision: applyRevision, IdempotencyKey: applyInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	switch {
+	case err != nil:
+		h.logWarn("cue activation loop: arm-ahead audio apply dispatch failed", "nodeId", nodeID, "cueId", act.CueID, "error", err)
+		return
+	case applyProblem != nil:
+		h.logWarn("cue activation loop: arm-ahead audio apply dispatch refused", "nodeId", nodeID, "cueId", act.CueID, "detail", applyProblem.Detail)
+		return
+	case applyResult.Outcome == "refused" || applyResult.Outcome == "failed":
+		h.logWarn("cue activation loop: arm-ahead audio apply outcome", "nodeId", nodeID, "cueId", act.CueID, "outcome", applyResult.Outcome, "reason", applyResult.Reason)
+		return
+	}
+
+	_, prepareProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.prepare", NodeID: nodeID, SessionID: session,
+		Params:   map[string]any{"sessionId": session, "invocationId": prepareInvocation, "revision": prepareRevision},
+		Revision: prepareRevision, IdempotencyKey: prepareInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	switch {
+	case err != nil:
+		h.logWarn("cue activation loop: arm-ahead audio prepare dispatch failed", "nodeId", nodeID, "cueId", act.CueID, "error", err)
+	case prepareProblem != nil:
+		h.logWarn("cue activation loop: arm-ahead audio prepare dispatch refused", "nodeId", nodeID, "cueId", act.CueID, "detail", prepareProblem.Detail)
+	}
+}
+
+// safeDispatchArmCurrentAudio wraps [handlers.dispatchArmCurrentAudio] with
+// a recover, mirroring [safeDispatchPrepareAheadAudio]'s identical reasoning
+// one cue over: this runs on runTick's own detached goroutine, with no
+// caller left to recover a panic before it reaches the Go runtime and
+// takes down the entire process.
+func (h *handlers) safeDispatchArmCurrentAudio(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, pin *cueactivate.ShowPin) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logWarn("cue activation loop: arm-ahead current audio dispatch panicked; recovered", "nodeId", nodeID, "cueId", act.CueID, "panic", fmt.Sprintf("%v", r))
+		}
+	}()
+	h.dispatchArmCurrentAudio(ctx, now, nodeID, act, issuer, pin)
+}
+
 // dispatchPrepareAheadAudio best-effort stages cue N+1's audio content
 // under [cueactivation.PrepareStagingSessionID] while cue N (act) is still
 // activating on nodeID — the coordinator's own half of closing the

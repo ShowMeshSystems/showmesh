@@ -56,4 +56,21 @@ type CueActivationNodeOutcome struct {
 	// UnalignedReason is set only when this node confirmed but missed
 	// its scheduled start instant and started on arrival instead.
 	UnalignedReason string `json:"unalignedReason,omitempty"`
+
+	// StartTrigger, TriggerSequenceFilename, TriggerArrivalNs, StartLeadMs
+	// and PreparedLate are ADR-051 decision 6's own "every start records
+	// how it started", present only when this activation had an audio
+	// output and no ADR-049 shared start instant was ever attempted (a
+	// Cue reaching one node, the ordinary case). StartTrigger is
+	// "multisync" when the coordinator's own evidence showed a MultiSync
+	// START packet already started this Cue's audio before cue.activate
+	// was dispatched, "coordinator" when the fallback window elapsed
+	// first. TriggerSequenceFilename, TriggerArrivalNs and StartLeadMs
+	// are present only alongside "multisync"; PreparedLate is present
+	// alongside either.
+	StartTrigger            string `json:"startTrigger,omitempty"`
+	TriggerSequenceFilename string `json:"triggerSequenceFilename,omitempty"`
+	TriggerArrivalNs        int64  `json:"triggerArrivalNs,omitempty"`
+	StartLeadMs             int    `json:"startLeadMs,omitempty"`
+	PreparedLate            bool   `json:"preparedLate,omitempty"`
 }

@@ -174,6 +174,7 @@ func pushSettings(ctx context.Context, cs ConfigStore, pub Publisher, now func()
 		"duckRestoreFadeDurationMs": payload.DuckRestoreFadeDurationMs,
 		"ltcFrameRate":              payload.LTCFrameRate,
 		"ltcDefaultStartOffset":     payload.LTCDefaultStartOffset,
+		"multisyncStartLeadMs":      payload.MultisyncStartLeadMs,
 		"revision":                  revision,
 	}
 	idempotencyKey := fmt.Sprintf("audio.settings.configure/%s/rev-%d", nodeID, revision)

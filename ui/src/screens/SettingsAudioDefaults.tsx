@@ -32,6 +32,8 @@ export function SettingsAudioDefaults() {
   const [driftIgnoreThresholdMs, setDriftIgnoreThresholdMs] = useState('')
   const [scheduledStartDeliveryBoundMs, setScheduledStartDeliveryBoundMs] = useState('')
   const [scheduledStartMarginMs, setScheduledStartMarginMs] = useState('')
+  const [multisyncFallbackWindowMs, setMultisyncFallbackWindowMs] = useState('')
+  const [multisyncStartLeadMs, setMultisyncStartLeadMs] = useState('')
   const [ltcFrameRate, setLtcFrameRate] = useState<(typeof LTC_FRAME_RATES)[number]>('30')
   const [ltcDefaultStartOffset, setLtcDefaultStartOffset] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -54,6 +56,8 @@ export function SettingsAudioDefaults() {
         setDriftIgnoreThresholdMs(String(response.payload.driftIgnoreThresholdMs))
         setScheduledStartDeliveryBoundMs(String(response.payload.scheduledStartDeliveryBoundMs))
         setScheduledStartMarginMs(String(response.payload.scheduledStartMarginMs))
+        setMultisyncFallbackWindowMs(String(response.payload.multisyncFallbackWindowMs))
+        setMultisyncStartLeadMs(String(response.payload.multisyncStartLeadMs))
         setLtcFrameRate(response.payload.ltcFrameRate)
         setLtcDefaultStartOffset(response.payload.ltcDefaultStartOffset)
         setDirty(false)
@@ -76,6 +80,8 @@ export function SettingsAudioDefaults() {
     setDriftIgnoreThresholdMs(String(state.response.payload.driftIgnoreThresholdMs))
     setScheduledStartDeliveryBoundMs(String(state.response.payload.scheduledStartDeliveryBoundMs))
     setScheduledStartMarginMs(String(state.response.payload.scheduledStartMarginMs))
+    setMultisyncFallbackWindowMs(String(state.response.payload.multisyncFallbackWindowMs))
+    setMultisyncStartLeadMs(String(state.response.payload.multisyncStartLeadMs))
     setLtcFrameRate(state.response.payload.ltcFrameRate)
     setLtcDefaultStartOffset(state.response.payload.ltcDefaultStartOffset)
     setDirty(false)
@@ -92,6 +98,8 @@ export function SettingsAudioDefaults() {
     const driftMs = Number(driftIgnoreThresholdMs)
     const deliveryBoundMs = Number(scheduledStartDeliveryBoundMs)
     const marginMs = Number(scheduledStartMarginMs)
+    const fallbackWindowMs = Number(multisyncFallbackWindowMs)
+    const startLeadMs = Number(multisyncStartLeadMs)
     if (!Number.isFinite(fadeMs) || fadeMs < 0) {
       setSaveError('Default fade duration must be a non-negative number of milliseconds.')
       return
@@ -128,6 +136,14 @@ export function SettingsAudioDefaults() {
       setSaveError('Scheduled start margin must be a whole number of milliseconds between 0 and 60000.')
       return
     }
+    if (!Number.isInteger(fallbackWindowMs) || fallbackWindowMs < 0 || fallbackWindowMs > 10000) {
+      setSaveError('MultiSync fallback window must be a whole number of milliseconds between 0 and 10000.')
+      return
+    }
+    if (!Number.isInteger(startLeadMs) || startLeadMs < 0 || startLeadMs > 5000) {
+      setSaveError('MultiSync start lead must be a whole number of milliseconds between 0 and 5000.')
+      return
+    }
     setSaving(true)
     setSaveError(null)
     setStale(null)
@@ -147,6 +163,8 @@ export function SettingsAudioDefaults() {
           ltcDefaultStartOffset,
           scheduledStartDeliveryBoundMs: deliveryBoundMs,
           scheduledStartMarginMs: marginMs,
+          multisyncFallbackWindowMs: fallbackWindowMs,
+          multisyncStartLeadMs: startLeadMs,
         }),
     })
       .then((outcome) => {
@@ -310,6 +328,42 @@ export function SettingsAudioDefaults() {
                     value={scheduledStartMarginMs}
                     onChange={(e) => {
                       setScheduledStartMarginMs(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="MultiSync fallback window (ms)"
+                help="Read by the coordinator, not by a node. How long it waits for a node's own evidence that a MultiSync packet already started a cue's audio before it starts that cue itself."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    max={10000}
+                    value={multisyncFallbackWindowMs}
+                    onChange={(e) => {
+                      setMultisyncFallbackWindowMs(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="MultiSync start lead (ms)"
+                help="Read by the node, not the coordinator. The fixed lead a MultiSync-triggered cue's audio waits past the START packet's own arrival before presenting the first sample. Pushed to every node on write and on hello."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={0}
+                    max={5000}
+                    value={multisyncStartLeadMs}
+                    onChange={(e) => {
+                      setMultisyncStartLeadMs(e.target.value)
                       setDirty(true)
                     }}
                   />

@@ -1040,6 +1040,11 @@ rest reserved rather than released.
 | `audio_session.ltc.claim.state` | shipped | Lane 18a (`held`, `refused` or `none`: whether this session drives the node's one LTC run) |
 | `audio_session.ltc.claim.reason` | shipped | Lane 18a (why a claim was refused; required whenever the state is `refused`) |
 | `node.audio.ltc.owner_session_id` | reserved | Lane 18a (which session holds the node's single LTC run, so a mismatch is legible from node-level evidence) |
+| `audio_session.start.trigger` | shipped | ADR-051 decision 6 (`multisync` or `coordinator`: how this session started) |
+| `audio_session.start.trigger_sequence_filename` | shipped | ADR-051 decision 6 (the FPP sequence filename a MultiSync START answered; present only when `start.trigger` is `multisync`) |
+| `audio_session.start.trigger_arrival_ns` | shipped | ADR-051 decision 6 (the MultiSync START packet's arrival on the node's media clock; present only when `start.trigger` is `multisync`) |
+| `audio_session.start.lead_ms` | shipped | ADR-051 decision 6 (the fixed lead applied after arrival; present only when `start.trigger` is `multisync`) |
+| `audio_session.start.prepared_late` | shipped | ADR-051 decision 6 (true when prepare ran on the OPEN packet instead of ahead of time) |
 
 **A refused LTC claim's own shape, 2026-08-28.** The session-level pair
 above ships; `node.audio.ltc.owner_session_id` stays reserved. A session
@@ -1205,15 +1210,20 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
 | `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
+| `fpp-multisync-disabled` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
+| `audio-node-not-multisync-remote` | shipped | ADR-051 decision 4 — reported only as `warning`, never `failingCondition`; see this file's own note below |
 | `audio-nodes-defaulted` | shipped | ADR-049 decision 10 — reported only as `warning`, never `failingCondition`; the same condition name is used at the night readiness layer for the background bed and announcements, which report through `nightReadinessCheck`, not this file's own `ReadinessCondition` |
 
-**`cue-multisync-trigger-missing` is warning-only, not a `failingCondition`.**
-Every condition above this row can make `ready` false; this one never does
-(ADR-051 decision 2: a Cue with an audio output and no trigger still plays,
-from the coordinator's own fallback, only later). It is registered here
-because it is still part of the same closed, script-branchable vocabulary
-this section exists to protect, even though it surfaces on `warning`
-rather than `failingCondition`.
+**`cue-multisync-trigger-missing`, `fpp-multisync-disabled` and
+`audio-node-not-multisync-remote` are warning-only, not a
+`failingCondition`.** Every condition above this row can make `ready`
+false; these three never do (ADR-051 decisions 2 and 4: a Cue with an
+audio output and no trigger, an FPP instance with MultiSync turned off, or
+a target audio node absent from that instance's own MultiSync systems
+list still plays, from the coordinator's own fallback, only later). They
+are registered here because they are still part of the same closed,
+script-branchable vocabulary this section exists to protect, even though
+they surface on `warning` rather than `failingCondition`.
 
 **Lane 20.1's three audio-target conditions are registered here after the
 fact.** SM-314 shipped them on `dev/multi-audio` (PR #210) without a
@@ -1379,7 +1389,8 @@ The store schema version, bumped by migrations in
 | v36 | shipped | cue-catalog deploy operator override (SM-632): `node_cue_catalog_override`, one row per node recording an operator's accepted H0.5 exclusive-claim conflict, scoped to the revision it was accepted for |
 | v37 | shipped | re-keys `node_asset_inventory` (schemaV8) from `PRIMARY KEY (node_id, content_hash)` to a composite `(node_id, content_hash, runtime_filename)` primary key, so a node reporting one content hash under two runtime filenames (asset sync deliberately dispatches a second copy of an already-held hash under a second filename when a node plays another node's upload) no longer fails its whole inventory report on a UNIQUE constraint violation. A pure widening, matching v27/v28's identical reasoning: every pre-v37 row is already unique under the old key, so no data fix runs |
 | v38 | shipped | PCM show audio (owner ruling 2026-09-18): adds `audio_renditions`, one row per original audio asset content hash recording its 48kHz/16-bit/stereo WAV rendition status (rendering/ready/failed) and, once ready, the rendition's own content hash, size, duration, and format string (`audio_renditions.go`'s own doc comment). A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36: no existing table is touched, and an audio asset with no row yet simply has no rendition, which the expected-set computation treats as "keep naming the original" rather than an error |
-| v39+ | unallocated | free |
+| v39 | shipped | ADR-051 decisions 1 and 4: backfills audio.settings' `multisyncFallbackWindowMs` and `multisyncStartLeadMs` keys into every stored revision written before they were required (`migrateV39AudioSettingsBackfillMultisyncFields`'s own doc comment, `migration_v39.go`), the same defect class v20/v34 already fix for earlier fields |
+| v40+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

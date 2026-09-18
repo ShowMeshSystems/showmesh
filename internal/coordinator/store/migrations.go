@@ -160,6 +160,14 @@ var migrations = []migration{
 	// has no rendition, which the expected-set computation treats as "keep
 	// naming the original" rather than an error.
 	{version: 38, sql: schemaV38},
+	// v39 (ADR-051 decisions 1 and 4): backfills audio.settings'
+	// multisyncFallbackWindowMs and multisyncStartLeadMs keys into every
+	// stored revision written before they were required
+	// (migrateV39AudioSettingsBackfillMultisyncFields's own doc comment,
+	// migration_v39.go). Same defect class as v20/v34: without it an
+	// upgraded coordinator cannot decode its own stored revision and
+	// stops pushing audio configuration to every node.
+	{version: 39, fn: migrateV39AudioSettingsBackfillMultisyncFields},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

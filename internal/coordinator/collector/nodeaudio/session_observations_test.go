@@ -189,6 +189,95 @@ func TestSessionLTCClaimStateDefaultsToNone(t *testing.T) {
 	}
 }
 
+// TestSessionStartTriggerMultisyncCarriesArrivalAndLead proves ADR-051
+// decision 6's own reporting surface: a session that started from a
+// MultiSync START packet reports its trigger, the sequence filename that
+// packet answered, the packet's arrival, and the lead applied, all
+// present, alongside PreparedLate.
+func TestSessionStartTriggerMultisyncCarriesArrivalAndLead(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "cue-activation:audio", State: "playing", Fault: "none",
+		StartTrigger: "multisync", TriggerSequenceFilename: "wake-up.fseq",
+		TriggerArrivalNs: 1_700_000_000_000_000_000, StartLeadMs: 100,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	trigger := findSessionObs(t, obs, SignalSessionStartTrigger)
+	if trigger.Value != "multisync" {
+		t.Errorf("start trigger = %v, want %q", trigger.Value, "multisync")
+	}
+	filename := findSessionObs(t, obs, SignalSessionTriggerSequenceFilename)
+	if filename.Value != "wake-up.fseq" {
+		t.Errorf("trigger sequence filename = %v, want %q", filename.Value, "wake-up.fseq")
+	}
+	arrival := findSessionObs(t, obs, SignalSessionTriggerArrivalNs)
+	if arrival.Value != int64(1_700_000_000_000_000_000) {
+		t.Errorf("trigger arrival ns = %v, want %d", arrival.Value, int64(1_700_000_000_000_000_000))
+	}
+	lead := findSessionObs(t, obs, SignalSessionStartLeadMs)
+	if lead.Value != int64(100) {
+		t.Errorf("start lead ms = %v, want %d", lead.Value, int64(100))
+	}
+	late := findSessionObs(t, obs, SignalSessionPreparedLate)
+	if late.Value != false {
+		t.Errorf("prepared late = %v, want false", late.Value)
+	}
+}
+
+// TestSessionStartTriggerCoordinatorReportsNoMultisyncFields proves the
+// fallback case: a session started by the coordinator's own dispatch
+// reports its trigger as "coordinator" and the three MultiSync-only
+// fields as not_collected, never a fabricated zero.
+func TestSessionStartTriggerCoordinatorReportsNoMultisyncFields(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "cue-activation:audio", State: "playing", Fault: "none",
+		StartTrigger: "coordinator", PreparedLate: true,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	trigger := findSessionObs(t, obs, SignalSessionStartTrigger)
+	if trigger.Value != "coordinator" {
+		t.Errorf("start trigger = %v, want %q", trigger.Value, "coordinator")
+	}
+	for _, sig := range []observation.SignalID{SignalSessionTriggerSequenceFilename, SignalSessionTriggerArrivalNs, SignalSessionStartLeadMs} {
+		got := findSessionObs(t, obs, sig)
+		if got.Absence != observation.StateNotCollected {
+			t.Errorf("signal %q absence = %q, want %q", sig, got.Absence, observation.StateNotCollected)
+		}
+	}
+	late := findSessionObs(t, obs, SignalSessionPreparedLate)
+	if late.Value != true {
+		t.Errorf("prepared late = %v, want true", late.Value)
+	}
+}
+
+// TestSessionStartTriggerAbsentIsNotCollected proves a session that has
+// never started, or whose node predates this reporting, carries every one
+// of the five signals as not_collected rather than an empty string or a
+// fabricated "coordinator".
+func TestSessionStartTriggerAbsentIsNotCollected(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSessionStartTrigger, SignalSessionTriggerSequenceFilename,
+		SignalSessionTriggerArrivalNs, SignalSessionStartLeadMs, SignalSessionPreparedLate,
+	} {
+		got := findSessionObs(t, obs, sig)
+		if got.Absence != observation.StateNotCollected {
+			t.Errorf("signal %q absence = %q, want %q", sig, got.Absence, observation.StateNotCollected)
+		}
+	}
+}
+
 // TestSessionPositionUnknownIsNotCollectedNeverStale proves a
 // mid-discontinuity session (PositionKnown=false) reports position as
 // not_collected — never a stale prior reading presented as current, and

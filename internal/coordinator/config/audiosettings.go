@@ -75,6 +75,24 @@ const (
 	maxScheduledStartOffsetMs = 60000
 )
 
+// Bounds on multisyncFallbackWindowMs. RES-020's own measured 100ms lead
+// plus real network and clock-read latency is comfortably under a second;
+// a bound past ten seconds would leave a Cue's audience-visible content
+// audibly late before the fallback ever fires, so the ceiling catches a
+// typo entered in a coarser unit rather than tuning the value itself.
+const (
+	minMultisyncFallbackWindowMs = 0
+	maxMultisyncFallbackWindowMs = 10000
+)
+
+// Bounds on multisyncStartLeadMs. A typo guard, not a tuned range: the
+// shipped default is 100ms, and a lead past five seconds would itself be
+// audibly late behind the lights, the exact defect ADR-051 exists to fix.
+const (
+	minMultisyncStartLeadMs = 0
+	maxMultisyncStartLeadMs = 5000
+)
+
 // Bounds on duckFadeDurationMs and duckRestoreFadeDurationMs share
 // defaultFadeDurationMs's own typo-guard range: neither is a fade a
 // node can ever run outside it either.
@@ -182,6 +200,24 @@ type AudioSettingsPayload struct {
 	// preroll. See AudioSettingsDefaultPayload.
 	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
+
+	// MultisyncFallbackWindowMs is ADR-051 decision 4's own bound: after
+	// dispatching an activation, the coordinator waits this long, from the
+	// FPP entry observation, for a node's own evidence that a MultiSync
+	// START packet already started that Cue's audio before it dispatches
+	// cue.activate with no scheduled instant (start on arrival) instead.
+	// Read by the COORDINATOR, matching ScheduledStartDeliveryBoundMs/
+	// ScheduledStartMarginMs's own identical "state the consumer" reasoning
+	// immediately above; no node ever reads this field.
+	MultisyncFallbackWindowMs int `json:"multisyncFallbackWindowMs"`
+
+	// MultisyncStartLeadMs is ADR-051 decision 1's own fixed lead: a
+	// MultiSync-triggered Cue audio start waits this long past the START
+	// packet's own arrival before presenting the first sample. Read by
+	// the NODE, not the coordinator, and pushed to every node on write
+	// and on hello (internal/coordinator/audioconfigpush) the same way
+	// every other node-applied field in this object already is.
+	MultisyncStartLeadMs int `json:"multisyncStartLeadMs"`
 }
 
 // AudioSettingsDefaultPayload is the value reported when nothing has ever
@@ -229,6 +265,19 @@ var AudioSettingsDefaultPayload = AudioSettingsPayload{
 
 	ScheduledStartDeliveryBoundMs: 2000,
 	ScheduledStartMarginMs:        1000,
+
+	// 1.5s is RES-020's own measured value (ADR-051 decision 4): comfortably
+	// past a real MultiSync START packet's own observed arrival-to-report
+	// latency, short enough that a Cue with no trigger at all still starts
+	// close behind the lights rather than after a long silent wait.
+	MultisyncFallbackWindowMs: 1500,
+
+	// 100 matches internal/agent/audio.DefaultSettings' own
+	// MultisyncStartLeadMs: a coordinator that has never sent this field
+	// and a node that has never received it must agree on the same
+	// value (docs/build/IDENTIFIER-REGISTER.md's own "Configuration field
+	// names" entry for this field).
+	MultisyncStartLeadMs: 100,
 }
 
 var audioSettingsTopLevelKeys = map[string]bool{
@@ -237,6 +286,7 @@ var audioSettingsTopLevelKeys = map[string]bool{
 	"duckTargetGainDb": true, "duckFadeDurationMs": true, "duckRestoreFadeDurationMs": true,
 	"ltcFrameRate": true, "ltcDefaultStartOffset": true,
 	"scheduledStartDeliveryBoundMs": true, "scheduledStartMarginMs": true,
+	"multisyncFallbackWindowMs": true, "multisyncStartLeadMs": true,
 }
 
 // EncodeAudioSettingsPayload marshals p into config_revisions.payload_json's
@@ -409,6 +459,28 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		}
 	}
 
+	multisyncFallbackWindowMs, verr := decodeRequiredInt(top, "multisyncFallbackWindowMs", "multisyncFallbackWindowMs")
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	if multisyncFallbackWindowMs < minMultisyncFallbackWindowMs || multisyncFallbackWindowMs > maxMultisyncFallbackWindowMs {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "multisyncFallbackWindowMs",
+			Detail: fmt.Sprintf("multisyncFallbackWindowMs must be between %d and %d", minMultisyncFallbackWindowMs, maxMultisyncFallbackWindowMs),
+		}
+	}
+
+	multisyncStartLeadMs, verr := decodeRequiredInt(top, "multisyncStartLeadMs", "multisyncStartLeadMs")
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	if multisyncStartLeadMs < minMultisyncStartLeadMs || multisyncStartLeadMs > maxMultisyncStartLeadMs {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "multisyncStartLeadMs",
+			Detail: fmt.Sprintf("multisyncStartLeadMs must be between %d and %d", minMultisyncStartLeadMs, maxMultisyncStartLeadMs),
+		}
+	}
+
 	return AudioSettingsPayload{
 		DriftIgnoreThresholdMs:     driftMs,
 		DefaultFadeCurve:           fadeCurve,
@@ -422,6 +494,8 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 
 		ScheduledStartDeliveryBoundMs: deliveryBoundMs,
 		ScheduledStartMarginMs:        marginMs,
+		MultisyncFallbackWindowMs:     multisyncFallbackWindowMs,
+		MultisyncStartLeadMs:          multisyncStartLeadMs,
 	}, nil
 }
 

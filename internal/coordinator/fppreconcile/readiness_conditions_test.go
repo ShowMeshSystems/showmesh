@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Track H seam H6 named several readiness conditions with no
@@ -654,5 +656,171 @@ func TestPlaylistReadinessCueMultisyncTriggerMissingWarns(t *testing.T) {
 	}
 	if !containsAll(report.Warning, "cue-1", "no FPP sequence filename starts this cue") {
 		t.Fatalf("Warning = %q, want it to name cue-1 and explain that no trigger starts it", report.Warning)
+	}
+}
+
+// multisyncReadyPlaylistFixture builds an otherwise fully-ready fpp-runner
+// Playlist (a triggered audio Cue, a current catalog ack, a matching
+// observation, the asset actually present) so
+// TestPlaylistReadinessFPPMultisyncDisabledWarns and
+// TestPlaylistReadinessAudioNodeNotMultisyncRemoteWarns each isolate their
+// own condition (14 or 15) exactly the way
+// TestPlaylistReadinessCueMultisyncTriggerMissingWarns isolates 13 — with
+// one difference: the entry declares a real expectedSequenceFilename, so
+// condition 13's own warning never fires here and would not be mistaken
+// for either of these two.
+func multisyncReadyPlaylistFixture(t *testing.T, st *store.Store) config.ShowPlaylistPayload {
+	t.Helper()
+	ctx := context.Background()
+	// AudioNodes is set explicitly (ADR-049 decision 10) so this fixture
+	// isolates conditions 14/15 from the unrelated audio-nodes-defaulted
+	// warning: without a show-wide list, an audio-bearing Cue defaulting
+	// to the installation's own node would add a second warning neither
+	// test below is about.
+	showPayload, err := config.EncodeShowPayload(config.ShowPayload{Name: "Show One", AudioNodes: []string{"node-1"}})
+	if err != nil {
+		t.Fatalf("encode show payload: %v", err)
+	}
+	putConfig(t, st, config.ShowConfigKind, "show-1", showPayload)
+	putActiveShow(t, st, "show-1")
+	hash := hash64("a1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "seq-1.fseq", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "seq-1.fseq", "")
+	putPlaylist(t, st, "playlist-1", p)
+	putCueWithAudio(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+
+	if _, _, err := st.CreateAsset(ctx, store.AssetRecord{
+		ID: "sha256:present-audio-node-1", ShowID: "show-1", SequenceID: "asset-cue-1",
+		TargetKind: store.AssetTargetKindNode, TargetID: "node-1", MediaType: "audio",
+		ContentHash: "sha256:present", RuntimeFilename: "cue-1.wav", SizeBytes: 1024,
+		Backend: "volume", StorageKey: "sha256:present",
+	}); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "node-1")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	if err := st.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
+		NodeID: "node-1", Revision: catalog.Revision, ShowID: "show-1", Generation: active.Generation,
+	}); err != nil {
+		t.Fatalf("put node cue catalog ack: %v", err)
+	}
+
+	obs := baseObservation("inst-1")
+	obs.PlaylistName, obs.PlaylistHash, obs.Section, obs.Position = "Main", hash, "mainPlaylist", 0
+	obs.EntryKey = entryKeyFor(t, p, "entry-1")
+	putObservation(t, st, obs)
+
+	if err := st.ReplaceNodeAssetInventory(ctx, "node-1",
+		[]store.NodeAssetInventoryRecord{{NodeID: "node-1", ContentHash: "sha256:present", RuntimeFilename: "cue-1.wav", SizeBytes: 1024, VerifiedAt: time.Now()}},
+		store.NodeAssetReportRecord{ReportedAt: time.Now(), Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory: %v", err)
+	}
+	return p
+}
+
+// putFPPSignal upserts one fpp.* observation for instanceUUID, mirroring
+// exactly what internal/coordinator/collector/fpp.Collector.Poll itself
+// would record.
+func putFPPSignal(t *testing.T, st *store.Store, instanceUUID string, sig observation.SignalID, value any) {
+	t.Helper()
+	o, err := observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceFPP, ID: instanceUUID}, sig, value, time.Now(),
+		observation.WithSource("fpp:"+instanceUUID), observation.WithCollectedAt(time.Now()))
+	if err != nil {
+		t.Fatalf("build fpp observation %s: %v", sig, err)
+	}
+	if err := st.UpsertObservation(context.Background(), o); err != nil {
+		t.Fatalf("upsert fpp observation %s: %v", sig, err)
+	}
+}
+
+// TestPlaylistReadinessFPPMultisyncDisabledWarns proves condition 14
+// (ADR-051 decision 4): the bound FPP instance reporting MultiSync
+// disabled is a Warning, never a FailingCondition.
+func TestPlaylistReadinessFPPMultisyncDisabledWarns(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncEnabled, false)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncSystemHostnames, "node-1")
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("Ready = false, want true: a disabled FPP instance is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
+	}
+	if !containsAll(report.Warning, "inst-1", "MultiSync turned off") {
+		t.Fatalf("Warning = %q, want it to name inst-1 and that MultiSync is turned off", report.Warning)
+	}
+}
+
+// TestPlaylistReadinessFPPMultisyncEnabledNoWarning proves the sibling
+// positive case: an instance reporting MultiSync enabled contributes no
+// warning of its own.
+func TestPlaylistReadinessFPPMultisyncEnabledNoWarning(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncEnabled, true)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncSystemHostnames, "node-1")
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready || report.Warning != "" {
+		t.Fatalf("Ready = %v, Warning = %q, want ready with no warning when MultiSync is enabled and node-1 is a known remote", report.Ready, report.Warning)
+	}
+}
+
+// TestPlaylistReadinessAudioNodeNotMultisyncRemoteWarns proves condition 15
+// (ADR-051 decision 4): a target audio node missing from the bound
+// instance's own MultiSync systems list is a Warning naming the cue and
+// the node, never a FailingCondition.
+func TestPlaylistReadinessAudioNodeNotMultisyncRemoteWarns(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncEnabled, true)
+	// node-1 is never listed among inst-1's own MultiSync remotes.
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncSystemHostnames, "some-other-node")
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("Ready = false, want true: a node missing from the MultiSync systems list is a warning, never a failure (failing condition %q: %s)", report.FailingCondition, report.Reason)
+	}
+	if !containsAll(report.Warning, "cue-1", "node-1", "inst-1", "does not list as a MultiSync remote") {
+		t.Fatalf("Warning = %q, want it to name cue-1, node-1 and inst-1", report.Warning)
+	}
+}
+
+// TestPlaylistReadinessAudioNodeNotMultisyncRemoteNoEvidenceNoWarning
+// proves that missing systems-list evidence never reads as "confirmed
+// absent": with no fpp.multisync.system_hostnames observation at all,
+// nothing is asserted about node-1's membership.
+func TestPlaylistReadinessAudioNodeNotMultisyncRemoteNoEvidenceNoWarning(t *testing.T) {
+	st := openTestStore(t)
+	p := multisyncReadyPlaylistFixture(t, st)
+	putFPPSignal(t, st, "inst-1", fpp.SignalMultiSyncEnabled, true)
+	// No fpp.multisync.system_hostnames observation is recorded at all.
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready || report.Warning != "" {
+		t.Fatalf("Ready = %v, Warning = %q, want ready with no warning when no systems-list evidence has ever been collected", report.Ready, report.Warning)
 	}
 }

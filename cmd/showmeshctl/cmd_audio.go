@@ -41,6 +41,16 @@ type configAudioSettingsPayload struct {
 	// the two terms it adds to a scheduled start's T0.
 	ScheduledStartDeliveryBoundMs int `json:"scheduledStartDeliveryBoundMs"`
 	ScheduledStartMarginMs        int `json:"scheduledStartMarginMs"`
+
+	// MultisyncFallbackWindowMs is also read by the coordinator only
+	// (ADR-051 decision 4): how long it waits for a node's own MultiSync
+	// start evidence before dispatching with no scheduled instant instead.
+	MultisyncFallbackWindowMs int `json:"multisyncFallbackWindowMs"`
+
+	// MultisyncStartLeadMs is read by the NODE, not the coordinator
+	// (ADR-051 decision 1): the fixed lead a MultiSync-triggered Cue
+	// audio start waits past the START packet's own arrival.
+	MultisyncStartLeadMs int `json:"multisyncStartLeadMs"`
 }
 
 type audioSettingsConfigResponse struct {
@@ -240,11 +250,18 @@ than duckFadeDurationMs by default: fast down, slower back up),
 ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
 ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
 ltcStartOffset overrides this),
-and the two scheduled-start terms the COORDINATOR reads rather than a
-node: scheduledStartDeliveryBoundMs (how long a start command is assumed
-to take to reach the slowest target and finish its preroll) and
-scheduledStartMarginMs (deliberate slack held back beyond it). Both are
-guesses, not measurements.
+and the three terms the COORDINATOR reads rather than a node:
+scheduledStartDeliveryBoundMs (how long a start command is assumed
+to take to reach the slowest target and finish its preroll),
+scheduledStartMarginMs (deliberate slack held back beyond it), and
+multisyncFallbackWindowMs (how long, after dispatching an activation, it
+waits for a node's own evidence that a MultiSync START packet already
+started that cue's audio before it dispatches with no scheduled instant
+instead). All three are guesses, not measurements.
+multisyncStartLeadMs is read by the NODE, not the coordinator: the fixed
+lead a MultiSync-triggered Cue audio start waits past the START packet's
+own arrival before presenting the first sample, pushed to every node on
+write and on hello.
 Every subcommand requires the config:write scope (admin only) — there is
 no config:read scope.
 
@@ -986,6 +1003,8 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
 	_, _ = fmt.Fprintf(w, "  scheduledStartDeliveryBoundMs: %d\n", resp.Payload.ScheduledStartDeliveryBoundMs)
 	_, _ = fmt.Fprintf(w, "  scheduledStartMarginMs:        %d\n", resp.Payload.ScheduledStartMarginMs)
+	_, _ = fmt.Fprintf(w, "  multisyncFallbackWindowMs:     %d\n", resp.Payload.MultisyncFallbackWindowMs)
+	_, _ = fmt.Fprintf(w, "  multisyncStartLeadMs:          %d\n", resp.Payload.MultisyncStartLeadMs)
 }
 
 // printAudioNodesTable renders an audio.node list with its channel

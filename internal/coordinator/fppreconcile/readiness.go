@@ -231,6 +231,25 @@ const (
 	// plays the audio; this only nudges toward naming the show's own
 	// audio nodes once instead of relying on the fleet-wide fallback.
 	ReadinessAudioNodesDefaulted ReadinessCondition = "audio-nodes-defaulted"
+
+	// ReadinessFPPMultisyncDisabled: the FPP instance this Playlist is
+	// bound to reports MultiSync turned off ([fppMultiSyncEnabledSignal]
+	// false). ADR-051 decision 4's own readiness warning: no node can ever
+	// start a Cue's audio from that instance's own MultiSync START packet
+	// while this holds, so every activation runs the coordinator's
+	// fallback. Never a failure — see [fppMultisyncDisabledReadiness]'s
+	// own doc comment.
+	ReadinessFPPMultisyncDisabled ReadinessCondition = "fpp-multisync-disabled"
+
+	// ReadinessAudioNodeNotMultisyncRemote: a node this Playlist's Cues
+	// resolve an audio output to is absent from the bound FPP instance's
+	// own MultiSync systems list ([fppMultiSyncSystemHostnamesSignal]).
+	// ADR-051 decision 4's other readiness warning: that instance's
+	// MultiSync START packets never reach a node it does not know about
+	// (FPP unicasts only to its own discovered remotes), so that node's
+	// Cues also run the coordinator's fallback. Never a failure — see
+	// [audioNodeNotMultisyncRemoteReadiness]'s own doc comment.
+	ReadinessAudioNodeNotMultisyncRemote ReadinessCondition = "audio-node-not-multisync-remote"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -539,6 +558,24 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// trigger. Never a failure — see [cueMultisyncTriggerReadiness]'s own
 	// doc comment.
 	if warning, err := cueMultisyncTriggerReadiness(ctx, st, p); err != nil {
+		return Report{}, err
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
+	// Condition 14 (ADR-051 decision 4): the bound FPP instance has
+	// MultiSync turned off. Never a failure — see
+	// [fppMultisyncDisabledReadiness]'s own doc comment.
+	if warning, err := fppMultisyncDisabledReadiness(ctx, st, p); err != nil {
+		return Report{}, err
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
+	// Condition 15 (ADR-051 decision 4): a target audio node is absent
+	// from that instance's own MultiSync systems list. Never a failure —
+	// see [audioNodeNotMultisyncRemoteReadiness]'s own doc comment.
+	if warning, err := audioNodeNotMultisyncRemoteReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if warning != "" {
 		report.Warning = appendWarning(report.Warning, warning)
@@ -1106,4 +1143,136 @@ func cueReady(ctx context.Context, st *store.Store, logger *slog.Logger, cueID, 
 		return ReadinessCueNotReady, fmt.Sprintf("cue %q belongs to show %q, not this playlist's own show %q", cueID, cuePayload.Show, playlistShow), nil
 	}
 	return "", "", nil
+}
+
+// fppMultiSyncEnabledSignal is internal/coordinator/collector/fpp.
+// SignalMultiSyncEnabled, and fppMultiSyncSystemHostnamesSignal is that
+// same package's SignalMultiSyncSystemHostnames — both copied as literals
+// for the identical reason [nodeClockStateSignal] is, immediately above:
+// this package must not import a collector (TestPackageNeverImportsACollector's
+// rule, stated for the api package and followed here identically, since
+// internal/coordinator/api imports this package).
+const (
+	fppMultiSyncEnabledSignal         observation.SignalID = "fpp.multisync.enabled"
+	fppMultiSyncSystemHostnamesSignal observation.SignalID = "fpp.multisync.system_hostnames"
+)
+
+// latestFPPObservation returns the one observation st holds for the bound
+// FPP instance's own resource and sig, or ok=false when no evidence has
+// ever been collected for it. p.FPP.InstanceUUID is the resource ID this
+// package's own collector (internal/coordinator/collector/fpp) stamps on
+// every observation it produces (that package's Poll doc comment).
+func latestFPPObservation(ctx context.Context, st *store.Store, instanceUUID string, sig observation.SignalID) (observation.Observation, bool, error) {
+	obs, err := st.ListObservations(ctx, store.ObservationFilter{
+		ResourceKind: observation.ResourceFPP, ResourceID: instanceUUID, Signal: sig,
+	})
+	if err != nil {
+		return observation.Observation{}, false, fmt.Errorf("fppreconcile: list %s observations for instance %q: %w", sig, instanceUUID, err)
+	}
+	if len(obs) == 0 {
+		return observation.Observation{}, false, nil
+	}
+	return obs[0], true, nil
+}
+
+// fppMultisyncDisabledReadiness implements condition 14 (see
+// [PlaylistReadiness]'s own doc comment): ADR-051 decision 4's "Readiness
+// warns when the bound FPP instance has MultiSync disabled." It reads
+// [fppMultiSyncEnabledSignal], the same evidence [cueMultisyncTriggerReadiness]'s
+// sibling condition is paired with in the ADR, live off the coordinator's
+// own regular FPP poll — this never issues a request of its own and never
+// blocks a tick on one, matching that collector's own independent-request
+// cadence.
+//
+// Never a failure, and never asserted from missing or failed evidence: a
+// disabled instance still plays every Cue's audio correctly, only from the
+// coordinator's own fallback (decision 4) rather than a node's own
+// MultiSync START handling, and "no observation yet" or "the last poll
+// failed" must never be reported as if MultiSync were confirmed disabled.
+func fppMultisyncDisabledReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+	obs, ok, err := latestFPPObservation(ctx, st, p.FPP.InstanceUUID, fppMultiSyncEnabledSignal)
+	if err != nil {
+		return "", err
+	}
+	if !ok || obs.Absence != "" {
+		return "", nil
+	}
+	enabled, ok := obs.Value.(bool)
+	if !ok || enabled {
+		return "", nil
+	}
+	return fmt.Sprintf(
+		"FPP instance %q reports MultiSync turned off; every cue's audio will start from the coordinator's fallback, never a node's own MultiSync handling",
+		p.FPP.InstanceUUID), nil
+}
+
+// audioNodeNotMultisyncRemoteReadiness implements condition 15 (see
+// [PlaylistReadiness]'s own doc comment): ADR-051 decision 4's "Readiness
+// warns when... a target audio node is missing from [the bound FPP
+// instance's] MultiSync systems list." It reads
+// [fppMultiSyncSystemHostnamesSignal] — every hostname the bound instance's
+// own /api/fppd/multiSyncSystems response currently lists — and compares it
+// directly against each node this Playlist's Cues resolve an audio output
+// to: a ShowMesh audio node's own hostname, as FPP sees it, is always that
+// node's own node ID verbatim (internal/agent/multisync.go's
+// discoverResponse, pinned by RES-003/ADR-044), so no separate identity
+// mapping is needed here.
+//
+// Skipped entirely when p.Show is not the currently active show, matching
+// [cueMultisyncTriggerReadiness]'s identical reasoning, and never asserted
+// from missing or failed systems-list evidence — "no poll has succeeded
+// yet" must never read as "confirmed this node is not a remote." Every
+// declared node is checked, in id order, and the first Cue with an audio
+// output whose node is missing is named, matching this file's other
+// deterministic fleet-wide conditions.
+func audioNodeNotMultisyncRemoteReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
+	}
+	if !active.Configured || active.ShowID != p.Show {
+		return "", nil
+	}
+
+	obs, ok, err := latestFPPObservation(ctx, st, p.FPP.InstanceUUID, fppMultiSyncSystemHostnamesSignal)
+	if err != nil {
+		return "", err
+	}
+	if !ok || obs.Absence != "" {
+		return "", nil
+	}
+	hostnameList, ok := obs.Value.(string)
+	if !ok {
+		return "", nil
+	}
+	remotes := make(map[string]bool)
+	for _, h := range strings.Split(hostnameList, "; ") {
+		if h != "" {
+			remotes[h] = true
+		}
+	}
+
+	nodes, err := st.ListNodeDeclarations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			return "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		if remotes[n.NodeID] {
+			continue
+		}
+		for _, e := range catalog.Entries {
+			if e.Outputs.Audio != nil {
+				return fmt.Sprintf(
+					"cue %q targets node %q, which FPP instance %q does not list as a MultiSync remote; its audio will start from the coordinator's fallback",
+					e.CueID, n.NodeID, p.FPP.InstanceUUID), nil
+			}
+		}
+	}
+	return "", nil
 }

@@ -15,6 +15,7 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // This file proves this seam's own fix: dispatchOneCueActivation must
@@ -411,6 +412,376 @@ func dispatchedActionsToSession(setup *audioDispatchTestSetup, sessionID string)
 		}
 	}
 	return out
+}
+
+// putAudioSettingsWithFallbackWindowForTest writes audio.settings with
+// MultisyncFallbackWindowMs set to windowMs, every other field the shipped
+// default, so a fallback-timer test controls exactly how long
+// [handlers.waitForMultiSyncStart] can block without paying the shipped
+// 1.5s default on every run.
+func putAudioSettingsWithFallbackWindowForTest(t *testing.T, st *store.Store, windowMs int) {
+	t.Helper()
+	payload := config.AudioSettingsDefaultPayload
+	payload.MultisyncFallbackWindowMs = windowMs
+	raw, err := config.EncodeAudioSettingsPayload(payload)
+	if err != nil {
+		t.Fatalf("encode audio.settings payload: %v", err)
+	}
+	putConfigForTest(t, st, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, raw)
+}
+
+// sessionStartTriggerObservation builds one audio_session.start.* signal
+// observation, mirroring nightaudioreadiness_test.go's
+// nodeAudioEngineStateObservation one resource kind over.
+func sessionStartTriggerObservation(sig observation.SignalID, value any, observedAt time.Time) observation.Observation {
+	return observation.Observation{
+		Resource:   observation.ResourceRef{Kind: observation.ResourceAudioSession, ID: cueactivation.AudioSessionID},
+		Signal:     sig,
+		Value:      value,
+		ObservedAt: &observedAt,
+	}
+}
+
+// TestDispatchOneCueActivationRecordsAlignedByMultiSyncWithinWindow proves
+// ADR-051 decision 4's own aligned case: when nodeID's own audio session
+// observations already show a MultiSync start for this activation before
+// the fallback window elapses, cue.activate is still dispatched (so the
+// node confirms and records it), carries no unalignedReason, and the
+// returned outcome reports StartTrigger "multisync" with the reported
+// arrival, lead, and trigger filename.
+func TestDispatchOneCueActivationRecordsAlignedByMultiSyncWithinWindow(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+	putAudioSettingsWithFallbackWindowForTest(t, setup.st, 500)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	audio := &fakeNodeAudioLister{}
+	audio.setObservations(nodeID, []observation.Observation{
+		sessionStartTriggerObservation(audioSessionStartTriggerSignal, "multisync", now),
+		sessionStartTriggerObservation(audioSessionTriggerSequenceFilenameSignal, "wake-up.fseq", now),
+		sessionStartTriggerObservation(audioSessionTriggerArrivalNsSignal, int64(1_700_000_000_000_000_000), now),
+		sessionStartTriggerObservation(audioSessionStartLeadMsSignal, int64(100), now),
+		sessionStartTriggerObservation(audioSessionPreparedLateSignal, false, now),
+	})
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	deps.Audio = audio
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if !outcome.Confirmed {
+		t.Fatalf("outcome = %+v, want confirmed", outcome)
+	}
+	if outcome.StartTrigger != "multisync" {
+		t.Errorf("StartTrigger = %q, want %q", outcome.StartTrigger, "multisync")
+	}
+	if outcome.TriggerSequenceFilename != "wake-up.fseq" {
+		t.Errorf("TriggerSequenceFilename = %q, want %q", outcome.TriggerSequenceFilename, "wake-up.fseq")
+	}
+	if outcome.TriggerArrivalNs != 1_700_000_000_000_000_000 {
+		t.Errorf("TriggerArrivalNs = %d, want %d", outcome.TriggerArrivalNs, int64(1_700_000_000_000_000_000))
+	}
+	if outcome.StartLeadMs != 100 {
+		t.Errorf("StartLeadMs = %d, want 100", outcome.StartLeadMs)
+	}
+
+	dispatched := setup.pub.dispatchedSnapshot()
+	if len(dispatched) != 1 || dispatched[0].Action != "cue.activate" {
+		t.Fatalf("dispatched = %+v, want exactly one cue.activate", dispatched)
+	}
+	if _, present := dispatched[0].Params["unalignedReason"]; present {
+		t.Errorf("cue.activate params carried unalignedReason, want none: a MultiSync-triggered start is aligned")
+	}
+}
+
+// TestDispatchOneCueActivationFallsBackAfterMultiSyncWindowElapses proves
+// ADR-051 decision 4's own fallback case: when no MultiSync evidence
+// appears before the configured window elapses, cue.activate is
+// dispatched with no scheduled instant, carries unalignedReason naming
+// the fallback, and the outcome reports StartTrigger "coordinator".
+func TestDispatchOneCueActivationFallsBackAfterMultiSyncWindowElapses(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+	putAudioSettingsWithFallbackWindowForTest(t, setup.st, 20)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	deps.Audio = &fakeNodeAudioLister{}
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer, nil)
+	if !outcome.Confirmed {
+		t.Fatalf("outcome = %+v, want confirmed", outcome)
+	}
+	if outcome.StartTrigger != "coordinator" {
+		t.Errorf("StartTrigger = %q, want %q", outcome.StartTrigger, "coordinator")
+	}
+
+	dispatched := setup.pub.dispatchedSnapshot()
+	if len(dispatched) != 1 || dispatched[0].Action != "cue.activate" {
+		t.Fatalf("dispatched = %+v, want exactly one cue.activate", dispatched)
+	}
+	reason, _ := dispatched[0].Params["unalignedReason"].(string)
+	if reason != "no MultiSync START packet arrived within the fallback window" {
+		t.Errorf("cue.activate params unalignedReason = %q, want the fallback reason", reason)
+	}
+	if _, present := dispatched[0].Params["scheduledAtNs"]; present {
+		t.Errorf("cue.activate params carried scheduledAtNs, want none: the fallback starts on arrival")
+	}
+}
+
+// TestDispatchArmCurrentAudioArmsCurrentCue proves ADR-051 decision 3's own
+// arming step: at cue-1's own activation, its audio is applied and prepared
+// directly onto [cueactivation.AudioSessionID] — the playing show session,
+// never a staging one — ahead of the real cue.activate dispatch.
+func TestDispatchArmCurrentAudioArmsCurrentCue(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchArmCurrentAudio(context.Background(), now, nodeID, act, issuer, nil)
+
+	armed := dispatchedActionsToSession(setup, cueactivation.AudioSessionID)
+	if len(armed) != 2 {
+		t.Fatalf("dispatched %d commands against the show session, want 2 (apply, prepare); got %+v", len(armed), armed)
+	}
+	if armed[0].Action != "audio.session.apply" {
+		t.Fatalf("first arm dispatch action = %q, want audio.session.apply", armed[0].Action)
+	}
+	media, ok := armed[0].Params["media"].(map[string]any)
+	if !ok {
+		t.Fatalf("audio.session.apply params carried no media object: %+v", armed[0].Params)
+	}
+	if got := media["assetId"]; got != "asset-cue-1" {
+		t.Fatalf("armed media assetId = %v, want %q", got, "asset-cue-1")
+	}
+	if got := media["contentHash"]; got != "sha256:authorized-cue-1" {
+		t.Fatalf("armed media contentHash = %v, want cue-1's own authorized asset hash", got)
+	}
+	if armed[1].Action != "audio.session.prepare" {
+		t.Fatalf("second arm dispatch action = %q, want audio.session.prepare", armed[1].Action)
+	}
+}
+
+// TestDispatchArmCurrentAudioRepeatTickReplaysIdempotently mirrors
+// TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently one cue over:
+// a second tick over the SAME unchanged act must answer from the replay
+// path, never publish again, even when called with a later wall-clock now.
+func TestDispatchArmCurrentAudioRepeatTickReplaysIdempotently(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	var logBuf bytes.Buffer
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchArmCurrentAudio(context.Background(), now, nodeID, act, issuer, nil)
+	firstTick := dispatchedActionsToSession(setup, cueactivation.AudioSessionID)
+	if len(firstTick) != 2 {
+		t.Fatalf("first tick dispatched %d commands against the show session, want 2 (apply, prepare); got %+v", len(firstTick), firstTick)
+	}
+
+	secondNow := now.Add(30 * time.Second)
+	h.dispatchArmCurrentAudio(context.Background(), secondNow, nodeID, act, issuer, nil)
+
+	secondTick := dispatchedActionsToSession(setup, cueactivation.AudioSessionID)
+	if len(secondTick) != len(firstTick) {
+		t.Fatalf("second tick over an unchanged act published %d commands beyond the first tick's %d; want no new publish (replay path)", len(secondTick)-len(firstTick), len(firstTick))
+	}
+	for i, d := range secondTick {
+		if !reflect.DeepEqual(d, firstTick[i]) {
+			t.Fatalf("second tick's replayed command %d = %+v, want byte-identical to the first tick's %+v", i, d, firstTick[i])
+		}
+	}
+	if logged := logBuf.String(); strings.Contains(logged, "refused") || strings.Contains(logged, "failed") {
+		t.Fatalf("second tick logged a refusal or failure, want a silent replay: %s", logged)
+	}
+}
+
+// TestDispatchArmCurrentAudioSkipsWhenAssetMissing is the regression this
+// function's own [cueactivate.Authorize] call exists to prevent: a Cue
+// whose real activation would be refused (no asset present on this node)
+// must never still have its media applied and prepared on the wire —
+// [cueActivationDispatchTestFixture] names a sequence nothing ever
+// uploads, so Authorize refuses it, exactly as dispatchOneCueActivation's
+// own independent call moments later would.
+func TestDispatchArmCurrentAudioSkipsWhenAssetMissing(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchArmCurrentAudio(context.Background(), now, nodeID, act, issuer, nil)
+
+	if got := setup.pub.count(); got != 0 {
+		t.Fatalf("dispatched %d command(s) for a Cue whose asset is missing, want 0", got)
+	}
+}
+
+// twoNodeCueActivationDispatchTestFixture builds one audio-only Cue whose
+// outputs.audio.targets names two nodes explicitly, both with a real
+// node-inventoried asset, and returns the [cueactivation.Activation] every
+// [dispatchCueActivationsConcurrently] caller keys by node ID —
+// [TestDispatchCueActivationsNeverProbesTheScheduleAndArmsBothNodes]'s own
+// fixture for ADR-051 decision 4's "the probe round... leaves the Cue
+// path" and decision 3's "the current entry's cue... arm[s]... on every
+// target node."
+func twoNodeCueActivationDispatchTestFixture(t *testing.T, setup *audioDispatchTestSetup, now time.Time) (nodeIDs []string, activations map[string]cueactivation.Activation) {
+	t.Helper()
+	const showID, cueID, playlistID, instanceUUID = "halloween-2026", "cue-1", "playlist-1", "inst-1"
+	node1, node2 := "audio-01", "audio-02"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putAudioNodeForTest(t, setup.st, node1)
+	putAudioNodeForTest(t, setup.st, node2)
+	declareNodeForTest(t, setup.st, node1)
+	declareNodeForTest(t, setup.st, node2)
+	putFreshReportForTest(t, setup.st, node1, now)
+	putFreshReportForTest(t, setup.st, node2, now)
+
+	payload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: showID, Name: cueID,
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-" + cueID, Targets: []string{node1, node2}}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, cueID, payload)
+
+	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: cueID,
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	})
+	putActiveShowForTest(t, setup.st, showID)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, cueID, node1, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, showID, cueID, node2, now)
+
+	nodeIDs = []string{node1, node2}
+	activations = make(map[string]cueactivation.Activation, 2)
+	for _, nodeID := range nodeIDs {
+		// ActivationID is per-node, mirroring cueactivate.Decide's own
+		// activationID (it folds nodeID in): the commands table's
+		// idempotency_key is globally unique, so two nodes sharing one
+		// literal ActivationID would collide and the second node's own
+		// dispatch would be silently treated as a replay of the first's.
+		activations[nodeID] = cueactivation.Activation{
+			Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-two-node-1-" + nodeID,
+			Show: showID, Generation: 1, CatalogRevision: resolvedCatalogRevisionForTest(t, setup.st, showID, nodeID),
+			Playlist: playlistID, PlaylistRevision: 1, EntryID: "entry-1",
+			CueID: cueID, CueRevision: 1, PositionMS: 0,
+			EvidenceAt: now,
+		}
+	}
+	return nodeIDs, activations
+}
+
+// TestDispatchCueActivationsNeverProbesTheScheduleAndArmsBothNodes proves
+// ADR-051 decisions 3 and 4 together, through the automatic FPP-driven
+// path's own dispatchCueActivations: a two-node Cue's activation records
+// no [cueactivation.ScheduleProbeSessionID] command at all (decision 4's
+// "the probe round... leaves the Cue path") and arms BOTH nodes' own
+// [cueactivation.AudioSessionID] with apply+prepare (decision 3's "on
+// every target node") before cue.activate confirms on each.
+func TestDispatchCueActivationsNeverProbesTheScheduleAndArmsBothNodes(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeIDs, activations := twoNodeCueActivationDispatchTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcomes := h.dispatchCueActivations(context.Background(), now, activations, issuer, nil)
+	if len(outcomes) != 2 {
+		t.Fatalf("dispatchCueActivations returned %d outcomes, want 2", len(outcomes))
+	}
+	for _, o := range outcomes {
+		if !o.Dispatched || !o.Confirmed {
+			t.Fatalf("node %q outcome = %+v, want dispatched and confirmed", o.NodeID, o)
+		}
+	}
+
+	if probed := dispatchedActionsToSession(setup, cueactivation.ScheduleProbeSessionID); len(probed) != 0 {
+		t.Fatalf("dispatched %d command(s) against the schedule-probe session, want 0: the probe round must never run on the automatic activation path (%+v)", len(probed), probed)
+	}
+
+	for _, nodeID := range nodeIDs {
+		armed := 0
+		setup.pub.mu.Lock()
+		for _, d := range setup.pub.dispatched {
+			if d.NodeID == nodeID {
+				if s, _ := d.Params["sessionId"].(string); s == cueactivation.AudioSessionID {
+					if d.Action == "audio.session.apply" || d.Action == "audio.session.prepare" {
+						armed++
+					}
+				}
+			}
+		}
+		setup.pub.mu.Unlock()
+		if armed != 2 {
+			t.Fatalf("node %q: %d apply/prepare commands dispatched against the show session, want 2 (arm-ahead)", nodeID, armed)
+		}
+	}
+}
+
+// TestDispatchCueActivationsReplaysArmingOnRepeatTick proves the repeat-
+// tick half of the same requirement: calling dispatchCueActivations again
+// over the identical, unchanged activations map must not re-arm either
+// node — every arm-ahead and cue.activate dispatch answers from the
+// replay path.
+func TestDispatchCueActivationsReplaysArmingOnRepeatTick(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	_, activations := twoNodeCueActivationDispatchTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchCueActivations(context.Background(), now, activations, issuer, nil)
+	firstCount := setup.pub.count()
+
+	h.dispatchCueActivations(context.Background(), now.Add(30*time.Second), activations, issuer, nil)
+	secondCount := setup.pub.count()
+
+	if secondCount != firstCount {
+		t.Fatalf("repeat tick over an unchanged activations map published %d command(s) beyond the first tick's %d; want no new publish (replay path)", secondCount-firstCount, firstCount)
+	}
 }
 
 // TestDispatchPrepareAheadAudioStagesNextCue proves the coordinator's own
