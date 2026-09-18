@@ -161,13 +161,19 @@ const (
 	StateEvidenceBroken State = "evidence-broken"
 )
 
+// Held is what [Decide] most recently activated for one FPP instance,
+// carried across ticks by the caller in memory, never persisted (owner
+// ruling 2026-09-18, follow-the-player). Used to populate
+// [Decision.FollowStop] when a later tick resolves nothing to replace it.
+type Held map[string]cueactivation.Activation
+
 // Decision is [Decide]'s result: the state it reached, human-readable
 // evidence, and — for StateActivated, or a safeCue-effect StateMismatched
 // — the per-node activations a caller must still run through [Authorize]
-// before dispatching. Never both a non-empty Activations/ClearNodes AND a
-// mismatched-hold state: only exactly one of "these activations, once
-// authorized", "clear these nodes", or "dispatch nothing" is ever
-// populated.
+// before dispatching. Never both a non-empty Activations AND ClearNodes:
+// only one of "these activations, once authorized", "clear these nodes",
+// or "dispatch nothing" is ever populated. FollowStop is independent of
+// all three — see its own doc comment.
 type Decision struct {
 	State  State
 	Reason string
@@ -201,6 +207,14 @@ type Decision struct {
 	// fail-to-black path already uses; it must never be dispatched as a
 	// cue.activate the way Decision.Activations is.
 	EvidenceBroken map[string]cueactivation.Activation
+
+	// FollowStop is nodeID -> the Activation held named, populated only
+	// when this tick's own State leaves nothing addressing that Cue: no
+	// Activations, no ClearNodes (owner ruling 2026-09-18,
+	// follow-the-player). A caller must dispatch it through the identical
+	// cue-scoped stop EvidenceBroken already uses, never the bed or the
+	// staging session.
+	FollowStop map[string]cueactivation.Activation
 }
 
 // Decide resolves result (fppreconcile's own answer for obs) into a
@@ -212,8 +226,11 @@ type Decision struct {
 // RunnerInstance] carries; it is obs.InstanceUUID for every caller today,
 // threaded explicitly rather than read off obs a second time so a future
 // non-FPP caller of the same decision shape is not forced through an
-// FPP-shaped observation.
-func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin) (Decision, error) {
+// FPP-shaped observation. held is the caller's own record of what it last
+// activated for this instance, see [Held]'s own doc comment; it is never
+// consulted on the [StateEvidenceBroken] path, which already reconstructs
+// what to undo from the stale stored observation itself.
+func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, obs store.FPPPlaylistEntryObservationRecord, runnerInstance string, pin *ShowPin, held Held) (Decision, error) {
 	// Checked first, unconditionally, before any routing on result.Outcome:
 	// StateEvidenceBroken's own doc comment for why a broken marker
 	// outranks whatever Reconcile computed from this same, now-possibly-
@@ -224,9 +241,9 @@ func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, ob
 
 	switch result.Outcome {
 	case fppreconcile.OutcomeIdentityUnavailable:
-		return Decision{State: StateIdentityUnavailable, Reason: result.Reason}, nil
+		return withFollowStop(Decision{State: StateIdentityUnavailable, Reason: result.Reason}, held), nil
 	case fppreconcile.OutcomeUnbound:
-		return Decision{State: StateUnbound, Reason: result.Reason}, nil
+		return withFollowStop(Decision{State: StateUnbound, Reason: result.Reason}, held), nil
 	}
 
 	// Every other outcome means fppreconcile located a binding somewhere
@@ -246,17 +263,38 @@ func Decide(ctx context.Context, st *store.Store, result fppreconcile.Result, ob
 		return Decision{}, fmt.Errorf("cueactivate: resolve active-show fpp binding: %w", err)
 	}
 	if !found {
-		return Decision{
+		return withFollowStop(Decision{
 			State:  StateUnbound,
 			Reason: "no fpp-runner show.playlist in the active show names this instance: there is nothing to hold",
-		}, nil
+		}, held), nil
 	}
 
 	if result.Outcome != fppreconcile.OutcomeResolved {
-		return decideMismatch(ctx, st, active, binding, result, obs, runnerInstance, pin)
+		dec, err := decideMismatch(ctx, st, active, binding, result, obs, runnerInstance, pin)
+		if err != nil {
+			return Decision{}, err
+		}
+		return withFollowStop(dec, held), nil
 	}
 
-	return decideResolved(ctx, st, active, result, obs, runnerInstance, pin)
+	dec, err := decideResolved(ctx, st, active, result, obs, runnerInstance, pin)
+	if err != nil {
+		return Decision{}, err
+	}
+	return withFollowStop(dec, held), nil
+}
+
+// withFollowStop populates dec.FollowStop from held when dec's own tick
+// left held's Cue unaddressed: no Activations (nothing superseded it on
+// the shared audio session) and no ClearNodes (blackAndSilence already
+// stops the identical session). See [Decision.FollowStop]'s own doc
+// comment.
+func withFollowStop(dec Decision, held Held) Decision {
+	if len(held) == 0 || len(dec.Activations) > 0 || len(dec.ClearNodes) > 0 {
+		return dec
+	}
+	dec.FollowStop = map[string]cueactivation.Activation(held)
+	return dec
 }
 
 // activeShowBinding is the ACTIVE show's own fpp-runner show.playlist bound

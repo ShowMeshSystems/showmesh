@@ -1315,6 +1315,137 @@ func TestPlaylistLoopChanged(t *testing.T) {
 	}
 }
 
+// --- signal 4: owner ruling 2026-09-18, follow-the-player ---
+
+// fppObservationBodyWithObservedAt is [fppObservationBodyWithAction] with
+// an explicit observedAtMillis, for exercising signal 4's own same-entry
+// restart detection, which compares this value against the one last
+// accepted.
+func fppObservationBodyWithObservedAt(t *testing.T, instanceUUID string, sequence int64, playlistName, section string, position int, action string, observedAtMillis int64) string {
+	t.Helper()
+	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{
+		InstanceUUID: instanceUUID, PlaylistName: playlistName, PlaylistHash: playlistHash64, Section: section, Position: position,
+	})
+	if err != nil {
+		t.Fatalf("derive entry key: %v", err)
+	}
+	m := map[string]any{
+		"schemaVersion":                      1,
+		"instanceUuid":                       instanceUUID,
+		"playlistName":                       playlistName,
+		"playlistHash":                       playlistHash64,
+		"section":                            section,
+		"position":                           position,
+		"entryKey":                           entryKey,
+		"action":                             action,
+		"sequence":                           sequence,
+		"observedAtMillis":                   observedAtMillis,
+		"coalescedSincePreviousAcknowledged": 0,
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal observation body: %v", err)
+	}
+	return string(raw)
+}
+
+// TestFPPObservationSameEntryRestartFromTopAdvancesOccurrence is signal 4's
+// own positive case: the SAME entry, no "start", no pass change, but this
+// observation's own reported time is behind the one last accepted by more
+// than entryOccurrenceRegressionThreshold — a player that went away and
+// came back on the identical entry with no other visible signal. Without
+// signal 4, this observation would carry the prior occurrence forward
+// unchanged and the Cue would never re-fire.
+func TestFPPObservationSameEntryRestartFromTopAdvancesOccurrence(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	first := fppObservationBodyWithObservedAt(t, "instance-1", 1, "showmesh-test", "main", 0, "playing", testNow.UnixMilli())
+	if resp, _ := mustPostObservation(t, api, first, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first post: status = %d, want 200", resp.StatusCode)
+	}
+	rec1, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after first: %v", err)
+	}
+
+	restarted := fppObservationBodyWithObservedAt(t, "instance-1", 2, "showmesh-test", "main", 0, "playing",
+		testNow.Add(-entryOccurrenceRegressionThreshold-time.Second).UnixMilli())
+	if resp, _ := mustPostObservation(t, api, restarted, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("restart post: status = %d, want 200", resp.StatusCode)
+	}
+	rec2, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after restart: %v", err)
+	}
+	if rec2.EntryKey != rec1.EntryKey {
+		t.Fatalf("test setup error: the second post's EntryKey (%s) differs from the first's (%s); this test proves nothing unless they match", rec2.EntryKey, rec1.EntryKey)
+	}
+	if rec2.EntryOccurrenceSequence == rec1.EntryOccurrenceSequence {
+		t.Fatalf("occurrence did not advance on a same-entry restart with observedAtMillis regressed past the threshold: stayed at %d", rec1.EntryOccurrenceSequence)
+	}
+	if rec2.EntryOccurrenceSequence != 2 {
+		t.Fatalf("occurrence after the restart = %d, want 2 (the restart tick's own wire sequence)", rec2.EntryOccurrenceSequence)
+	}
+}
+
+// TestFPPObservationUnreachableThenBackStillAdvancingDoesNotAdvanceOccurrence
+// is signal 4's own negative case: the SAME entry, reported after a long
+// gap, but this observation's own reported time is still AHEAD of the one
+// last accepted. Nothing here says playback ever stopped, so the prior
+// occurrence must carry forward unchanged — no restart, no stop.
+func TestFPPObservationUnreachableThenBackStillAdvancingDoesNotAdvanceOccurrence(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	first := fppObservationBodyWithObservedAt(t, "instance-1", 1, "showmesh-test", "main", 0, "playing", testNow.UnixMilli())
+	if resp, _ := mustPostObservation(t, api, first, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first post: status = %d, want 200", resp.StatusCode)
+	}
+	rec1, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after first: %v", err)
+	}
+
+	// A long gap in postings (the player was unreachable), but this
+	// observation's own reported time still advances past the last one
+	// accepted: playback never visibly stopped.
+	backAfterAGap := fppObservationBodyWithObservedAt(t, "instance-1", 2, "showmesh-test", "main", 0, "playing", testNow.Add(time.Hour).UnixMilli())
+	if resp, _ := mustPostObservation(t, api, backAfterAGap, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("back-after-a-gap post: status = %d, want 200", resp.StatusCode)
+	}
+	rec2, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after back-after-a-gap: %v", err)
+	}
+	if rec2.EntryOccurrenceSequence != rec1.EntryOccurrenceSequence {
+		t.Fatalf("occurrence advanced on a same-entry tick whose own reported time still advanced: %d -> %d", rec1.EntryOccurrenceSequence, rec2.EntryOccurrenceSequence)
+	}
+}
+
+func TestObservedAtRegressed(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		incoming, stored time.Time
+		want             bool
+	}{
+		{"identical is not a regression", testNow, testNow, false},
+		{"forward, however far, is not a regression", testNow.Add(time.Hour), testNow, false},
+		{"just under the threshold is not a regression", testNow.Add(-entryOccurrenceRegressionThreshold + time.Millisecond), testNow, false},
+		{"just past the threshold is a regression", testNow.Add(-entryOccurrenceRegressionThreshold - time.Millisecond), testNow, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := observedAtRegressed(tc.incoming, tc.stored); got != tc.want {
+				t.Fatalf("observedAtRegressed(%v, %v) = %v, want %v", tc.incoming, tc.stored, got, tc.want)
+			}
+		})
+	}
+}
+
 // fppObservationBodyWithExtraMembers is [fppObservationBody] with extra
 // top-level members spliced in, standing in for a plugin newer than the
 // coordinator it is posting to.

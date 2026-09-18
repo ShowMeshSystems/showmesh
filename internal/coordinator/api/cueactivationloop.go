@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -92,6 +94,12 @@ type CueActivationLoop struct {
 	pinMu    sync.Mutex
 	pin      *cueactivate.ShowPin
 	pinnedAt time.Time
+
+	// held is [cueHeldTracker]'s own instance, this loop's per-instance
+	// record of what it last activated (owner ruling 2026-09-18,
+	// follow-the-player). Loop-lifetime, never persisted, same reasoning
+	// as pin above.
+	held cueHeldTracker
 }
 
 // PinStatus implements [CueActivationPinStatus] for GET
@@ -221,7 +229,7 @@ func (l *CueActivationLoop) runTick(ctx context.Context) {
 				l.logger.Warn("cue activation loop: resolve show-mode pin failed; falling back to live resolution this tick", "error", err)
 				pin = nil
 			}
-			l.h.cueActivationTick(ctx, l.h.now(), pin)
+			l.h.cueActivationTick(ctx, l.h.now(), pin, &l.held)
 		}()
 	default:
 		// Previous tick still running; skip this one — the next tick
@@ -281,7 +289,7 @@ func (l *CueActivationLoop) resolvePin(ctx context.Context) (*cueactivate.ShowPi
 
 // cueActivationTick resolves and dispatches an activation for every FPP
 // instance this coordinator has an accepted observation from.
-func (h *handlers) cueActivationTick(ctx context.Context, now time.Time, pin *cueactivate.ShowPin) {
+func (h *handlers) cueActivationTick(ctx context.Context, now time.Time, pin *cueactivate.ShowPin, held *cueHeldTracker) {
 	if h.deps.FPPReconciliation == nil || h.deps.FPPObservations == nil {
 		return
 	}
@@ -291,11 +299,11 @@ func (h *handlers) cueActivationTick(ctx context.Context, now time.Time, pin *cu
 		return
 	}
 	for _, obs := range obsList {
-		h.cueActivationTickOne(ctx, now, obs, pin)
+		h.cueActivationTickOne(ctx, now, obs, pin, held)
 	}
 }
 
-func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs store.FPPPlaylistEntryObservationRecord, pin *cueactivate.ShowPin) {
+func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs store.FPPPlaylistEntryObservationRecord, pin *cueactivate.ShowPin, held *cueHeldTracker) {
 	result, err := h.deps.FPPReconciliation.ReconcileFPPPlaylistEntryObservation(ctx, obs)
 	if err != nil {
 		h.logWarn("cue activation loop: reconcile failed", "instanceUuid", obs.InstanceUUID, "error", err)
@@ -304,13 +312,32 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	if h.deps.AssetManifests == nil {
 		return
 	}
-	dec, err := cueactivate.Decide(ctx, h.deps.AssetManifests, result, obs, obs.InstanceUUID, pin)
+	dec, err := cueactivate.Decide(ctx, h.deps.AssetManifests, result, obs, obs.InstanceUUID, pin, held.get(obs.InstanceUUID))
 	if err != nil {
 		h.logWarn("cue activation loop: decide failed", "instanceUuid", obs.InstanceUUID, "error", err)
 		return
 	}
+	held.observe(obs.InstanceUUID, dec)
 
 	issuer := cueActivationIssuer{PrincipalID: cueActivationSystemPrincipalID(obs.InstanceUUID)}
+
+	if len(dec.FollowStop) > 0 {
+		targets, err := h.cueScopedFailToBlackTargetsFor(ctx, dec.FollowStop)
+		if err != nil {
+			h.logWarn("cue activation loop: resolve follow-stop fail-to-black targets failed", "instanceUuid", obs.InstanceUUID, "error", err)
+		} else if len(targets) > 0 {
+			// Detached, in its own goroutine, for the identical reason the
+			// evidence-broken dispatch below is: dispatchCueScopedBlackAndSilence
+			// awaits real per-node confirmation, and this method runs once
+			// per FPP instance from cueActivationTick's own sequential loop.
+			episode := followStopEpisode(obs.InstanceUUID, dec.FollowStop)
+			h.cueActivationFailToBlackWG.Add(1)
+			go func() {
+				defer h.cueActivationFailToBlackWG.Done()
+				h.dispatchCueScopedBlackAndSilence(ctx, now, targets, issuer, episode)
+			}()
+		}
+	}
 
 	switch dec.State {
 	case cueactivate.StateActivated, cueactivate.StateMismatched:
@@ -412,7 +439,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 		if len(dec.EvidenceBroken) == 0 {
 			return
 		}
-		targets, err := h.evidenceBrokenFailToBlackTargets(ctx, dec.EvidenceBroken)
+		targets, err := h.cueScopedFailToBlackTargetsFor(ctx, dec.EvidenceBroken)
 		if err != nil {
 			h.logWarn("cue activation loop: resolve evidence-broken fail-to-black targets failed", "instanceUuid", obs.InstanceUUID, "error", err)
 			return
@@ -476,22 +503,22 @@ func (h *handlers) clearCueActivationRefusalLog(instanceUUID, nodeID string) {
 	delete(h.cueActivationRefusalLog, key)
 }
 
-// evidenceBrokenFailToBlackTargets resolves evidenceBroken's own per-node
-// Activations (cueactivate.Decision.EvidenceBroken) into
+// cueScopedFailToBlackTargetsFor resolves a Decision's own per-node
+// Activations (cueactivate.Decision.EvidenceBroken or .FollowStop) into
 // cueScopedFailToBlackTarget{NodeID, Outputs} pairs, mirroring
 // dispatchPrepareAheadAudio's own reasoning for reusing act.Show/
 // act.Generation directly rather than re-resolving the active show live a
 // second time: cueactivate.Decide already resolved them, live, at decide
 // time. A node whose Cue no longer resolves in that catalog — the active
-// show changed, or the Cue itself was deleted, between when the now-broken
-// evidence was last resolved and this tick — is skipped: there is nothing
-// left to scope a stop to for that node.
-func (h *handlers) evidenceBrokenFailToBlackTargets(ctx context.Context, evidenceBroken map[string]cueactivation.Activation) ([]cueScopedFailToBlackTarget, error) {
-	if h.deps.AssetManifests == nil || len(evidenceBroken) == 0 {
+// show changed, or the Cue itself was deleted, between when that Activation
+// was resolved and this tick — is skipped: there is nothing left to scope
+// a stop to for that node.
+func (h *handlers) cueScopedFailToBlackTargetsFor(ctx context.Context, activations map[string]cueactivation.Activation) ([]cueScopedFailToBlackTarget, error) {
+	if h.deps.AssetManifests == nil || len(activations) == 0 {
 		return nil, nil
 	}
 	var out []cueScopedFailToBlackTarget
-	for nodeID, act := range evidenceBroken {
+	for nodeID, act := range activations {
 		active := assetsync.ActiveShow{Configured: true, ShowID: act.Show, Generation: act.Generation}
 		catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)
 		if err != nil {
@@ -522,6 +549,64 @@ func evidenceBrokenEpisode(obs store.FPPPlaylistEntryObservationRecord) string {
 		brokenAt = obs.EvidenceBrokenAt.UTC().Format(time.RFC3339Nano)
 	}
 	return obs.InstanceUUID + "-" + brokenAt
+}
+
+// cueHeldTracker is CueActivationLoop's own in-memory record of what
+// [cueactivate.Decide] most recently activated for each FPP instance, fed
+// back as that instance's own [cueactivate.Held] on the next tick (owner
+// ruling 2026-09-18, follow-the-player). Mirrors *cueactivate.ShowPin:
+// per-process, never persisted, since a coordinator restart has nothing
+// durable to trust was still playing anyway. The zero value is ready to
+// use.
+type cueHeldTracker struct {
+	mu   sync.Mutex
+	held map[string]cueactivate.Held
+}
+
+func (t *cueHeldTracker) get(instanceUUID string) cueactivate.Held {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.held[instanceUUID]
+}
+
+// observe updates instanceUUID's own held Cue from dec: replaced by
+// dec.Activations whenever it is non-empty (something new now supersedes
+// whatever was held), dropped once dec.ClearNodes or
+// [cueactivate.StateEvidenceBroken] has already stopped it, and otherwise
+// left unchanged, so a repeat tick of the same unresolved divergence keeps
+// asserting the identical FollowStop rather than forgetting it.
+func (t *cueHeldTracker) observe(instanceUUID string, dec cueactivate.Decision) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch {
+	case len(dec.Activations) > 0:
+		if t.held == nil {
+			t.held = make(map[string]cueactivate.Held)
+		}
+		t.held[instanceUUID] = cueactivate.Held(dec.Activations)
+	case len(dec.ClearNodes) > 0, dec.State == cueactivate.StateEvidenceBroken:
+		delete(t.held, instanceUUID)
+	}
+}
+
+// followStopEpisode is [Decision.FollowStop]'s own idempotency-key
+// dimension, mirroring evidenceBrokenEpisode's identical role: derived
+// from followStop's own held ActivationIDs, so it stays stable across
+// repeat ticks of the same unresolved divergence and changes the moment a
+// different Cue is held.
+func followStopEpisode(instanceUUID string, followStop map[string]cueactivation.Activation) string {
+	nodeIDs := make([]string, 0, len(followStop))
+	for nodeID := range followStop {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	sort.Strings(nodeIDs)
+	var b strings.Builder
+	b.WriteString(instanceUUID)
+	for _, nodeID := range nodeIDs {
+		b.WriteString("-")
+		b.WriteString(followStop[nodeID].ActivationID)
+	}
+	return b.String()
 }
 
 // cueScopedFailToBlackTarget is one node this tick must fail to black,
