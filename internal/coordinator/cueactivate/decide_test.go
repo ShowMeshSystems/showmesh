@@ -11,6 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
@@ -227,7 +228,7 @@ func TestDecideResolvedActivationCarriesEveryPinnedIdentity(t *testing.T) {
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestAuthorizeCrossShowRefusesDispatchingNothing(t *testing.T) {
 
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
 	obs := baseObservation("inst-1")
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -327,7 +328,7 @@ func TestAuthorizeStaleGenerationRefused(t *testing.T) {
 
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
 	obs := baseObservation("inst-1")
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -369,7 +370,7 @@ func TestDecideMismatchHoldDispatchesNothing(t *testing.T) {
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -402,7 +403,7 @@ func TestDecideMismatchBlackAndSilenceClearsParticipatingNodes(t *testing.T) {
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -436,7 +437,7 @@ func TestDecideMismatchSafeCueActivatesTheSafeCue(t *testing.T) {
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -458,6 +459,178 @@ func TestDecideMismatchSafeCueActivatesTheSafeCue(t *testing.T) {
 	}
 }
 
+// --- FollowStop: owner ruling 2026-09-18, follow-the-player ---
+
+// heldFor builds a [Held] naming cueID as node's own last-known live cue,
+// the shape a prior tick's own StateActivated Decision would have left.
+func heldFor(node, cueID string) Held {
+	return Held{node: cueactivation.Activation{
+		Runner: "fpp", RunnerInstance: "inst-1", ActivationID: "cueact-old",
+		Show: "show-1", Generation: 1, CueID: cueID, CueRevision: 1,
+	}}
+}
+
+// TestDecideFollowStopFiresWhenMismatchHoldLeavesHeldCueUnaddressed is
+// requirement 1: the rehearsal-rig gap. A restarted player reports a
+// playlist this instance's own binding no longer matches; the hold policy
+// dispatches nothing of its own, and held names the Cue that observation
+// left running, so Decide must add it to FollowStop.
+func TestDecideFollowStopFiresWhenMismatchHoldLeavesHeldCueUnaddressed(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := fppreconcile.Result{
+		Outcome: fppreconcile.OutcomeStaleImport, Reason: "the observed playlistHash differs from the bound playlistHash",
+		PlaylistID: "playlist-1", PlaylistRevision: 1, Show: "show-1",
+	}
+	obs := baseObservation("inst-1")
+	held := heldFor("node-1", "cue-1")
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, held)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateMismatched {
+		t.Fatalf("State = %q, want %q", dec.State, StateMismatched)
+	}
+	if len(dec.Activations) != 0 || len(dec.ClearNodes) != 0 {
+		t.Fatalf("hold dispatched something: Activations=%v ClearNodes=%v", dec.Activations, dec.ClearNodes)
+	}
+	act, ok := dec.FollowStop["node-1"]
+	if !ok {
+		t.Fatalf("FollowStop built nothing for node-1: %v", dec.FollowStop)
+	}
+	if act.CueID != "cue-1" {
+		t.Fatalf("FollowStop CueID = %q, want cue-1 (the held Cue this tick left unaddressed)", act.CueID)
+	}
+}
+
+// TestDecideFollowStopAbsentWhenNothingIsHeld proves FollowStop never
+// fires from nothing: a bare hold-policy mismatch with no prior held Cue
+// (the first tick ever seen for this instance, or one already followed
+// and cleared) dispatches nothing, exactly as before this seam existed.
+func TestDecideFollowStopAbsentWhenNothingIsHeld(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := fppreconcile.Result{
+		Outcome: fppreconcile.OutcomeStaleImport, Reason: "the observed playlistHash differs from the bound playlistHash",
+		PlaylistID: "playlist-1", PlaylistRevision: 1, Show: "show-1",
+	}
+	obs := baseObservation("inst-1")
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if len(dec.FollowStop) != 0 {
+		t.Fatalf("FollowStop = %v, want empty: nothing was held", dec.FollowStop)
+	}
+}
+
+// TestDecideFollowStopAbsentOnBlackAndSilenceAlreadyStopsIt proves
+// FollowStop never duplicates blackAndSilence's own stop: that policy
+// already clears [cueactivation.AudioSessionID] on every participating
+// node (blackAndSilenceAudioSessionIDs, internal/coordinator/api), so
+// Decide must leave FollowStop empty even with a Cue held.
+func TestDecideFollowStopAbsentOnBlackAndSilenceAlreadyStopsIt(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyBlackAndSilence, ""))
+
+	result := fppreconcile.Result{
+		Outcome: fppreconcile.OutcomeCrossShow, Reason: "the bound playlist's show is not the currently active show",
+		PlaylistID: "playlist-other", PlaylistRevision: 1, Show: "show-other",
+	}
+	obs := baseObservation("inst-1")
+	held := heldFor("node-1", "cue-1")
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, held)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if len(dec.FollowStop) != 0 {
+		t.Fatalf("FollowStop = %v, want empty: blackAndSilence's own ClearNodes already stops it", dec.FollowStop)
+	}
+}
+
+// TestDecideFollowStopAbsentOnNormalAdvanceToADifferentCue is requirement
+// 3: a normal advance to the next Cue must behave exactly as today. The
+// new Cue's own activation shares the identical audio session id with
+// whatever was held, so it already supersedes it; Decide must not also
+// populate FollowStop for the Cue that held.
+func TestDecideFollowStopAbsentOnNormalAdvanceToADifferentCue(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putLTCCue(t, st, "cue-2", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	putFreshReport(t, st, "node-1", now)
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-2", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-2", 1)
+	obs := baseObservation("inst-1")
+	held := heldFor("node-1", "cue-1")
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, held)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateActivated {
+		t.Fatalf("State = %q, want %q", dec.State, StateActivated)
+	}
+	if act, ok := dec.Activations["node-1"]; !ok || act.CueID != "cue-2" {
+		t.Fatalf("Activations = %v, want a cue-2 activation for node-1", dec.Activations)
+	}
+	if len(dec.FollowStop) != 0 {
+		t.Fatalf("FollowStop = %v, want empty: the normal activation path already supersedes the held Cue", dec.FollowStop)
+	}
+}
+
+// TestDecideFollowStopAbsentWhenTheHeldCueIsStillResolved is the negative
+// case for player-unreachable-then-back: an ordinary continuing tick for
+// the SAME held Cue (no restart, elapsed still advancing) must not stop
+// anything.
+func TestDecideFollowStopAbsentWhenTheHeldCueIsStillResolved(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	putFreshReport(t, st, "node-1", now)
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
+	obs := baseObservation("inst-1")
+	held := heldFor("node-1", "cue-1")
+
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, held)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if dec.State != StateActivated {
+		t.Fatalf("State = %q, want %q", dec.State, StateActivated)
+	}
+	if len(dec.FollowStop) != 0 {
+		t.Fatalf("FollowStop = %v, want empty: the held Cue is still what this tick resolves", dec.FollowStop)
+	}
+}
+
 // --- unbound ---
 
 func TestDecideUnboundWhenFppreconcileFoundNoBindingAnywhere(t *testing.T) {
@@ -468,7 +641,7 @@ func TestDecideUnboundWhenFppreconcileFoundNoBindingAnywhere(t *testing.T) {
 	result := fppreconcile.Result{Outcome: fppreconcile.OutcomeUnbound, Reason: "no ShowMesh output was ever authorized by this instance"}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -498,7 +671,7 @@ func TestDecideUnboundWhenActiveShowHasNoOwnBindingForThisInstance(t *testing.T)
 	}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -514,7 +687,7 @@ func TestDecideIdentityUnavailable(t *testing.T) {
 	result := fppreconcile.Result{Outcome: fppreconcile.OutcomeIdentityUnavailable, Reason: "FPP could not establish identity"}
 	obs := baseObservation("inst-1")
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -545,11 +718,11 @@ func TestActivationIDStableAcrossRepeatedDecideForTheSameEntry(t *testing.T) {
 	obs2 := baseObservation("inst-1")
 	obs2.Sequence, obs2.Position = 2, 5000
 
-	dec1, err := Decide(context.Background(), st, result, obs1, "inst-1", nil)
+	dec1, err := Decide(context.Background(), st, result, obs1, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide (1): %v", err)
 	}
-	dec2, err := Decide(context.Background(), st, result, obs2, "inst-1", nil)
+	dec2, err := Decide(context.Background(), st, result, obs2, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide (2): %v", err)
 	}
@@ -562,7 +735,7 @@ func TestActivationIDStableAcrossRepeatedDecideForTheSameEntry(t *testing.T) {
 	otherCueID := "cue-other"
 	putLTCCue(t, st, otherCueID, "show-1")
 	resultOther := resolvedResult("show-1", "playlist-1", 1, "entry-2", otherCueID, 1)
-	decOther, err := Decide(context.Background(), st, resultOther, obs2, "inst-1", nil)
+	decOther, err := Decide(context.Background(), st, resultOther, obs2, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide (other entry): %v", err)
 	}
@@ -605,11 +778,11 @@ func TestActivationIDChangesAcrossALoopingEntryOccurrence(t *testing.T) {
 	firstLapTick2 := baseObservation("inst-1")
 	firstLapTick2.Sequence, firstLapTick2.EntryOccurrenceSequence, firstLapTick2.Position = 2, 1, 5000
 
-	dec1, err := Decide(context.Background(), st, result, firstLapTick1, "inst-1", nil)
+	dec1, err := Decide(context.Background(), st, result, firstLapTick1, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide (first lap, tick 1): %v", err)
 	}
-	dec2, err := Decide(context.Background(), st, result, firstLapTick2, "inst-1", nil)
+	dec2, err := Decide(context.Background(), st, result, firstLapTick2, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide (first lap, tick 2): %v", err)
 	}
@@ -625,7 +798,7 @@ func TestActivationIDChangesAcrossALoopingEntryOccurrence(t *testing.T) {
 	secondLapTick := baseObservation("inst-1")
 	secondLapTick.Sequence, secondLapTick.EntryOccurrenceSequence, secondLapTick.Position = 3, 3, 1000
 
-	dec3, err := Decide(context.Background(), st, result, secondLapTick, "inst-1", nil)
+	dec3, err := Decide(context.Background(), st, result, secondLapTick, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide (second lap): %v", err)
 	}
@@ -712,7 +885,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 	putPlaylist(t, st, "playlist-other", singleEntryPlaylist("show-1", "inst-other", hash64("b2"), "cue-other", config.ShowPlaylistMismatchPolicyHold, ""))
 
 	ownResult := resolvedResult("show-1", "playlist-own", 1, "entry-1", "cue-own", 1)
-	ownDec, err := Decide(context.Background(), st, ownResult, baseObservation("inst-own"), "inst-own", nil)
+	ownDec, err := Decide(context.Background(), st, ownResult, baseObservation("inst-own"), "inst-own", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide(cue-own): %v", err)
 	}
@@ -722,7 +895,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 	}
 
 	otherResult := resolvedResult("show-1", "playlist-other", 1, "entry-1", "cue-other", 1)
-	otherDec, err := Decide(context.Background(), st, otherResult, baseObservation("inst-other"), "inst-other", nil)
+	otherDec, err := Decide(context.Background(), st, otherResult, baseObservation("inst-other"), "inst-other", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide(cue-other): %v", err)
 	}
@@ -798,7 +971,7 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 		}
 		pin := NewShowPin(active)
 
-		decBefore, err := Decide(context.Background(), st, result, obs, "inst-1", pin)
+		decBefore, err := Decide(context.Background(), st, result, obs, "inst-1", pin, nil)
 		if err != nil {
 			t.Fatalf("Decide (before edit): %v", err)
 		}
@@ -817,7 +990,7 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 		// The operator edits the PLAYING cue.
 		editLTCCue(t, st, "cue-1", "show-1", 9999)
 
-		decAfter, err := Decide(context.Background(), st, result, obs, "inst-1", pin)
+		decAfter, err := Decide(context.Background(), st, result, obs, "inst-1", pin, nil)
 		if err != nil {
 			t.Fatalf("Decide (after edit): %v", err)
 		}
@@ -847,7 +1020,7 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 	})
 
 	t.Run("unpinned (program mode): the edit takes effect at the next tick", func(t *testing.T) {
-		decBefore, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+		decBefore, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 		if err != nil {
 			t.Fatalf("Decide (before edit): %v", err)
 		}
@@ -855,7 +1028,7 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 
 		editLTCCue(t, st, "cue-1", "show-1", 12345)
 
-		decAfter, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+		decAfter, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 		if err != nil {
 			t.Fatalf("Decide (after edit): %v", err)
 		}
@@ -897,7 +1070,7 @@ func TestAuthorizeRefusesASequenceThatWasNeverUploaded(t *testing.T) {
 	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
 
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
-	dec, err := Decide(context.Background(), st, result, baseObservation("inst-1"), "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, baseObservation("inst-1"), "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -946,7 +1119,7 @@ func TestDecideEvidenceBrokenOutranksResolvedOutcome(t *testing.T) {
 	brokenAt := time.Unix(3500, 0).UTC()
 	obs.EvidenceBrokenAt = &brokenAt
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -981,7 +1154,7 @@ func TestDecideEvidenceBrokenOutranksIdentityUnavailable(t *testing.T) {
 	brokenAt := time.Unix(3500, 0).UTC()
 	obs.EvidenceBrokenAt = &brokenAt
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -1013,7 +1186,7 @@ func TestDecideEvidenceBrokenWithNonResolvedOutcomeHasNothingToUndo(t *testing.T
 	brokenAt := time.Unix(3500, 0).UTC()
 	obs.EvidenceBrokenAt = &brokenAt
 
-	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil)
+	dec, err := Decide(context.Background(), st, result, obs, "inst-1", nil, nil)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}

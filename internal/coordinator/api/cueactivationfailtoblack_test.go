@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 )
 
@@ -161,7 +163,7 @@ func TestCueActivationTickOneAudioOnlyAssetMissingNeverClearsRenderSurface(t *te
 		t.Fatalf("get fpp playlist entry observation: %v", err)
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationTickOne(context.Background(), now, obs, nil, &cueHeldTracker{})
 
 	// The fail-to-black dispatch is async (problem 3's own fix) — poll
 	// for the audio stop to appear rather than asserting immediately.
@@ -256,7 +258,7 @@ func TestCueActivationTickOneAssetMissingNeverBlacksInProgramMode(t *testing.T) 
 		t.Fatalf("get fpp playlist entry observation: %v", err)
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationTickOne(context.Background(), now, obs, nil, &cueHeldTracker{})
 
 	// The fail-to-black decision is made in its own goroutine (problem
 	// 3's own fix); give it a generous window to have run and NOT
@@ -325,7 +327,7 @@ func TestCueActivationTickOneNodeSideAssetMissingReachesScopedFailToBlack(t *tes
 		t.Fatalf("get fpp playlist entry observation: %v", err)
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationTickOne(context.Background(), now, obs, nil, &cueHeldTracker{})
 
 	deadline := time.After(2 * time.Second)
 	for {
@@ -438,7 +440,7 @@ func TestCueActivationTickOneAssetMissingFailToBlackDoesNotBlockTick(t *testing.
 	// ran on cueActivationTickOne's own goroutine, this call would take
 	// at least renderCommandConfirmDeadline to return.
 	start := time.Now()
-	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationTickOne(context.Background(), now, obs, nil, &cueHeldTracker{})
 	elapsed := time.Since(start)
 	if elapsed >= renderCommandConfirmDeadline {
 		t.Fatalf("cueActivationTickOne took %s, want well under renderCommandConfirmDeadline (%s): the fail-to-black dispatch must not block the caller", elapsed, renderCommandConfirmDeadline)
@@ -534,7 +536,7 @@ func TestCueActivationTickOneEvidenceBrokenStopsOnlyThisCuesOwnAudio(t *testing.
 		t.Fatal("precondition failed: EvidenceBrokenAt not set on the row the tick will read")
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationTickOne(context.Background(), now, obs, nil, &cueHeldTracker{})
 	h.cueActivationFailToBlackWG.Wait()
 
 	setup.audioPub.mu.Lock()
@@ -598,9 +600,10 @@ func TestCueActivationTickOneEvidenceBrokenReplaysIdempotentlyOnAnUnchangedBreak
 		t.Fatalf("get fpp playlist entry observation: %v", err)
 	}
 
-	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	held := &cueHeldTracker{}
+	h.cueActivationTickOne(context.Background(), now, obs, nil, held)
 	h.cueActivationFailToBlackWG.Wait()
-	h.cueActivationTickOne(context.Background(), now, obs, nil)
+	h.cueActivationTickOne(context.Background(), now, obs, nil, held)
 	h.cueActivationFailToBlackWG.Wait()
 
 	setup.audioPub.mu.Lock()
@@ -613,5 +616,104 @@ func TestCueActivationTickOneEvidenceBrokenReplaysIdempotentlyOnAnUnchangedBreak
 	setup.audioPub.mu.Unlock()
 	if stops != 1 {
 		t.Fatalf("audio.session.stop dispatched %d time(s) across two ticks over an unchanged break, want exactly 1 (the second must replay, not re-dispatch)", stops)
+	}
+}
+
+// --- FollowStop: owner ruling 2026-09-18, follow-the-player ---
+
+// TestCueActivationTickOneFollowStopDispatchesToBothNodesNeverTheBed proves
+// this seam's own fix: a Cue held live on two nodes, followed by an
+// observation that the H0.2 hold policy leaves entirely undispatched (the
+// rehearsal-rig gap this seam closes), must stop exactly the held Cue's
+// own audio session on BOTH nodes it was dispatched to, and must never
+// address the background bed or the staging session — [cueactivation.
+// BackgroundSessionID] and [cueactivation.PrepareStagingSessionID] must
+// never appear among the dispatched sessions.
+func TestCueActivationTickOneFollowStopDispatchesToBothNodesNeverTheBed(t *testing.T) {
+	now := testNow
+	setup := newFailToBlackComposedSetup(t, fixedClock(now))
+	const showID, cueID, playlistID, instanceUUID, entryID = "halloween-2026", "wake-up", "playlist-1", "inst-1", "entry-1"
+	const node1, node2 = "audio-01", "audio-02"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putShowModeForTest(t, setup.st, config.ShowModeShow)
+	putAudioNodeForTest(t, setup.st, node1)
+	putAudioNodeForTest(t, setup.st, node2)
+	declareNodeForTest(t, setup.st, node1)
+	declareNodeForTest(t, setup.st, node2)
+	// Explicit Targets naming both nodes: an untargeted audio output
+	// resolves to only the installation's sole program+ltc node, and
+	// this fixture declares two, so both must be named to participate.
+	cuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: showID, Name: cueID,
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-" + cueID, Targets: []string{node1, node2}}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, cueID, cuePayload)
+
+	playlist := config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: entryID, Cue: cueID,
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	putPlaylistForTest(t, setup.st, playlistID, playlist)
+	putActiveShowForTest(t, setup.st, showID)
+
+	// The Cue's audio is held live on both nodes -- what a prior tick's own
+	// StateActivated Decision would have left in the loop's own
+	// cueHeldTracker, seeded directly rather than replaying a full prior
+	// dispatch this test does not otherwise need.
+	held := &cueHeldTracker{}
+	held.observe(instanceUUID, cueactivate.Decision{
+		State: cueactivate.StateActivated,
+		Activations: map[string]cueactivation.Activation{
+			node1: {Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-old-1", Show: showID, Generation: 1, CueID: cueID, CueRevision: 1},
+			node2: {Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-old-2", Show: showID, Generation: 1, CueID: cueID, CueRevision: 1},
+		},
+	})
+
+	// fppd restarted and came back on a different playlist: the observed
+	// playlistHash no longer matches the bound one, so this resolves
+	// StateMismatched under the hold policy -- the exact rig gap this
+	// seam closes.
+	if err := setup.st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: instanceUUID, SchemaVersion: 1, Sequence: 2, Action: "playing",
+		PlaylistName: "resting-halloween", PlaylistHash: hash64ForTest("b2"),
+		Section: "mainPlaylist", Position: 0, EntryKey: "unrelated-entry-key",
+		EntryOccurrenceSequence: 2, ObservedAt: now, ReceivedAt: now,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	obs, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), instanceUUID)
+	if err != nil {
+		t.Fatalf("get fpp playlist entry observation: %v", err)
+	}
+
+	h.cueActivationTickOne(context.Background(), now, obs, nil, held)
+	h.cueActivationFailToBlackWG.Wait()
+
+	setup.audioPub.mu.Lock()
+	defer setup.audioPub.mu.Unlock()
+	gotNodes := map[string]bool{}
+	for _, d := range setup.audioPub.dispatched {
+		if d.Action != "audio.session.stop" {
+			continue
+		}
+		sessionID, _ := d.Params["sessionId"].(string)
+		if sessionID != blackAndSilenceAudioSessionID {
+			t.Fatalf("audio.session.stop dispatched sessionId %q, want only %q: never the bed or the staging session", sessionID, blackAndSilenceAudioSessionID)
+		}
+		gotNodes[d.NodeID] = true
+	}
+	if !gotNodes[node1] || !gotNodes[node2] || len(gotNodes) != 2 {
+		t.Fatalf("audio.session.stop dispatched to %v, want both %q and %q", gotNodes, node1, node2)
 	}
 }

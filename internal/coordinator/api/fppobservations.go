@@ -99,6 +99,18 @@ func playlistLoopChanged(incoming, stored *int64) bool {
 	}
 }
 
+// entryOccurrenceRegressionThreshold is signal 4's own "a few seconds"
+// (owner ruling 2026-09-18, follow-the-player): smaller than this is
+// ordinary reporting jitter, not a restarted player's own clock reading
+// behind where this coordinator last trusted it.
+const entryOccurrenceRegressionThreshold = 3 * time.Second
+
+// observedAtRegressed reports whether incoming's own reported observation
+// time is behind stored's by more than entryOccurrenceRegressionThreshold.
+func observedAtRegressed(incoming, stored time.Time) bool {
+	return incoming.Before(stored.Add(-entryOccurrenceRegressionThreshold))
+}
+
 func fppObservationConflictProblem(detail string) v1.Problem {
 	return v1.Problem{
 		Type:   ProblemTypeConflict,
@@ -351,8 +363,9 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 				}
 				return store.ErrFPPPlaylistEntryObservationSequenceConflict
 			}
-			// A fresh occurrence begins on any of three signals, and each
-			// covers a case the others cannot (contract §1.8):
+			// A fresh occurrence begins on any of four signals, and each
+			// covers a case the others cannot (contract §1.8, plus owner
+			// ruling 2026-09-18 follow-the-player for the fourth):
 			//
 			//   1. action "start", FPP entering an entry. Fires on FPP 9.
 			//      FPP 10 never sends it at all, so it is dead there, but it
@@ -363,15 +376,27 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 			//      that catches a playlist looping back into an entry it
 			//      already visited, because that visit derives the identical
 			//      EntryKey and, on FPP 10, arrives with no "start".
+			//   4. the SAME entry, with this observation's own reported
+			//      observedAtMillis more than a few seconds earlier than the
+			//      one last accepted for it: a player that went away and
+			//      came back on the identical entry with no "start" and no
+			//      pass change to catch it otherwise (a single-entry or
+			//      non-looping playlist on FPP 10), its own clock reading
+			//      behind where this coordinator last trusted it. A player
+			//      that stays away and comes back still reporting forward
+			//      time, however long the gap, is signal 4's own negative
+			//      case: nothing here says its playback ever stopped.
 			//
 			// Anything else, an ordinary "playing" tick, "stop",
 			// "query_next", or "unknown" for the SAME entry on the SAME
-			// pass, carries the prior occurrence forward unchanged, so
-			// repeat ticks inside one occurrence keep deriving the same
-			// [cueactivate] ActivationID and dedup to one dispatch.
+			// pass with its own reported time still advancing, carries the
+			// prior occurrence forward unchanged, so repeat ticks inside one
+			// occurrence keep deriving the same [cueactivate] ActivationID
+			// and dedup to one dispatch.
 			if action == fppidentity.ActionStart ||
 				rec.EntryKey != existing.EntryKey ||
-				playlistLoopChanged(rec.PlaylistLoop, existing.PlaylistLoop) {
+				playlistLoopChanged(rec.PlaylistLoop, existing.PlaylistLoop) ||
+				(rec.EntryKey == existing.EntryKey && observedAtRegressed(rec.ObservedAt, existing.ObservedAt)) {
 				rec.EntryOccurrenceSequence = rec.Sequence
 			} else {
 				rec.EntryOccurrenceSequence = existing.EntryOccurrenceSequence
