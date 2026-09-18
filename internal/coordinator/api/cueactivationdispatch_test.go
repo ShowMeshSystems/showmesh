@@ -531,6 +531,52 @@ func TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently(t *testing.T) {
 	}
 }
 
+// TestDispatchPrepareAheadAudioRepeatTickWithMovedEvidenceAtDoesNotDispatch
+// reproduces the defect TestDispatchPrepareAheadAudioRepeatTickReplaysIdempotently
+// does not reach: on the real cue activation loop, act.EvidenceAt is
+// refreshed from the latest FPP observation on every tick while
+// act.ActivationID (and so this dispatch's own idempotency keys) stays
+// fixed, so a later tick's revision (derived from act.EvidenceAt) differs
+// from the first tick's under the SAME key — exactly the params-mismatch
+// resolveAudioSessionReplay refuses, logged as a refusal on every loop
+// tick for the activation's whole lifetime. The fix looks up the apply
+// key via GetCommandByIdempotencyKey before dispatching at all: a repeat
+// tick, whatever its own EvidenceAt reads, must skip silently rather than
+// ever reach that refusal.
+func TestDispatchPrepareAheadAudioRepeatTickWithMovedEvidenceAtDoesNotDispatch(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cuePrepareAheadTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	var logBuf bytes.Buffer
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	h.dispatchPrepareAheadAudio(context.Background(), now, nodeID, act, issuer)
+	firstTick := dispatchedActionsToSession(setup, cueactivation.PrepareStagingSessionID)
+	if len(firstTick) != 2 {
+		t.Fatalf("first tick dispatched %d commands against the staging session, want 2 (apply, prepare); got %+v", len(firstTick), firstTick)
+	}
+
+	// The SAME activation, a later tick: act.ActivationID (and so both
+	// idempotency keys) is unchanged, but act.EvidenceAt has moved, as it
+	// does on a real tick once a fresher FPP observation lands.
+	movedAct := act
+	movedAct.EvidenceAt = now.Add(45 * time.Second)
+	h.dispatchPrepareAheadAudio(context.Background(), now.Add(45*time.Second), nodeID, movedAct, issuer)
+
+	secondTick := dispatchedActionsToSession(setup, cueactivation.PrepareStagingSessionID)
+	if len(secondTick) != len(firstTick) {
+		t.Fatalf("repeat tick with a moved EvidenceAt published %d commands beyond the first tick's %d; want no new publish", len(secondTick)-len(firstTick), len(firstTick))
+	}
+	if logged := logBuf.String(); strings.Contains(logged, "refused") || strings.Contains(logged, "failed") {
+		t.Fatalf("repeat tick with a moved EvidenceAt logged a refusal or failure, want a silent skip: %s", logged)
+	}
+}
+
 // TestPrepareStagingSessionRevisionClearsWhatTheNodeAlreadyHolds is the
 // prepare-ahead audio prepare's own stale-revision regression test: by
 // the time this dispatch's audio.session.prepare runs, the node's own

@@ -465,7 +465,15 @@ func (h *handlers) dispatchCueCatalogDeploy(ctx context.Context, now time.Time, 
 		// cue-catalog-ack write immediately above: the deploy itself
 		// already succeeded regardless of whether this follow-on apply
 		// does.
-		h.applyShowmeshAudioPlaylistIfAny(ctx, h.now(), nodeID, active)
+		//
+		// attempt identifies THIS deploy: idempotencyKey is this deploy's
+		// own dispatch identity (a fresh one every time a new
+		// cuecatalog.deploy is sent, including a later deploy of byte-
+		// identical catalog/playlist content), and dispatchedAt is fixed
+		// for this deploy's whole lifetime, never h.now() at whichever
+		// moment this line happens to run — see showmeshAudioAttempt's own
+		// doc comment for why a moving time here would break replay.
+		h.applyShowmeshAudioPlaylistIfAny(ctx, h.now(), nodeID, active, showmeshAudioAttempt{ID: idempotencyKey, At: dispatchedAt})
 
 		// A node that just proved it holds the active Show's authorized
 		// Cue catalog is exactly the node whose show.surface objects

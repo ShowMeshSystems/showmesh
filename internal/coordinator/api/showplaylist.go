@@ -191,7 +191,7 @@ func (h *handlers) handlePutShowPlaylist(w http.ResponseWriter, r *http.Request)
 	// applyShowmeshAudioPlaylistIfAny's own doc comment already states for
 	// its catalog-deploy trigger.
 	if payload.Runner == config.ShowPlaylistRunnerShowmeshAudio {
-		h.reapplyShowmeshAudioPlaylistIfActive(r.Context(), h.now(), payload.Show)
+		h.reapplyShowmeshAudioPlaylistIfActive(r.Context(), h.now(), payload.Show, id, nextRevisionNo)
 	}
 
 	jsonWrite(w, mapShowPlaylistConfigResponse(now, activated, store.ConfigObjectRecord{
@@ -206,7 +206,15 @@ func (h *handlers) handlePutShowPlaylist(w http.ResponseWriter, r *http.Request)
 // follow-on dispatch in this package (applyShowmeshAudioPlaylistIfAny's own
 // doc comment): the write itself already succeeded regardless of whether
 // this re-apply does.
-func (h *handlers) reapplyShowmeshAudioPlaylistIfActive(ctx context.Context, now time.Time, showID string) {
+//
+// playlistID and playlistRevision identify THIS write as its own attempt
+// (see showmeshAudioAttempt's own doc comment): revision is this Playlist
+// config object's own new revision number, fixed for the write that just
+// committed and distinct from whatever revision number an earlier or
+// later write to the SAME playlist object lands on, so two genuinely
+// separate writes of byte-identical playlist content still each dispatch
+// rather than one being refused as a stale replay of the other.
+func (h *handlers) reapplyShowmeshAudioPlaylistIfActive(ctx context.Context, now time.Time, showID, playlistID string, playlistRevision int64) {
 	if h.deps.AssetManifests == nil || h.deps.Nodes == nil {
 		return
 	}
@@ -224,8 +232,9 @@ func (h *handlers) reapplyShowmeshAudioPlaylistIfActive(ctx context.Context, now
 		h.logWarn("showmesh-audio: list nodes for playlist re-apply failed", "show", showID, "error", err)
 		return
 	}
+	attempt := showmeshAudioAttempt{ID: fmt.Sprintf("show.playlist-write-%s-%d", playlistID, playlistRevision), At: now}
 	for _, v := range views {
-		h.applyShowmeshAudioPlaylistIfAny(ctx, now, v.NodeID, active)
+		h.applyShowmeshAudioPlaylistIfAny(ctx, now, v.NodeID, active, attempt)
 	}
 }
 
