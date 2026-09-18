@@ -111,15 +111,22 @@ export type NodeClockProvider = 'managed' | 'external' | 'fpp'
 
 export type NodeClockVerdict = { ok: true } | { ok: false; reason: string }
 
+/** The only shape `internal/coordinator/config/nodeclock.go`'s phcDevicePattern accepts. */
+const phcDevicePattern = /^\/dev\/ptp[0-9]+$/
+
 /**
  * The refusals `PUT /config/node.clock/{id}` names, built to
- * `internal/coordinator/config/nodeclock.go`'s `DecodeNodeClockPayload`:
+ * `internal/coordinator/config/nodeclock.go`'s `DecodeNodeClockPayload`,
+ * plus one client-only check: the server accepts any non-empty interface
+ * string, so a device path typed into Interface is refused here before
+ * it ever reaches the server.
  * provider/interface/domain are always required (domain 0-255); fppBaseUrl
  * is required exactly when provider is fpp; holdoverLimitSeconds, left
  * blank, defaults server-side and otherwise must be a positive integer;
- * priority1, left blank, defaults to 0 and otherwise must be 0-255. The
- * server accepts a field that does not apply to the chosen provider rather
- * than refusing it, so this does not either.
+ * priority1, left blank, defaults to 0 and otherwise must be 0-255; phcDevice,
+ * left blank, is omitted and otherwise must match `/dev/ptp` followed by
+ * digits. The server accepts a field that does not apply to the chosen
+ * provider rather than refusing it, so this does not either.
  */
 export function nodeClockVerdict(payload: {
   provider: NodeClockProvider
@@ -128,9 +135,13 @@ export function nodeClockVerdict(payload: {
   fppBaseUrl: string
   holdoverLimitSecondsText: string
   priority1Text: string
+  phcDeviceText: string
 }): NodeClockVerdict {
   if (payload.interfaceName.trim() === '') {
     return { ok: false, reason: 'Interface is required.' }
+  }
+  if (payload.interfaceName.includes('/')) {
+    return { ok: false, reason: 'Interface takes an interface name such as eno2, not a device path.' }
   }
   const domain = Number(payload.domainText)
   if (payload.domainText.trim() === '' || !Number.isInteger(domain) || domain < 0 || domain > 255) {
@@ -150,6 +161,9 @@ export function nodeClockVerdict(payload: {
     if (!Number.isInteger(priority1) || priority1 < 0 || priority1 > 255) {
       return { ok: false, reason: 'Priority1 must be a whole number from 0 to 255, or left blank for the default.' }
     }
+  }
+  if (payload.provider === 'external' && payload.phcDeviceText.trim() !== '' && !phcDevicePattern.test(payload.phcDeviceText.trim())) {
+    return { ok: false, reason: 'PHC device must match /dev/ptp followed by digits, e.g. /dev/ptp0.' }
   }
   return { ok: true }
 }

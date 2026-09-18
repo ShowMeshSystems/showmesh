@@ -993,6 +993,25 @@ describe('Settings › Node routing › PTP clock', () => {
     expect(screen.getByLabelText('Hardware timestamping')).toBeChecked()
     expect(screen.queryByLabelText('FPP base URL')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('External UDS address · optional')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('PHC device · optional')).not.toBeInTheDocument()
+  })
+
+  it('shows the PHC device control for the external provider only', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'managed' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByLabelText('Priority1 · optional')).toBeInTheDocument())
+    expect(screen.queryByLabelText('PHC device · optional')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'FPP' }))
+    expect(screen.queryByLabelText('PHC device · optional')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'External' }))
+    expect(screen.getByLabelText('PHC device · optional')).toBeInTheDocument()
   })
 
   it('switching provider hides fields for the inapplicable provider and shows the new one', async () => {
@@ -1112,7 +1131,7 @@ describe('Settings › Node routing › PTP clock', () => {
     expect(sentPayload).toMatchObject({ provider: 'external', interface: 'eth2', externalUdsAddress: '/var/run/ptp/ptp4lro' })
   })
 
-  it('round-trips phcDevice unchanged for an external node with no control of its own on this screen', async () => {
+  it('round-trips a stored phcDevice the operator did not touch on an unrelated save', async () => {
     setUpNodeRouting()
     stubs.getNodeClock = () =>
       Promise.resolve(nodeClockConfig({ provider: 'external', externalUdsAddress: '/var/run/ptp/ptp4lro', phcDevice: '/dev/ptp0' }))
@@ -1126,12 +1145,67 @@ describe('Settings › Node routing › PTP clock', () => {
     renderAt('/settings/node-routing', { nodes: [] })
     commitNewClockNodeId('audio-node-01')
 
-    await waitFor(() => expect(screen.getByLabelText('External UDS address · optional')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByLabelText('PHC device · optional')).toHaveValue('/dev/ptp0'))
     fireEvent.change(screen.getByLabelText('Interface'), { target: { value: 'eth2' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
 
     await waitFor(() => expect(sentPayload).not.toBeNull())
     expect(sentPayload).toMatchObject({ provider: 'external', interface: 'eth2', phcDevice: '/dev/ptp0' })
+  })
+
+  it('saves an operator-entered phcDevice for the external provider', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'external' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+    let sentPayload: unknown = null
+    stubs.putNodeClock = (_id: string, payload: unknown) => {
+      sentPayload = payload
+      return Promise.resolve(nodeClockConfig({ provider: 'external', phcDevice: '/dev/ptp0' }))
+    }
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByLabelText('PHC device · optional')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('PHC device · optional'), { target: { value: '/dev/ptp0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save clock config' }))
+
+    await waitFor(() => expect(sentPayload).not.toBeNull())
+    expect(sentPayload).toMatchObject({ provider: 'external', phcDevice: '/dev/ptp0' })
+  })
+
+  it('refuses an invalid phcDevice for the external provider, naming PHC device rather than a generic failure', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'external' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+    stubs.putNodeClock = () => Promise.reject(new Error('should not be called: invalid phcDevice must be refused client-side'))
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByLabelText('PHC device · optional')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('PHC device · optional'), { target: { value: 'eno2' } })
+
+    expect(screen.getByText(/Will be refused/)).toBeInTheDocument()
+    expect(screen.getByText(/PHC device must match/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save clock config' })).toBeDisabled()
+  })
+
+  it('refuses a device path typed into Interface', async () => {
+    setUpNodeRouting()
+    stubs.getNodeClock = () => Promise.resolve(nodeClockConfig({ provider: 'external' }))
+    stubs.getNodeClockConfigRevisions = () => Promise.resolve({ serverTime: '2026-09-12T21:00:00Z', kind: 'node.clock', revisions: [] })
+    stubs.putNodeClock = () => Promise.reject(new Error('should not be called: a device path in Interface must be refused client-side'))
+
+    renderAt('/settings/node-routing', { nodes: [] })
+    commitNewClockNodeId('audio-node-01')
+
+    await waitFor(() => expect(screen.getByLabelText('Interface')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Interface'), { target: { value: '/dev/ptp0' } })
+
+    expect(screen.getByText(/Will be refused/)).toBeInTheDocument()
+    expect(screen.getByText('Interface takes an interface name such as eno2, not a device path.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save clock config' })).toBeDisabled()
   })
 
   it('drops phcDevice when switching an external node to managed', async () => {

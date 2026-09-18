@@ -801,6 +801,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
   const [hardwareTimestamping, setHardwareTimestamping] = useState(false)
   const [externalUdsAddress, setExternalUdsAddress] = useState('')
   const [fppBaseUrl, setFppBaseUrl] = useState('')
+  const [phcDevice, setPhcDevice] = useState('')
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -817,6 +818,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
     setHardwareTimestamping(payload.hardwareTimestamping ?? false)
     setExternalUdsAddress(payload.externalUdsAddress ?? '')
     setFppBaseUrl(payload.fppBaseUrl ?? '')
+    setPhcDevice(payload.phcDevice ?? '')
     setDirty(false)
   }
 
@@ -830,6 +832,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
     setHardwareTimestamping(false)
     setExternalUdsAddress('')
     setFppBaseUrl('')
+    setPhcDevice('')
     setDirty(false)
   }
 
@@ -856,7 +859,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
     }
   }, [nodeId, attempt])
 
-  const verdict = nodeClockVerdict({ provider, interfaceName, domainText, fppBaseUrl, holdoverLimitSecondsText, priority1Text })
+  const verdict = nodeClockVerdict({ provider, interfaceName, domainText, fppBaseUrl, holdoverLimitSecondsText, priority1Text, phcDeviceText: phcDevice })
   const canSave = verdict.ok
 
   const buildPayload = (base: ConfigNodeClock): ConfigNodeClock => {
@@ -879,11 +882,12 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
     } else if (provider === 'external') {
       if (externalUdsAddress.trim() !== '') payload.externalUdsAddress = externalUdsAddress
       else delete payload.externalUdsAddress
+      if (phcDevice.trim() !== '') payload.phcDevice = phcDevice.trim()
+      else delete payload.phcDevice
       delete payload.clientOnly
       delete payload.priority1
       delete payload.hardwareTimestamping
       delete payload.fppBaseUrl
-      // phcDevice has no control here yet; the base spread round-trips it unchanged.
     } else {
       payload.fppBaseUrl = fppBaseUrl
       delete payload.clientOnly
@@ -980,7 +984,7 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
             setDirty(true)
           }}
         />
-        <Field label="Interface" help="The network interface this node's PTP clock runs on.">
+        <Field label="Interface" help="A network interface name, such as eno2 or eth0. Never a device path: for the external provider, a PTP hardware clock device goes in PHC device instead.">
           {(props) => (
             <Input
               {...props}
@@ -1054,18 +1058,35 @@ function NodeClockSection({ nodeId, saveGate }: { nodeId: string; saveGate: Scop
           </>
         )}
         {provider === 'external' && (
-          <Field label="External UDS address · optional" help="Defaults to linuxptp's own /var/run/ptp/ptp4lro when left blank.">
-            {(props) => (
-              <Input
-                {...props}
-                value={externalUdsAddress}
-                onChange={(e) => {
-                  setExternalUdsAddress(e.target.value)
-                  setDirty(true)
-                }}
-              />
-            )}
-          </Field>
+          <>
+            <Field label="External UDS address · optional" help="Defaults to linuxptp's own /var/run/ptp/ptp4lro when left blank.">
+              {(props) => (
+                <Input
+                  {...props}
+                  value={externalUdsAddress}
+                  onChange={(e) => {
+                    setExternalUdsAddress(e.target.value)
+                    setDirty(true)
+                  }}
+                />
+              )}
+            </Field>
+            <Field
+              label="PHC device · optional"
+              help="A Linux PTP hardware clock device path, such as /dev/ptp0. Separate from the interface name above."
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  value={phcDevice}
+                  onChange={(e) => {
+                    setPhcDevice(e.target.value)
+                    setDirty(true)
+                  }}
+                />
+              )}
+            </Field>
+          </>
         )}
         {provider === 'fpp' && (
           <Field label="FPP base URL" help="Required when the provider is fpp.">
