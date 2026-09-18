@@ -119,6 +119,13 @@ type Manager struct {
 	// reason engineEpoch is: a session's Start reads it without taking
 	// m.mu.
 	outputLatencyUs atomic.Int64
+
+	// duckFadeWait, when set, replaces [Manager.waitDuckFade]'s own real,
+	// context-cancelable timer with a test's own function, so a test can
+	// observe or deterministically control the duck-then-start wait
+	// without a real sleep. Nil in production, always: NewManager never
+	// sets it, and nothing outside this package's tests may.
+	duckFadeWait func(ctx context.Context, d time.Duration) error
 }
 
 // NewManager builds a Manager. decoder is [RealDecoder]{} in production
@@ -480,6 +487,12 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	}
 	s.mu.Lock()
 
+	// duckedBeforeStart records whether the exec below actually dispatched
+	// a pre-start duck for this invocation (never merely decided to): see
+	// its own assignment inside exec for why this session's start must
+	// restore that duck when it does not end Playing.
+	duckedBeforeStart := false
+
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		item, ok := s.currentItemLocked()
 		if !ok {
@@ -541,6 +554,54 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled start instant: " + err.Error()}
 			}
 		}
+
+		// Owner ruling 2026-09-18: duck the bed first, then start — an
+		// announcement must never present its own first sample while the
+		// bed underneath it is still at full level. Ducking another
+		// session takes ITS lock (see [Manager.duckLowerPriority]'s own
+		// doc comment on why that can never happen while this session's
+		// own lock is also held: two ducks racing each other would
+		// deadlock), so this is a deliberate, narrow exception to
+		// [Session.dispatch]'s "exec must not lock the session" rule:
+		// s.mu is released for exactly the duck dispatch itself (fast —
+		// it only fires off engine.Fade calls, it never blocks on their
+		// completion) and reacquired immediately after. The wait for the
+		// fade to actually finish then runs with s.mu held again, the
+		// same as the scheduled-start wait just above already does for
+		// up to maxScheduledStartLead: it touches no other session, so
+		// it carries none of the duck dispatch's own deadlock risk, and
+		// holding it keeps this call atomic against a concurrent command
+		// on this exact session for a bounded, small (configured,
+		// default 200ms) addition to a start that already blocks at
+		// least that long for prepare and, often, the schedule wait.
+		// duckedBeforeStart, set the instant the duck is actually
+		// dispatched (never merely decided), is read below once s.mu is
+		// released again, so a start that ends anywhere but Playing
+		// restores the duck it already applied instead of leaving the
+		// bed held down under an announcement that never played.
+		if s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyDuck {
+			var duckerRole pkgaudio.SourceRole
+			if s.desired.SourceRole != nil {
+				duckerRole = *s.desired.SourceRole
+			}
+			fadeMs := m.SettingsSnapshot().DuckFadeDurationMs
+			s.mu.Unlock()
+			m.duckLowerPriority(ctx, id, duckerRole)
+			s.mu.Lock()
+			duckedBeforeStart = true
+			// Every node applies the same configured fade length after
+			// the same scheduled instant, so the effective start instant
+			// this announcement anchors its own timeline to (below) is
+			// shifted by exactly that length too — never a measured or
+			// earlier value, so nodes given the same T0 stay in step.
+			if sched != nil {
+				sched.t0 = sched.t0.Add(time.Duration(fadeMs) * time.Millisecond)
+			}
+			if err := m.waitDuckFade(ctx, fadeMs); err != nil {
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the duck fade to complete: " + err.Error()}
+			}
+		}
+
 		dispatchedAt := m.now()
 		// This call can still fail for a real engine reason
 		// (ClassifyFault below covers those), but never with
@@ -574,11 +635,11 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		return out
 	})
 
-	// duck/interrupt resolution needs to lock OTHER sessions, so it must
-	// run after s.mu is released — see [Manager.duckLowerPriority]'s doc
-	// comment on why this can never hold two sessions' locks at once.
+	// Interrupt resolution and restoring a duck applied before a start
+	// that did not end Playing both need to lock OTHER sessions, so they
+	// must run after s.mu is released — see [Manager.duckLowerPriority]'s
+	// doc comment on why this can never hold two sessions' locks at once.
 	started := res.executed && s.state == pkgaudio.StatePlaying
-	duck := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyDuck
 	interrupt := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
 	var role pkgaudio.SourceRole
 	if s.desired.SourceRole != nil {
@@ -586,8 +647,12 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	}
 	s.mu.Unlock()
 
-	if duck {
-		m.duckLowerPriority(ctx, id, role)
+	if duckedBeforeStart && !started {
+		// The announcement never actually reached Playing (a failed
+		// engine.Start, or the duck fade's own wait was cut short): the
+		// bed must not stay held down under a duck no announcement is
+		// using, exactly as if the announcement had ended.
+		m.restoreDucked(ctx, id)
 	}
 	if interrupt {
 		m.interruptLowerPriority(ctx, id, role)
@@ -713,6 +778,13 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 	from.mu.Unlock()
 
 	to.mu.Lock()
+
+	// duckedBeforeStart mirrors [Manager.start]'s own field: whether the
+	// exec below actually dispatched a pre-start duck for this
+	// invocation, read once to.mu is released again to decide whether a
+	// promote that does not end Playing must restore it.
+	duckedBeforeStart := false
+
 	res := to.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		item, ok := to.currentItemLocked()
 		if !ok || itemIdentity(item) != wantIdentity {
@@ -754,6 +826,30 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled start instant: " + err.Error()}
 			}
 		}
+
+		// Duck the bed before starting here too — see [Manager.start]'s
+		// identical block for the full reasoning (owner ruling
+		// 2026-09-18, the deadlock this avoids, and why holding to.mu
+		// across the fade wait itself, but not across duckLowerPriority,
+		// is the chosen tradeoff).
+		if to.desired.MixPolicy != nil && *to.desired.MixPolicy == pkgaudio.MixPolicyDuck {
+			var duckerRole pkgaudio.SourceRole
+			if to.desired.SourceRole != nil {
+				duckerRole = *to.desired.SourceRole
+			}
+			fadeMs := m.SettingsSnapshot().DuckFadeDurationMs
+			to.mu.Unlock()
+			m.duckLowerPriority(ctx, toID, duckerRole)
+			to.mu.Lock()
+			duckedBeforeStart = true
+			if sched != nil {
+				sched.t0 = sched.t0.Add(time.Duration(fadeMs) * time.Millisecond)
+			}
+			if err := m.waitDuckFade(ctx, fadeMs); err != nil {
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the duck fade to complete: " + err.Error()}
+			}
+		}
+
 		dispatchedAt := m.now()
 		obs, err := to.mgr.engine.Start(ctx, to.handle, position)
 		if err != nil {
@@ -779,13 +875,13 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 		return out
 	})
 
-	// duck/interrupt resolution needs to lock OTHER sessions, so it must
-	// run after to.mu is released — see [Manager.duckLowerPriority]'s doc
-	// comment on why this can never hold two sessions' locks at once. The
-	// same shape Start's own tail uses: read to's own state/desired here,
-	// while to.mu is still held, never after Unlock.
+	// Interrupt resolution and restoring a duck applied before a promote
+	// that did not end Playing both need to lock OTHER sessions, so they
+	// must run after to.mu is released — see [Manager.duckLowerPriority]'s
+	// doc comment on why this can never hold two sessions' locks at once.
+	// The same shape Start's own tail uses: read to's own state/desired
+	// here, while to.mu is still held, never after Unlock.
 	started := res.executed && to.state == pkgaudio.StatePlaying
-	duck := res.executed && to.state == pkgaudio.StatePlaying && to.desired.MixPolicy != nil && *to.desired.MixPolicy == pkgaudio.MixPolicyDuck
 	interrupt := res.executed && to.state == pkgaudio.StatePlaying && to.desired.MixPolicy != nil && *to.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
 	var role pkgaudio.SourceRole
 	if to.desired.SourceRole != nil {
@@ -801,8 +897,11 @@ func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 		relCancel()
 	}
 
-	if duck {
-		m.duckLowerPriority(ctx, toID, role)
+	if duckedBeforeStart && !started {
+		// The promoted session never actually reached Playing: the bed
+		// must not stay held down under a duck no announcement is using,
+		// exactly as if the announcement had ended.
+		m.restoreDucked(ctx, toID)
 	}
 	if interrupt {
 		m.interruptLowerPriority(ctx, toID, role)

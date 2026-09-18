@@ -420,6 +420,13 @@ func nightRunAudioCommandLedgerHistory(history []nightBackgroundAudioHistoryRow,
 	return out
 }
 
+// nightLedgerRefusalOperatorReason is the operator-facing OutcomeReason for
+// a background-audio step this coordinator's own ledger refused before
+// dispatch: fact then action, no internals vocabulary, per this
+// repository's operator copy rule. The detailed cause stays in the WARN log
+// and the returned error.
+const nightLedgerRefusalOperatorReason = "This step was skipped because a newer command had already reached this speaker. Run the action again if the background audio did not play as expected."
+
 // nightPersistLedgerRefusal commits phase/cueName straight to resolved,
 // outcome refused: this coordinator's own acceptance ledger, not the node,
 // refused revision before any dispatch, so there is no in-flight attempt to
@@ -469,12 +476,15 @@ func (h *handlers) nightRunAudioCommand(ctx context.Context, now time.Time, rec 
 				reason = decision.Result.Reason
 			}
 			msg := fmt.Sprintf("api: background audio: refusing to commit %s/%s at revision %d: %s (current %d)", phase, cueName, revision, reason, decision.Revision)
+			h.logWarn("night loop: background audio: ledger refused revision before dispatch", "phase", phase, "cueName", cueName, "revision", revision, "reason", reason, "currentRevision", decision.Revision)
 			// Persisted resolved/refused, never left as a log line alone: a
 			// node-addressed step this coordinator's own ledger refuses
 			// before ever dispatching must be as visible to the operator as
 			// a step the NODE itself refused, on the same outbox row shape
-			// mapNightBackgroundAudio already reads.
-			refusedRow, perr := h.nightPersistLedgerRefusal(ctx, now, rec, phase, cueName, revision, msg)
+			// mapNightBackgroundAudio already reads. OutcomeReason is
+			// operator-facing (rendered verbatim by the UI/showmeshctl), so
+			// it carries nightLedgerRefusalOperatorReason, never msg.
+			refusedRow, perr := h.nightPersistLedgerRefusal(ctx, now, rec, phase, cueName, revision, nightLedgerRefusalOperatorReason)
 			if perr != nil {
 				return store.NightCueOutboxRecord{}, perr
 			}
