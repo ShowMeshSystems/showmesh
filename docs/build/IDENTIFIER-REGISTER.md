@@ -1366,7 +1366,8 @@ The store schema version, bumped by migrations in
 | v34 | shipped | every stored `audio.settings` revision is backfilled with `scheduledStartDeliveryBoundMs`/`scheduledStartMarginMs` when either is missing, using each field's own stated default, so a revision written before the two scheduled-start keys joined the required set still decodes and can be pushed (`migrateV34AudioSettingsBackfillScheduledStartFields`, `migration_v34.go`). Same defect class as v20 and v24. Renumbered from v33 when `dev/clock-sync` took `main`: v33 had already shipped as the credentials table, and a number at or below the stamped maximum can never run |
 | v35 | shipped | long-run program-to-LTC drift recording (2026-09-11): `audio_alignment_runs` plus `audio_alignment_samples`, coordinator-side, appended from the node's own `alignmentSampledAt`/`alignmentOffsetMs` report fields while a run is active |
 | v36 | shipped | cue-catalog deploy operator override (SM-632): `node_cue_catalog_override`, one row per node recording an operator's accepted H0.5 exclusive-claim conflict, scoped to the revision it was accepted for |
-| v37+ | unallocated | free |
+| v37 | shipped | re-keys `node_asset_inventory` (schemaV8) from `PRIMARY KEY (node_id, content_hash)` to a composite `(node_id, content_hash, runtime_filename)` primary key, so a node reporting one content hash under two runtime filenames (asset sync deliberately dispatches a second copy of an already-held hash under a second filename when a node plays another node's upload) no longer fails its whole inventory report on a UNIQUE constraint violation. A pure widening, matching v27/v28's identical reasoning: every pre-v37 row is already unique under the old key, so no data fix runs |
+| v38+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
