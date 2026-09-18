@@ -197,7 +197,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 	// cue starts, cut immediately rather than wait on a later
 	// night-controller pause command. Announcement sessions never cut it.
 	if announcement == nil {
-		mgr.CutBackgroundBed(ctx, pkgaudio.SessionID(cueactivation.BackgroundSessionID))
+		mgr.CutBackgroundBed(ctx)
 	}
 
 	id := cueActivationAudioSessionID

@@ -896,7 +896,12 @@ func TestMultiSyncCueAudioStartCutsPlayingBackgroundBed(t *testing.T) {
 	resetTriggerRegistry(t)
 
 	bgHash := writeAssetFixture(t, dir, "bed.wav", []byte("pretend this is bed audio content"))
-	bgID := pkgaudio.SessionID(cueactivation.BackgroundSessionID)
+	// A night session's own bed session id ("night-bg-<night session id>",
+	// see internal/coordinator/api/nightbackgroundaudio.go's
+	// nightBackgroundAudioSessionID), never the stale, unused
+	// cueactivation.BackgroundSessionID: CutBackgroundBed must cut
+	// whichever session is actually Playing with source role background.
+	bgID := pkgaudio.SessionID("night-bg-night-1")
 	bgMedia := pkgaudio.MediaRef{AssetID: "bed-asset", ContentHash: bgHash, RuntimeFilename: "bed.wav"}
 	if r := mgr.Apply(context.Background(), bgID, "bg-apply", 1, pkgaudio.ApplyRequest{
 		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleBackground),

@@ -146,6 +146,128 @@ func TestNightStageFirstShowCueAudioRepeatTickSkipsAlreadyDispatched(t *testing.
 	}
 }
 
+// TestNightStageFirstShowCueAudioSecondEntryRestagesWithNewKeysAndHigherRevisions
+// proves the fix for the keying defect a rig review caught: an idempotency
+// key derived from (rec.ID, rec.Cycle, rec.StateEnteredAt) — never
+// rec.ArmedShowID — so a SECOND entry into the same show tonight (a later
+// Cycle, a later StateEnteredAt, the SAME session id) stages again rather
+// than being skipped as an already-seen replay, dispatches under
+// DIFFERENT node-side invocation ids, and carries a HIGHER revision on
+// the shared staging session than the first entry did.
+func TestNightStageFirstShowCueAudioSecondEntryRestagesWithNewKeysAndHigherRevisions(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeA, _, playlistID, _ := nightFirstCueStageTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+
+	firstEntry := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", Cycle: 1, StateEnteredAt: now}
+	if unstaged := h.nightStageFirstShowCueAudio(context.Background(), now, firstEntry, payload); len(unstaged) != 0 {
+		t.Fatalf("first entry unstagedNodes = %v, want none", unstaged)
+	}
+	firstStaged := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, nodeA)
+	if len(firstStaged) != 2 {
+		t.Fatalf("node %q after first entry: dispatched %d commands, want 2", nodeA, len(firstStaged))
+	}
+
+	// A LATER entry into the same show tonight: same session id, a later
+	// Cycle, and a later StateEnteredAt — the SAME ArmedShowID reuse a
+	// stale key derivation would have collapsed into one no-op skip.
+	secondEntry := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", Cycle: 2, StateEnteredAt: now.Add(time.Hour)}
+	if unstaged := h.nightStageFirstShowCueAudio(context.Background(), now.Add(time.Hour), secondEntry, payload); len(unstaged) != 0 {
+		t.Fatalf("second entry unstagedNodes = %v, want none", unstaged)
+	}
+
+	allStaged := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, nodeA)
+	if len(allStaged) != 4 {
+		t.Fatalf("node %q after both entries: dispatched %d commands total, want 4 (2 per entry): the second entry must not be skipped as a replay", nodeA, len(allStaged))
+	}
+	secondStaged := allStaged[2:]
+
+	firstApplyKey, _ := firstStaged[0].Params["invocationId"].(string)
+	secondApplyKey, _ := secondStaged[0].Params["invocationId"].(string)
+	if firstApplyKey == "" || secondApplyKey == "" {
+		t.Fatalf("apply invocationId missing: first=%q second=%q", firstApplyKey, secondApplyKey)
+	}
+	if firstApplyKey == secondApplyKey {
+		t.Fatalf("both entries dispatched under the SAME apply invocationId %q, want different keys per entry", firstApplyKey)
+	}
+
+	// Round-tripped through JSON by the fake publisher, so a number decodes
+	// as float64, never the uint64 [cueactivation.PrepareStagingSessionRevision]
+	// actually returned.
+	firstRevision, _ := firstStaged[0].Params["revision"].(float64)
+	secondRevision, _ := secondStaged[0].Params["revision"].(float64)
+	if secondRevision <= firstRevision {
+		t.Fatalf("second entry apply revision = %v, want greater than the first entry's %v", secondRevision, firstRevision)
+	}
+}
+
+// TestNightKickOffFirstCueStageRunsInBackgroundAndNeverBlocks proves the
+// owner ruling's own timing fix: staging is kicked off without waiting for
+// any node to answer (a Raspberry Pi 3B+'s cold prepare takes seconds),
+// and a node that never answers at all is read back as still-unconfirmed
+// at the launch moment rather than ever being waited on there.
+func TestNightKickOffFirstCueStageRunsInBackgroundAndNeverBlocks(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeA, nodeB, playlistID, _ := nightFirstCueStageTestFixture(t, setup, now)
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+	release := make(chan struct{})
+	setup.pub.onAwaitResponseForNode = map[string]func(){
+		nodeB + ":audio.session.apply": func() { <-release },
+	}
+	t.Cleanup(func() { close(release) })
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+
+	rec := store.NightSessionRecord{ID: "night-1", ArmedShowID: "armed-1", Cycle: 1, StateEnteredAt: now}
+	payload := config.NightSessionPayload{ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "inst-1", Playlist: playlistID}}
+
+	started := time.Now()
+	h.nightKickOffFirstCueStage(context.Background(), now, rec, payload)
+	if took := time.Since(started); took > 100*time.Millisecond {
+		t.Fatalf("nightKickOffFirstCueStage took %v to return, want near-instant: it must never wait on any node", took)
+	}
+
+	// Read back immediately, before nodeB's fake node has ever answered:
+	// this is exactly what nightAdvanceTransitionToShow's own launch step
+	// does, and it must see "not done yet," never block.
+	if _, done := h.nightFirstCueStageStatus(rec); done {
+		t.Fatal("staging status reported done immediately after kickoff, before the slow node could possibly have answered")
+	}
+
+	// A repeat kickoff for the SAME entry must not launch a second
+	// goroutine (and therefore never a second round of node dispatches).
+	h.nightKickOffFirstCueStage(context.Background(), now, rec, payload)
+
+	// nodeB's own dispatch is left blocked (released only by t.Cleanup);
+	// the goroutine still finishes on its own, bounded by
+	// nightStageFirstShowCueTimeout, exactly as
+	// TestNightStageFirstShowCueAudioSlowNodeReportedUnstagedAndBounded
+	// proves at nightStageFirstShowCueAudio's own level.
+	h.nightFirstCueStageWG.Wait()
+
+	unstaged, done := h.nightFirstCueStageStatus(rec)
+	if !done {
+		t.Fatal("staging status still not done after the goroutine finished")
+	}
+	if len(unstaged) != 1 || unstaged[0] != nodeB {
+		t.Fatalf("unstagedNodes = %v, want [%q]", unstaged, nodeB)
+	}
+	staged := dispatchedActionsToSessionForNode(setup, cueactivation.PrepareStagingSessionID, nodeA)
+	if len(staged) != 2 {
+		t.Fatalf("healthy node %q: dispatched %d commands, want 2 (apply, prepare)", nodeA, len(staged))
+	}
+}
+
 // TestNightStageFirstShowCueAudioSlowNodeReportedUnstagedAndBounded proves
 // the owner ruling's own bound: a node whose apply never answers is named
 // in unstagedNodes rather than allowed to hold up start-night, and the

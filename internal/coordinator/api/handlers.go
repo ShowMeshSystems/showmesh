@@ -180,6 +180,34 @@ type handlers struct {
 	// handler can invalidate stream state at the moment it changes rather
 	// than leaving clients to wait for the hub's next render pass.
 	hub *Hub
+
+	// nightFirstCueStageWG owns every nightStageFirstShowCueAudio goroutine
+	// [handlers.nightKickOffFirstCueStage] has launched but not yet
+	// finished - mirrors cueActivationFailToBlackWG above: [NightLoop.Run]
+	// waits on it before returning from its own ctx.Done() case, so
+	// shutdown cannot close the store while one of these is still
+	// dispatching.
+	nightFirstCueStageWG sync.WaitGroup
+
+	// nightFirstCueStageMu guards nightFirstCueStageKicked and
+	// nightFirstCueStageResult, written by a nightKickOffFirstCueStage
+	// goroutine and read by nightAdvanceTransitionToShow's own launch
+	// step, on different goroutines.
+	nightFirstCueStageMu sync.Mutex
+	// nightFirstCueStageKicked records, by nightFirstCueStageEntryKey, that
+	// staging has already been kicked off for this entry into a show
+	// tonight, so a later tick (there are many, while transition-to-show
+	// waits on its hold and barrier cues) never launches a second goroutine
+	// for the same entry. In-memory and per-*handlers, like
+	// emergencyStopArms above: losing it across a restart just means the
+	// next tick launches one fresh goroutine, which nightStageFirstShowCueAudio's
+	// own idempotency keys make harmless.
+	nightFirstCueStageKicked map[string]bool
+	// nightFirstCueStageResult records, by the same key, the last known
+	// unstagedNodes a launched goroutine has completed with. Absent means
+	// staging for that entry has not finished yet - the launch step reads
+	// this without blocking and never waits for it to appear.
+	nightFirstCueStageResult map[string][]string
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

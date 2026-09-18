@@ -430,7 +430,7 @@ func (c *multiSyncCueAudioTrigger) handleStart(ctx context.Context, mgr *audio.M
 	// A resting or preshow bed must never keep playing once any show
 	// sequence starts: cut it immediately, node-local, rather than wait
 	// for the coordinator's own later pause command to arrive.
-	mgr.CutBackgroundBed(ctx, pkgaudio.SessionID(cueactivation.BackgroundSessionID))
+	mgr.CutBackgroundBed(ctx)
 
 	target := c.targetIdentity(entry)
 

@@ -7,25 +7,44 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
-// CutBackgroundBed immediately suspends id when it is a Playing session
-// with source role background, capturing a resume bookmark exactly as a
-// commanded [Manager.Pause] would: an Engine.Pause, never a fade. Unlike
-// [Manager.interruptOneLocked] it never joins interruptedByAll, so a
-// later coordinator-issued pause or resume against id still runs through
-// its own ledger unobstructed instead of tripping [Manager.Resume]'s
-// interruptedByAll refusal. It also bypasses [Session.dispatch]'s
-// revState ledger entirely, the same trade [Manager.SilenceAll] already
-// makes, so a coordinator command dispatched afterward is still accepted
-// on its own revision.
+// CutBackgroundBed immediately suspends every currently Playing session
+// whose source role is background, whatever its session id, capturing a
+// resume bookmark exactly as a commanded [Manager.Pause] would: an
+// Engine.Pause, never a fade. A node may carry a background session under
+// more than one id over a night (a resting/preshow bed's session id
+// changes with the night session that started it), so this scans every
+// session this Manager holds rather than trusting a single fixed id.
+// Announcement and show sessions are never touched, whatever their state.
 //
-// Reports false, with nothing changed, when there is nothing to cut: no
-// such session, its source role is not background, its handle is not
-// loaded, or it is not Playing.
-func (m *Manager) CutBackgroundBed(ctx context.Context, id pkgaudio.SessionID) bool {
-	s, ok := m.get(id)
-	if !ok {
-		return false
+// Unlike [Manager.interruptOneLocked] a cut session never joins
+// interruptedByAll, so a later coordinator-issued pause or resume against
+// it still runs through its own ledger unobstructed instead of tripping
+// [Manager.Resume]'s interruptedByAll refusal. It also bypasses
+// [Session.dispatch]'s revState ledger entirely, the same trade
+// [Manager.SilenceAll] already makes, so a coordinator command dispatched
+// afterward is still accepted on its own revision.
+//
+// Reports true only if at least one session was actually cut.
+func (m *Manager) CutBackgroundBed(ctx context.Context) bool {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
 	}
+	m.mu.Unlock()
+
+	var cutAny bool
+	for _, s := range sessions {
+		if m.cutOneBackgroundBedLocked(ctx, s) {
+			cutAny = true
+		}
+	}
+	return cutAny
+}
+
+// cutOneBackgroundBedLocked runs [Manager.CutBackgroundBed]'s own cut
+// against a single session, taking and releasing that session's own lock.
+func (m *Manager) cutOneBackgroundBedLocked(ctx context.Context, s *Session) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state != pkgaudio.StatePlaying || !s.handleLoaded {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
@@ -39,10 +41,21 @@ const nightStageFirstShowCueTimeout = scheduleProbeStepTimeout
 // nil when there is nothing to stage at all: no bound playlist, no entry
 // resolves to a cue with audio anywhere, or a dependency is unavailable.
 //
-// Idempotent across repeat ticks: each node's apply carries an
-// invocation key derived from rec.ArmedShowID, so a tick that finds one
-// already dispatched (successfully or not) skips it rather than
-// re-dispatching or waiting on it again.
+// Idempotent across repeat ticks AND across every entry into a show
+// tonight: each node's apply and prepare carry an invocation key derived
+// from [nightFirstCueStageEntryKey] (rec.ID, rec.Cycle, rec.StateEnteredAt),
+// a fresh identity for every entry, so a tick that finds one already
+// dispatched (successfully or not) for THIS entry skips it rather than
+// re-dispatching or waiting on it again, while a later entry into the
+// same show tonight always gets its own keys and a higher revision on
+// the shared staging session ([cueactivation.PrepareStagingSessionRevision]
+// derives that revision from rec.StateEnteredAt, which only ever advances).
+//
+// Every participating node's apply-then-prepare pair runs on its own
+// goroutine, concurrently with every other node's: a slow node's own
+// cold prepare (seconds, on constrained hardware) must never delay
+// another node's confirmation, mirroring
+// [dispatchCueActivationsConcurrently]'s identical per-node isolation.
 func (h *handlers) nightStageFirstShowCueAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) (unstagedNodes []string) {
 	if h.deps.Config == nil || h.deps.AssetManifests == nil || h.deps.Commands == nil {
 		return nil
@@ -84,88 +97,172 @@ func (h *handlers) nightStageFirstShowCueAudio(ctx context.Context, now time.Tim
 	applyRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepApply)
 	prepareRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepPrepare)
 	staging := cueactivation.PrepareStagingSessionID
+	entryKey := nightFirstCueStageEntryKey(rec)
 
-	type inflightApply struct {
-		nodeID string
-		ch     <-chan audioDispatchOutcome
-	}
-	var applies []inflightApply
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+	)
 	for nodeID, catalog := range catalogs {
 		entry, participates := prepareAheadCatalogEntry(catalog, cueID)
 		if !participates || entry.Outputs.Audio == nil || entry.Outputs.Audio.Filename == "" {
-			continue
-		}
-		applyInvocation := rec.ArmedShowID + ":stage-first-cue-apply:" + nodeID
-		if _, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, applyInvocation); err == nil {
-			continue
-		} else if !errors.Is(err, store.ErrCommandNotFound) {
-			h.logWarn("night loop: stage first cue: look up staging apply by idempotency key failed", "nodeId", nodeID, "cueId", cueID, "error", err)
-			unstagedNodes = append(unstagedNodes, nodeID)
 			continue
 		}
 		contentHash := ""
 		if len(entry.Outputs.Audio.AssetHashes) > 0 {
 			contentHash = entry.Outputs.Audio.AssetHashes[0]
 		}
-		ch := h.dispatchProbeStep(ctx, now, AudioDispatchInput{
-			Action: "audio.session.apply", NodeID: nodeID, SessionID: staging,
-			Params: map[string]any{
-				"sessionId": staging, "invocationId": applyInvocation, "revision": applyRevision,
-				"sourceRole": string(pkgaudio.SourceRoleShow),
-				"media": map[string]any{
-					"assetId": entry.Outputs.Audio.Asset, "contentHash": contentHash, "filename": entry.Outputs.Audio.Filename,
-				},
-			},
-			Revision: applyRevision, IdempotencyKey: applyInvocation,
-			IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
-			IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
-		})
-		applies = append(applies, inflightApply{nodeID: nodeID, ch: ch})
+		wg.Add(1)
+		go func(nodeID string, assetID, filename string) {
+			defer wg.Done()
+			if unstaged := h.nightStageFirstShowCueAudioOnNode(ctx, now, entryKey, cueID, nodeID, assetID, contentHash, filename, staging, applyRevision, prepareRevision, issuer); unstaged {
+				mu.Lock()
+				unstagedNodes = append(unstagedNodes, nodeID)
+				mu.Unlock()
+			}
+		}(nodeID, entry.Outputs.Audio.Asset, entry.Outputs.Audio.Filename)
 	}
-
-	for _, ia := range applies {
-		out, timedOut := awaitProbeStep(ia.ch)
-		switch {
-		case timedOut:
-			h.logWarn("night loop: stage first cue: apply dispatch timed out", "nodeId", ia.nodeID, "cueId", cueID, "timeout", nightStageFirstShowCueTimeout)
-			unstagedNodes = append(unstagedNodes, ia.nodeID)
-			continue
-		case out.err != nil:
-			h.logWarn("night loop: stage first cue: apply dispatch failed", "nodeId", ia.nodeID, "cueId", cueID, "error", out.err)
-			unstagedNodes = append(unstagedNodes, ia.nodeID)
-			continue
-		case out.problem != nil:
-			h.logWarn("night loop: stage first cue: apply dispatch refused", "nodeId", ia.nodeID, "cueId", cueID, "detail", out.problem.Detail)
-			unstagedNodes = append(unstagedNodes, ia.nodeID)
-			continue
-		case out.result.Outcome == "refused" || out.result.Outcome == "failed":
-			h.logWarn("night loop: stage first cue: apply outcome", "nodeId", ia.nodeID, "cueId", cueID, "outcome", out.result.Outcome, "reason", out.result.Reason)
-			unstagedNodes = append(unstagedNodes, ia.nodeID)
-			continue
-		}
-
-		prepareInvocation := rec.ArmedShowID + ":stage-first-cue-prepare:" + ia.nodeID
-		prepCh := h.dispatchProbeStep(ctx, now, AudioDispatchInput{
-			Action: "audio.session.prepare", NodeID: ia.nodeID, SessionID: staging,
-			Params:   map[string]any{"sessionId": staging, "invocationId": prepareInvocation, "revision": prepareRevision},
-			Revision: prepareRevision, IdempotencyKey: prepareInvocation,
-			IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
-			IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
-		})
-		prepOut, prepTimedOut := awaitProbeStep(prepCh)
-		switch {
-		case prepTimedOut:
-			h.logWarn("night loop: stage first cue: prepare dispatch timed out", "nodeId", ia.nodeID, "cueId", cueID, "timeout", nightStageFirstShowCueTimeout)
-			unstagedNodes = append(unstagedNodes, ia.nodeID)
-		case prepOut.err != nil:
-			h.logWarn("night loop: stage first cue: prepare dispatch failed", "nodeId", ia.nodeID, "cueId", cueID, "error", prepOut.err)
-			unstagedNodes = append(unstagedNodes, ia.nodeID)
-		case prepOut.problem != nil:
-			h.logWarn("night loop: stage first cue: prepare dispatch refused", "nodeId", ia.nodeID, "cueId", cueID, "detail", prepOut.problem.Detail)
-			unstagedNodes = append(unstagedNodes, ia.nodeID)
-		}
-	}
+	wg.Wait()
 	return unstagedNodes
+}
+
+// nightFirstCueStageEntryKey derives a stable identity for one entry into
+// a show tonight, from rec.ID, rec.Cycle, and rec.StateEnteredAt: unlike
+// rec.ArmedShowID (opaque and, once armed, unchanged across every repeat
+// tick of the SAME entry, which is exactly the replay-safety this key
+// also needs), this stays legible and, because rec.StateEnteredAt only
+// ever advances, guarantees a DIFFERENT key for every later entry into
+// the same show tonight or on a later night — so the node-side invocation
+// ids this feeds never repeat across entries, only within one.
+func nightFirstCueStageEntryKey(rec store.NightSessionRecord) string {
+	return rec.ID + ":" + strconv.FormatInt(rec.Cycle, 10) + ":" + rec.StateEnteredAt.UTC().Format(time.RFC3339Nano)
+}
+
+// nightKickOffFirstCueStage launches [handlers.nightStageFirstShowCueAudio]
+// on its own goroutine, once per entry into a show tonight (owner ruling
+// 2026-09-18): a Raspberry Pi 3B+ needs about 8s to cold-prepare a large
+// WAV, so staging must start as early as possible - at the same tick
+// transition-to-show first runs its enterShow cues (the pre-show
+// announcement cue's own release moment), never at the launch moment
+// nightAdvanceTransitionToShow's own hold and barrier wait ends. Never
+// blocks the calling tick: the goroutine reports back through
+// nightFirstCueStageResult, which [handlers.nightFirstCueStageStatus]
+// reads without waiting.
+//
+// Idempotent by construction, twice over: nightFirstCueStageKicked stops
+// a second call for the SAME entry from ever launching a second goroutine,
+// and nightStageFirstShowCueAudio's own per-node idempotency keys make a
+// second goroutine for the same entry harmless even if one somehow did.
+func (h *handlers) nightKickOffFirstCueStage(ctx context.Context, now time.Time, rec store.NightSessionRecord, payload config.NightSessionPayload) {
+	key := nightFirstCueStageEntryKey(rec)
+
+	h.nightFirstCueStageMu.Lock()
+	if h.nightFirstCueStageKicked == nil {
+		h.nightFirstCueStageKicked = make(map[string]bool, 1)
+	}
+	if h.nightFirstCueStageKicked[key] {
+		h.nightFirstCueStageMu.Unlock()
+		return
+	}
+	h.nightFirstCueStageKicked[key] = true
+	h.nightFirstCueStageMu.Unlock()
+
+	h.nightFirstCueStageWG.Add(1)
+	go func() {
+		defer h.nightFirstCueStageWG.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				h.logWarn("night loop: stage first cue: dispatch panicked; recovered", "sessionId", rec.ID, "panic", r)
+			}
+		}()
+		unstaged := h.nightStageFirstShowCueAudio(ctx, now, rec, payload)
+		h.nightFirstCueStageMu.Lock()
+		if h.nightFirstCueStageResult == nil {
+			h.nightFirstCueStageResult = make(map[string][]string, 1)
+		}
+		h.nightFirstCueStageResult[key] = unstaged
+		h.nightFirstCueStageMu.Unlock()
+	}()
+}
+
+// nightFirstCueStageStatus reads back rec's own entry-keyed staging result
+// without blocking: done is false while the goroutine
+// [handlers.nightKickOffFirstCueStage] launched for this entry has not
+// finished yet, in which case unstagedNodes is meaningless and must not be
+// treated as "every node confirmed."
+func (h *handlers) nightFirstCueStageStatus(rec store.NightSessionRecord) (unstagedNodes []string, done bool) {
+	key := nightFirstCueStageEntryKey(rec)
+	h.nightFirstCueStageMu.Lock()
+	defer h.nightFirstCueStageMu.Unlock()
+	unstagedNodes, done = h.nightFirstCueStageResult[key]
+	return unstagedNodes, done
+}
+
+// nightStageFirstShowCueAudioOnNode runs one node's own apply-then-prepare
+// staging pair, gated on the SAME idempotency check
+// [handlers.nightStageFirstShowCueAudio] used inline before this was split
+// out for per-node concurrency. Returns true when nodeID should be
+// reported unstaged (apply or prepare did not confirm); false covers both
+// a genuine confirm and an already-dispatched replay.
+func (h *handlers) nightStageFirstShowCueAudioOnNode(ctx context.Context, now time.Time, entryKey, cueID, nodeID, assetID, contentHash, filename, staging string, applyRevision, prepareRevision uint64, issuer FPPCommandIssuer) (unstaged bool) {
+	applyInvocation := entryKey + ":stage-first-cue-apply:" + nodeID
+	if _, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, applyInvocation); err == nil {
+		return false
+	} else if !errors.Is(err, store.ErrCommandNotFound) {
+		h.logWarn("night loop: stage first cue: look up staging apply by idempotency key failed", "nodeId", nodeID, "cueId", cueID, "error", err)
+		return true
+	}
+
+	ch := h.dispatchProbeStep(ctx, now, AudioDispatchInput{
+		Action: "audio.session.apply", NodeID: nodeID, SessionID: staging,
+		Params: map[string]any{
+			"sessionId": staging, "invocationId": applyInvocation, "revision": applyRevision,
+			"sourceRole": string(pkgaudio.SourceRoleShow),
+			"media": map[string]any{
+				"assetId": assetID, "contentHash": contentHash, "filename": filename,
+			},
+		},
+		Revision: applyRevision, IdempotencyKey: applyInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	out, timedOut := awaitProbeStep(ch)
+	switch {
+	case timedOut:
+		h.logWarn("night loop: stage first cue: apply dispatch timed out", "nodeId", nodeID, "cueId", cueID, "timeout", nightStageFirstShowCueTimeout)
+		return true
+	case out.err != nil:
+		h.logWarn("night loop: stage first cue: apply dispatch failed", "nodeId", nodeID, "cueId", cueID, "error", out.err)
+		return true
+	case out.problem != nil:
+		h.logWarn("night loop: stage first cue: apply dispatch refused", "nodeId", nodeID, "cueId", cueID, "detail", out.problem.Detail)
+		return true
+	case out.result.Outcome == "refused" || out.result.Outcome == "failed":
+		h.logWarn("night loop: stage first cue: apply outcome", "nodeId", nodeID, "cueId", cueID, "outcome", out.result.Outcome, "reason", out.result.Reason)
+		return true
+	}
+
+	prepareInvocation := entryKey + ":stage-first-cue-prepare:" + nodeID
+	prepCh := h.dispatchProbeStep(ctx, now, AudioDispatchInput{
+		Action: "audio.session.prepare", NodeID: nodeID, SessionID: staging,
+		Params:   map[string]any{"sessionId": staging, "invocationId": prepareInvocation, "revision": prepareRevision},
+		Revision: prepareRevision, IdempotencyKey: prepareInvocation,
+		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
+	})
+	prepOut, prepTimedOut := awaitProbeStep(prepCh)
+	switch {
+	case prepTimedOut:
+		h.logWarn("night loop: stage first cue: prepare dispatch timed out", "nodeId", nodeID, "cueId", cueID, "timeout", nightStageFirstShowCueTimeout)
+		return true
+	case prepOut.err != nil:
+		h.logWarn("night loop: stage first cue: prepare dispatch failed", "nodeId", nodeID, "cueId", cueID, "error", prepOut.err)
+		return true
+	case prepOut.problem != nil:
+		h.logWarn("night loop: stage first cue: prepare dispatch refused", "nodeId", nodeID, "cueId", cueID, "detail", prepOut.problem.Detail)
+		return true
+	}
+	return false
 }
 
 // nightShowPlaylistEntries reads playlistID's current show.playlist
