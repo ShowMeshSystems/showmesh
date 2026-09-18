@@ -75,7 +75,9 @@
   --rail-w: 212px;
   /* The 49px chrome includes the separate 3px progress strip. */
   --chrome-h: 46px;
-  --page-max: 1200px;
+  /* Content is fluid: it fills the column and caps at a generous max so an
+     ultrawide keeps a sane measure. Set here only; no screen overrides it. */
+  --page-max: min(1600px, 100%);
 }
 
 [data-density='compact'] {

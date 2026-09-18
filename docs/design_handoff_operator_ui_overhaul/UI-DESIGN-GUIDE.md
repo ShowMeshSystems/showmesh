@@ -145,12 +145,15 @@ principal. The show picker and the mode badge open popovers rather than navigati
 If it wraps its height changes and the rail's offset puts the first nav group behind it. Fix the
 wrap, never the offset.
 
-**One page width, no exceptions.** `.sm-shell-body` is
+**One place controls width; no screen overrides it.** `.sm-shell-body` is
 `grid-template-columns: var(--rail-w) minmax(0, 1fr)` with the rail fixed at 212px, and `.sm-main`
-is `max-width: var(--page-max)`, 1200px, set once in `shell.css`. **A screen never overrides the
-page width.** Every per-page `.sm-main` cap was deleted in the 2026-09-01 round-three pass, along
-with the stylesheet that used `!important` to fight them; the `.sm-main:has(...)` rules that remain
-in `blocks.css` adjust padding only. Access is included in the rule: it has no cap of its own.
+is `max-width: var(--page-max)`. Width is fluid: `--page-max` is `min(1600px, 100%)`, set once in
+`tokens.css`, so content fills the column and caps at a generous maximum on an ultrawide (owner
+ruling, 2026-09-18, superseding the flat 1200px). **A screen never sets its own width.** Every
+per-page `.sm-main` cap was deleted in the 2026-09-01 round-three pass, along with the stylesheet
+that used `!important` to fight them; the `.sm-main:has(...)` rules that remain in `blocks.css`
+adjust padding only. Access is included in the rule: it has no cap of its own. Prose blocks keep
+their own reading-measure caps (74ch / 78ch); those are readability limits, not page width.
 
 **Inspectors float, they do not take a column.** The old `[data-panes]` two-column grid is gone.
 `.sm-panes` is `display: block`, and `Panes`' `aside` child renders inside the kit `Drawer`
@@ -609,8 +612,10 @@ waiting for the owner, and no working file collects them again.
     as a two-column layout. Selection stays the screen's own state, closing the drawer clears it, and
     picking another row swaps the content without closing. Node detail renders the same way, in a
     wide drawer over Monitor Fleet, with deep links and every existing link target still working.
-14. **One page width.** `--page-max` in `ui/src/kit/styles/shell.css` is the only cap. A screen may
-    adjust its padding; it may not set a width.
+14. **One place controls width.** `--page-max` in `ui/src/kit/styles/tokens.css` is the only width
+    control. It is fluid, `min(1600px, 100%)`: content fills the column and caps at a generous
+    maximum (owner ruling, 2026-09-18, superseding the flat 1200px cap). A screen may adjust its
+    padding; it may not set a width.
 15. **Show Night and Live Control build their lifecycle commands from one shared spec builder**, in
     the mock's cell order. A command's option renders inside that command's own cell, under its
     consequence line, never beside the button.
