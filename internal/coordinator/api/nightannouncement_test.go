@@ -1637,3 +1637,164 @@ func TestNightAnnouncement_StartsScheduledNodesConcurrently(t *testing.T) {
 		}
 	}
 }
+
+// dispatchedRevisionForNode returns the params["revision"] of the first
+// dispatch of action addressed to nodeID at or after index from, failing
+// the test if none exists.
+func dispatchedRevisionForNode(t *testing.T, pub *fakeAudioPublisher, action, nodeID string, from int) int64 {
+	t.Helper()
+	for _, d := range pub.dispatched[from:] {
+		if d.Action != action || d.NodeID != nodeID {
+			continue
+		}
+		rev, ok := d.Params["revision"].(float64)
+		if !ok {
+			t.Fatalf("%s's own %q carried no numeric revision param: %v", nodeID, action, d.Params)
+		}
+		return int64(rev)
+	}
+	t.Fatalf("no %q was dispatched to %q", action, nodeID)
+	return 0
+}
+
+// TestNightAnnouncement_ExtraNodeApplyPrepareStartRevisionsIncreaseAcrossTwoEntries
+// is the acceptance proof for the rehearsal-rig defect: a two-node
+// announcement, entered twice as nightPhaseEnterShow's own sole (and
+// therefore first outward-facing) cue, must give its EXTRA node (node-b)
+// an apply, a prepare and a start on BOTH entries, every one strictly
+// increasing - never the frozen show.action configuration revision
+// [handlers.nightAnnouncementSessionTarget]'s own second return value used
+// to feed the extra-node apply before this fix, which the node's own
+// second-entry audio.session.apply refused as stale_revision, and from
+// there [handlers.nightAdvanceAnnouncementStartScheduled]'s own readiness
+// gate never saw a terminal apply row to start against.
+//
+// mutation target: [handlers.nightAdvanceAnnouncementApplyExtra]'s revision
+// source. Feed it the show.action configuration revision again (this
+// function's own prior defect) and the second entry's node-b apply wire
+// revision stops advancing past the first entry's node-b start revision,
+// failing here.
+func TestNightAnnouncement_ExtraNodeApplyPrepareStartRevisionsIncreaseAcrossTwoEntries(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putAudioNodeForTest(t, st, "node-a")      // holds the media clock
+	putAudioNodeNoLTCForTest(t, st, "node-b") // the extra node
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+
+	const holderReading = int64(1_700_000_000_000_000_000)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading, ""),
+		"node-b:audio.session.prepare": scheduleProbeEvidenceResult(true, holderReading+5_000_000, ""),
+	}
+
+	var lastStartRev int64 = -1
+	for entry := 1; entry <= 2; entry++ {
+		if entry > 1 {
+			rec.Cycle++
+			rec.ShowCommitted = false
+			if err := st.UpdateNightSession(ctx, rec, testNow); err != nil {
+				t.Fatalf("entry %d: advance cycle: %v", entry, err)
+			}
+		}
+
+		before := len(pub.dispatched)
+		h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+		rec = mustRefreshNightSession(t, st, rec.ID)
+
+		applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementApplyExtra+":"+nightPhaseEnterShow+":node-b", "thank-you")
+		if err != nil {
+			t.Fatalf("entry %d: node-b apply row: %v", entry, err)
+		}
+		if applyRow.State != nightCueStateResolved || applyRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("entry %d: node-b apply = %+v, want resolved/confirmed - not refused as stale_revision", entry, applyRow)
+		}
+		startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow+":node-b", "thank-you")
+		if err != nil {
+			t.Fatalf("entry %d: node-b start row: %v", entry, err)
+		}
+		if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+			t.Fatalf("entry %d: node-b start = %+v, want resolved/confirmed - the welcome announcement must play on the extra node every entry, not once", entry, startRow)
+		}
+
+		applyRev := dispatchedRevisionForNode(t, pub, "audio.session.apply", "node-b", before)
+		prepareRev := dispatchedRevisionForNode(t, pub, "audio.session.prepare", "node-b", before)
+		startRev := dispatchedRevisionForNode(t, pub, "audio.session.start", "node-b", before)
+
+		if applyRev <= lastStartRev {
+			t.Fatalf("entry %d: node-b apply revision %d did not advance past the previous entry's start revision %d", entry, applyRev, lastStartRev)
+		}
+		if prepareRev <= applyRev {
+			t.Fatalf("entry %d: node-b prepare revision %d did not advance past its own apply's %d", entry, prepareRev, applyRev)
+		}
+		if startRev <= prepareRev {
+			t.Fatalf("entry %d: node-b start revision %d did not advance past its own prepare's %d", entry, startRev, prepareRev)
+		}
+		lastStartRev = startRev
+	}
+}
+
+// TestNightAnnouncement_ExtraNodeApplyRefusalIsReportedAndTheAnnouncementStillStarts
+// is the reporting acceptance proof: when the extra node's own apply is
+// refused, that refusal lands durably on ITS OWN applyExtra outbox row -
+// never silently dropped - and, following exactly the primary node's own
+// "start anyway" policy [handlers.nightAdvanceAnnouncementStartScheduled]
+// already applies uniformly to every listed node, the announcement still
+// starts on it: a silent announcement is never the quiet outcome of a step
+// this controller skipped without a trace.
+func TestNightAnnouncement_ExtraNodeApplyRefusalIsReportedAndTheAnnouncementStillStarts(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	// Neither node has an audio.node config: no usable media clock, so
+	// both nodes start on arrival, isolating this test to the refusal
+	// reporting question alone.
+	twoNodeAnnouncementAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-b:audio.session.apply": {Outcome: mqttproto.OutcomeRefused, Reason: "node-b refuses this apply"},
+	}
+
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementApplyExtra+":"+nightPhaseEnterResting+":node-b", "thank-you")
+	if err != nil {
+		t.Fatalf("node-b apply row: %v", err)
+	}
+	if applyRow.State != nightCueStateResolved || applyRow.Outcome == nightCueOutcomeConfirmed {
+		t.Fatalf("node-b apply = %+v, want resolved and NOT confirmed - this test needs a refused apply", applyRow)
+	}
+	if applyRow.OutcomeReason == "" {
+		t.Fatalf("node-b apply row carries no reason; an operator reading this row cannot tell why it was refused")
+	}
+
+	startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting+":node-b", "thank-you")
+	if err != nil {
+		t.Fatalf("no start row after a refused extra-node apply: %v (a silent announcement must never be the quiet outcome of a step this controller simply skipped)", err)
+	}
+	if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-b start = %+v, want resolved/confirmed - follows the primary node's own start-anyway policy for an unconfirmed apply", startRow)
+	}
+
+	// The wire surface: an operator reading GET /night/session sees the
+	// refusal on node-b's own apply step, not a gap.
+	wire := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	var sawRefusedApply bool
+	for _, step := range wire.Steps {
+		if step.Sequence == v1.NightAudioSequenceAnnouncement && step.NodeID == "node-b" && step.Kind == nightAnnouncementStepApply {
+			if step.Outcome == nightCueOutcomeConfirmed {
+				t.Fatalf("wire node-b apply outcome = %q, want it to carry the refusal, not confirmed", step.Outcome)
+			}
+			sawRefusedApply = true
+		}
+	}
+	if !sawRefusedApply {
+		t.Fatalf("wire steps carry no node-b apply step at all; the refusal has no operator-visible trace")
+	}
+}

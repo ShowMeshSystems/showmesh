@@ -273,10 +273,12 @@ func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.T
 }
 
 // nightAdvanceAnnouncementApplyExtra runs the cue's own announcement apply
-// again for every node beyond the bound action's own first, using the
-// SAME applyRevision and params the generic engine already dispatched for that first node.
+// again for every node beyond the bound action's own first, computing each
+// node's own applyRevision from that SAME node's own persisted audio-session
+// floor ([nightAnnouncementRevisions]) - exactly like clear and start
+// already do per node - never the show action's own configuration revision.
 func (h *handlers) nightAdvanceAnnouncementApplyExtra(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
-	target, applyRevision, ok := h.nightAnnouncementSessionTarget(ctx, rec, cue)
+	target, _, ok := h.nightAnnouncementSessionTarget(ctx, rec, cue)
 	if !ok || len(target.AudioNodeIDs) <= 1 {
 		return
 	}
@@ -284,9 +286,16 @@ func (h *handlers) nightAdvanceAnnouncementApplyExtra(ctx context.Context, now t
 	for _, nodeID := range target.AudioNodeIDs[1:] {
 		applyTarget := declared
 		applyTarget.AudioNodeIDs = config.AudioNodeIDList{nodeID}
+		persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, target.AudioSessionID)
+		_, applyRevision, _ := nightAnnouncementRevisions(persisted)
 		phase := nightPhaseAnnouncementApplyExtra + ":" + cuePhase + ":" + nodeID
 		if err := h.nightRunAnnouncementApply(ctx, now, rec, phase, cue.Name, applyTarget, applyRevision); err != nil {
 			h.logWarn("night loop: announcement: extra-node apply failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
+			continue
+		}
+		row, rerr := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cue.Name)
+		if rerr == nil && row.Outcome != nightCueOutcomeConfirmed {
+			h.logWarn("night loop: announcement: extra-node apply did not confirm; starting anyway so a silent announcement is never the quiet outcome", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "outcome", row.Outcome, "reason", row.OutcomeReason)
 		}
 	}
 }
