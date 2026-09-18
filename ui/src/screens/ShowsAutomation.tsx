@@ -23,7 +23,6 @@ import {
   type ConfigShowAction,
   type ConfigShowActionMQTTExpect,
   type ConfigShowActionTarget,
-  type ConfigShowActionTargetWithExclude,
   type ConfigShowMacro,
   type ConfigShowMacroLocalFallback,
   type ConfigShowMacroStep,
@@ -1273,7 +1272,7 @@ function buildAudioTarget(value: AudioTargetValue, showAudioNodes: readonly stri
       else params[key] = n
     }
   }
-  const target: ConfigShowActionTargetWithExclude = {
+  const target: ConfigShowActionTarget = {
     integration: 'audio',
     ...(value.audioNodeIds.length > 0
       ? { audioNodeId: value.audioNodeIds.length === 1 && !value.audioNodeIdWasArray ? (value.audioNodeIds[0] ?? '') : value.audioNodeIds }

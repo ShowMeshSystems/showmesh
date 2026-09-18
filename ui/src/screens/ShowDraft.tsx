@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { getShow, listConfigObjects, putShow, type AudioNodeSummary, type ConfigShowWriteWithAudioNodes } from '../api'
+import { getShow, listConfigObjects, putShow, type AudioNodeSummary, type ConfigShowWrite } from '../api'
 import { Button, ButtonRow, ChoiceGroup, Field, Input, RuledStrip, Section, Textarea } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -64,7 +64,7 @@ export function ShowDraft() {
     setCreating(true)
     setTaken(false)
     setCreateError(null)
-    const payload: ConfigShowWriteWithAudioNodes = { name, notes, audioNodes }
+    const payload: ConfigShowWrite = { name, notes, audioNodes }
     guardedCreate({
       read: () => getShow(id),
       write: () => putShow(id, payload),

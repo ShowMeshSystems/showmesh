@@ -7,7 +7,7 @@ import {
   putShow,
   readShowAudioNodes,
   type AudioNodeSummary,
-  type ConfigShowWriteWithAudioNodes,
+  type ConfigShowWrite,
   type ShowConfigResponse,
 } from '../api'
 import { Button, ButtonRow, ChoiceGroup, Field, Input, NotWired, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
@@ -138,7 +138,7 @@ export function ShowDetail() {
     setSaving(true)
     setSaveError(null)
     setStale(null)
-    const payload: ConfigShowWriteWithAudioNodes = { name, notes, audioNodes }
+    const payload: ConfigShowWrite = { name, notes, audioNodes }
     guardedSave({
       loaded,
       read: () => getShow(id),

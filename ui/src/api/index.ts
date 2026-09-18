@@ -482,18 +482,15 @@ export { getStoredToken } from './token'
 // the store's own generation rather than inventing a second scheme.
 export { randomUUIDv4 } from './uuid'
 
-// ADR-049 decision 10: the show's declared audio nodes and the per-object
-// excludeNodes/resolvedFrom vocabulary, hand-written until the coordinator
-// half of this decision lands in the generated schema (see audioNodesTypes.ts).
+// ADR-049 decision 10: show.audioNodes and excludeNodes are generated
+// schema types (PR #517 landed); only the night bed's two WRITE forms
+// still need a hand-widened type, because api/openapi.yaml's WRITE
+// schemas for them do not yet declare excludeNodes even though the
+// coordinator's own decode path accepts it (see audioNodesTypes.ts).
 export type {
   ResolvedFrom,
-  ConfigShowWithAudioNodes,
-  ConfigShowWriteWithAudioNodes,
-  ConfigShowCueAudioOutputWithExclude,
-  ConfigShowCueAnnouncementOutputWithExclude,
   ConfigNightSessionBackgroundAudioInlineWriteWithExclude,
   ConfigNightSessionBackgroundAudioReferenceWriteWithExclude,
-  ConfigShowActionTargetWithExclude,
 } from './audioNodesTypes'
 export { readShowAudioNodes, readCueOutputExcludeNodes, readBackgroundAudioExcludeNodes, readActionTargetExcludeNodes } from './audioNodesTypes'
 

@@ -1,13 +1,22 @@
 /**
- * ADR-049 decision 10: `show.audioNodes`, the per-object `excludeNodes` on
- * cue audio and announcement outputs, the night bed background, and a
- * show.action audio target, plus `resolvedFrom` beside a reported resolved
- * target list. Hand-written because the coordinator half of this decision
- * (tracked separately from this UI seam) had not landed in api/openapi.yaml
- * or generated/schema.d.ts as of this writing. Once it does, replace each
- * type below with a plain `components['schemas'][...]` alias in domain.ts
- * and delete this file; the read/write helpers below stay useful only if
- * the landed shape differs from what is assumed here.
+ * ADR-049 decision 10: `show.audioNodes`, and the per-object `excludeNodes`
+ * on cue audio/announcement outputs, the night bed background, and a
+ * show.action audio target. The coordinator half (PR #517) has landed and
+ * `show.audioNodes`/`excludeNodes` are now part of the generated schema for
+ * every shape except the night bed's two WRITE forms
+ * (ConfigNightSessionBackgroundAudioInlineWrite/ReferenceWrite): the
+ * coordinator's own decode path accepts `excludeNodes` there
+ * (nightSessionBackgroundKeys/nightSessionBackgroundRefKeys in
+ * internal/coordinator/config/nightsession.go), but api/openapi.yaml's
+ * WRITE schemas for those two forms do not yet declare it, so
+ * openapi-typescript does not generate it. Those two widened types stay
+ * hand-written until that spec gap closes; every other type here is a
+ * plain alias of the generated schema.
+ *
+ * No `resolvedFrom` field is reported anywhere: the coordinator team
+ * confirmed the resolution order is not surfaced on GET responses, so
+ * `ResolvedFrom` is a client-only concept computed by showsModel.ts's
+ * `resolveAudioNodes`, never a wire field.
  */
 import type {
   ConfigNightSessionBackgroundAudio,
@@ -17,41 +26,31 @@ import type {
   ConfigShowActionTarget,
   ConfigShowCueAnnouncementOutput,
   ConfigShowCueAudioOutput,
-  ConfigShowWrite,
 } from './domain'
 
-/** Where a reported resolved target list came from (ADR-049 decision 10). */
+/** Where the client resolved an audio-bearing object's nodes from (ADR-049 decision 10); never reported by the coordinator, always computed locally. */
 export type ResolvedFrom = 'explicit' | 'show' | 'default'
 
-export type ShowAudioNodesFields = { audioNodes?: string[] }
-export type ConfigShowWithAudioNodes = ConfigShow & ShowAudioNodesFields
-export type ConfigShowWriteWithAudioNodes = ConfigShowWrite & ShowAudioNodesFields
-
 export type ExcludeNodesFields = { excludeNodes?: string[] }
-export type ConfigShowCueAudioOutputWithExclude = ConfigShowCueAudioOutput & ExcludeNodesFields
-export type ConfigShowCueAnnouncementOutputWithExclude = ConfigShowCueAnnouncementOutput & ExcludeNodesFields
 export type ConfigNightSessionBackgroundAudioInlineWriteWithExclude = ConfigNightSessionBackgroundAudioInlineWrite & ExcludeNodesFields
 export type ConfigNightSessionBackgroundAudioReferenceWriteWithExclude = ConfigNightSessionBackgroundAudioReferenceWrite & ExcludeNodesFields
-export type ConfigShowActionTargetWithExclude = ConfigShowActionTarget & ExcludeNodesFields
 
-/** `show.audioNodes`, or empty when the show carries none (absent is not yet configured, same absent/empty distinction fppInstances already uses). */
+/** `show.audioNodes`, or empty when the show carries none (absent and empty both mean unset, per ConfigShow's own description). */
 export function readShowAudioNodes(show: ConfigShow): string[] {
-  return (show as ConfigShowWithAudioNodes).audioNodes ?? []
+  return show.audioNodes ?? []
 }
 
 /** `outputs.audio.excludeNodes` or `outputs.announcement.excludeNodes`; only meaningful when the output carries no explicit `targets` of its own. */
 export function readCueOutputExcludeNodes(output: ConfigShowCueAudioOutput | ConfigShowCueAnnouncementOutput | undefined): string[] {
-  if (output === undefined) return []
-  return (output as (ConfigShowCueAudioOutput | ConfigShowCueAnnouncementOutput) & ExcludeNodesFields).excludeNodes ?? []
+  return output?.excludeNodes ?? []
 }
 
 /** The night bed's own `excludeNodes`, inline or reference form alike; only meaningful when the bed carries no explicit `targets` of its own. */
 export function readBackgroundAudioExcludeNodes(bg: ConfigNightSessionBackgroundAudio | undefined): string[] {
-  if (bg === undefined) return []
-  return (bg as ConfigNightSessionBackgroundAudio & ExcludeNodesFields).excludeNodes ?? []
+  return bg?.excludeNodes ?? []
 }
 
 /** A show.action audio target's `excludeNodes`; only meaningful when the target carries no explicit `audioNodeId` list of its own. */
 export function readActionTargetExcludeNodes(target: ConfigShowActionTarget): string[] {
-  return (target as ConfigShowActionTargetWithExclude).excludeNodes ?? []
+  return target.excludeNodes ?? []
 }
