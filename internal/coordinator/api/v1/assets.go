@@ -26,6 +26,30 @@ type Asset struct {
 	CreatedByPrincipalName *string `json:"createdByPrincipalName"`
 	SupersededAt           *string `json:"supersededAt"`
 	Current                bool    `json:"current"`
+
+	// Rendition carries this asset's 48kHz/16-bit/stereo WAV rendition
+	// state (owner ruling 2026-09-18, PCM show audio). Present only when
+	// MediaType is "audio"; nil for every other media type. nil also when
+	// MediaType is "audio" but no rendition has ever been queued for this
+	// asset's content: the coordinator's own reconcile pass has not
+	// reached it yet.
+	Rendition *AssetRendition `json:"rendition,omitempty"`
+}
+
+// AssetRendition is one audio asset's rendition state.
+type AssetRendition struct {
+	// Status is "rendering", "ready", or "failed".
+	Status string `json:"status"`
+	// Format is the rendition's fixed format string, set only when
+	// Status is "ready".
+	Format string `json:"format,omitempty"`
+	// DurationMillis is the rendition's playable duration, set only when
+	// Status is "ready".
+	DurationMillis int64 `json:"durationMillis,omitempty"`
+	// FailureReason names why the last transcode attempt failed, set only
+	// when Status is "failed". The original file is still served to every
+	// node regardless.
+	FailureReason string `json:"failureReason,omitempty"`
 }
 
 // AssetResponse is the body of POST /assets and GET /assets/{id}.

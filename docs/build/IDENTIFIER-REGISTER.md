@@ -1375,7 +1375,9 @@ The store schema version, bumped by migrations in
 | v34 | shipped | every stored `audio.settings` revision is backfilled with `scheduledStartDeliveryBoundMs`/`scheduledStartMarginMs` when either is missing, using each field's own stated default, so a revision written before the two scheduled-start keys joined the required set still decodes and can be pushed (`migrateV34AudioSettingsBackfillScheduledStartFields`, `migration_v34.go`). Same defect class as v20 and v24. Renumbered from v33 when `dev/clock-sync` took `main`: v33 had already shipped as the credentials table, and a number at or below the stamped maximum can never run |
 | v35 | shipped | long-run program-to-LTC drift recording (2026-09-11): `audio_alignment_runs` plus `audio_alignment_samples`, coordinator-side, appended from the node's own `alignmentSampledAt`/`alignmentOffsetMs` report fields while a run is active |
 | v36 | shipped | cue-catalog deploy operator override (SM-632): `node_cue_catalog_override`, one row per node recording an operator's accepted H0.5 exclusive-claim conflict, scoped to the revision it was accepted for |
-| v37+ | unallocated | free |
+| v37 | unallocated | free |
+| v38 | shipped | PCM show audio (owner ruling 2026-09-18): adds `audio_renditions`, one row per original audio asset content hash recording its 48kHz/16-bit/stereo WAV rendition status (rendering/ready/failed) and, once ready, the rendition's own content hash, size, duration, and format string (`audio_renditions.go`'s own doc comment). A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36: no existing table is touched, and an audio asset with no row yet simply has no rendition, which the expected-set computation treats as "keep naming the original" rather than an error |
+| v39+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

@@ -258,6 +258,56 @@ func TestServiceDispatchesMissingAsset(t *testing.T) {
 	}
 }
 
+// TestServiceDispatchesRenditionRouteForSubstitutedAudioAsset proves a
+// fetch dispatched for an audio asset with a ready rendition names the
+// rendition's own contentHash/filename/sizeBytes and the rendition
+// content route, never the original upload's: a node opening the URL this
+// coordinator gives it and hashing what it downloads must always get a
+// match.
+func TestServiceDispatchesRenditionRouteForSubstitutedAudioAsset(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "audio-01")
+	createAssetWithMediaType(t, st, "halloween-2026", "opening-theme", store.AssetTargetKindShow, "", "audio", "sha256:original", "opening-theme.mp3")
+	if err := st.SetAudioRenditionReady(context.Background(), "sha256:original", store.AudioRenditionReady{
+		ContentHash: "sha256:rendition", SizeBytes: 4096, DurationMillis: 12345, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("seed ready rendition: %v", err)
+	}
+	seedEmptyCompleteReport(t, st, "audio-01", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	svc.tick(context.Background())
+
+	calls := pub.callsFor("audio-01")
+	if len(calls) != 1 {
+		t.Fatalf("callsFor(audio-01) = %d calls, want exactly 1", len(calls))
+	}
+	env, err := mqttproto.DecodeEnvelope(calls[0].payload)
+	if err != nil {
+		t.Fatalf("DecodeEnvelope() error = %v", err)
+	}
+	cmd, err := mqttproto.DecodeCmdPayload(env)
+	if err != nil {
+		t.Fatalf("DecodeCmdPayload() error = %v", err)
+	}
+	if cmd.Params["contentHash"] != "sha256:rendition" {
+		t.Errorf("Params[contentHash] = %v, want the rendition's own sha256:rendition, never the original's", cmd.Params["contentHash"])
+	}
+	if cmd.Params["filename"] != "opening-theme.wav" {
+		t.Errorf("Params[filename] = %v, want opening-theme.wav", cmd.Params["filename"])
+	}
+	if sb, ok := cmd.Params["sizeBytes"].(float64); !ok || sb != 4096 {
+		t.Errorf("Params[sizeBytes] = %v, want float64(4096)", cmd.Params["sizeBytes"])
+	}
+	wantURL := "https://coordinator.example/api/v1/assets/" + cmd.Params["assetId"].(string) + "/rendition/content"
+	if cmd.Params["url"] != wantURL {
+		t.Errorf("Params[url] = %v, want %q: a node must never be told to fetch the original upload's route for a substituted asset", cmd.Params["url"], wantURL)
+	}
+}
+
 func TestServiceReadyNodeIsNeverDispatchedTo(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "halloween-2026", "Halloween 2026")
