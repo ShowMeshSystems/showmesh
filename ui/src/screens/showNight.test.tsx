@@ -163,8 +163,8 @@ describe('Show Night', () => {
       'Status',
       'Run of Show',
       'Background Audio Record',
-      'Night session activation',
     ])
+    expect(screen.getByRole('button', { name: 'Activate Definition' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
   })
 
@@ -853,6 +853,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     expect(await screen.findByText('winter-ridge-2026')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Winter Ridge Backup (winter-ridge-backup)' })).toBeInTheDocument()
   })
@@ -868,6 +869,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     expect(await screen.findByText(/Active revision/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
@@ -877,6 +879,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => new Promise(() => {})
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
   })
@@ -885,6 +888,7 @@ describe('Show Night', () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () => Promise.reject(new Error('network down'))
     renderScreen({ nightSession: session() })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
 
@@ -905,6 +909,7 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -929,6 +934,7 @@ describe('Show Night', () => {
         objects: [{ id: 'winter-ridge-backup', label: 'Backup', show: '', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
       })
     renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
     fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
@@ -944,6 +950,7 @@ describe('Show Night', () => {
       return Promise.resolve(activeConfigResponse('', { revision: 4 }))
     }
     renderScreen({ nightSession: session(), session: configWriteSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate Definition' }))
     await screen.findByText('winter-ridge-2026')
     const confirmInput = screen.getByLabelText('Type winter-ridge-2026 to confirm clearing the pointer')
     const clearButton = screen.getByRole('button', { name: 'Clear active definition' })

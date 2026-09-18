@@ -41,6 +41,7 @@ import {
   Choice,
   ConfirmDialog,
   DefinitionStrip,
+  Drawer,
   Field,
   FieldGrid,
   Input,
@@ -142,6 +143,7 @@ export function ShowNight() {
   const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
   const [skipEnterShowLead, setSkipEnterShowLead] = useState(false)
   const [startNightConfirmOpen, setStartNightConfirmOpen] = useState(false)
+  const [activationOpen, setActivationOpen] = useState(false)
 
   const send = useCallback(
     (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
@@ -347,6 +349,7 @@ export function ShowNight() {
           <h1 className="sm-page__title">Cycle {session.cycle} of the night</h1>
         </div>
         <ButtonRow>
+          <Button onClick={() => setActivationOpen(true)}>Activate Definition</Button>
           {session.armedShowId !== '' ? (
             <Link className="sm-btn" to={`/shows/${encodeURIComponent(session.armedShowId)}/night-session`}>Edit definition</Link>
           ) : (
@@ -585,7 +588,7 @@ export function ShowNight() {
       </>}
       />
 
-      <NightSessionActivation />
+      <NightSessionActivation open={activationOpen} onClose={() => setActivationOpen(false)} />
 
       {session.degraded && (
         <BlankingPlate
@@ -634,7 +637,7 @@ type ActiveLoadState =
  * it at a different one. Definition authoring lives directly below it so the
  * active pointer and the immutable object it names stay visibly distinct.
  */
-function NightSessionActivation() {
+function NightSessionActivation({ open, onClose }: { open: boolean; onClose: () => void }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [attempt, setAttempt] = useState(0)
@@ -691,6 +694,7 @@ function NightSessionActivation() {
   }
 
   return (
+    <Drawer open={open} onClose={onClose} labelledBy="sn-active" width="content">
     <Section
       id="sn-active"
       title="Night session activation"
@@ -787,6 +791,7 @@ function NightSessionActivation() {
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <RevisionHistory fetch={getNightSessionActiveConfigRevisions} reloadKey={attempt} />
     </Section>
+    </Drawer>
   )
 }
 
