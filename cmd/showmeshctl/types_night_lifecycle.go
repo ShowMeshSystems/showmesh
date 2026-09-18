@@ -78,6 +78,16 @@ type nightBackgroundAudioWire struct {
 	PinnedMaxGainDb *float64                       `json:"pinnedMaxGainDb,omitempty"`
 }
 
+// nightCycleOutcomeWire is one already-finished cycle: NightCycleOutcome
+// in api/openapi.yaml.
+type nightCycleOutcomeWire struct {
+	Cycle     int64  `json:"cycle"`
+	StartedAt string `json:"startedAt"`
+	EndedAt   string `json:"endedAt"`
+	Outcome   string `json:"outcome"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // nightAuthorizationWire is NightSessionState.authorization: who
 // authorized this session, recorded for provenance across a coordinator
 // restart. RecordedAt is null when State is "unknown" (nothing has been
@@ -118,6 +128,8 @@ type nightSessionStateWire struct {
 	Cues nightCuesWire `json:"cues"`
 
 	BackgroundAudio nightBackgroundAudioWire `json:"backgroundAudio"`
+
+	FinishedCycles []nightCycleOutcomeWire `json:"finishedCycles"`
 
 	Degraded            bool   `json:"degraded"`
 	DegradedReason      string `json:"degradedReason,omitempty"`

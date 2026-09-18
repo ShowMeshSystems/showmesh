@@ -19058,6 +19058,16 @@ components:
           $ref: "#/components/schemas/NightCues"
         backgroundAudio:
           $ref: "#/components/schemas/NightBackgroundAudio"
+        finishedCycles:
+          type: array
+          description: >-
+            Every cycle this session has already completed, oldest first.
+            The current, still-open cycle (`cycle` above) is never included
+            here. A cycle that ran before this field existed has no
+            recorded outcome and is simply absent, never a synthesized
+            "not recorded" entry.
+          items:
+            $ref: "#/components/schemas/NightCycleOutcome"
         degraded:
           type: boolean
         degradedReason:
@@ -19074,6 +19084,30 @@ components:
         updatedAt:
           type: string
           format: date-time
+    NightCycleOutcome:
+      type: object
+      description: >-
+        One already-finished cycle of a night session: when its show
+        started and ended, and how it ended.
+      required: [cycle, startedAt, endedAt, outcome]
+      properties:
+        cycle:
+          type: integer
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        outcome:
+          type: string
+          enum: [completed, stopped, interrupted, unknown]
+        reason:
+          type: string
+          description: >-
+            An operator-readable explanation. Only ever present for
+            "stopped", "interrupted", or "unknown"; a "completed" cycle
+            needs none.
     NightAuthorization:
       type: object
       description: >-

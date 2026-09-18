@@ -754,6 +754,9 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		cur.BoundaryJSON = ""
 		return cur
 	})
+	if err := h.deps.NightSessions.OpenNightCycleOutcome(ctx, rec.ID, rec.Cycle, now); err != nil {
+		h.logWarn("night loop: failed to open night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
+	}
 }
 
 // nightShowLaunchStaleNudgeWindow bounds one stale-evidence episode's wait
@@ -913,11 +916,18 @@ func (h *handlers) nightAdvanceLive(ctx context.Context, now time.Time, rec stor
 	}
 	if unmet != "" {
 		if now.Sub(rec.StateEnteredAt) >= nightAdvanceLiveDeadline {
+			if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, rec.ID, rec.Cycle, now, store.NightCycleOutcomeInterrupted,
+				"The player stopped reporting the show as playing before it could be confirmed finished. The night was left degraded until an operator recovers it."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+				h.logWarn("night loop: failed to close night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
+			}
 			h.nightDegradeSession(ctx, now, rec, fmt.Sprintf(
 				"live hasn't confirmed the show ended after %s: %s",
 				nightAdvanceLiveDeadline, unmet))
 		}
 		return
+	}
+	if err := h.deps.NightSessions.CloseNightCycleOutcome(ctx, rec.ID, rec.Cycle, now, store.NightCycleOutcomeCompleted, ""); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+		h.logWarn("night loop: failed to close night cycle outcome record", "sessionId", rec.ID, "cycle", rec.Cycle, "error", err)
 	}
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.State = nightStateTransitionToResting

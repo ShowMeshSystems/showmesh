@@ -151,6 +151,27 @@ type nightCommandOutcome struct {
 	// applied interlock override, which RESTING-MODE.md §10.1 requires the
 	// audit entry to identify by rule, phase, reason, and bounded scope.
 	auditParams map[string]any
+
+	// closeCycleOutcome, when non-nil, is a night_cycle_outcomes row decide
+	// wants closed alongside persist: the operator commands that stop a
+	// live show (nightPowerDownPresentationApply, nightEndSessionDecide)
+	// describe it as data here, on the identical reasoning readiness
+	// above states in full, rather than calling tx.CloseNightCycleOutcome
+	// directly (decidewriteboundary_test.go enforces this). Best-effort
+	// like nightAdvanceLive's own close calls: a failure here is logged,
+	// never a reason to fail the operator command that already decided
+	// the show is stopping.
+	closeCycleOutcome *nightCloseCycleOutcome
+}
+
+// nightCloseCycleOutcome is [nightCommandOutcome.closeCycleOutcome]'s
+// payload: the exact arguments [store.Tx.CloseNightCycleOutcome] needs.
+type nightCloseCycleOutcome struct {
+	sessionID string
+	cycle     int64
+	endedAt   time.Time
+	outcome   string
+	reason    string
 }
 
 // --- HTTP handlers ---
@@ -468,10 +489,19 @@ func (h *handlers) nightRunExempt(ctx context.Context, now time.Time, cmd string
 		switch out.persist {
 		case "create":
 			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
-			return tx.CreateNightSession(ctx, out.result, now)
+			if err := tx.CreateNightSession(ctx, out.result, now); err != nil {
+				return err
+			}
 		case "update":
 			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
-			return tx.UpdateNightSession(ctx, out.result, now)
+			if err := tx.UpdateNightSession(ctx, out.result, now); err != nil {
+				return err
+			}
+		}
+		if c := out.closeCycleOutcome; c != nil {
+			if err := tx.CloseNightCycleOutcome(ctx, c.sessionID, c.cycle, c.endedAt, c.outcome, c.reason); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+				h.logWarn("night command: failed to close night cycle outcome record", "sessionId", c.sessionID, "cycle", c.cycle, "error", err)
+			}
 		}
 		return nil
 	})
@@ -546,6 +576,13 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 			if err := tx.CreateNightReadiness(ctx, *out.readiness); err != nil {
 				return identity.AuditEntry{}, err
 			}
+		}
+		if out.closeCycleOutcome != nil {
+			// No gated decide function sets this today: every command that
+			// stops a live show (nightPowerDownPresentationApply,
+			// nightEndSessionDecide) is exempt and routes through
+			// nightRunExempt instead, which does know how to persist it.
+			return identity.AuditEntry{}, fmt.Errorf("api: night command %q's decide function set nightCommandOutcome.closeCycleOutcome, which nightRunGated does not know how to persist", cmd)
 		}
 		switch out.persist {
 		case "create":
@@ -1399,6 +1436,14 @@ func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *stor
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
 	next, changed := applyNightShutdownEffect(now, *current, "power-down", force)
+	var closeCycleOutcome *nightCloseCycleOutcome
+	if current.State == nightStateLive && next.State == nightStateFadingOut {
+		closeCycleOutcome = &nightCloseCycleOutcome{
+			sessionID: current.ID, cycle: current.Cycle, endedAt: now,
+			outcome: store.NightCycleOutcomeStopped,
+			reason:  "The operator stopped the show before it finished.",
+		}
+	}
 	if next.State == nightStateStopped && next.PowerPhase == "" {
 		phase := "not_configured"
 		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil &&
@@ -1411,7 +1456,7 @@ func (h *handlers) nightPowerDownPresentationApply(ctx context.Context, tx *stor
 	if !changed {
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
-	out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+	out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update", closeCycleOutcome: closeCycleOutcome}
 	if len(overrideAuditParams) > 0 {
 		out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
 	}
@@ -1440,7 +1485,15 @@ func (h *handlers) nightEndSessionDecide(now time.Time, current *store.NightSess
 		t := now
 		next.AdmissionClosedAt = &t
 	}
-	return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+	out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+	if current.State == nightStateLive {
+		out.closeCycleOutcome = &nightCloseCycleOutcome{
+			sessionID: current.ID, cycle: current.Cycle, endedAt: now,
+			outcome: store.NightCycleOutcomeStopped,
+			reason:  "The operator ended the night session before the show finished.",
+		}
+	}
+	return out
 }
 
 // --- readiness ---
@@ -1868,6 +1921,33 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
 	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
+	out.FinishedCycles = mapNightFinishedCycles(ctx, deps, rec)
+	return out
+}
+
+// mapNightFinishedCycles reports every cycle rec has already completed,
+// oldest first, excluding the current still-open one (Cycle above). A read
+// failure reports no finished cycles rather than a partial or stale list:
+// the current cycle rail (Cycle, Transition, Boundary) is unaffected either
+// way, so this never blocks the rest of the response.
+func mapNightFinishedCycles(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) []v1.NightCycleOutcome {
+	out := []v1.NightCycleOutcome{}
+	if rec.ID == "" {
+		return out
+	}
+	rows, err := deps.NightSessions.ListNightCycleOutcomes(ctx, rec.ID)
+	if err != nil {
+		return out
+	}
+	for _, row := range rows {
+		if row.EndedAt == nil {
+			continue
+		}
+		out = append(out, v1.NightCycleOutcome{
+			Cycle: row.Cycle, StartedAt: formatTime(row.ShowStartedAt), EndedAt: formatTime(*row.EndedAt),
+			Outcome: row.Outcome, Reason: row.Reason,
+		})
+	}
 	return out
 }
 
@@ -2230,6 +2310,29 @@ func nightAmbiguousProblem(detail string) v1.Problem {
 	return v1.Problem{Type: ProblemTypeNightAmbiguous, Title: "Night session is degraded", Status: http.StatusConflict, Detail: detail}
 }
 
+// reconcileOpenNightCycleOutcomesOnStartup closes every night_cycle_outcomes
+// row this build finds still open, as interrupted: a row can only still be
+// open if the process that opened it never closed it, and the only way that
+// happens is this coordinator restarting mid-cycle. Runs unconditionally,
+// even when no current night session exists or it is already degraded,
+// because a stale open row can outlive the session that opened it.
+func reconcileOpenNightCycleOutcomesOnStartup(ctx context.Context, deps Dependencies, at time.Time, logger *slog.Logger) error {
+	open, err := deps.NightSessions.ListOpenNightCycleOutcomes(ctx)
+	if err != nil {
+		return fmt.Errorf("list open night cycle outcomes: %w", err)
+	}
+	for _, rec := range open {
+		if err := deps.NightSessions.CloseNightCycleOutcome(ctx, rec.SessionID, rec.Cycle, at, store.NightCycleOutcomeInterrupted,
+			"The coordinator restarted while the show was in progress."); err != nil && err != store.ErrNightCycleOutcomeNotFound {
+			return fmt.Errorf("close night cycle outcome %s/%d: %w", rec.SessionID, rec.Cycle, err)
+		}
+		if logger != nil {
+			logger.Warn("night cycle outcome reconciliation: closed a cycle left open by a restart", "sessionId", rec.SessionID, "cycle", rec.Cycle)
+		}
+	}
+	return nil
+}
+
 // ReconcileNightSessionOnStartup runs once, synchronously, before the
 // coordinator starts serving requests (see [ReconcileStrandedFPPCommands]
 // for the identical timing rationale). Pending cue outbox rows are
@@ -2238,6 +2341,11 @@ func nightAmbiguousProblem(detail string) v1.Problem {
 // degraded rather than resumed by guess; end-session remains the way out.
 func ReconcileNightSessionOnStartup(ctx context.Context, deps Dependencies, now func() time.Time, logger *slog.Logger) error {
 	deps = deps.withDefaults()
+	at := now()
+	if err := reconcileOpenNightCycleOutcomesOnStartup(ctx, deps, at, logger); err != nil {
+		return fmt.Errorf("api: reconcile night session on startup: %w", err)
+	}
+
 	rec, ok, err := deps.NightSessions.GetCurrentNightSession(ctx)
 	if err != nil {
 		return fmt.Errorf("api: reconcile night session on startup: %w", err)
@@ -2246,7 +2354,6 @@ func ReconcileNightSessionOnStartup(ctx context.Context, deps Dependencies, now 
 		return nil
 	}
 	h := &handlers{deps: deps, clock: now, logger: logger}
-	at := now()
 
 	if err := h.nightReconcileCueOutbox(ctx, at, rec); err != nil {
 		return fmt.Errorf("api: reconcile night session on startup: %w", err)

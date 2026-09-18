@@ -34,6 +34,16 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	_, _ = fmt.Fprintf(w, "In state since: %s\n", s.StateEnteredAt)
 	_, _ = fmt.Fprintf(w, "Cycle:       %d\n", s.Cycle)
 
+	if len(s.FinishedCycles) > 0 {
+		_, _ = fmt.Fprintf(w, "\nFinished cycles:\n")
+		for _, c := range s.FinishedCycles {
+			_, _ = fmt.Fprintf(w, "  - cycle %d: %s (%s to %s)\n", c.Cycle, c.Outcome, c.StartedAt, c.EndedAt)
+			if c.Reason != "" {
+				_, _ = fmt.Fprintf(w, "      %s\n", c.Reason)
+			}
+		}
+	}
+
 	if s.Degraded {
 		_, _ = fmt.Fprintf(w, "\nDEGRADED:    %s\n", s.DegradedReason)
 	}

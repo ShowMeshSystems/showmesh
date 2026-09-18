@@ -198,6 +198,13 @@ type NightSessionState struct {
 
 	BackgroundAudio NightBackgroundAudio `json:"backgroundAudio"`
 
+	// FinishedCycles lists every cycle this session has already completed,
+	// oldest first. The current, still-open cycle (Cycle above) is never
+	// included here: it has not ended yet. A cycle that ran before this
+	// field existed has no recorded outcome and is simply absent, never a
+	// synthesized "not recorded" entry.
+	FinishedCycles []NightCycleOutcome `json:"finishedCycles"`
+
 	Degraded       bool   `json:"degraded"`
 	DegradedReason string `json:"degradedReason,omitempty"`
 
@@ -214,6 +221,18 @@ type NightSessionState struct {
 	Authorization NightAuthorization `json:"authorization"`
 
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// NightCycleOutcome is one already-finished cycle of a night session: when
+// its show started and ended, and how it ended. Reason is only ever
+// non-empty for Outcome "stopped", "interrupted", or "unknown"; a
+// "completed" cycle needs no explanation.
+type NightCycleOutcome struct {
+	Cycle     int64  `json:"cycle"`
+	StartedAt string `json:"startedAt"`
+	EndedAt   string `json:"endedAt"`
+	Outcome   string `json:"outcome"` // "completed" | "stopped" | "interrupted" | "unknown"
+	Reason    string `json:"reason,omitempty"`
 }
 
 // NightAuthorization states the authorizing principal or the explicit

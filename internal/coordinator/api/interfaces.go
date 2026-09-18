@@ -508,6 +508,15 @@ type NightSessionStore interface {
 	ListNightCueOutboxRowsForPhasePrefix(ctx context.Context, sessionID, prefix string) ([]store.NightCueOutboxRecord, error)
 	UpdateNightCueOutboxRow(ctx context.Context, rec store.NightCueOutboxRecord) error
 
+	// The four methods below are night_cycle_outcomes' own addition
+	// (store/nightcycleoutcome.go): one row per (session, cycle) recording
+	// how that cycle's show ended, so a finished cycle can be reported
+	// instead of treated as a placeholder.
+	OpenNightCycleOutcome(ctx context.Context, sessionID string, cycle int64, startedAt time.Time) error
+	CloseNightCycleOutcome(ctx context.Context, sessionID string, cycle int64, endedAt time.Time, outcome, reason string) error
+	ListNightCycleOutcomes(ctx context.Context, sessionID string) ([]store.NightCycleOutcomeRecord, error)
+	ListOpenNightCycleOutcomes(ctx context.Context) ([]store.NightCycleOutcomeRecord, error)
+
 	// InTx runs fn inside one BEGIN IMMEDIATE transaction, so a lifecycle
 	// command's read, decision, and write share one atomic unit. *store.
 	// Store already satisfies this with no adapter.
