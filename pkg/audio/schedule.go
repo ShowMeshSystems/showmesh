@@ -102,6 +102,35 @@ const (
 	ResultBookmarkPositionMs = "bookmarkPositionMs"
 )
 
+// StartTriggerMultiSync and StartTriggerCoordinator are the two closed
+// values a session's own start trigger evidence (ADR-051 decision 6)
+// reports: "multisync" when a node's MultiSync listener started the
+// session itself, on FPP's own sequence START packet, with no coordinator
+// round trip in the path; "coordinator" for every other start, dispatched
+// by a "cue.activate" or "audio.session.start" command. A session that has
+// never started reports neither (an empty string).
+const (
+	StartTriggerMultiSync   = "multisync"
+	StartTriggerCoordinator = "coordinator"
+)
+
+// The "cue.activate" result's own start-trigger evidence (ADR-051 decision
+// 6), written only when that activation finds its Cue's audio session
+// already started by MultiSync rather than starting it itself: a
+// coordinator that dispatched the activation needs to know it did not
+// restart or reseek anything, and why. ResultStartTrigger is always
+// [StartTriggerMultiSync] when these are present at all; the other three
+// mirror the audio session report's identical fields for the same event,
+// so a caller never has to reconcile two independently-shaped answers to
+// "how did this Cue's audio actually start."
+const (
+	ResultStartTrigger            = "startTrigger"
+	ResultTriggerSequenceFilename = "triggerSequenceFilename"
+	ResultTriggerArrivalNs        = "triggerArrivalNs"
+	ResultStartLeadMs             = "startLeadMs"
+	ResultPreparedLate            = "preparedLate"
+)
+
 // ParamResumeItemID, ParamResumeIndex, and ParamResumePositionMs are
 // audio.session.resume's optional named resume target (ADR-049 decision
 // 4, amended): the exact playlist item and position a coordinator wants

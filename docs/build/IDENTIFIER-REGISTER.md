@@ -1331,6 +1331,7 @@ value, and it does not belong here.
 | --- | --- | --- |
 | `duckFadeDurationMs` | shipped | how long the duck ramp takes when an announcement bed starts. Backfilled into every stored `audio.settings` revision by schema v24, which is what puts it in scope for this section |
 | `duckRestoreFadeDurationMs` | shipped | how long the restore ramp takes when the bed ends. Backfilled by the same v24 migration |
+| `multisyncStartLeadMs` | shipped | ADR-051 decision 1's fixed lead a MultiSync-triggered Cue audio start waits past packet arrival before presenting the first sample. No migration: `audio.settings.configure`'s wire boundary decodes it as optional, defaulting to 100 when absent, which is what puts a plain node-local default field in scope for this section — a coordinator that has never sent it and one that always sends it must agree on the same node-side value |
 
 **Both rows are recorded after the fact, which is the exception and not the
 pattern.** v24 shipped before this section existed. Anything meeting the two

@@ -57,6 +57,16 @@ type Settings struct {
 	LTCFrameRate          pkgaudio.LTCFrameRate
 	LTCDefaultStartOffset pkgaudio.LTCTimecode
 
+	// MultisyncStartLeadMs is ADR-051 decision 1's fixed lead: a MultiSync
+	// sequence START packet's own Cue audio starts this many milliseconds
+	// after the packet's arrival on this node's media clock, never at
+	// arrival itself, so every target node's own processing jitter has
+	// room to still land on the same shared instant. Optional on the wire
+	// with no migration (internal/agent/audionodeops.go decodes it as
+	// absent-means-default, never required); see
+	// docs/build/IDENTIFIER-REGISTER.md's Configuration field names entry.
+	MultisyncStartLeadMs int
+
 	// Configured reports whether these values came from a real
 	// audio.settings.configure push (true) or are still [DefaultSettings]
 	// (false). clampToCeilingLocked only applies DefaultMaxBackgroundGain
@@ -89,6 +99,7 @@ var DefaultSettings = Settings{
 	DuckRestoreFadeDurationMs: 800,
 	LTCFrameRate:              pkgaudio.LTCFrameRate30,
 	LTCDefaultStartOffset:     pkgaudio.LTCTimecode("00:00:00:00"),
+	MultisyncStartLeadMs:      100,
 }
 
 // validDuckTargetGain reports why g is not a usable duck depth: a valid
@@ -166,6 +177,9 @@ func invalidSettingsFields(s Settings) []settingsFieldIssue {
 	if err := s.LTCDefaultStartOffset.Validate(); err != nil {
 		issues = append(issues, settingsFieldIssue{"LTCDefaultStartOffset", "LTCDefaultStartOffset: " + err.Error()})
 	}
+	if s.MultisyncStartLeadMs < 0 {
+		issues = append(issues, settingsFieldIssue{"MultisyncStartLeadMs", fmt.Sprintf("MultisyncStartLeadMs %d must not be negative", s.MultisyncStartLeadMs)})
+	}
 	return issues
 }
 
@@ -208,6 +222,9 @@ func (m *Manager) SetSettings(s Settings) {
 		}
 		if s.LTCDefaultStartOffset.Validate() != nil {
 			s.LTCDefaultStartOffset = DefaultSettings.LTCDefaultStartOffset
+		}
+		if s.MultisyncStartLeadMs < 0 {
+			s.MultisyncStartLeadMs = DefaultSettings.MultisyncStartLeadMs
 		}
 		for _, issue := range issues {
 			fields = append(fields, issue.field)

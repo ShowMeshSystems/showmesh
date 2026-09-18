@@ -95,7 +95,16 @@ type audioSettingsConfig struct {
 	DuckRestoreFadeDurationMs int     `json:"duckRestoreFadeDurationMs"`
 	LTCFrameRate              string  `json:"ltcFrameRate"`
 	LTCDefaultStartOffset     string  `json:"ltcDefaultStartOffset"`
-	Revision                  int64   `json:"revision"`
+
+	// MultisyncStartLeadMs is optional with no migration (ADR-051 decision
+	// 1): a pointer so an absent key decodes as "no value pushed" rather
+	// than an indistinguishable explicit zero, and
+	// [audioSettingsFromWire] substitutes [audio.DefaultSettings]'s own
+	// MultisyncStartLeadMs when nil. See
+	// docs/build/IDENTIFIER-REGISTER.md's Configuration field names entry.
+	MultisyncStartLeadMs *int `json:"multisyncStartLeadMs,omitempty"`
+
+	Revision int64 `json:"revision"`
 }
 
 // audioBinding holds this node's most recently accepted audio.node and
@@ -310,6 +319,7 @@ var audioSettingsConfigureKnownKeys = map[string]bool{
 	"defaultMaxBackgroundGain": true, "duckTargetGain": true,
 	"duckFadeDurationMs": true, "duckRestoreFadeDurationMs": true,
 	"ltcFrameRate": true, "ltcDefaultStartOffset": true, "revision": true,
+	"multisyncStartLeadMs": true,
 }
 
 // decodeAudioSettingsConfig mirrors [decodeAudioNodeConfig], validating
@@ -365,6 +375,9 @@ func decodeAudioSettingsConfig(params map[string]any) (audioSettingsConfig, erro
 	}
 	if err := pkgaudio.LTCTimecode(p.LTCDefaultStartOffset).Validate(); err != nil {
 		return audioSettingsConfig{}, fmt.Errorf("%s: params.ltcDefaultStartOffset: %w", action, err)
+	}
+	if p.MultisyncStartLeadMs != nil && *p.MultisyncStartLeadMs < 0 {
+		return audioSettingsConfig{}, fmt.Errorf("%s: params.multisyncStartLeadMs must not be negative", action)
 	}
 	if p.Revision < 0 {
 		return audioSettingsConfig{}, fmt.Errorf("%s: params.revision must not be negative", action)
