@@ -7,7 +7,8 @@
 
 .sm-shell {
   min-height: 100vh;
-  background: var(--bg);
+  /* No background here: html and body already paint --bg. A second identical
+     layer meeting this element's 100vh edge renders a faint subpixel seam. */
   color: var(--text);
   font: var(--t-body);
 }
