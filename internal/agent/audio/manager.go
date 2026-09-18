@@ -270,6 +270,27 @@ func (m *Manager) get(id pkgaudio.SessionID) (*Session, bool) {
 	return s, ok
 }
 
+// LoadedMediaIdentity reports the identity of the media id's engine handle
+// is CURRENTLY loaded against (the same [itemIdentity] comparison
+// [Manager.Promote] judges a staged handle by), so a caller can check
+// whether a session already holds a candidate media (see
+// [TargetMediaIdentity]) before deciding whether to Apply and Prepare it
+// again. ok is false when id does not exist or holds no loaded handle: a
+// session that has never prepared, or was cleared, is exactly as useless
+// to a caller here as one that was never created.
+func (m *Manager) LoadedMediaIdentity(id pkgaudio.SessionID) (identity string, ok bool) {
+	s, exists := m.get(id)
+	if !exists {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.handleLoaded {
+		return "", false
+	}
+	return s.loadedIdentity, true
+}
+
 // Snapshot returns fresh, read-only telemetry for every session this
 // Manager currently holds — the retained observation surface. It never
 // mutates any command-facing session state and never consults
@@ -625,6 +646,32 @@ func (m *Manager) start(ctx context.Context, id pkgaudio.SessionID, invocation p
 // fromID's own owner here would make the emptied staging session
 // permanently unretirable instead.
 func (m *Manager) Promote(ctx context.Context, fromID, toID pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
+	return m.promote(ctx, fromID, toID, invocation, revision, nil, nil)
+}
+
+// PromoteAtPosition is [Manager.Promote] plus [Manager.StartAtPosition]'s
+// own scheduled-T0 and explicit-position behavior: it moves fromID's
+// already-loaded handle onto toID exactly as Promote does, skipping the
+// load a Prepare would otherwise pay for, but waits for atNs on THIS
+// node's media clock and presents position on the SAME engine call,
+// never a Start-then-Seek pair, for the identical single-buffer-glitch
+// reason [Manager.StartAtPosition]'s own doc comment states. A node whose
+// clock provider is not locked ignores atNs, promotes on arrival exactly
+// as Promote does, and says so in the outcome's own reason, matching
+// StartAtPosition's identical fallback.
+func (m *Manager) PromoteAtPosition(ctx context.Context, fromID, toID pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, atNs int64, position time.Duration) pkgaudio.OutcomeResult {
+	return m.promote(ctx, fromID, toID, invocation, revision, &atNs, &position)
+}
+
+// promote is [Manager.Promote] and [Manager.PromoteAtPosition]'s shared
+// implementation, one Promote-then-schedule dial over [Manager.start]'s
+// own scheduledAtNs/explicitPosition shape. scheduledAtNs and
+// explicitPosition are both nil for the plain [Manager.Promote] path,
+// which must reproduce that method's pre-existing behavior exactly: the
+// timeline/item-schedule anchoring calls below only ever run when
+// scheduledAtNs is non-nil, so an ordinary Promote (never previously
+// anchored) is untouched.
+func (m *Manager) promote(ctx context.Context, fromID, toID pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, scheduledAtNs *int64, explicitPosition *time.Duration) pkgaudio.OutcomeResult {
 	to, ok := m.get(toID)
 	if !ok {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session does not exist"}
@@ -679,10 +726,25 @@ func (m *Manager) Promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 		to.handle = handle
 		to.handleLoaded = true
 		to.loadedIdentity = capturedIdentity
-		position, err := to.resolveBookmarkPositionLocked(item)
-		if err != nil {
-			to.bookmark = nil
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+		var position time.Duration
+		if explicitPosition != nil {
+			position = *explicitPosition
+		} else {
+			var err error
+			position, err = to.resolveBookmarkPositionLocked(item)
+			if err != nil {
+				to.bookmark = nil
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+			}
+		}
+		sched, scheduleNote, refusal := m.resolveScheduleLocked(ctx, scheduledAtNs)
+		if refusal != nil {
+			return *refusal
+		}
+		if sched != nil {
+			if err := sched.waitUntilT0(ctx); err != nil {
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: "waiting for the scheduled start instant: " + err.Error()}
+			}
 		}
 		dispatchedAt := m.now()
 		obs, err := to.mgr.engine.Start(ctx, to.handle, position)
@@ -698,7 +760,15 @@ func (m *Manager) Promote(ctx context.Context, fromID, toID pkgaudio.SessionID, 
 		to.bookmark = nil
 		to.lastObservedAt = obs.ObservedAt
 		m.startLTCLocked(ctx, to, position)
-		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
+		if scheduledAtNs != nil {
+			m.anchorTimelineLocked(ctx, to, sched, position)
+			m.anchorItemScheduleLocked(ctx, to, sched, position)
+		}
+		out := m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
+		if scheduleNote != "" && out.Reason == "" {
+			out.Reason = scheduleNote
+		}
+		return out
 	})
 
 	// duck/interrupt resolution needs to lock OTHER sessions, so it must

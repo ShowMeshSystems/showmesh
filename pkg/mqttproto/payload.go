@@ -1427,6 +1427,34 @@ type AudioSessionReport struct {
 	// time and is nil whenever PositionKnown is false. Nil only for a
 	// session that has never produced one successful snapshot.
 	CollectedAt *time.Time `json:"collectedAt"`
+
+	// StartTrigger is how this session's most recent play was actually
+	// started (ADR-051 decision 6): "multisync" when this node's own
+	// MultiSync listener started it on FPP's sequence START packet, with
+	// no coordinator round trip in the path, or "coordinator" for every
+	// other start. "" is a session that has never started. The other four
+	// fields below are meaningful only while StartTrigger is "multisync".
+	StartTrigger string `json:"startTrigger"`
+
+	// TriggerSequenceFilename is the FPP sequence filename whose START
+	// packet started this session.
+	TriggerSequenceFilename string `json:"triggerSequenceFilename"`
+
+	// TriggerArrivalNs is when that START packet was observed to arrive,
+	// read on this node's own media clock (the same clock a scheduled
+	// start's T0 is read on) at receive time, before any other work.
+	TriggerArrivalNs int64 `json:"triggerArrivalNs"`
+
+	// StartLeadMs is the configured lead (audio.settings'
+	// multisyncStartLeadMs) actually applied on top of TriggerArrivalNs to
+	// compute this start's own T0.
+	StartLeadMs int64 `json:"startLeadMs"`
+
+	// PreparedLate is true when this session was not already armed ahead
+	// of the START packet: the node had to apply and prepare it in
+	// reaction to the sequence's own OPEN packet (or, failing that, to
+	// the START packet itself), rather than finding it already prepared.
+	PreparedLate bool `json:"preparedLate"`
 }
 
 // AudioPayload is the payload of the showmesh.node.audio/v1 schema,
@@ -1801,6 +1829,18 @@ func (p AudioPayload) Validate() error {
 		if sess.RestoreAttempts > 0 && sess.RestoreLastReason == "" {
 			return fmt.Errorf("%w: sessions[%d].restoreLastReason (required whenever restoreAttempts is nonzero)", ErrPayloadMissingField, i)
 		}
+		switch sess.StartTrigger {
+		case "", "multisync", "coordinator":
+		default:
+			return fmt.Errorf("%w: sessions[%d].startTrigger %q", ErrPayloadInvalidStartTrigger, i, sess.StartTrigger)
+		}
+		if sess.StartTrigger == "multisync" {
+			if sess.TriggerSequenceFilename == "" {
+				return fmt.Errorf("%w: sessions[%d].triggerSequenceFilename (required whenever startTrigger is \"multisync\")", ErrPayloadMissingField, i)
+			}
+		} else if sess.TriggerSequenceFilename != "" || sess.TriggerArrivalNs != 0 || sess.StartLeadMs != 0 || sess.PreparedLate {
+			return fmt.Errorf("%w: sessions[%d] trigger fields must be empty/zero when startTrigger is not \"multisync\"", ErrPayloadInconsistentField, i)
+		}
 	}
 	if p.ObservedAt == nil {
 		return fmt.Errorf("%w: observedAt", ErrPayloadMissingField)
@@ -2029,6 +2069,13 @@ var ErrPayloadInvalidEngineClockSource = errors.New("mqttproto: engineClockSourc
 // "substituted" -- the closed vocabulary node.audio.settings.state
 // carries (docs/build/IDENTIFIER-REGISTER.md).
 var ErrPayloadInvalidSettingsState = errors.New("mqttproto: settingsState is not a recognized value")
+
+// ErrPayloadInvalidStartTrigger is wrapped by [AudioPayload.Validate] when
+// a session's StartTrigger is set to something other than "", "multisync",
+// or "coordinator" -- the closed vocabulary
+// docs/build/IDENTIFIER-REGISTER.md's audio_session.start_trigger carries
+// (ADR-051 decision 6).
+var ErrPayloadInvalidStartTrigger = errors.New("mqttproto: startTrigger is not a recognized value")
 
 // ErrPayloadInconsistentField is wrapped by [AudioPayload.Validate] when a
 // field that means "not collected" (e.g. engineGlitchCountsKnown false)

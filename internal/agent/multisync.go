@@ -37,7 +37,7 @@ import (
 // normally is still correct: a bind conflict must fail loudly (which it
 // does, here, as a degraded-with-reason node) rather than silently sharing
 // the port and risking exactly the desync ADR-013 documents.
-func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName string, timeline *multisync.Timeline, status *multiSyncStatus, fppConnect *fppConnectState, logger *slog.Logger) {
+func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName string, timeline *multisync.Timeline, status *multiSyncStatus, fppConnect *fppConnectState, cueAudio *multiSyncCueAudioTrigger, logger *slog.Logger) {
 	ranges := rangesFunc(fppConnect)
 	// oversizeRangesLogged rate-limits the warning below to once per node
 	// process life, not once per discover ping: DiscoverResponseFunc runs on
@@ -107,6 +107,16 @@ func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName
 			source = sourceIP(rec.SrcAddr)
 		}
 		timeline.Observe(sync, source)
+
+		// ADR-051: a Cue's audio starts on this node itself, on the
+		// sequence's own MultiSync START packet. Media packets are never
+		// passed here at all (see [multiSyncCueAudioTrigger.
+		// HandleSequencePacket]'s own doc comment), and cueAudio tolerates
+		// being called before its sources are wired, matching this
+		// function's own discover-ping tolerance for fppConnect being nil.
+		if sync.FileType == multisync.SyncFileTypeSequence && cueAudio != nil {
+			cueAudio.HandleSequencePacket(ctx, sync)
+		}
 	}
 
 	if err := l.Run(ctx, handle); err != nil {

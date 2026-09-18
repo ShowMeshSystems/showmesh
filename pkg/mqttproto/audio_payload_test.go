@@ -207,6 +207,50 @@ func TestAudioPayloadValidateAllowsHeldClaimWithNoReason(t *testing.T) {
 	}
 }
 
+func TestAudioPayloadValidateRejectsUnrecognizedStartTrigger(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "none", StartTrigger: "bogus"}}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInvalidStartTrigger) {
+		t.Errorf("Validate(startTrigger=bogus) = %v, want ErrPayloadInvalidStartTrigger", err)
+	}
+}
+
+func TestAudioPayloadValidateRequiresTriggerSequenceFilenameWhenMultiSync(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "none", StartTrigger: "multisync", TriggerSequenceFilename: ""}}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(multisync trigger, no sequence filename) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsMultiSyncTriggerWithFields(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{
+		SessionID: "s1", Fault: "none", StartTrigger: "multisync",
+		TriggerSequenceFilename: "wake-up.fseq", TriggerArrivalNs: 1_700_000_000_000_000_000,
+		StartLeadMs: 100, PreparedLate: true,
+	}}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(well-formed multisync trigger) = %v, want nil", err)
+	}
+}
+
+func TestAudioPayloadValidateRejectsTriggerFieldsWhenTriggerIsCoordinator(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "none", StartTrigger: "coordinator", StartLeadMs: 100}}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInconsistentField) {
+		t.Errorf("Validate(coordinator trigger with a lead) = %v, want ErrPayloadInconsistentField", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsEmptyStartTrigger(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "none"}}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(no start trigger recorded yet) = %v, want nil", err)
+	}
+}
+
 func TestAudioPayloadValidateRequiresLTCGeneratorState(t *testing.T) {
 	p := validAudioPayload()
 	p.LTCGeneratorState = ""
