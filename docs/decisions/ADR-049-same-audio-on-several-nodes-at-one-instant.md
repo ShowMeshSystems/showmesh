@@ -1,6 +1,6 @@
 # ADR-049: A Cue's Audio Plays on Several Nodes at One Instant
 
-Status: Accepted (owner, 2026-09-15; decisions 6 to 9 added 2026-09-16); decisions 3 and 6 narrowed to the fallback start by [ADR-051](ADR-051-cue-audio-starts-on-the-multisync-start-packet.md) (2026-09-18)
+Status: Accepted (owner, 2026-09-15; decisions 6 to 9 added 2026-09-16; decision 10 added 2026-09-18); decisions 3 and 6 narrowed to the fallback start by [ADR-051](ADR-051-cue-audio-starts-on-the-multisync-start-packet.md) (2026-09-18)
 Date: 2026-09-15
 
 ## Context
@@ -153,6 +153,41 @@ An announcement whose bound `show.action` lists more than one node in
 registered-copy rule, fails Night readiness naming any listed node that lacks
 it, and starts at one instant chosen as decision 3 chooses one, with decision
 4's fallback. Each node's duck or interrupt of its own bed is unchanged.
+
+### 10. The show names its audio nodes once, and an output excludes rather than opts in (added 2026-09-18)
+
+Decisions 1, 7 and 9 each gave one object its own list of target nodes, and
+every list defaulted to nothing. On the rehearsal rig on 2026-09-17 that
+produced three silent-node failures in one evening that looked unrelated: the
+bed played on one node, the welcome announcement on one node, and a Cue on one
+node, each because one checkbox in one place was not ticked. The owner ruled
+that the node list belongs in one place and that everything that plays audio
+inherits it.
+
+`show` carries `audioNodes`, an optional list of `audio.node` ids. Every
+object that plays audio for that show resolves its nodes in this order:
+
+1. Its own explicit list, when present and non-empty: `show.cue`
+   `outputs.audio.targets` and `outputs.announcement.targets`, the night bed's
+   `targets`, and a `show.action` audio target's `audioNodeId` list. An
+   existing configuration therefore plays on exactly the nodes it names today,
+   before and after the upgrade.
+2. Otherwise the show's `audioNodes` minus the object's own `excludeNodes`, an
+   optional list on the same four shapes. An excluded id must name a node in
+   the show's list; excluding every node is refused. Unticking a node on one
+   Cue stops that Cue on that node and nothing else.
+3. Otherwise decision 1's default: the installation's `program+ltc` node, or
+   its sole `audio.node`.
+
+The resolved list is what asset sync delivers to, what readiness and the node
+manifest check, what the Cue catalog includes a Cue on, and what decisions 3,
+7, 8 and 9 start together. Readiness warns when the show has no `audioNodes`
+and any audio-bearing object relies on step 3, naming the object.
+
+The Night, Cues and Automation screens show the resolved nodes, offer the
+per-node exclude, and keep an explicit list editable with an action to clear
+it back to the show's list. `showmeshctl` carries the same fields. The
+OpenAPI description changes with them.
 
 ## Consequences
 
