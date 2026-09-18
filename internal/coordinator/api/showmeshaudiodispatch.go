@@ -60,6 +60,25 @@ import (
 // that never made this request.
 const showmeshAudioIssuerPrincipalID = "system:showmesh-audio-runner"
 
+// showmeshAudioAttempt identifies the caller's own triggering event for
+// one applyShowmeshAudioPlaylistIfAny call — a cue-catalog deploy or a
+// show.playlist write, never the bare playlist content — and the fixed
+// point in time that event resolved at. ID must be stable across every
+// repeat call this same triggering event produces (so a repeat tick
+// replays instead of conflicting) and change between genuinely different
+// triggering events (so a later, independent apply of byte-identical
+// content is not refused as a stale conflict with an earlier one — see
+// showmeshAudioIdempotencyKey). At must likewise stay fixed for the
+// event's own lifetime: [dispatchShowmeshAudioStep] derives every step's
+// revision from At, never from a fresh now at each call, because a
+// revision that moved between repeat calls of the SAME attempt would
+// itself make those calls fail resolveAudioSessionReplay's params check,
+// the identical defect this type exists to close.
+type showmeshAudioAttempt struct {
+	ID string
+	At time.Time
+}
+
 // applyShowmeshAudioPlaylistIfAny resolves active's Show's
 // `showmesh-audio` show.playlist (if any) and dispatches Apply, Prepare,
 // and Start against nodeID's own [cueactivation.BackgroundSessionID], if
@@ -81,7 +100,7 @@ const showmeshAudioIssuerPrincipalID = "system:showmesh-audio-runner"
 // announcement had nothing to duck: this same fix is what makes the
 // announcement feature work in production, not only in a test that fakes
 // the precondition by calling Apply and Start directly.
-func (h *handlers) applyShowmeshAudioPlaylistIfAny(ctx context.Context, now time.Time, nodeID string, active assetsync.ActiveShow) {
+func (h *handlers) applyShowmeshAudioPlaylistIfAny(ctx context.Context, now time.Time, nodeID string, active assetsync.ActiveShow, attempt showmeshAudioAttempt) {
 	if h.deps.AssetManifests == nil || h.deps.Commands == nil {
 		return
 	}
@@ -130,16 +149,16 @@ func (h *handlers) applyShowmeshAudioPlaylistIfAny(ctx context.Context, now time
 	// node that never got past Apply (e.g. a coordinator restart between
 	// steps) gets the rest of the sequence it is still missing.
 	if !h.dispatchShowmeshAudioStep(ctx, now, nodeID, obj.ID, ref, "apply",
-		cueactivation.AudioSessionStepApply, map[string]any{
+		cueactivation.AudioSessionStepApply, attempt, map[string]any{
 			"sourceRole": string(pkgaudio.SourceRoleBackground),
 			"playlist":   showmeshAudioPlaylistWireParams(ref),
 		}) {
 		return
 	}
-	if !h.dispatchShowmeshAudioStep(ctx, now, nodeID, obj.ID, ref, "prepare", cueactivation.AudioSessionStepPrepare, nil) {
+	if !h.dispatchShowmeshAudioStep(ctx, now, nodeID, obj.ID, ref, "prepare", cueactivation.AudioSessionStepPrepare, attempt, nil) {
 		return
 	}
-	h.dispatchShowmeshAudioStep(ctx, now, nodeID, obj.ID, ref, "start", cueactivation.AudioSessionStepStart, nil)
+	h.dispatchShowmeshAudioStep(ctx, now, nodeID, obj.ID, ref, "start", cueactivation.AudioSessionStepStart, attempt, nil)
 }
 
 // dispatchShowmeshAudioStep dispatches one audio.session.<step> command
@@ -149,8 +168,8 @@ func (h *handlers) applyShowmeshAudioPlaylistIfAny(ctx context.Context, now time
 // step was refused or errored — a caller must stop the sequence there
 // (Apply's own failure must not be followed by Prepare/Start) — and true
 // otherwise, including a replay of an already-confirmed step.
-func (h *handlers) dispatchShowmeshAudioStep(ctx context.Context, now time.Time, nodeID, playlistID string, ref pkgaudio.PlaylistRef, step string, stepIndex int, extraParams map[string]any) bool {
-	idempotencyKey := showmeshAudioIdempotencyKey(nodeID, playlistID, step, ref)
+func (h *handlers) dispatchShowmeshAudioStep(ctx context.Context, now time.Time, nodeID, playlistID string, ref pkgaudio.PlaylistRef, step string, stepIndex int, attempt showmeshAudioAttempt, extraParams map[string]any) bool {
+	idempotencyKey := showmeshAudioIdempotencyKey(nodeID, playlistID, step, attempt.ID, ref)
 	// TRACK-H-cues-and-playlists.md section H5 build item 6's own fix: this
 	// used to send uint64(obj.CurrentRevision) — a small integer — as
 	// this session's own pkg/audio.Revision. [cueactivation.
@@ -164,7 +183,16 @@ func (h *handlers) dispatchShowmeshAudioStep(ctx context.Context, now time.Time,
 	// integer revision as stale, forever. Using the SAME derivation here
 	// keeps this session's revision space unified with every other
 	// command that can ever address it.
-	revision := cueactivation.AudioSessionRevision(now, stepIndex)
+	//
+	// attempt.At, not now: now is a fresh wall-clock reading on every
+	// call, including a repeat call for the SAME triggering event (a
+	// duplicate deploy confirmation, for example), and a revision that
+	// moved between two calls sharing the same idempotencyKey would fail
+	// resolveAudioSessionReplay's byte-identical-params check instead of
+	// replaying — the same-key-different-revision defect this attempt
+	// design exists to close (see showmeshAudioAttempt's own doc
+	// comment).
+	revision := cueactivation.AudioSessionRevision(attempt.At, stepIndex)
 	params := map[string]any{
 		"sessionId":    string(cueactivation.BackgroundSessionID),
 		"invocationId": idempotencyKey,
@@ -200,8 +228,8 @@ func (h *handlers) dispatchShowmeshAudioStep(ctx context.Context, now time.Time,
 }
 
 // showmeshAudioIdempotencyKey derives one step's idempotency key from
-// nodeID, playlistID, step, and a content digest of ref itself —
-// deliberately NOT the bare playlist revision number the original
+// nodeID, playlistID, step, attemptID, and a content digest of ref itself
+// — deliberately NOT the bare playlist revision number the original
 // version of this file keyed on. TRACK-H-cues-and-playlists.md section H5
 // build item 6's own fix: a revision number is a config-object counter,
 // not evidence of what the NODE'S ENGINE currently holds — once the
@@ -216,10 +244,21 @@ func (h *handlers) dispatchShowmeshAudioStep(ctx context.Context, now time.Time,
 // edited back to a previously published shape, landing on a NEW config
 // revision number that nonetheless matches an OLDER revision's content)
 // would not.
-func showmeshAudioIdempotencyKey(nodeID, playlistID, step string, ref pkgaudio.PlaylistRef) string {
+//
+// attemptID (see showmeshAudioAttempt) closes a second, later-found
+// defect the content digest alone cannot: the SAME unchanged playlist,
+// deployed to the SAME node on two genuinely separate occasions (two
+// different nights, or a node that missed the first attempt entirely),
+// must dispatch again rather than be refused as a stale conflict with
+// whatever [cueactivation.AudioSessionRevision] this key's first owner
+// happened to carry. Folding attemptID into the key means two different
+// attempts never share a key at all, so each reaches its own fresh
+// command row; a repeat call FOR THE SAME attempt keeps the same
+// attemptID and therefore replays, exactly as before.
+func showmeshAudioIdempotencyKey(nodeID, playlistID, step, attemptID string, ref pkgaudio.PlaylistRef) string {
 	raw, _ := json.Marshal(showmeshAudioPlaylistWireParams(ref))
 	digest := sha256.Sum256(raw)
-	return fmt.Sprintf("showmesh-audio-%s-%s-%s-%s", step, nodeID, playlistID, hex.EncodeToString(digest[:8]))
+	return fmt.Sprintf("showmesh-audio-%s-%s-%s-%s-%s", step, nodeID, playlistID, attemptID, hex.EncodeToString(digest[:8]))
 }
 
 // showmeshAudioPlaylistWireParams builds audio.session.apply's own

@@ -227,8 +227,8 @@ func TestPutAssetsSettingsConfigDeferredMigrationGivesANonDestructiveRemedy(t *t
 		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, body)
 	}
 	detail := fmt.Sprint(decodeMap(t, body)["detail"])
-	if !strings.Contains(detail, "Do NOT remove") {
-		t.Errorf("detail = %q, want an explicit warning against removing the variables while the migration is deferred", detail)
+	if !strings.Contains(detail, "do not clear") {
+		t.Errorf("detail = %q, want an explicit warning against clearing the variables while the migration is deferred", detail)
 	}
 }
 
@@ -255,7 +255,7 @@ func TestGetAssetsSettingsConfigDeferredMigrationStatesItRatherThanReportingNoth
 	if strings.Contains(detail, "has been created yet") {
 		t.Errorf("detail = %q, must not report a coordinator nothing has ever configured: settings ARE in effect", detail)
 	}
-	for _, want := range []string{"SHOWMESH_ASSET_CONTENT_BASE_URL", "could not be"} {
+	for _, want := range []string{"SHOWMESH_ASSET_*", "unwritable"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail = %q, want it to contain %q", detail, want)
 		}

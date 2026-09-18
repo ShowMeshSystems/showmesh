@@ -8,6 +8,7 @@ import {
   getShowMacro,
   getShowMacroRevisions,
   invokeAction,
+  listAssets,
   listConfigObjects,
   listMacroRuns,
   listResolumeActions,
@@ -16,6 +17,7 @@ import {
   submitMacroRun,
   type ActionBinding,
   type ActionInvocationResult,
+  type Asset,
   type AudioNodeSummary,
   type ConfigShowAction,
   type ConfigShowActionMQTTExpect,
@@ -1067,7 +1069,14 @@ type MqttTargetValue = {
   expectValue: string
 }
 type ResolumeTargetValue = { action: string; ref: Record<string, string> }
-type AudioTargetValue = { audioNodeIds: string[]; audioSessionId: string; audioAction: string; gainDb: string; audioNodeIdWasArray: boolean }
+type AudioTargetValue = {
+  audioNodeIds: string[]
+  audioSessionId: string
+  audioAction: string
+  gainDb: string
+  audioNodeIdWasArray: boolean
+  params: Record<string, unknown>
+}
 
 function emptyFppValue(): FppTargetValue {
   return { instanceId: '', primitive: '', params: {} }
@@ -1079,7 +1088,7 @@ function emptyResolumeValue(): ResolumeTargetValue {
   return { action: '', ref: {} }
 }
 function emptyAudioValue(): AudioTargetValue {
-  return { audioNodeIds: [], audioSessionId: '', audioAction: '', gainDb: '', audioNodeIdWasArray: false }
+  return { audioNodeIds: [], audioSessionId: '', audioAction: '', gainDb: '', audioNodeIdWasArray: false, params: {} }
 }
 
 function fppValueFromTarget(target: ConfigShowActionTarget): FppTargetValue {
@@ -1115,8 +1124,9 @@ function resolumeValueFromTarget(target: ConfigShowActionTarget): ResolumeTarget
 
 function audioValueFromTarget(target: ConfigShowActionTarget): AudioTargetValue {
   const audioAction = target.audioAction ?? ''
+  const params = target.params ?? {}
   const gainKey = audioAction === 'audio.gain.set' ? 'gainDb' : audioAction === 'audio.gain.fade' ? 'targetGainDb' : null
-  const gain = gainKey === null ? undefined : target.params?.[gainKey]
+  const gain = gainKey === null ? undefined : params[gainKey]
   const ids = target.audioNodeId
   return {
     audioNodeIds: Array.isArray(ids) ? ids : ids === undefined || ids === '' ? [] : [ids],
@@ -1124,6 +1134,7 @@ function audioValueFromTarget(target: ConfigShowActionTarget): AudioTargetValue 
     audioAction,
     gainDb: gain === undefined ? '' : String(gain),
     audioNodeIdWasArray: Array.isArray(ids),
+    params,
   }
 }
 
@@ -1194,6 +1205,17 @@ function buildMqttTarget(value: MqttTargetValue): TargetBuild {
 
 type ResolumeActionsState = { kind: 'loading' } | { kind: 'loaded'; actions: ResolumeAction[] } | { kind: 'failed'; reason: string }
 type AudioNodesState = { kind: 'loading' } | { kind: 'loaded'; nodes: AudioNodeSummary[] } | { kind: 'failed'; reason: string }
+type AudioAssetsState = { kind: 'loading' } | { kind: 'loaded'; assets: Asset[] } | { kind: 'failed'; reason: string }
+
+type StoredAudioMedia = { assetId: string; contentHash: string; filename: string; sizeBytes: number }
+
+function storedAudioMedia(params: Record<string, unknown>): StoredAudioMedia | null {
+  const raw = params.media
+  if (typeof raw !== 'object' || raw === null) return null
+  const { assetId, contentHash, filename, sizeBytes } = raw as Record<string, unknown>
+  if (typeof assetId !== 'string' || typeof contentHash !== 'string' || typeof filename !== 'string' || typeof sizeBytes !== 'number') return null
+  return { assetId, contentHash, filename, sizeBytes }
+}
 
 function buildResolumeTarget(value: ResolumeTargetValue, actionsState: ResolumeActionsState): TargetBuild {
   const base: ConfigShowActionTarget = { integration: 'resolume', action: value.action, ref: {} }
@@ -1230,7 +1252,7 @@ function buildAudioTarget(value: AudioTargetValue): TargetBuild {
   if (value.audioNodeIds.length === 0) blockReason ??= 'An audio node is required.'
   if (value.audioSessionId.trim() === '') blockReason ??= 'A session id is required.'
   if (value.audioAction === '') blockReason ??= 'An audio operation is required.'
-  let params: Record<string, unknown> | undefined
+  const params: Record<string, unknown> = { ...value.params }
   if (value.audioAction === 'audio.gain.set' || value.audioAction === 'audio.gain.fade') {
     const key = value.audioAction === 'audio.gain.set' ? 'gainDb' : 'targetGainDb'
     const raw = value.gainDb.trim()
@@ -1240,7 +1262,7 @@ function buildAudioTarget(value: AudioTargetValue): TargetBuild {
       const n = Number(raw)
       if (!Number.isFinite(n)) blockReason ??= 'Gain must be a number, in decibels.'
       else if (n > 12) blockReason ??= 'Gain must not exceed 12 dB, the accepted ceiling.'
-      else params = { [key]: n }
+      else params[key] = n
     }
   }
   const target: ConfigShowActionTarget = {
@@ -1248,7 +1270,7 @@ function buildAudioTarget(value: AudioTargetValue): TargetBuild {
     audioNodeId: value.audioNodeIds.length === 1 && !value.audioNodeIdWasArray ? (value.audioNodeIds[0] ?? '') : value.audioNodeIds,
     audioSessionId: value.audioSessionId.trim(),
     audioAction: value.audioAction,
-    ...(params !== undefined ? { params } : {}),
+    ...(Object.keys(params).length > 0 ? { params } : {}),
   }
   return { target, blockReason }
 }
@@ -1461,10 +1483,23 @@ function ResolumeTarget({
   )
 }
 
-function AudioTarget({ value, onChange, nodesState }: { value: AudioTargetValue; onChange: (value: AudioTargetValue) => void; nodesState: AudioNodesState }) {
+function AudioTarget({
+  value,
+  onChange,
+  nodesState,
+  assetsState,
+}: {
+  value: AudioTargetValue
+  onChange: (value: AudioTargetValue) => void
+  nodesState: AudioNodesState
+  assetsState: AudioAssetsState
+}) {
   const helpId = useId()
   const declaredIds = nodesState.kind === 'loaded' ? new Set(nodesState.nodes.map((node) => node.id)) : new Set<string>()
   const undeclaredIds = value.audioNodeIds.filter((id) => !declaredIds.has(id))
+  const storedMedia = storedAudioMedia(value.params)
+  const audioAssets = assetsState.kind === 'loaded' ? assetsState.assets.filter((asset) => asset.mediaType === 'audio' && asset.current) : []
+  const storedMediaKnown = storedMedia !== null && audioAssets.some((asset) => asset.id === storedMedia.assetId)
   return (
     <div className="sm-inspector__group">
       <p className="sm-eyebrow sm-flat">audio target</p>
@@ -1517,6 +1552,46 @@ function AudioTarget({ value, onChange, nodesState }: { value: AudioTargetValue;
           </Select>
         )}
       </Field>
+      {value.audioAction === 'audio.session.apply' && (
+        <>
+          {assetsState.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Fetching this show's uploaded audio assets." />}
+          {assetsState.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={assetsState.reason} />}
+          {assetsState.kind === 'loaded' && (
+            <Field label="Media" help="The audio file this operation sends to the node. Selecting one sets the session's source role to announcement.">
+              {(props) => (
+                <Select
+                  {...props}
+                  value={storedMedia?.assetId ?? ''}
+                  onChange={(e) => {
+                    const asset = audioAssets.find((a) => a.id === e.target.value)
+                    if (asset === undefined) return
+                    const sourceRole = typeof value.params.sourceRole === 'string' ? value.params.sourceRole : 'announcement'
+                    onChange({
+                      ...value,
+                      params: {
+                        ...value.params,
+                        media: { assetId: asset.id, contentHash: asset.contentHash, filename: asset.runtimeFilename, sizeBytes: asset.sizeBytes },
+                        sourceRole,
+                      },
+                    })
+                  }}
+                >
+                  <option value="">Select an audio asset</option>
+                  {audioAssets.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      {asset.runtimeFilename}
+                    </option>
+                  ))}
+                  {storedMedia !== null && !storedMediaKnown && <option value={storedMedia.assetId}>{storedMedia.filename}</option>}
+                </Select>
+              )}
+            </Field>
+          )}
+          {storedMedia !== null && !storedMediaKnown && (
+            <p className="sm-small sm-faint">{storedMedia.filename} is not in this show's assets. It stays set until changed.</p>
+          )}
+        </>
+      )}
       {(value.audioAction === 'audio.gain.set' || value.audioAction === 'audio.gain.fade') && (
         <Field
           label={value.audioAction === 'audio.gain.set' ? 'Gain' : 'Target gain'}
@@ -1636,6 +1711,7 @@ function ActionDraft({
   const [idempotent, setIdempotent] = useState<IdempotencyChoice>('undeclared')
   const [resolumeActions, setResolumeActions] = useState<ResolumeActionsState>({ kind: 'loading' })
   const [audioNodes, setAudioNodes] = useState<AudioNodesState>({ kind: 'loading' })
+  const [audioAssets, setAudioAssets] = useState<AudioAssetsState>({ kind: 'loading' })
   const [creating, setCreating] = useState(false)
   const [taken, setTaken] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -1671,6 +1747,22 @@ function ActionDraft({
       cancelled = true
     }
   }, [integration])
+
+  useEffect(() => {
+    if (integration !== 'audio') return
+    let cancelled = false
+    setAudioAssets({ kind: 'loading' })
+    listAssets({ show: showId })
+      .then((response) => {
+        if (!cancelled) setAudioAssets({ kind: 'loaded', assets: response.assets })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setAudioAssets({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [integration, showId])
 
   const onLabelChange = (value: string) => {
     setLabel(value)
@@ -1778,7 +1870,7 @@ function ActionDraft({
       {integration === 'fpp' && <FppTarget value={fppValue} onChange={setFppValue} fppInstances={model.fpp} />}
       {integration === 'mqtt' && <MqttTarget value={mqttValue} onChange={setMqttValue} />}
       {integration === 'resolume' && <ResolumeTarget value={resolumeValue} onChange={setResolumeValue} actionsState={resolumeActions} />}
-      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} />}
+      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} assetsState={audioAssets} />}
 
       {integration !== '' && (
         <SafetyClassBlock
@@ -1851,6 +1943,7 @@ function ActionEditor({
   const [idempotent, setIdempotent] = useState<IdempotencyChoice>(() => idempotencyChoice(action.payload.idempotent))
   const [resolumeActions, setResolumeActions] = useState<ResolumeActionsState>({ kind: 'loading' })
   const [audioNodes, setAudioNodes] = useState<AudioNodesState>({ kind: 'loading' })
+  const [audioAssets, setAudioAssets] = useState<AudioAssetsState>({ kind: 'loading' })
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [stale, setStale] = useState<Extract<SaveOutcome<ShowActionConfigResponse>, { kind: 'stale' }> | null>(null)
@@ -1886,6 +1979,22 @@ function ActionEditor({
       cancelled = true
     }
   }, [integration])
+
+  useEffect(() => {
+    if (integration !== 'audio') return
+    let cancelled = false
+    setAudioAssets({ kind: 'loading' })
+    listAssets({ show: action.payload.show })
+      .then((response) => {
+        if (!cancelled) setAudioAssets({ kind: 'loaded', assets: response.assets })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setAudioAssets({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [integration, action.payload.show])
 
   let target: ConfigShowActionTarget | null = null
   let targetBlockReason: string | null = null
@@ -1977,7 +2086,7 @@ function ActionEditor({
       {integration === 'fpp' && <FppTarget value={fppValue} onChange={setFppValue} fppInstances={model.fpp} />}
       {integration === 'mqtt' && <MqttTarget value={mqttValue} onChange={setMqttValue} />}
       {integration === 'resolume' && <ResolumeTarget value={resolumeValue} onChange={setResolumeValue} actionsState={resolumeActions} />}
-      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} />}
+      {integration === 'audio' && <AudioTarget value={audioValue} onChange={setAudioValue} nodesState={audioNodes} assetsState={audioAssets} />}
 
       <SafetyClassBlock
         integration={integration}

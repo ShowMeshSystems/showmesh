@@ -449,7 +449,7 @@ func TestStartPlaylistRefusedWhenEvidenceNotCurrent(t *testing.T) {
 	}
 	m := decodeMap(t, respBody)
 	detail, _ := m["detail"].(string)
-	if !strings.Contains(detail, "CURRENT evidence") {
+	if !strings.Contains(detail, "current evidence") {
 		t.Errorf("detail = %q, want it to say current evidence is required", detail)
 	}
 }

@@ -1025,6 +1025,23 @@ func (h *handlers) dispatchPrepareAheadAudio(ctx context.Context, now time.Time,
 	applyRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepApply)
 	prepareRevision := cueactivation.PrepareStagingSessionRevision(t, cueactivation.PrepareStagingSessionStepPrepare)
 
+	// act.EvidenceAt is refreshed from the latest FPP observation on every
+	// tick while act.ActivationID stays fixed, so a later tick's revision
+	// (derived from t above) differs from the one this activation's first
+	// tick already dispatched under the SAME invocation key. Checked here,
+	// before dispatch, rather than left to resolveAudioSessionReplay: a
+	// repeat tick is expected, not a conflict, so it must never reach the
+	// params-mismatch refusal path at all.
+	if h.deps.Commands != nil {
+		if _, err := h.deps.Commands.GetCommandByIdempotencyKey(ctx, applyInvocation); err == nil {
+			h.logDebug("cue activation loop: prepare-ahead audio already dispatched for this activation; skipping repeat tick", "nodeId", nodeID, "cueId", nextCueID, "activationId", act.ActivationID)
+			return
+		} else if !errors.Is(err, store.ErrCommandNotFound) {
+			h.logWarn("cue activation loop: look up prepare-ahead audio apply by idempotency key failed", "nodeId", nodeID, "cueId", nextCueID, "error", err)
+			return
+		}
+	}
+
 	applyResult, applyProblem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
 		Action: "audio.session.apply", NodeID: nodeID, SessionID: staging,
 		Params: map[string]any{

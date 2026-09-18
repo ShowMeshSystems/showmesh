@@ -8,50 +8,6 @@ import (
 	"time"
 )
 
-// openDatabaseAtV36 builds a database carrying every migration up to and
-// including v36 and stamped at that version, so a test can seed
-// node_asset_inventory rows the way a pre-v37 coordinator would have
-// written them (under schemaV8's bare `(node_id, content_hash)` primary
-// key) and then watch v37 re-key the table underneath them. Nothing
-// between v8 and v36 touches this table, so stamping directly at 36 seeds
-// the identical pre-migration shape running every intermediate migration
-// would.
-func openDatabaseAtV36(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "pre-v37.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	ctx := context.Background()
-	for _, m := range migrations {
-		if m.version > 36 {
-			continue
-		}
-		if m.fn != nil {
-			tx, err := db.BeginTx(ctx, nil)
-			if err != nil {
-				t.Fatalf("begin tx for migration %d: %v", m.version, err)
-			}
-			if err := m.fn(ctx, tx); err != nil {
-				t.Fatalf("apply migration %d: %v", m.version, err)
-			}
-			if err := tx.Commit(); err != nil {
-				t.Fatalf("commit migration %d: %v", m.version, err)
-			}
-			continue
-		}
-		if _, err := db.ExecContext(ctx, m.sql); err != nil {
-			t.Fatalf("apply migration %d: %v", m.version, err)
-		}
-	}
-	if _, err := db.ExecContext(ctx, `PRAGMA user_version = 36`); err != nil {
-		t.Fatalf("stamp user_version: %v", err)
-	}
-	return db
-}
-
 func seedPreV37InventoryRow(t *testing.T, db *sql.DB, nodeID, contentHash, filename string, sizeBytes int64, verifiedAt string) {
 	t.Helper()
 	_, err := db.ExecContext(context.Background(),

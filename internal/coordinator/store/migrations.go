@@ -152,6 +152,14 @@ var migrations = []migration{
 	// holding one content hash under more than one runtime filename
 	// (schemaV37's own doc comment, migrations.go).
 	{version: 37, sql: schemaV37},
+	// v38 (owner ruling 2026-09-18, PCM show audio): adds audio_renditions,
+	// one row per original audio asset content hash recording its 48kHz/
+	// 16-bit/stereo WAV rendition (audio_renditions.go's own doc comment).
+	// A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36: no
+	// existing table is touched, and an audio asset with no row yet simply
+	// has no rendition, which the expected-set computation treats as "keep
+	// naming the original" rather than an error.
+	{version: 38, sql: schemaV38},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

@@ -98,6 +98,11 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}
 
+	triggerSeeds, err := cueSequenceFilenameTriggerSeeds(ctx, st, showID)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
+	}
+
 	// A program-only audio.node declares no LTC route at all, so
 	// having an audio.node no longer implies being able to emit LTC. LTC
 	// scoping, LTC output projection, and the LTC claim context all key
@@ -154,10 +159,13 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 			continue
 		}
 
+		outputs := resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets, assetsBySequence)
+
 		entries = append(entries, cuecatalog.Entry{
 			CueID:       obj.ID,
 			CueRevision: obj.CurrentRevision,
-			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets, assetsBySequence),
+			Outputs:     outputs,
+			Triggers:    resolveCueTriggers(triggerSeeds[obj.ID], outputs),
 		})
 
 		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, targets)
@@ -503,6 +511,67 @@ func cueReferencingPlaylistIDs(ctx context.Context, st *store.Store, showID stri
 		}
 	}
 	return out, nil
+}
+
+// cueSequenceFilenameTriggerSeeds returns, for every Cue any fpp-runner
+// show.playlist in showID references with an entry naming an
+// fpp.expectedSequenceFilename, that Cue's own set of declared filenames —
+// [cuecatalog.Entry.Triggers]' playlist-derived half. A "showmesh-audio"
+// runner playlist never carries an fpp binding on its entries
+// (decodeShowPlaylistEntryFPP's own required-iff-fpp-runner rule), so it
+// contributes nothing here; only an "fpp" runner playlist can.
+func cueSequenceFilenameTriggerSeeds(ctx context.Context, st *store.Store, showID string) (map[string][]string, error) {
+	objs, err := st.ListConfigObjects(ctx, config.ShowPlaylistConfigKind)
+	if err != nil {
+		return nil, fmt.Errorf("list show.playlist objects: %w", err)
+	}
+	out := make(map[string][]string)
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := st.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return nil, fmt.Errorf("read show.playlist %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
+		}
+		payload, err := decodeStoredShowPlaylistPayload(rev.PayloadJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode stored show.playlist %q: %w", obj.ID, err)
+		}
+		if payload.Show != showID || payload.Runner != config.ShowPlaylistRunnerFPP {
+			continue
+		}
+		for _, entry := range payload.Entries {
+			if entry.FPP == nil || entry.FPP.ExpectedSequenceFilename == "" {
+				continue
+			}
+			out[entry.Cue] = append(out[entry.Cue], entry.FPP.ExpectedSequenceFilename)
+		}
+	}
+	return out, nil
+}
+
+// resolveCueTriggers combines seeds (this Cue's playlist-declared
+// expectedSequenceFilename values) with outputs' own resolved render
+// filename, sorted and de-duplicated, per [cuecatalog.Entry.Triggers]'s
+// own determinism rule. Never nil, matching that field's own "two callers
+// agree on an empty array" requirement.
+func resolveCueTriggers(seeds []string, outputs cuecatalog.Outputs) []string {
+	all := append([]string(nil), seeds...)
+	if outputs.Render != nil && outputs.Render.Filename != "" {
+		all = append(all, outputs.Render.Filename)
+	}
+	seen := make(map[string]bool, len(all))
+	triggers := make([]string, 0, len(all))
+	for _, filename := range all {
+		if seen[filename] {
+			continue
+		}
+		seen[filename] = true
+		triggers = append(triggers, filename)
+	}
+	sort.Strings(triggers)
+	return triggers
 }
 
 // resolveAssetFor returns the sorted, de-duplicated content hashes of every

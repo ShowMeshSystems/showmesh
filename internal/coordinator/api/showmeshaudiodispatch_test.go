@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -79,6 +82,13 @@ func showmeshAudioDispatchTestFixture(t *testing.T, setup *audioDispatchTestSetu
 	return nodeID, active
 }
 
+// testShowmeshAudioAttempt is a fixed, arbitrary attempt identity for
+// tests that only care about the dispatch sequence or content-derived key
+// behavior, never about attempt identity itself (that is covered by
+// TestApplyShowmeshAudioPlaylistDifferentAttemptsDispatchIndependently and
+// TestApplyShowmeshAudioPlaylistRepeatTickOfSameAttemptReplays below).
+var testShowmeshAudioAttempt = showmeshAudioAttempt{ID: "test-attempt", At: testNow}
+
 // confirmedAudioResult is a node result every audio.session.* step in
 // this file's tests confirms unconditionally — the dispatch SEQUENCE is
 // what these tests prove, not per-step evidence semantics already proven
@@ -106,7 +116,7 @@ func TestApplyShowmeshAudioPlaylistDispatchesApplyPrepareStart(t *testing.T) {
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 	h.deps.AssetManifests = setup.st
 
-	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active)
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active, testShowmeshAudioAttempt)
 
 	setup.pub.mu.Lock()
 	defer setup.pub.mu.Unlock()
@@ -147,7 +157,7 @@ func TestApplyShowmeshAudioPlaylistUsesUnifiedRevisionSpace(t *testing.T) {
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 	h.deps.AssetManifests = setup.st
 
-	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active)
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active, testShowmeshAudioAttempt)
 
 	setup.pub.mu.Lock()
 	defer setup.pub.mu.Unlock()
@@ -192,7 +202,7 @@ func TestApplyShowmeshAudioPlaylistIdempotencyKeyIsContentDerived(t *testing.T) 
 	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: testLogger()}
 	h.deps.AssetManifests = setup.st
 
-	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active)
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active, testShowmeshAudioAttempt)
 	firstApplyKey := ""
 	setup.pub.mu.Lock()
 	for _, d := range setup.pub.dispatched {
@@ -229,7 +239,7 @@ func TestApplyShowmeshAudioPlaylistIdempotencyKeyIsContentDerived(t *testing.T) 
 		t.Fatalf("activate edited show.playlist revision: %v", err)
 	}
 
-	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active)
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active, testShowmeshAudioAttempt)
 
 	setup.pub.mu.Lock()
 	defer setup.pub.mu.Unlock()
@@ -246,6 +256,73 @@ func TestApplyShowmeshAudioPlaylistIdempotencyKeyIsContentDerived(t *testing.T) 
 	}
 	if secondApplyKey == firstApplyKey {
 		t.Fatalf("apply idempotency key did not change (%q) after the playlist's own content changed (repeat none -> all)", secondApplyKey)
+	}
+}
+
+// TestApplyShowmeshAudioPlaylistDifferentAttemptsDispatchIndependently
+// proves the rig defect this dispatch's attempt identity closes: the SAME
+// unchanged playlist applied to the SAME node on two genuinely separate
+// occasions (two different nights, or a node that missed the first
+// attempt) must dispatch again, never be refused by
+// resolveAudioSessionReplay as "same key, different params" — the 409 a
+// 2026-09-16 record produced against the 2026-09-17 playout on the rig.
+// Two distinct "now" readings stand in for those two occasions.
+func TestApplyShowmeshAudioPlaylistDifferentAttemptsDispatchIndependently(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = confirmedAudioResult()
+	nodeID, active := showmeshAudioDispatchTestFixture(t, setup)
+
+	var logBuf bytes.Buffer
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	h.deps.AssetManifests = setup.st
+
+	firstAttempt := showmeshAudioAttempt{ID: "attempt-2026-09-16", At: testNow}
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active, firstAttempt)
+
+	secondNow := testNow.Add(24 * time.Hour)
+	secondAttempt := showmeshAudioAttempt{ID: "attempt-2026-09-17", At: secondNow}
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), secondNow, nodeID, active, secondAttempt)
+
+	if got := countAudioSessionApplies(setup); got != 2 {
+		t.Fatalf("audio.session.apply dispatch count across two distinct attempts = %d, want 2 (no 409 between them)", got)
+	}
+	if logged := logBuf.String(); strings.Contains(logged, "refused") {
+		t.Fatalf("a later attempt of the same unchanged playlist was refused, want two independent dispatches: %s", logged)
+	}
+}
+
+// TestApplyShowmeshAudioPlaylistRepeatOfSameAttemptReplays proves the
+// other half of the same fix: a repeat call FOR THE SAME attempt (its
+// identity and fixed time unchanged, only the call's own "now" reading
+// moved, as a duplicate confirmation delivery would produce) must still
+// hit the replay path — same key, byte-identical params, including
+// revision, which is derived from the attempt's own fixed time rather
+// than the call's now.
+func TestApplyShowmeshAudioPlaylistRepeatOfSameAttemptReplays(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = confirmedAudioResult()
+	nodeID, active := showmeshAudioDispatchTestFixture(t, setup)
+
+	var logBuf bytes.Buffer
+	h := &handlers{deps: setup.deps().withDefaults(), clock: fixedClock(testNow), logger: slog.New(slog.NewTextHandler(&logBuf, nil))}
+	h.deps.AssetManifests = setup.st
+
+	attempt := showmeshAudioAttempt{ID: "attempt-repeat-tick", At: testNow}
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), testNow, nodeID, active, attempt)
+	if got := countAudioSessionApplies(setup); got != 1 {
+		t.Fatalf("audio.session.apply dispatch count after the first call = %d, want 1", got)
+	}
+
+	// A repeat call for the SAME attempt, but with a later "now" for the
+	// call itself — attempt.At (not now) is what the revision must track.
+	repeatNow := testNow.Add(5 * time.Second)
+	h.applyShowmeshAudioPlaylistIfAny(context.Background(), repeatNow, nodeID, active, attempt)
+
+	if got := countAudioSessionApplies(setup); got != 1 {
+		t.Fatalf("audio.session.apply dispatch count after a repeat call of the same attempt = %d, want 1 (replay, not a second dispatch)", got)
+	}
+	if logged := logBuf.String(); strings.Contains(logged, "refused") {
+		t.Fatalf("a repeat call of the same attempt was refused instead of replayed: %s", logged)
 	}
 }
 

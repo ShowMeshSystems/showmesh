@@ -63,14 +63,9 @@ func (h *handlers) handleGetResolumeInstancesConfig(w http.ResponseWriter, r *ht
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		if h.deps.ResolumeInstancesMigrationDeferred {
 			writeProblem(w, h.logger, now, resourceNotFoundProblem(
-				"no resolume.instances configuration is stored, but this coordinator IS using the instance named by "+
-					"SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID: the startup migration of those variables into this store "+
-					"could not be persisted on this boot, and was deferred rather than refusing to start. GET "+
-					"/api/v1/resolume/instances lists the instance actually in effect. Nothing was written, so nothing "+
-					"here is stale or half-applied. Check this coordinator's startup log for the failure, fix the data "+
-					"volume (usually full, read-only, or a damaged database), and restart: the migration is retried on "+
-					"every start. Do NOT remove SHOWMESH_RESOLUME_URL/SHOWMESH_RESOLUME_ID until it has succeeded — while "+
-					"the migration is deferred those variables are the only copy of this configuration."))
+				"No resolume.instances configuration is stored: the coordinator's data volume is unwritable, so "+
+					"nothing was saved. GET /api/v1/resolume/instances shows the instance actually in effect. Fix the "+
+					"volume and restart; do not clear SHOWMESH_RESOLUME_URL or SHOWMESH_RESOLUME_ID."))
 			return
 		}
 		writeProblem(w, h.logger, now, resourceNotFoundProblem(

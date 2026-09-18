@@ -1204,6 +1204,15 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-ltc-emitter-ambiguous` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
+| `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
+
+**`cue-multisync-trigger-missing` is warning-only, not a `failingCondition`.**
+Every condition above this row can make `ready` false; this one never does
+(ADR-051 decision 2: a Cue with an audio output and no trigger still plays,
+from the coordinator's own fallback, only later). It is registered here
+because it is still part of the same closed, script-branchable vocabulary
+this section exists to protect, even though it surfaces on `warning`
+rather than `failingCondition`.
 
 **Lane 20.1's three audio-target conditions are registered here after the
 fact.** SM-314 shipped them on `dev/multi-audio` (PR #210) without a
@@ -1367,7 +1376,8 @@ The store schema version, bumped by migrations in
 | v35 | shipped | long-run program-to-LTC drift recording (2026-09-11): `audio_alignment_runs` plus `audio_alignment_samples`, coordinator-side, appended from the node's own `alignmentSampledAt`/`alignmentOffsetMs` report fields while a run is active |
 | v36 | shipped | cue-catalog deploy operator override (SM-632): `node_cue_catalog_override`, one row per node recording an operator's accepted H0.5 exclusive-claim conflict, scoped to the revision it was accepted for |
 | v37 | shipped | re-keys `node_asset_inventory` (schemaV8) from `PRIMARY KEY (node_id, content_hash)` to a composite `(node_id, content_hash, runtime_filename)` primary key, so a node reporting one content hash under two runtime filenames (asset sync deliberately dispatches a second copy of an already-held hash under a second filename when a node plays another node's upload) no longer fails its whole inventory report on a UNIQUE constraint violation. A pure widening, matching v27/v28's identical reasoning: every pre-v37 row is already unique under the old key, so no data fix runs |
-| v38+ | unallocated | free |
+| v38 | shipped | PCM show audio (owner ruling 2026-09-18): adds `audio_renditions`, one row per original audio asset content hash recording its 48kHz/16-bit/stereo WAV rendition status (rendering/ready/failed) and, once ready, the rendition's own content hash, size, duration, and format string (`audio_renditions.go`'s own doc comment). A pure addition, like schemaV17/schemaV25/schemaV33/schemaV36: no existing table is touched, and an audio asset with no row yet simply has no rendition, which the expected-set computation treats as "keep naming the original" rather than an error |
+| v39+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

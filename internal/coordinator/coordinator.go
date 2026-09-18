@@ -20,6 +20,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audiorendition"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/clockconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
@@ -453,6 +454,12 @@ func Run() int {
 		return 1
 	}
 
+	// audioRendition is the owner ruling 2026-09-18 PCM-show-audio
+	// background transcode service: it builds every audio asset's
+	// 48kHz/16-bit/stereo WAV rendition off the request path, over the SAME
+	// st/assetBackend the upload handler itself uses.
+	audioRendition := audiorendition.NewService(st, assetBackend, logger)
+
 	// fppRunner is constructed here — BEFORE apiDeps, not after it the way
 	// this file had every other FPP collector wiring line ordered before
 	// the 2026-08-13 post-dispatch poll nudge — so apiDeps.Nudger
@@ -795,6 +802,11 @@ func Run() int {
 		// capability existed and was tested but had no production caller
 		// until this line.
 		AssetSyncNudger: assetSync,
+		// AudioRenditionNudger wires the SAME *audiorendition.Service
+		// constructed above: its Nudge method already satisfies
+		// api.AudioRenditionNudger with no adapter needed, mirroring
+		// AssetSyncNudger's identical wiring one field up.
+		AudioRenditionNudger: audioRendition,
 		// AssetFetchFailures wires the SAME *assetsync.Service in a third
 		// time: its LastFetchFailure method already satisfies
 		// api.AssetFetchFailureSource with no adapter needed, so
@@ -1210,6 +1222,15 @@ func Run() int {
 	// change (including the zero-to-one transition) with no restart.
 	spawnBackground(func() {
 		assetSync.Run(ctx)
+	})
+	// audioRendition.Run owns the PCM-show-audio background transcode
+	// service's own reconcile loop: it also does the "coordinator startup
+	// or reconcile pass" pass an existing audio asset uploaded before this
+	// feature shipped needs, with no operator action. Joined via the
+	// identical backgroundWG so shutdown waits for it cleanly like every
+	// other background loop here.
+	spawnBackground(func() {
+		audioRendition.Run(ctx)
 	})
 	// runAssetSettingsReconciler is the OTHER half of that same no-restart
 	// guarantee: it re-reads the active assets.settings configuration every

@@ -2912,6 +2912,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assets/{id}/rendition/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One audio asset's rendition bytes (PCM show audio)
+         * @description Same `node:read` gate as `GET /assets/{id}/content`, but serves the asset's separately content-addressed 48kHz/16-bit/stereo WAV rendition instead of the original upload. 404 when the asset has no rendition at all, or none that is ready yet - a node is only ever told to fetch this route once the coordinator's own expected-set computation has substituted a ready rendition for this asset. Supports `Range`. `ETag` is the rendition's own content hash, quoted, distinct from the original asset's.
+         */
+        get: operations["getAssetRenditionContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets/manifest": {
         parameters: {
             query?: never;
@@ -5155,14 +5175,14 @@ export interface components {
          *
          *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) - a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision - the macro was edited between two submissions under one key, 409) - minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. One is "cue-catalog-claim-conflict": `POST /nodes/{nodeId}/cue-catalog/deploy` refused because the resolved catalog carries an H0.5 exclusive-claim conflict - kept distinct from `conflict` because a client (an operator UI's "Deploy anyway" affordance) resends the identical request with `override: true` to accept it and deploy anyway, the one refusal this route allows bypassing. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** an unavailable audit store no longer blocks a command dispatch on ANY request path this coordinator has - the amendment covers every one of them, not a named subset - so `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable"; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own former ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface), is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing in this coordinator's audit-write posture treats Resolume actions differently from FPP commands, so this type is no longer produced either. **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (a non-empty ltcRoute naming a DIFFERENT device route from programRoute: program and LTC leave through one interface in one clock domain, ADR-018, so the two must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. One is "cue-catalog-claim-conflict": `POST /nodes/{nodeId}/cue-catalog/deploy` refused because the resolved catalog carries an H0.5 exclusive-claim conflict - kept distinct from `conflict` because a client (an operator UI's "Deploy anyway" affordance) resends the identical request with `override: true` to accept it and deploy anyway, the one refusal this route allows bypassing. One is ADR-051 decision 2's own addition: "sequence-filename-claim-duplicate" (`PUT /config/show.playlist/{id}` refused because the write would make two different show.cue objects in one Show claim the same FPP sequence filename, `400`, naming both Cues and the filename) - a node's MultiSync START packet for that filename would otherwise be ambiguous about which Cue's audio it starts. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** an unavailable audit store no longer blocks a command dispatch on ANY request path this coordinator has - the amendment covers every one of them, not a named subset - so `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable"; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own former ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface), is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing in this coordinator's audit-write posture treats Resolume actions differently from FPP commands, so this type is no longer produced either. **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (a non-empty ltcRoute naming a DIFFERENT device route from programRoute: program and LTC leave through one interface in one clock domain, ADR-018, so the two must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/cue-catalog-claim-conflict" | "https://showmesh.dev/problems/sequence-filename-claim-duplicate" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/fpp-transition-gain-write-failed" | "https://showmesh.dev/problems/fpp-definition-republish-failed" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-night-background-audio-target-duplicate" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed" | "https://showmesh.dev/problems/asset-resync-publish-failed";
             title: string;
             status: number;
             detail: string;
@@ -6620,6 +6640,19 @@ export interface components {
             supersededAt: string | null;
             /** @description True exactly when supersededAt is null. */
             current: boolean;
+            /** @description This asset's 48kHz/16-bit/stereo WAV rendition state (owner ruling 2026-09-18, PCM show audio). Present only when mediaType is "audio". Null when mediaType is "audio" but no rendition has ever been queued for this asset's content - the coordinator's own reconcile pass has not reached it yet, and the original file is what every node still fetches and plays. */
+            rendition?: components["schemas"]["AssetRendition"] | null;
+        };
+        /** @description One audio asset's rendition state, as read back on Asset.rendition. The rendition is a second, separately content-addressed WAV blob; the operator's own uploaded file (Asset.contentHash) is never rewritten. */
+        AssetRendition: {
+            /** @enum {string} */
+            status: "rendering" | "ready" | "failed";
+            /** @description The rendition's fixed format string. Set only when status is "ready". */
+            format?: string;
+            /** @description The rendition's playable duration in milliseconds. Set only when status is "ready". */
+            durationMillis?: number;
+            /** @description Why the last transcode attempt failed. Set only when status is "failed". The original file is still served to every node regardless. */
+            failureReason?: string;
         };
         /** @description The body of POST /assets and GET /assets/{id}. `rolledBack` is true only when a POST matched a SUPERSEDED identity and performed ADR-028 decision 10's rollback (un-superseding `asset` and superseding whatever was current); it is always false on GET. */
         AssetResponse: {
@@ -6771,11 +6804,12 @@ export interface components {
             ltc?: components["schemas"]["CueCatalogLTCOutput"];
             announcement?: components["schemas"]["CueCatalogAnnouncementOutput"];
         };
-        /** @description One Cue's row in a resolved catalog (Track H seam H3). */
+        /** @description One Cue's row in a resolved catalog (Track H seam H3). triggers is the sorted, de-duplicated list of FPP sequence filenames that start this Cue's audio (ADR-051 decision 2): a node starts a Cue's audio when it receives a MultiSync START packet naming one of these filenames. Resolved from every bound fpp-runner show.playlist entry naming this Cue whose fpp.expectedSequenceFilename is set, plus this Cue's own resolved render output filename when it has one. Always present, an empty array when there is no trigger yet. */
         CueCatalogEntry: {
             cueId: string;
             cueRevision: number;
             outputs: components["schemas"]["CueCatalogOutputs"];
+            triggers: string[];
         };
         /** @description The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3, plus its read-only acknowledgement projection). acknowledgedStatus is always present: "catalog-unacknowledged" when this node has never acknowledged a cue catalog, "catalog-current" when its last acknowledged revision equals `revision` above, and "catalog-stale" otherwise (including when no active show is configured at all, so there is nothing to be current with). acknowledgedRevision and acknowledgedAt are both absent exactly when acknowledgedStatus is "catalog-unacknowledged" - a caller must read acknowledgedStatus, never infer "never acknowledged" from their absence. */
         CueCatalogResponse: {
@@ -13118,6 +13152,58 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             /** @description An internal error, OR (see `detail`) the stored blob's on-disk size disagrees with its recorded size: a corrupted or truncated asset is reported, never served. */
+            500: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getAssetRenditionContent: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Standard HTTP byte-range request, e.g. "bytes=0-1023". */
+                Range?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. The complete rendition bytes. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    /** @description The rendition's content hash, quoted. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Partial Content, honoring a `Range` request header. */
+            206: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description An internal error, OR (see `detail`) the stored rendition blob's on-disk size disagrees with its recorded size: a corrupted or truncated rendition is reported, never served. */
             500: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

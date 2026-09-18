@@ -188,6 +188,32 @@ func contentHashOf(b []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// minimalTestWAV builds a tiny valid RIFF/WAVE PCM file (a single silent
+// mono 16-bit sample), varied by seed so two calls produce different
+// content hashes, for a test that uploads an "audio" mediaType asset
+// through the real HTTP route and needs [audiorendition.DetectFormat] to
+// accept it (assets.go's own synchronous probe), never a committed media
+// file.
+func minimalTestWAV(seed uint16) []byte {
+	buf := make([]byte, 46)
+	copy(buf[0:4], "RIFF")
+	buf[4], buf[5], buf[6], buf[7] = 38, 0, 0, 0
+	copy(buf[8:12], "WAVE")
+	copy(buf[12:16], "fmt ")
+	buf[16], buf[17], buf[18], buf[19] = 16, 0, 0, 0
+	buf[20], buf[21] = 1, 0                                  // PCM
+	buf[22], buf[23] = 1, 0                                  // mono
+	buf[24], buf[25], buf[26], buf[27] = 0x44, 0xAC, 0, 0    // 44100 Hz
+	buf[28], buf[29], buf[30], buf[31] = 0x88, 0x58, 0x01, 0 // byte rate
+	buf[32], buf[33] = 2, 0                                  // block align
+	buf[34], buf[35] = 16, 0                                 // bits per sample
+	copy(buf[36:40], "data")
+	buf[40], buf[41], buf[42], buf[43] = 2, 0, 0, 0
+	buf[44] = byte(seed)
+	buf[45] = byte(seed >> 8)
+	return buf
+}
+
 // --- happy path ---
 
 func TestPostAssetUploadHappyPath(t *testing.T) {
@@ -253,20 +279,29 @@ type v1AssetResponseForTest struct {
 }
 
 type v1AssetForTest struct {
-	ID                     string  `json:"id"`
-	Show                   string  `json:"show"`
-	Sequence               string  `json:"sequence"`
-	TargetKind             string  `json:"targetKind"`
-	Target                 string  `json:"target"`
-	MediaType              string  `json:"mediaType"`
-	ContentHash            string  `json:"contentHash"`
-	RuntimeFilename        string  `json:"runtimeFilename"`
-	SizeBytes              int64   `json:"sizeBytes"`
-	CreatedAt              string  `json:"createdAt"`
-	CreatedByPrincipalID   *string `json:"createdByPrincipalId"`
-	CreatedByPrincipalName *string `json:"createdByPrincipalName"`
-	SupersededAt           *string `json:"supersededAt"`
-	Current                bool    `json:"current"`
+	ID                     string                   `json:"id"`
+	Show                   string                   `json:"show"`
+	Sequence               string                   `json:"sequence"`
+	TargetKind             string                   `json:"targetKind"`
+	Target                 string                   `json:"target"`
+	MediaType              string                   `json:"mediaType"`
+	ContentHash            string                   `json:"contentHash"`
+	RuntimeFilename        string                   `json:"runtimeFilename"`
+	SizeBytes              int64                    `json:"sizeBytes"`
+	CreatedAt              string                   `json:"createdAt"`
+	CreatedByPrincipalID   *string                  `json:"createdByPrincipalId"`
+	CreatedByPrincipalName *string                  `json:"createdByPrincipalName"`
+	SupersededAt           *string                  `json:"supersededAt"`
+	Current                bool                     `json:"current"`
+	Rendition              *v1AssetRenditionForTest `json:"rendition"`
+}
+
+// v1AssetRenditionForTest mirrors v1.AssetRendition.
+type v1AssetRenditionForTest struct {
+	Status         string `json:"status"`
+	Format         string `json:"format,omitempty"`
+	DurationMillis int64  `json:"durationMillis,omitempty"`
+	FailureReason  string `json:"failureReason,omitempty"`
 }
 
 // --- ADR-028's own load-bearing property: a filename is not an identity ---
@@ -1388,7 +1423,7 @@ func TestPostAssetUploadRollbackAuditNamesTheCorrectMediaTypeWhenBothAreCurrent(
 
 	fseqBytesA := []byte("fseq version A")
 	fseqBytesB := []byte("fseq version B, different bytes")
-	audioBytes := []byte("audio bed bytes, same sequence and target")
+	audioBytes := minimalTestWAV(1)
 
 	respA1, bodyA1 := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", fseqBytesA, auth)
 	if respA1.StatusCode != http.StatusOK {
