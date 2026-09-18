@@ -26,6 +26,17 @@ type fakeClockSource struct {
 	// sequencing, advancing races the schedule's own read and a start
 	// meant to be in the future is sometimes resolved as already past.
 	nowCalls int
+
+	// wallNow times Poll's own cache entry in the same time domain the
+	// Manager under test measures freshness against (its injected wall
+	// clock), never real time.Now, so a test can control cache age
+	// exactly. Defaults to time.Now when unset.
+	wallNow func() time.Time
+
+	pollCalls    int
+	lastStatus   agentclock.Status
+	lastPolledAt time.Time
+	lastKnown    bool
 }
 
 func newFakeClockSource(mediaStart time.Time) *fakeClockSource {
@@ -39,7 +50,41 @@ func newFakeClockSource(mediaStart time.Time) *fakeClockSource {
 func (f *fakeClockSource) Poll(context.Context) agentclock.Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.pollCalls++
+	f.lastStatus = f.status
+	if f.wallNow != nil {
+		f.lastPolledAt = f.wallNow()
+	} else {
+		f.lastPolledAt = time.Now()
+	}
+	f.lastKnown = true
 	return f.status
+}
+
+// Last reports the status from this fake's most recent Poll call. ok is
+// false until a test (or the code under test) has called Poll at least
+// once, matching a real [clock.Tracker] that has never polled.
+func (f *fakeClockSource) Last() (agentclock.Status, time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastStatus, f.lastPolledAt, f.lastKnown
+}
+
+// setWallNow wires this fake's cache-entry clock to fn, so a test can put
+// the fake's cache in the same time domain as the Manager it is wired
+// into.
+func (f *fakeClockSource) setWallNow(fn func() time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.wallNow = fn
+}
+
+// pollCount reports how many times Poll has been called, so a test can
+// prove resolveScheduleLocked served a start from cache without polling.
+func (f *fakeClockSource) pollCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pollCalls
 }
 
 func (f *fakeClockSource) Now(context.Context) agentclock.MediaTime {
@@ -142,6 +187,7 @@ func newScheduledFixture(t *testing.T, thresholdMs int) *scheduledFixture {
 	// the media clock produces an obviously wrong number rather than a
 	// plausible one.
 	media := newFakeClockSource(time.Unix(4_000_000_000, 0))
+	media.setWallNow(c.now)
 	m.SetClockSource(media)
 	if thresholdMs > 0 {
 		m.SetSettings(Settings{
@@ -230,6 +276,92 @@ func TestScheduledStartInThePastIsRefused(t *testing.T) {
 	s.mu.Unlock()
 	if state == pkgaudio.StatePlaying {
 		t.Fatal("a refused scheduled start left the session Playing; it must not have started at all")
+	}
+}
+
+// TestScheduledStartHonorsShortLeadFromFreshCacheWithoutPolling proves a
+// lead shorter than an external clock provider's own Poll cost (RES-019
+// evidence: pollViaUDS's pmc round trips run ~400ms) is still honored when
+// the clock report loop has already polled recently: resolveScheduleLocked
+// must use that cached status rather than pay for a live Poll before
+// comparing the requested instant.
+func TestScheduledStartHonorsShortLeadFromFreshCacheWithoutPolling(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	ctx := context.Background()
+
+	f.media.Poll(ctx) // prime the cache, as the agent's own clock report loop does
+	pollsBefore := f.media.pollCount()
+
+	const lead = 100 * time.Millisecond
+	t0 := f.media.Now(ctx).Time.Add(lead)
+	before := f.media.reads()
+	done := make(chan pkgaudio.OutcomeResult, 1)
+	go func() {
+		done <- f.m.StartAt(ctx, f.id, "inv-start", 2, t0.UnixNano())
+	}()
+	f.media.waitForReads(t, before+1)
+
+	if got := f.media.pollCount(); got != pollsBefore {
+		t.Fatalf("resolveScheduleLocked polled the clock source %d extra time(s) despite a fresh cache, want 0", got-pollsBefore)
+	}
+
+	f.media.advance(lead)
+	select {
+	case out := <-done:
+		if out.Outcome != pkgaudio.OutcomeStarted {
+			t.Fatalf("scheduled StartAt = %q (%s), want started", out.Outcome, out.Reason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartAt never returned after the media clock reached T0")
+	}
+}
+
+// TestScheduledStartFallsBackToPollWhenCachedStatusIsStale proves a cache
+// older than clockStatusFreshnessBound is not trusted: resolveScheduleLocked
+// must pay for one live Poll rather than decide a schedule off evidence
+// that predates the agent's own clock report cadence.
+func TestScheduledStartFallsBackToPollWhenCachedStatusIsStale(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	ctx := context.Background()
+
+	f.media.Poll(ctx) // prime the cache
+	f.clk.advance(clockStatusFreshnessBound + time.Second)
+
+	pollsBefore := f.media.pollCount()
+	out := f.startScheduled(t, 100*time.Millisecond)
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("scheduled StartAt = %q (%s), want started", out.Outcome, out.Reason)
+	}
+	if got := f.media.pollCount(); got != pollsBefore+1 {
+		t.Fatalf("resolveScheduleLocked polled %d extra time(s) after a stale cache, want exactly 1 fallback poll", got-pollsBefore)
+	}
+}
+
+// TestScheduledStartWithCachedUnlockedStatusStartsOnArrival proves a fresh
+// cached status that is not locked produces exactly today's
+// start-on-arrival behaviour (the instant ignored, note carrying
+// [pkgaudio.ReasonScheduledStartIgnored]) without polling the source
+// again — the freshness cache changes only which status resolveScheduleLocked
+// reads, never the accepted/ignored/refused rule itself.
+func TestScheduledStartWithCachedUnlockedStatusStartsOnArrival(t *testing.T) {
+	f := newScheduledFixture(t, 20)
+	ctx := context.Background()
+
+	f.media.setState(agentclock.StateAcquiring, "not yet locked")
+	f.media.Poll(ctx) // prime the cache with the unlocked status
+	pollsBefore := f.media.pollCount()
+
+	t0 := f.media.Now(ctx).Time.Add(2 * time.Second)
+	out := f.m.StartAt(ctx, f.id, "inv-start", 2, t0.UnixNano())
+
+	if out.Outcome != pkgaudio.OutcomeStarted {
+		t.Fatalf("StartAt with a fresh unlocked cached status = %q (%s), want started (today's start-on-arrival behaviour)", out.Outcome, out.Reason)
+	}
+	if !containsString(out.Reason, pkgaudio.ReasonScheduledStartIgnored) {
+		t.Fatalf("reason = %q, want it to carry %q", out.Reason, pkgaudio.ReasonScheduledStartIgnored)
+	}
+	if got := f.media.pollCount(); got != pollsBefore {
+		t.Fatalf("resolveScheduleLocked polled the clock source %d extra time(s) despite a fresh cache, want 0", got-pollsBefore)
 	}
 }
 

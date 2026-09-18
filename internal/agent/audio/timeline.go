@@ -17,6 +17,11 @@ import (
 type ClockSource interface {
 	Poll(ctx context.Context) agentclock.Status
 	Now(ctx context.Context) agentclock.MediaTime
+
+	// Last reports the status from this source's most recent Poll, and
+	// when that poll happened, without polling again. ok is false when
+	// no poll has ever completed.
+	Last() (status agentclock.Status, polledAt time.Time, ok bool)
 }
 
 // Resync reasons: the three causes that can make a discontinuity, and
@@ -395,6 +400,14 @@ func (m *Manager) OutputLatencyUs() int64 {
 // nothing to do with it.
 var maxScheduledStartLead = 30 * time.Second // var, not const: shrunk by tests exercising the bound itself
 
+// clockStatusFreshnessBound is how old a cached clock status may be before
+// resolveScheduleLocked falls back to a live Poll instead of trusting it.
+// Twice the agent's clock report cadence (internal/agent/config's
+// defaultClockReportInterval, 15s), so a cache still holds between two
+// report ticks under ordinary jitter but a stalled report loop is not
+// trusted indefinitely.
+const clockStatusFreshnessBound = 30 * time.Second
+
 // startSchedule is one accepted scheduled start: the T0 to present the
 // first sample at, and the clock evidence the timeline anchors against.
 type startSchedule struct {
@@ -455,11 +468,20 @@ func (m *Manager) resolveScheduleLocked(ctx context.Context, scheduledAtNs *int6
 	if source == nil {
 		return nil, pkgaudio.ReasonScheduledStartIgnored + ": started on arrival: this node has no media clock wired, so the requested start instant was ignored", nil
 	}
-	status := source.Poll(ctx)
+
+	// A fresh cached status (from the clock report loop's own cadence,
+	// clockStatusFreshnessBound) is used as-is so a short lead is not
+	// consumed by an external provider's own Poll cost (pollViaUDS's pmc
+	// round trips); only a missing or stale cache pays for a live Poll.
+	status, polledAt, ok := source.Last()
+	if !ok || m.now().Sub(polledAt) > clockStatusFreshnessBound {
+		status = source.Poll(ctx)
+	}
+	mediaNow := source.Now(ctx)
+
 	if status.State != agentclock.StateLocked {
 		return nil, fmt.Sprintf("%s: started on arrival: this node's clock provider reports %q (%s), so the requested start instant was ignored", pkgaudio.ReasonScheduledStartIgnored, status.State, status.Reason), nil
 	}
-	mediaNow := source.Now(ctx)
 	if !mediaNow.Valid {
 		return nil, pkgaudio.ReasonScheduledStartIgnored + ": started on arrival: this node's media clock is unreadable (" + mediaNow.Reason + "), so the requested start instant was ignored", nil
 	}
