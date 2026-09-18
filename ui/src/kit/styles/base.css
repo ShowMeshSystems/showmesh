@@ -14,10 +14,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Paint the ground on the html element only. It maps to the fixed-size canvas,
-   so the color is painted once across the viewport. Painting it on the tall
-   body box instead leaves a faint sub-pixel seam partway down a long page. */
-html {
+/* Paint the ground on a fixed, viewport-sized layer behind everything. On a
+   very tall page, painting --bg on the html or body box leaves a faint
+   sub-pixel seam partway down where Chrome tiles the large solid fill; a fixed
+   layer is always viewport-sized, so there is no tall box to seam. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
   background: var(--bg);
 }
 
