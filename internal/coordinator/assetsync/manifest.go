@@ -108,6 +108,15 @@ type ExpectedAsset struct {
 	Filename    string
 	SizeBytes   int64
 	Source      AssetSource
+
+	// Rendition is true when ContentHash, Filename, and SizeBytes name a
+	// ready audio rendition ([substituteAudioRenditions]) rather than the
+	// asset's own original upload. AssetID is unchanged either way: it
+	// always names the original asset row, since that is what inventory
+	// and the manifest identify an asset by. The fetch dispatch (sync.go)
+	// uses this to route to the rendition content route instead of the
+	// original one.
+	Rendition bool
 }
 
 // borrowedAsset is a store.AssetRecord borrowed from another target's own
@@ -461,6 +470,12 @@ type MissingAsset struct {
 	Filename    string
 	ContentHash string
 	SizeBytes   int64
+
+	// Rendition mirrors [ExpectedAsset.Rendition]: true when Filename/
+	// ContentHash/SizeBytes name a ready audio rendition rather than the
+	// asset's own original upload. The sync service's own dispatch
+	// (sync.go) needs this to route the fetch it issues correctly.
+	Rendition bool
 }
 
 // ExtraAsset is one asset a node holds that this manifest did not expect.
@@ -669,7 +684,7 @@ func ComputeNodeManifest(nodeID string, active ActiveShow, expected ExpectedSet,
 		}
 		missing = append(missing, MissingAsset{
 			AssetID: a.AssetID, SequenceID: a.SequenceID, Filename: a.Filename,
-			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes,
+			ContentHash: a.ContentHash, SizeBytes: a.SizeBytes, Rendition: a.Rendition,
 		})
 		state := AssetVerdictAbsent
 		for oldHash := range expected.SupersededHashes[a.AssetID] {

@@ -40,14 +40,17 @@ func substituteAudioRenditions(ctx context.Context, st *store.Store, assets []Ex
 		}
 		assets[i].ContentHash = rend.ContentHash
 		assets[i].SizeBytes = rend.SizeBytes
-		assets[i].Filename = renditionFilename(a.Filename)
+		assets[i].Filename = RenditionFilename(a.Filename)
+		assets[i].Rendition = true
 	}
 	return assets, nil
 }
 
-// renditionFilename replaces original's own extension with ".wav",
+// RenditionFilename replaces original's own extension with ".wav",
 // matching every audio rendition's fixed [audiorendition.RenditionFormat].
-func renditionFilename(original string) string {
+// Exported so the API package's rendition content route (assets.go) names
+// the same runtime filename this package's own expected set names.
+func RenditionFilename(original string) string {
 	ext := filepath.Ext(original)
 	if ext == "" {
 		return original + ".wav"

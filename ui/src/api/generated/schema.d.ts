@@ -2912,6 +2912,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assets/{id}/rendition/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One audio asset's rendition bytes (PCM show audio)
+         * @description Same `node:read` gate as `GET /assets/{id}/content`, but serves the asset's separately content-addressed 48kHz/16-bit/stereo WAV rendition instead of the original upload. 404 when the asset has no rendition at all, or none that is ready yet - a node is only ever told to fetch this route once the coordinator's own expected-set computation has substituted a ready rendition for this asset. Supports `Range`. `ETag` is the rendition's own content hash, quoted, distinct from the original asset's.
+         */
+        get: operations["getAssetRenditionContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets/manifest": {
         parameters: {
             query?: never;
@@ -13132,6 +13152,58 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             /** @description An internal error, OR (see `detail`) the stored blob's on-disk size disagrees with its recorded size: a corrupted or truncated asset is reported, never served. */
+            500: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getAssetRenditionContent: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Standard HTTP byte-range request, e.g. "bytes=0-1023". */
+                Range?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. The complete rendition bytes. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    /** @description The rendition's content hash, quoted. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Partial Content, honoring a `Range` request header. */
+            206: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description An internal error, OR (see `detail`) the stored rendition blob's on-disk size disagrees with its recorded size: a corrupted or truncated rendition is reported, never served. */
             500: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

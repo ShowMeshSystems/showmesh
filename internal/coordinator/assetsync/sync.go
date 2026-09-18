@@ -599,6 +599,7 @@ func (s *Service) syncNode(ctx context.Context, showID, nodeID string) {
 		s.maybeDispatch(ctx, nodeID, ExpectedAsset{
 			AssetID: missing.AssetID, SequenceID: missing.SequenceID,
 			ContentHash: missing.ContentHash, Filename: missing.Filename, SizeBytes: missing.SizeBytes,
+			Rendition: missing.Rendition,
 		})
 	}
 }
@@ -766,7 +767,7 @@ func (s *Service) dispatchFetch(ctx context.Context, nodeID string, asset Expect
 			"contentHash": asset.ContentHash,
 			"filename":    asset.Filename,
 			"sizeBytes":   asset.SizeBytes,
-			"url":         s.fetchURL(asset.AssetID),
+			"url":         s.fetchURL(asset.AssetID, asset.Rendition),
 		},
 		Issuer:             mqttproto.CmdIssuer{PrincipalID: assetSyncIssuerPrincipalID, PrincipalName: assetSyncIssuerPrincipalName},
 		ConfirmationMethod: assetFetchConfirmationMethod,
@@ -785,10 +786,18 @@ func (s *Service) dispatchFetch(ctx context.Context, nodeID string, asset Expect
 
 // fetchURL builds the URL an agent's asset.fetch operation downloads from:
 // the CURRENT live content base URL joined with the content route the
-// (separately built) asset store's HTTP handler serves, GET
-// /api/v1/assets/{id}/content.
-func (s *Service) fetchURL(assetID string) string {
-	return strings.TrimRight(s.ContentBaseURL(), "/") + "/api/v1/assets/" + assetID + "/content"
+// (separately built) asset store's HTTP handler serves. rendition selects
+// GET /api/v1/assets/{id}/rendition/content (the audio rendition's own
+// bytes, matching a substituted [ExpectedAsset]'s contentHash/filename/
+// sizeBytes params) instead of GET /api/v1/assets/{id}/content (the
+// asset's original upload); assetID always names the original asset
+// either way.
+func (s *Service) fetchURL(assetID string, rendition bool) string {
+	path := "/content"
+	if rendition {
+		path = "/rendition/content"
+	}
+	return strings.TrimRight(s.ContentBaseURL(), "/") + "/api/v1/assets/" + assetID + path
 }
 
 // --- consuming asset.fetch results ---

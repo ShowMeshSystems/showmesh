@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
@@ -111,5 +113,112 @@ func TestGetAssetCarriesReadyRenditionState(t *testing.T) {
 	}
 	if got.Asset.Rendition.Status != "ready" || got.Asset.Rendition.Format != "wav48k16s" || got.Asset.Rendition.DurationMillis != 1234 {
 		t.Errorf("Rendition = %+v, want status ready, format wav48k16s, durationMillis 1234", got.Asset.Rendition)
+	}
+}
+
+// TestGetAssetRenditionContentServesRenditionBytes proves the rendition
+// content route serves the RENDITION's own bytes, distinct from the
+// original upload: the served body hashes to the rendition's own content
+// hash and matches its own recorded size, exactly what a node's asset.fetch
+// verifies against once assetsync substitutes a ready rendition into an
+// expected-set entry.
+func TestGetAssetRenditionContentServesRenditionBytes(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := assetsTestDeps(t, svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+
+	original := minimalTestWAV(11)
+	fields := validAssetFields()
+	fields["mediaType"] = "audio"
+	_, uploadBody := doAssetUpload(t, api.Handler, fields, "bed.wav", original, auth)
+	var uploaded v1AssetResponseForTest
+	if err := json.Unmarshal(uploadBody, &uploaded); err != nil {
+		t.Fatalf("decode upload response: %v\nbody: %s", err, uploadBody)
+	}
+
+	renditionBytes := []byte("stand-in 48kHz/16-bit/stereo WAV bytes, distinct from the original upload")
+	blob, err := deps.AssetBackend.Put(context.Background(), bytes.NewReader(renditionBytes), int64(len(renditionBytes)))
+	if err != nil {
+		t.Fatalf("store rendition blob: %v", err)
+	}
+	if err := st.SetAudioRenditionReady(context.Background(), uploaded.Asset.ContentHash, store.AudioRenditionReady{
+		ContentHash: blob.ContentHash, SizeBytes: blob.SizeBytes, DurationMillis: 999, Format: "wav48k16s",
+	}); err != nil {
+		t.Fatalf("seed ready rendition: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/assets/"+uploaded.Asset.ID+"/rendition/content", nil)
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if !bytes.Equal(body, renditionBytes) {
+		t.Fatalf("served bytes = %q, want the rendition's own bytes %q", body, renditionBytes)
+	}
+	if gotHash := contentHashOf(body); gotHash != blob.ContentHash {
+		t.Errorf("served bytes hash to %q, want the rendition's own content hash %q", gotHash, blob.ContentHash)
+	}
+	if int64(len(body)) != blob.SizeBytes {
+		t.Errorf("served %d bytes, want the rendition's own recorded size %d", len(body), blob.SizeBytes)
+	}
+	if got, want := resp.Header.Get("ETag"), `"`+blob.ContentHash+`"`; got != want {
+		t.Errorf("ETag = %q, want %q", got, want)
+	}
+	if gotHash := contentHashOf(body); gotHash == uploaded.Asset.ContentHash {
+		t.Error("served bytes hash to the ORIGINAL upload's content hash, want the rendition's own")
+	}
+}
+
+// TestGetAssetRenditionContentNotFoundWithoutAReadyRendition proves the
+// rendition route refuses with 404 when the asset has never had a
+// rendition queued, is still rendering, or last failed, rather than
+// serving the original upload's bytes under this route.
+func TestGetAssetRenditionContentNotFoundWithoutAReadyRendition(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, st *store.Store, hash string)
+	}{
+		{"never queued", func(t *testing.T, st *store.Store, hash string) {}},
+		{"still rendering", func(t *testing.T, st *store.Store, hash string) {
+			if err := st.SetAudioRenditionRendering(context.Background(), hash); err != nil {
+				t.Fatalf("SetAudioRenditionRendering: %v", err)
+			}
+		}},
+		{"failed", func(t *testing.T, st *store.Store, hash string) {
+			if err := st.SetAudioRenditionFailed(context.Background(), hash, "decode error"); err != nil {
+				t.Fatalf("SetAudioRenditionFailed: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, st, auth := assetsAdminAPI(t)
+
+			wav := minimalTestWAV(13)
+			fields := validAssetFields()
+			fields["mediaType"] = "audio"
+			_, uploadBody := doAssetUpload(t, api.Handler, fields, "bed.wav", wav, auth)
+			var uploaded v1AssetResponseForTest
+			if err := json.Unmarshal(uploadBody, &uploaded); err != nil {
+				t.Fatalf("decode upload response: %v\nbody: %s", err, uploadBody)
+			}
+			tc.setup(t, st, uploaded.Asset.ContentHash)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/assets/"+uploaded.Asset.ID+"/rendition/content", nil)
+			for k, v := range auth {
+				req.Header.Set(k, v)
+			}
+			resp, body := doRawRequest(t, api.Handler, req)
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404; body: %s", resp.StatusCode, body)
+			}
+		})
 	}
 }

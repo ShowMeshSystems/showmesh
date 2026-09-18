@@ -2176,6 +2176,10 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/assets", h.readAnyGuard(showConfigReadScopes, h.handleListAssets))
 	mux.HandleFunc("GET /api/v1/assets/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetAsset))
 	mux.HandleFunc("GET /api/v1/assets/{id}/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetContent))
+	// Same node:read gate as .../content, one route below it: an audio
+	// asset's separately content-addressed rendition bytes rather than the
+	// original upload (PCM show audio). See handleGetAssetRenditionContent.
+	mux.HandleFunc("GET /api/v1/assets/{id}/rendition/content", h.readGuard(identity.ScopeNodeRead, h.handleGetAssetRenditionContent))
 
 	// Seam E5 (assetmanifest.go): "what should a node hold" versus "what
 	// does it hold" — read-only, same showConfigReadScopes posture as

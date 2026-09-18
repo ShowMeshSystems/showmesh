@@ -14,6 +14,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audiorendition"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -546,6 +547,70 @@ func (h *handlers) handleGetAssetContent(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("ETag", strconv.Quote(rec.ContentHash))
 	http.ServeContent(w, r, rec.RuntimeFilename, rec.CreatedAt, rc)
+}
+
+// --- GET /assets/{id}/rendition/content ---
+
+func assetRenditionNotFoundProblem(id string) v1.Problem {
+	return resourceNotFoundProblem(fmt.Sprintf("no ready rendition exists for asset %q", id))
+}
+
+// handleGetAssetRenditionContent serves GET /api/v1/assets/{id}/rendition/
+// content: the SAME id as GET /api/v1/assets/{id}/content, but the audio
+// asset's own separately content-addressed rendition blob, never the
+// original upload. A node is only ever dispatched this route once
+// [assetsync]'s expected-set computation has substituted a ready
+// rendition for this asset, so a 404 here (no rendition row, or one not
+// yet ready) means that node's own manifest is stale relative to what the
+// coordinator now expects.
+func (h *handlers) handleGetAssetRenditionContent(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	id := r.PathValue("id")
+
+	rec, err := h.deps.Assets.GetAsset(r.Context(), id)
+	if errors.Is(err, store.ErrAssetNotFound) {
+		writeProblem(w, h.logger, now, assetNotFoundProblem(id))
+		return
+	}
+	if err != nil {
+		h.writeInternalError(w, now, "get asset for rendition content", err)
+		return
+	}
+
+	rend, err := h.deps.Assets.GetAudioRendition(r.Context(), rec.ContentHash)
+	switch {
+	case errors.Is(err, store.ErrAudioRenditionNotFound):
+		writeProblem(w, h.logger, now, assetRenditionNotFoundProblem(id))
+		return
+	case err != nil:
+		h.writeInternalError(w, now, "get asset rendition for content", err)
+		return
+	case rend.Status != store.AudioRenditionStatusReady:
+		writeProblem(w, h.logger, now, assetRenditionNotFoundProblem(id))
+		return
+	}
+
+	// Same write-deadline extension as handleGetAssetContent, sized from
+	// the rendition's own recorded size rather than the original's.
+	writeDeadline := time.Now().Add(assetstore.UploadBudget(rend.SizeBytes))
+	_ = http.NewResponseController(w).SetWriteDeadline(writeDeadline)
+
+	rc, size, err := h.deps.AssetBackend.Open(r.Context(), rend.ContentHash)
+	if err != nil {
+		h.writeInternalError(w, now, fmt.Sprintf("open stored rendition for asset %q", id), err)
+		return
+	}
+	defer func() { _ = rc.Close() }()
+
+	if size != rend.SizeBytes {
+		h.writeInternalError(w, now, fmt.Sprintf("serve rendition for asset %q", id),
+			fmt.Errorf("stored rendition blob is %d bytes but the recorded size is %d bytes: refusing to serve a truncated or corrupted rendition", size, rend.SizeBytes))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("ETag", strconv.Quote(rend.ContentHash))
+	http.ServeContent(w, r, assetsync.RenditionFilename(rec.RuntimeFilename), rec.CreatedAt, rc)
 }
 
 // --- mapping: store.AssetRecord -> v1 wire types ---

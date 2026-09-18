@@ -15,8 +15,8 @@ func TestRenditionFilenameReplacesExtension(t *testing.T) {
 		"a.b.ogg":           "a.b.wav",
 	}
 	for in, want := range cases {
-		if got := renditionFilename(in); got != want {
-			t.Errorf("renditionFilename(%q) = %q, want %q", in, got, want)
+		if got := RenditionFilename(in); got != want {
+			t.Errorf("RenditionFilename(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -54,6 +54,9 @@ func TestExpectedAssetsForNodeNamesReadyAudioRendition(t *testing.T) {
 	}
 	if a.Filename != "opening-theme.wav" {
 		t.Errorf("Filename = %q, want opening-theme.wav", a.Filename)
+	}
+	if !a.Rendition {
+		t.Error("Rendition = false, want true: this entry names a ready rendition")
 	}
 }
 
@@ -100,6 +103,9 @@ func TestExpectedAssetsForNodeKeepsOriginalWithoutAReadyRendition(t *testing.T) 
 			}
 			if a.Filename != "opening-theme.mp3" {
 				t.Errorf("Filename = %q, want the original opening-theme.mp3", a.Filename)
+			}
+			if a.Rendition {
+				t.Error("Rendition = true, want false: no ready rendition exists yet")
 			}
 		})
 	}
