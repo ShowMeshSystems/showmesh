@@ -83,8 +83,12 @@ const (
 // SHOWMESH HYPOTHESIS, NOT MEASURED: no real runner clock has been
 // observed to produce two distinct activations with the identical
 // nanosecond EvidenceAt.
-func activationRevision(act cueactivation.Activation, step int) pkgaudio.Revision {
-	return pkgaudio.Revision(cueactivation.AudioSessionRevision(act.EvidenceAt, step))
+//
+// at is normally act.EvidenceAt, but activateAudio passes a fresher now()
+// instead whenever the MultiSync trigger already touched this session at
+// a later, wall-clock-derived revision (multisynccueaudio.go).
+func activationRevision(at time.Time, step int) pkgaudio.Revision {
+	return pkgaudio.Revision(cueactivation.AudioSessionRevision(at, step))
 }
 
 // audioOutcomeFailed reports whether outcome is one of the three
@@ -178,7 +182,7 @@ func announcementMixPolicy(policy string) (pkgaudio.MixPolicy, error) {
 // naming why THIS node's clock could not honor the instant it started
 // on arrival instead ([pkgaudio.ReasonScheduledStartIgnored]); empty on
 // every other successful path.
-func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput, announcement *cuecatalog.AnnouncementOutput) (string, *audioStartTriggerRecord, error) {
+func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput, announcement *cuecatalog.AnnouncementOutput, now func() time.Time) (string, *audioStartTriggerRecord, error) {
 	if out.Filename == "" {
 		return "", nil, fmt.Errorf("cue %q's audio asset %q has not been uploaded to this node, upload it and redeploy", act.CueID, out.Asset)
 	}
@@ -204,24 +208,25 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 
 	target := audio.TargetMediaIdentity(pkgaudio.MediaRef{AssetID: out.Asset, ContentHash: contentHash})
 
-	// ADR-051 decision 6/item 7: a Cue's audio this node's own MultiSync
-	// listener already started for the SAME Cue and media must not be
-	// restarted or reseeked by a coordinator activation that arrives
-	// after it: the node is already doing exactly what this activation
-	// would otherwise do, and restarting it would be an audible glitch
-	// for no benefit. A coordinator activation that arrives FIRST is
-	// unaffected: cueActivationTriggerRegistry holds no record yet, or
-	// one for a different Cue/media, so this check never matches it.
+	// ADR-051 decision 6/item 7: a session Playing under this exact
+	// MultiSync trigger is left alone. One touched but not playing already
+	// consumed a wall-clock revision above act.EvidenceAt, so derive from now().
+	revisionAt := act.EvidenceAt
 	if announcement == nil && cueActivationTriggerRegistry != nil {
 		if rec, ok := cueActivationTriggerRegistry.get(id); ok &&
 			rec.Trigger == pkgaudio.StartTriggerMultiSync && rec.CueID == act.CueID && rec.MediaIdentity == target {
+			playing := false
 			if identity, loaded := mgr.LoadedMediaIdentity(id); loaded && identity == target {
 				for _, snap := range mgr.Snapshot(ctx) {
 					if snap.ID == id && snap.State == pkgaudio.StatePlaying {
-						return "", &rec, nil
+						playing = true
 					}
 				}
 			}
+			if playing {
+				return "", &rec, nil
+			}
+			revisionAt = now()
 		}
 	}
 
@@ -263,7 +268,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		}
 	}
 
-	applyOutcome := mgr.Apply(ctx, id, activationInvocation(act, "apply"), activationRevision(act, activationStepApply), req)
+	applyOutcome := mgr.Apply(ctx, id, activationInvocation(act, "apply"), activationRevision(revisionAt, activationStepApply), req)
 	if audioOutcomeFailed(applyOutcome) {
 		return "", nil, fmt.Errorf("cue %q's audio setup failed (%s): %s", act.CueID, applyOutcome.Outcome, applyOutcome.Reason)
 	}
@@ -293,16 +298,16 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 			// Cue in advance would leave that stage loaded and
 			// unreleased until some future, unrelated Cue's own
 			// prepare-ahead cycle happens to overwrite it.
-			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(act, activationStepStart))
+			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(revisionAt, activationStepStart))
 		}
-		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
+		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(revisionAt, activationStepPrepare))
 		if audioOutcomeFailed(prepOutcome) {
 			return "", nil, fmt.Errorf("cue %q's audio was not ready (%s): %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
 		}
-		startOutcome := mgr.StartAtPosition(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart), *act.ScheduledAtNs, position)
+		startOutcome := mgr.StartAtPosition(ctx, id, activationInvocation(act, "start"), activationRevision(revisionAt, activationStepStart), *act.ScheduledAtNs, position)
 		if audioOutcomeFailed(startOutcome) {
 			if startOutcome.Outcome == pkgaudio.OutcomeRefused && strings.HasPrefix(startOutcome.Reason, pkgaudio.ReasonScheduledStartInPast) {
-				return startUnalignedOnArrival(ctx, mgr, id, act, position, startOutcome.Reason, target)
+				return startUnalignedOnArrival(ctx, mgr, id, act, revisionAt, position, startOutcome.Reason, target)
 			}
 			return "", nil, fmt.Errorf("cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 		}
@@ -336,7 +341,7 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		// matches — [Manager.Promote] has touched nothing on id, so falling
 		// through to the ordinary Prepare+Start pair below runs exactly as
 		// it does when nothing was ever staged.
-		promoteOutcome := mgr.Promote(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), id, activationInvocation(act, "start"), activationRevision(act, activationStepStart))
+		promoteOutcome := mgr.Promote(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), id, activationInvocation(act, "start"), activationRevision(revisionAt, activationStepStart))
 		if promoteOutcome.Outcome == pkgaudio.OutcomeStarted {
 			started = true
 		} else {
@@ -357,23 +362,23 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 			// synchronous in-process call inside one activation, not a
 			// dispatched command that can be delayed between broker and
 			// agent.
-			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(act, activationStepStart))
+			mgr.Clear(ctx, pkgaudio.SessionID(cueactivation.PrepareStagingSessionID), activationInvocation(act, "clear-stage"), activationRevision(revisionAt, activationStepStart))
 		}
 	}
 
 	if !started {
-		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(act, activationStepPrepare))
+		prepOutcome := mgr.Prepare(ctx, id, activationInvocation(act, "prepare"), activationRevision(revisionAt, activationStepPrepare))
 		if audioOutcomeFailed(prepOutcome) {
 			return "", nil, fmt.Errorf("cue %q's audio was not ready (%s): %s", act.CueID, prepOutcome.Outcome, prepOutcome.Reason)
 		}
 
-		startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start"), activationRevision(act, activationStepStart))
+		startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start"), activationRevision(revisionAt, activationStepStart))
 		if audioOutcomeFailed(startOutcome) {
 			return "", nil, fmt.Errorf("cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 		}
 	}
 
-	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek"), activationRevision(act, activationStepSeek), position)
+	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek"), activationRevision(revisionAt, activationStepSeek), position)
 	if audioOutcomeFailed(seekOutcome) {
 		return "", nil, fmt.Errorf("cue %q's audio did not move to %dms (%s): %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
 	}
@@ -387,12 +392,12 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 // reason (not apply-failed) once both actually succeed: the node is
 // playing, just not at the scheduled instant. A failed start or seek here
 // still returns an error: the fallback did not actually take effect.
-func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, position time.Duration, missedReason, mediaIdentity string) (string, *audioStartTriggerRecord, error) {
-	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(act, unalignedFallbackStepStart))
+func startUnalignedOnArrival(ctx context.Context, mgr *audio.Manager, id pkgaudio.SessionID, act cueactivation.Activation, revisionAt time.Time, position time.Duration, missedReason, mediaIdentity string) (string, *audioStartTriggerRecord, error) {
+	startOutcome := mgr.Start(ctx, id, activationInvocation(act, "start-unaligned"), activationRevision(revisionAt, unalignedFallbackStepStart))
 	if audioOutcomeFailed(startOutcome) {
 		return "", nil, fmt.Errorf("cue %q's audio did not start (%s): %s", act.CueID, startOutcome.Outcome, startOutcome.Reason)
 	}
-	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek-unaligned"), activationRevision(act, unalignedFallbackStepSeek), position)
+	seekOutcome := mgr.Seek(ctx, id, activationInvocation(act, "seek-unaligned"), activationRevision(revisionAt, unalignedFallbackStepSeek), position)
 	if audioOutcomeFailed(seekOutcome) {
 		return "", nil, fmt.Errorf("cue %q's audio did not move to %dms (%s): %s", act.CueID, act.PositionMS, seekOutcome.Outcome, seekOutcome.Reason)
 	}

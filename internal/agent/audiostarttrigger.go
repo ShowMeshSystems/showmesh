@@ -23,6 +23,11 @@ type audioStartTriggerRecord struct {
 	ArrivalNs        int64
 	LeadMs           int64
 	PreparedLate     bool
+
+	// LatenessMs is how far past its own computed T0 a MultiSync-triggered
+	// start actually began, set only by the missed-instant fallback
+	// (multisynccueaudio.go's startLateOnArrival). Zero otherwise.
+	LatenessMs int64
 }
 
 // cueActivationTriggerRegistry is this node's ONE shared start-trigger

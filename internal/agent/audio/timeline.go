@@ -374,6 +374,14 @@ func (m *Manager) outputLatencyUsSnapshot() int64 {
 	return m.outputLatencyUs.Load()
 }
 
+// OutputLatencyUs is [Manager.outputLatencyUsSnapshot], exported for a
+// caller outside this package that must pick a start instant already
+// accounting for the identical adjustment [Manager.resolveScheduleLocked]
+// applies, rather than guess one and rely on the refusal alone.
+func (m *Manager) OutputLatencyUs() int64 {
+	return m.outputLatencyUsSnapshot()
+}
+
 // maxScheduledStartLead bounds how far into the future a start instant
 // may sit before this node refuses it. A scheduled start holds its
 // session's lock until T0 arrives, so an instant days away would wedge

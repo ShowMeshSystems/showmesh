@@ -230,7 +230,7 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 			// called, so its own Apply/Prepare never tears down the
 			// in-flight announcement mid-sentence.
 			applyErrs = append(applyErrs, concurrentAnnouncementReason)
-		} else if reason, trigger, err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement); err != nil {
+		} else if reason, trigger, err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement, now); err != nil {
 			applyErrs = append(applyErrs, err.Error())
 		} else {
 			unalignedReason = reason
