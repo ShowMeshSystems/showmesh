@@ -93,7 +93,11 @@ type showActionTarget struct {
 	// target audio node(s): the server accepts and returns either a bare
 	// string (one node) or an array of strings (more than one, for a
 	// night-mode bed or announcement) under this same "audioNodeId" key.
+	// ExcludeNodes is ADR-049 decision 10's own per-target exclude list,
+	// valid only when AudioNodeIDs is absent or empty: the target then
+	// resolves against the show's own audioNodes list minus these ids.
 	AudioNodeIDs   audioNodeIDList `json:"audioNodeId,omitempty"`
+	ExcludeNodes   []string        `json:"excludeNodes,omitempty"`
 	AudioSessionID string          `json:"audioSessionId,omitempty"`
 	AudioAction    string          `json:"audioAction,omitempty"`
 }

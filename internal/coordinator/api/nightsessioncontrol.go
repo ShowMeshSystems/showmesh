@@ -836,7 +836,7 @@ func (h *handlers) nightResetAnnouncementSessionsAtPrepareSite(ctx context.Conte
 // that check happens here, in real wall-clock time, rather than through
 // ctx.
 func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now time.Time, rec store.NightSessionRecord, cue config.NightSessionCue, seen map[string]bool, budgetDeadline time.Time) (skipped int) {
-	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	target, _, ok := h.nightAnnouncementSessionTarget(ctx, rec, cue)
 	if !ok {
 		return 0
 	}

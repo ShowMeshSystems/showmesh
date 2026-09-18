@@ -501,7 +501,7 @@ func nightResolveMediaPlaylist(ctx context.Context, deps Dependencies, id string
 // here explicitly or every reference-form bed would silently fall back to
 // OutputNodeIDs/ItemsForTarget's per-item routing regardless of what the
 // session actually declared.
-func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.MediaPlaylistPayload, targets []string) *config.NightSessionBackgroundAudio {
+func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.MediaPlaylistPayload, targets, excludeNodes []string) *config.NightSessionBackgroundAudio {
 	items := make([]config.NightSessionBackgroundAudioItem, 0, len(payload.Items))
 	for i, it := range payload.Items {
 		items = append(items, config.NightSessionBackgroundAudioItem{
@@ -512,7 +512,7 @@ func nightMediaPlaylistBackgroundAudio(mediaPlaylistID string, payload config.Me
 		Items: items, Repeat: payload.Repeat, Resume: payload.Resume, ItemTransition: payload.ItemTransition,
 		CrossfadeMs: payload.CrossfadeMs, MaxGainDb: payload.MaxGainDb,
 		FadeOutMs: payload.FadeOutMs, FadeInMs: payload.FadeInMs,
-		Targets: targets,
+		Targets: targets, ExcludeNodes: excludeNodes,
 	}
 }
 
@@ -531,7 +531,7 @@ func (h *handlers) nightResolveBackgroundAudio(ctx context.Context, rec store.Ni
 	if !ok {
 		return nil, nightBackgroundAudioOwner{}, false
 	}
-	return nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload, ba.Targets), nightBackgroundAudioOwner{Kind: config.MediaPlaylistConfigKind, ID: ba.MediaPlaylist, Revision: revision}, true
+	return nightMediaPlaylistBackgroundAudio(ba.MediaPlaylist, payload, ba.Targets, ba.ExcludeNodes), nightBackgroundAudioOwner{Kind: config.MediaPlaylistConfigKind, ID: ba.MediaPlaylist, Revision: revision}, true
 }
 
 // nightBuildBackgroundPlaylistItems resolves ba's configured items into
@@ -755,24 +755,29 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 		h.logWarn("night loop: background audio: failed to read history", "sessionId", rec.ID, "error", err)
 		return
 	}
-	if nightBackgroundAudioIsMultiNode(resolved) {
+	showAudioNodes := h.showAudioNodes(ctx)(payload.Show)
+	if nightBackgroundAudioIsMultiNode(resolved, showAudioNodes) {
 		h.nightAdvanceMultiNodeBackgroundAudio(ctx, now, rec, payload.Show, resolved, owner, history)
 		return
 	}
-	for _, nodeID := range resolved.PlaybackNodeIDs() {
+	resolvedNodeIDs, _ := resolved.ResolvedPlaybackNodeIDs(showAudioNodes)
+	for _, nodeID := range resolvedNodeIDs {
 		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, payload.Show, nodeID, resolved, owner, history)
 	}
 }
 
-// nightBackgroundAudioIsMultiNode reports whether ba is a declared-Targets
-// bed (ADR-049 decision 7) naming more than one node: decisions 8 and 9's
-// own shared-instant start/resume and bookmark push apply only to this
-// case. A bed with no declared Targets, or one declaring a single target,
-// behaves exactly as it always has (ADR-049's own regression rule) - see
+// nightBackgroundAudioIsMultiNode reports whether ba resolves (ADR-049
+// decision 10: Targets, else showAudioNodes minus ExcludeNodes, else the
+// per-item default) to more than one node from an explicit or show-wide
+// list: decisions 8 and 9's own shared-instant start/resume and bookmark
+// push apply only to this case. A bed falling through to the per-item
+// default, or resolving to a single node, behaves exactly as it always
+// has (ADR-049's own regression rule) - see
 // [nightAdvanceBackgroundAudioForNode]'s own gates for the two transitions
 // this changes.
-func nightBackgroundAudioIsMultiNode(ba *config.NightSessionBackgroundAudio) bool {
-	return ba.HasDeclaredTargets() && len(ba.PlaybackNodeIDs()) > 1
+func nightBackgroundAudioIsMultiNode(ba *config.NightSessionBackgroundAudio, showAudioNodes []string) bool {
+	resolved, resolvedFrom := ba.ResolvedPlaybackNodeIDs(showAudioNodes)
+	return resolvedFrom != config.AudioNodeResolutionDefault && len(resolved) > 1
 }
 
 // nightAdvanceBackgroundAudioForNode is [nightAdvanceBackgroundAudio]'s
@@ -783,6 +788,7 @@ func nightBackgroundAudioIsMultiNode(ba *config.NightSessionBackgroundAudio) boo
 // its paired dispatch owner triple.
 func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, history []nightBackgroundAudioHistoryRow) {
 	sessionID := nightBackgroundAudioSessionID(rec)
+	showAudioNodes := h.showAudioNodes(ctx)(show)
 
 	confirms, _, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, pkgaudio.ItemTransition(ba.ItemTransition))
 	if err != nil {
@@ -794,7 +800,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		return
 	}
 
-	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.PlaybackItemsFor(nodeID))
+	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ResolvedPlaybackItemsFor(nodeID, showAudioNodes))
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to resolve playlist items", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
 		return
@@ -803,7 +809,7 @@ func (h *handlers) nightAdvanceBackgroundAudioForNode(ctx context.Context, now t
 		return
 	}
 
-	multiNode := nightBackgroundAudioIsMultiNode(ba)
+	multiNode := nightBackgroundAudioIsMultiNode(ba, showAudioNodes)
 
 	steps := nightBackgroundAudioStepsForNode(history, nodeID)
 	if len(steps) == 0 {
@@ -1202,6 +1208,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 // triple, needed only for the in-flight-apply resume case.
 func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, history []nightBackgroundAudioHistoryRow) {
 	sessionID := nightBackgroundAudioSessionID(rec)
+	showAudioNodes := h.showAudioNodes(ctx)(show)
 	steps := nightBackgroundAudioStepsForNode(history, nodeID)
 	if len(steps) == 0 {
 		return
@@ -1215,7 +1222,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 	}
 
 	if latest.Row.State == nightCueStatePending || latest.Row.State == nightCueStateDispatched {
-		if nightBackgroundAudioIsMultiNode(ba) && latest.Step.Kind == nightBGStepPause {
+		if nightBackgroundAudioIsMultiNode(ba, showAudioNodes) && latest.Step.Kind == nightBGStepPause {
 			// A multi-node bed's own in-flight pause is retried by
 			// re-attempting [nightBackgroundAudioSuspend] below under the
 			// SAME already-committed identity (nightRunBedAudioCommand's own
@@ -1224,10 +1231,10 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 			// nightBackgroundAudioSuspend's own doc comment for why only
 			// this dispatcher may capture the bookmark decision 8's resume
 			// push needs.
-			h.nightBackgroundAudioSuspend(ctx, now, rec, nodeID, sessionID, ba, history)
+			h.nightBackgroundAudioSuspend(ctx, now, rec, show, nodeID, sessionID, ba, history)
 			return
 		}
-		items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.PlaybackItemsFor(nodeID))
+		items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ResolvedPlaybackItemsFor(nodeID, showAudioNodes))
 		if err != nil {
 			return
 		}
@@ -1236,7 +1243,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 	}
 
 	if ba.FadeOutMs == nil {
-		h.nightBackgroundAudioSuspend(ctx, now, rec, nodeID, sessionID, ba, history)
+		h.nightBackgroundAudioSuspend(ctx, now, rec, show, nodeID, sessionID, ba, history)
 		return
 	}
 
@@ -1253,7 +1260,7 @@ func (h *handlers) nightStopBackgroundAudioIfRunningForNode(ctx context.Context,
 		if !nightBackgroundAudioFadeSettled(h.deps.Audio, now, fadeDispatchedAt, nodeID, sessionID) {
 			return // the ramp is still running; never let pause/stop race it (see nightBackgroundAudioFadeSettled's own doc comment).
 		}
-		h.nightBackgroundAudioSuspend(ctx, now, rec, nodeID, sessionID, ba, history)
+		h.nightBackgroundAudioSuspend(ctx, now, rec, show, nodeID, sessionID, ba, history)
 		return
 	}
 	// Either the fadedown step has never been dispatched yet, or its own
@@ -1616,7 +1623,7 @@ const nightBedReadyStepBound = 5 * time.Second
 // own multi-node body: every node's per-node machine advances first, then
 // the bed-level gate drives the shared schedule and dispatch.
 func (h *handlers) nightAdvanceMultiNodeBackgroundAudio(ctx context.Context, now time.Time, rec store.NightSessionRecord, show string, ba *config.NightSessionBackgroundAudio, owner nightBackgroundAudioOwner, history []nightBackgroundAudioHistoryRow) {
-	nodeIDs := ba.PlaybackNodeIDs()
+	nodeIDs, _ := ba.ResolvedPlaybackNodeIDs(h.showAudioNodes(ctx)(show))
 	for _, nodeID := range nodeIDs {
 		h.nightAdvanceBackgroundAudioForNode(ctx, now, rec, show, nodeID, ba, owner, history)
 	}
@@ -1856,7 +1863,7 @@ func (h *handlers) nightGetOrComputeBedSchedule(ctx context.Context, now time.Ti
 // nodeID's own first configured item. Never the bed's own real session -
 // this is what lets the clock read leave a paused bed session paused.
 func (h *handlers) nightBedProbeMedia(ctx context.Context, show string, ba *config.NightSessionBackgroundAudio, nodeID string, bookmark nightBedBookmark) (pkgaudio.MediaRef, error) {
-	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.PlaybackItemsFor(nodeID))
+	items, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.ResolvedPlaybackItemsFor(nodeID, h.showAudioNodes(ctx)(show)))
 	if err != nil {
 		return pkgaudio.MediaRef{}, err
 	}
@@ -2205,8 +2212,8 @@ func (h *handlers) nightBackgroundAudioResumeScheduled(ctx context.Context, now 
 // nightBackgroundAudioSuspend branches only for a multi-node bed's own
 // pause, to capture the program+ltc node's bookmark. KNOWN GAP, accepted:
 // a crash-recovery retry resolves without it, falling back to resume on arrival.
-func (h *handlers) nightBackgroundAudioSuspend(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
-	if !nightBackgroundAudioIsMultiNode(ba) || nightBackgroundSuspendKind(ba.Resume) != nightBGStepPause {
+func (h *handlers) nightBackgroundAudioSuspend(ctx context.Context, now time.Time, rec store.NightSessionRecord, show, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, history []nightBackgroundAudioHistoryRow) {
+	if !nightBackgroundAudioIsMultiNode(ba, h.showAudioNodes(ctx)(show)) || nightBackgroundSuspendKind(ba.Resume) != nightBGStepPause {
 		h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, ba.Resume, history)
 		return
 	}

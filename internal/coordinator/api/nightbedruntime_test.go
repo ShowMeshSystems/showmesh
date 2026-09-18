@@ -857,7 +857,7 @@ func TestNightCheckBackgroundAudioBedProgramLTCCoverage_WarnsNamingTheBedWhenTar
 	putAudioNodeNoLTCForTest(t, st, "node-b")
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba)
+	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba.PlaybackNodeIDs())
 	if check.health != nightHealthDegraded() {
 		t.Fatalf("health = %v, reason = %q, want degraded (a warning, not a failure)", check.health, check.reason)
 	}
@@ -874,7 +874,7 @@ func TestNightCheckBackgroundAudioBedProgramLTCCoverage_HealthyWhenATargetHoldsP
 	putAudioNodeNoLTCForTest(t, st, "node-b")
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba)
+	check := h.nightCheckBackgroundAudioBedProgramLTCCoverage(context.Background(), ba.PlaybackNodeIDs())
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("health = %v, reason = %q, want healthy (node-a holds program+ltc)", check.health, check.reason)
 	}
@@ -890,7 +890,7 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_FailsNamingNodeAndFile(t *te
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-c", "asset-2")
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthFailed() {
 		t.Fatalf("health = %v, want failed (no listed target has a registered copy)", check.health)
 	}
@@ -918,7 +918,7 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_HealthyViaFallback(t *testin
 	)
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("health = %v, reason = %q, want healthy (node-b covered via node-a's own registered row, and both nodes' inventory holds it under the expected filename)", check.health, check.reason)
 	}
@@ -946,7 +946,7 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_FailsWhenHeldUnderWrongFilen
 	)
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthFailed() {
 		t.Fatalf("health = %v, reason = %q, want failed (node-b holds asset-1's bytes under the wrong filename)", check.health, check.reason)
 	}
@@ -972,7 +972,7 @@ func TestNightCheckBackgroundAudioBedTargetCoverage_UnknownOnStaleReport(t *test
 	// node-b never reports at all.
 	ba := multiNodeBedConfig("node-a", "node-a", "node-b")
 
-	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba)
+	check := h.nightCheckBackgroundAudioBedTargetCoverage(context.Background(), testNow, "halloween", ba, ba.PlaybackNodeIDs())
 	if check.health != nightHealthUnknown() {
 		t.Fatalf("health = %v, reason = %q, want unknown (node-b has never reported its inventory)", check.health, check.reason)
 	}

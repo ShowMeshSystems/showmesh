@@ -146,7 +146,7 @@ func validMQTTActionJSON(extraExpect string) string {
 }
 
 func TestDecodeShowActionPayloadFPPValid(t *testing.T) {
-	p, verr := DecodeShowActionPayload(validFPPActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	p, verr := DecodeShowActionPayload(validFPPActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -159,7 +159,7 @@ func TestDecodeShowActionPayloadFPPValid(t *testing.T) {
 }
 
 func TestEncodeShowActionPayloadRoundTrips(t *testing.T) {
-	p, verr := DecodeShowActionPayload(validFPPActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	p, verr := DecodeShowActionPayload(validFPPActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -191,7 +191,7 @@ func TestDecodeShowActionPayloadMQTTValidKinds(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := validMQTTActionJSON(tc.expect)
-			_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+			_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 			if verr != nil {
 				t.Fatalf("unexpected error: %+v", verr)
 			}
@@ -201,7 +201,7 @@ func TestDecodeShowActionPayloadMQTTValidKinds(t *testing.T) {
 
 func TestDecodeShowActionPayloadShowRequired(t *testing.T) {
 	raw := `{"label": "x", "safetyClass": "none", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "startPlaylist", "params": {"playlist": "x"}}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "show" {
 		t.Fatalf("expected show-required error, got %+v", verr)
 	}
@@ -209,7 +209,7 @@ func TestDecodeShowActionPayloadShowRequired(t *testing.T) {
 
 func TestDecodeShowActionPayloadShowNull(t *testing.T) {
 	raw := `{"show": null, "label": "x", "safetyClass": "none", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "startPlaylist", "params": {"playlist": "x"}}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "show" {
 		t.Fatalf("expected show-null error, got %+v", verr)
 	}
@@ -217,7 +217,7 @@ func TestDecodeShowActionPayloadShowNull(t *testing.T) {
 
 func TestDecodeShowActionPayloadShowInvalidFormat(t *testing.T) {
 	raw := `{"show": "Not A Valid Show!", "label": "x", "safetyClass": "none", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "startPlaylist", "params": {"playlist": "x"}}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "show" {
 		t.Fatalf("expected show format error, got %+v", verr)
 	}
@@ -225,7 +225,7 @@ func TestDecodeShowActionPayloadShowInvalidFormat(t *testing.T) {
 
 func TestDecodeShowActionPayloadLabelRequired(t *testing.T) {
 	raw := `{"show": "halloween-2026", "safetyClass": "none", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "startPlaylist", "params": {"playlist": "x"}}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "label" {
 		t.Fatalf("expected label-required error, got %+v", verr)
 	}
@@ -236,7 +236,7 @@ func TestDecodeShowActionPayloadDescriptionAbsentNullEmpty(t *testing.T) {
 		return `{"show": "halloween-2026", "label": "x", ` + desc + `"safetyClass": "stop", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
 	}
 	t.Run("absent", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(base(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(base(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -245,13 +245,13 @@ func TestDecodeShowActionPayloadDescriptionAbsentNullEmpty(t *testing.T) {
 		}
 	})
 	t.Run("null", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(base(`"description": null, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(base(`"description": null, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "description" {
 			t.Fatalf("expected description-null error, got %+v", verr)
 		}
 	})
 	t.Run("explicit-empty", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(base(`"description": "", `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(base(`"description": "", `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -260,7 +260,7 @@ func TestDecodeShowActionPayloadDescriptionAbsentNullEmpty(t *testing.T) {
 		}
 	})
 	t.Run("explicit-value", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(base(`"description": "a real description", `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(base(`"description": "a real description", `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -285,7 +285,7 @@ func TestDecodeShowActionPayloadIdempotentAbsentNullExplicit(t *testing.T) {
 		return `{"show": "halloween-2026", "label": "x", ` + idempotent + `"safetyClass": "stop", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
 	}
 	t.Run("absent", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(base(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(base(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -301,7 +301,7 @@ func TestDecodeShowActionPayloadIdempotentAbsentNullExplicit(t *testing.T) {
 		// null for an undeclared action, so PUTting that same response
 		// back unchanged must not fail only because it round-tripped as
 		// null rather than an omitted key.
-		p, verr := DecodeShowActionPayload(base(`"idempotent": null, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(base(`"idempotent": null, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -310,7 +310,7 @@ func TestDecodeShowActionPayloadIdempotentAbsentNullExplicit(t *testing.T) {
 		}
 	})
 	t.Run("true", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(base(`"idempotent": true, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(base(`"idempotent": true, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -319,7 +319,7 @@ func TestDecodeShowActionPayloadIdempotentAbsentNullExplicit(t *testing.T) {
 		}
 	})
 	t.Run("false", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(base(`"idempotent": false, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(base(`"idempotent": false, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -328,7 +328,7 @@ func TestDecodeShowActionPayloadIdempotentAbsentNullExplicit(t *testing.T) {
 		}
 	})
 	t.Run("wrong-type", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(base(`"idempotent": "yes", `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(base(`"idempotent": "yes", `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "idempotent" {
 			t.Fatalf("expected idempotent field-invalid error, got %+v", verr)
 		}
@@ -354,7 +354,7 @@ func TestShowActionPayloadIdempotentRoundTripsThreeStates(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := `{"show": "halloween-2026", "label": "x", ` + tc.wire + `"safetyClass": "stop", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
-			p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+			p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 			if verr != nil {
 				t.Fatalf("decode: %+v", verr)
 			}
@@ -382,14 +382,14 @@ func TestShowActionPayloadIdempotentRoundTripsThreeStates(t *testing.T) {
 func TestDecodeShowActionPayloadSafetyClassRequiredAndClosed(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
-		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "safetyClass" {
 			t.Fatalf("expected safetyClass-required error, got %+v", verr)
 		}
 	})
 	t.Run("not-a-member", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "critical", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
-		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "safetyClass" {
 			t.Fatalf("expected safetyClass-invalid error, got %+v", verr)
 		}
@@ -398,7 +398,7 @@ func TestDecodeShowActionPayloadSafetyClassRequiredAndClosed(t *testing.T) {
 
 func TestDecodeShowActionPayloadTargetRequired(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "none"}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "target" {
 		t.Fatalf("expected target-required error, got %+v", verr)
 	}
@@ -406,7 +406,7 @@ func TestDecodeShowActionPayloadTargetRequired(t *testing.T) {
 
 func TestDecodeShowActionPayloadIntegrationInvalid(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "none", "target": {"integration": "dmx"}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "target.integration" {
 		t.Fatalf("expected target.integration-invalid error, got %+v", verr)
 	}
@@ -414,7 +414,7 @@ func TestDecodeShowActionPayloadIntegrationInvalid(t *testing.T) {
 
 func TestDecodeShowActionPayloadFPPInstanceIDUnconfigured(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "stop", "target": {"integration": "fpp", "instanceId": "not-configured", "primitive": "stopPlaylist"}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "target.instanceId" {
 		t.Fatalf("expected instanceId-unknown-reference error, got %+v", verr)
 	}
@@ -422,7 +422,7 @@ func TestDecodeShowActionPayloadFPPInstanceIDUnconfigured(t *testing.T) {
 
 func TestDecodeShowActionPayloadFPPPrimitiveUnknown(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "none", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "doTheHustle"}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "target.primitive" {
 		t.Fatalf("expected primitive-unknown-reference error, got %+v", verr)
 	}
@@ -434,7 +434,7 @@ func TestDecodeShowActionPayloadFPPPrimitiveUnknown(t *testing.T) {
 // class (STEP-9-SPEC.md section 5.3), on its own distinct Code.
 func TestDecodeShowActionPayloadFPPSafetyClassMustAgreeWithRegistry(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil {
 		t.Fatal("expected an error for safetyClass disagreeing with the registry, got none")
 	}
@@ -449,7 +449,7 @@ func TestDecodeShowActionPayloadFPPParamsInvalidPropagates(t *testing.T) {
 		return nil, errParamsBoom
 	}
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "stop", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), reg, newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), reg, newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "target.params" {
 		t.Fatalf("expected target.params field-invalid error, got %+v", verr)
 	}
@@ -465,7 +465,7 @@ func TestDecodeShowActionPayloadMQTTBrokerRequired(t *testing.T) {
 		"publish": {"topic": "home/projectors/set", "payload": "ON", "qos": 1},
 		"expect": {"kind": "none"}
 	}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil {
 		t.Fatal("expected an error for an absent broker, got none")
 	}
@@ -481,7 +481,7 @@ func TestDecodeShowActionPayloadMQTTBrokerUndeclared(t *testing.T) {
 		"publish": {"topic": "home/projectors/set", "payload": "ON", "qos": 1},
 		"expect": {"kind": "none"}
 	}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "target.broker" {
 		t.Fatalf("expected target.broker unknown-reference error, got %+v", verr)
 	}
@@ -496,37 +496,37 @@ func TestDecodeShowActionPayloadMQTTPublishRequiredFields(t *testing.T) {
 		}}`
 	}
 	t.Run("topic-required", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"payload": "ON", "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"payload": "ON", "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.publish.topic" {
 			t.Fatalf("expected topic-required error, got %+v", verr)
 		}
 	})
 	t.Run("payload-required-absent", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.publish.payload" || verr.Code != ValidationCodeFieldRequired {
 			t.Fatalf("expected payload-required error, got %+v", verr)
 		}
 	})
 	t.Run("payload-empty-string-allowed", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": "", "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": "", "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("expected empty payload to be accepted, got %+v", verr)
 		}
 	})
 	t.Run("payload-null-rejected", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": null, "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": null, "qos": 1}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "target.publish.payload" {
 			t.Fatalf("expected payload-null error, got %+v", verr)
 		}
 	})
 	t.Run("qos-required", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": "ON"}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": "ON"}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.publish.qos" {
 			t.Fatalf("expected qos-required error, got %+v", verr)
 		}
 	})
 	t.Run("qos-out-of-range", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": "ON", "qos": 3}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"topic": "t", "payload": "ON", "qos": 3}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.publish.qos" || verr.Code != ValidationCodeFieldInvalid {
 			t.Fatalf("expected qos out-of-range error, got %+v", verr)
 		}
@@ -542,7 +542,7 @@ func TestDecodeShowActionPayloadMQTTRetainAbsentNullExplicit(t *testing.T) {
 		}}`
 	}
 	t.Run("absent-defaults-false", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(mk(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(mk(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -551,13 +551,13 @@ func TestDecodeShowActionPayloadMQTTRetainAbsentNullExplicit(t *testing.T) {
 		}
 	})
 	t.Run("null-is-error", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`, "retain": null`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`, "retain": null`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "target.publish.retain" {
 			t.Fatalf("expected retain-null error, got %+v", verr)
 		}
 	})
 	t.Run("explicit-true", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(mk(`, "retain": true`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(mk(`, "retain": true`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -576,19 +576,19 @@ func TestDecodeShowActionPayloadMQTTExpectNoneForbidsFields(t *testing.T) {
 		}}`
 	}
 	t.Run("topic-forbidden", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "none", "topic": "t"}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "none", "topic": "t"}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil {
 			t.Fatal("expected error for topic supplied under kind none")
 		}
 	})
 	t.Run("value-forbidden", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "none", "value": "x"}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "none", "value": "x"}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil {
 			t.Fatal("expected error for value supplied under kind none")
 		}
 	})
 	t.Run("deadline-forbidden", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "none", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "none", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil {
 			t.Fatal("expected error for deadlineSeconds supplied under kind none")
 		}
@@ -604,25 +604,25 @@ func TestDecodeShowActionPayloadMQTTExpectDeadlineBounds(t *testing.T) {
 		}}`
 	}
 	t.Run("zero-rejected", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk("0"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk("0"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil {
 			t.Fatal("expected error for a zero deadline")
 		}
 	})
 	t.Run("negative-rejected", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk("-5"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk("-5"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil {
 			t.Fatal("expected error for a negative deadline")
 		}
 	})
 	t.Run("over-cap-rejected", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk("121"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk("121"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil {
 			t.Fatal("expected error for a deadline over 120")
 		}
 	})
 	t.Run("at-cap-accepted", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk("120"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk("120"), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("expected 120 to be accepted, got %+v", verr)
 		}
@@ -638,25 +638,25 @@ func TestDecodeShowActionPayloadMQTTExpectValueRulesPerKind(t *testing.T) {
 		}}`
 	}
 	t.Run("match-requires-value", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "match", "topic": "t2", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "match", "topic": "t2", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.expect.value" {
 			t.Fatalf("expected value-required error for match, got %+v", verr)
 		}
 	})
 	t.Run("boolean-forbids-value", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "boolean", "topic": "t2", "value": "x", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "boolean", "topic": "t2", "value": "x", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.expect.value" {
 			t.Fatalf("expected value-forbidden error for boolean, got %+v", verr)
 		}
 	})
 	t.Run("text-forbids-value", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "text", "topic": "t2", "value": "x", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "text", "topic": "t2", "value": "x", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.expect.value" {
 			t.Fatalf("expected value-forbidden error for text, got %+v", verr)
 		}
 	})
 	t.Run("number-value-must-be-numeric", func(t *testing.T) {
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": "not-a-number", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": "not-a-number", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.expect.value" {
 			t.Fatalf("expected value-invalid error for a non-numeric number value, got %+v", verr)
 		}
@@ -672,7 +672,7 @@ func TestDecodeShowActionPayloadMQTTExpectValueRulesPerKind(t *testing.T) {
 	// as a number — matching kind "match" and matching what a GET
 	// returns, in both directions.
 	t.Run("number-value-accepts-numeric-string", func(t *testing.T) {
-		p, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": "42", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": "42", "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("expected a numeric JSON string to be accepted for kind \"number\", got %+v", verr)
 		}
@@ -686,7 +686,7 @@ func TestDecodeShowActionPayloadMQTTExpectValueRulesPerKind(t *testing.T) {
 		// decodeMQTTExpect accepted, which is what made the read shape
 		// (always a quoted string) unusable as a write body. Restored
 		// afterward — see this builder's report.
-		_, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": 42, "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`{"kind": "number", "topic": "t2", "value": 42, "deadlineSeconds": 10}`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Field != "target.expect.value" {
 			t.Fatalf("expected a bare JSON number literal to be rejected for kind \"number\" (value has exactly one wire representation), got %+v", verr)
 		}
@@ -722,7 +722,7 @@ func TestDecodeShowActionPayloadMQTTExpectValueRoundTrips(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			first, verr := DecodeShowActionPayload(mk(tc.expect), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+			first, verr := DecodeShowActionPayload(mk(tc.expect), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 			if verr != nil {
 				t.Fatalf("first decode: unexpected error: %+v", verr)
 			}
@@ -730,7 +730,7 @@ func TestDecodeShowActionPayloadMQTTExpectValueRoundTrips(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode: %v", err)
 			}
-			second, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+			second, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 			if verr != nil {
 				t.Fatalf("re-decoding the encoded (read) shape unchanged: unexpected error: %+v\nencoded: %s", verr, raw)
 			}
@@ -748,7 +748,7 @@ func TestDecodeShowActionPayloadMQTTExpectValueRoundTrips(t *testing.T) {
 }
 
 func TestDecodeShowActionPayloadBodyInvalid(t *testing.T) {
-	_, verr := DecodeShowActionPayload("not json", testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload("not json", testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeBodyInvalid {
 		t.Fatalf("expected body-invalid error, got %+v", verr)
 	}
@@ -767,7 +767,7 @@ func TestDecodeShowActionPayloadUnknownTopLevelKeyRejected(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "descriptio": "oops", "safetyClass": "none", "target": {
 		"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"
 	}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key error for typo'd \"descriptio\", got %+v", verr)
 	}
@@ -847,7 +847,7 @@ func TestDecodeShowActionPayloadResolumeValidRoundTripsForEveryAction(t *testing
 				"target": {"integration": "resolume", "action": %q, "ref": %s}}`,
 				tc.safetyClass, tc.action, tc.refJSON)
 
-			p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), tc.resolver, alwaysTrueShowExists)
+			p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), tc.resolver, alwaysTrueShowExists, nil)
 			if verr != nil {
 				t.Fatalf("decode: %+v", verr)
 			}
@@ -863,7 +863,7 @@ func TestDecodeShowActionPayloadResolumeValidRoundTripsForEveryAction(t *testing
 				t.Fatalf("an object id leaked into ref: %s", encoded)
 			}
 
-			p2, verr := DecodeShowActionPayload(encoded, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), tc.resolver, alwaysTrueShowExists)
+			p2, verr := DecodeShowActionPayload(encoded, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), tc.resolver, alwaysTrueShowExists, nil)
 			if verr != nil {
 				t.Fatalf("re-decode the coordinator's own encoded output: %+v", verr)
 			}
@@ -888,7 +888,7 @@ func TestDecodeShowActionPayloadResolumeValidRoundTripsForEveryAction(t *testing
 // catch it, i.e. the write was wrongly accepted. Restored afterward.
 func TestDecodeShowActionPayloadResolumeClipNotFoundRefused(t *testing.T) {
 	resolver := newFakeResolumeReferenceResolver() // nothing known
-	_, verr := DecodeShowActionPayload(validResolumeLaunchClipJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(validResolumeLaunchClipJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 	if verr == nil {
 		t.Fatal("expected an error for a clip the resolver does not know")
 	}
@@ -905,7 +905,7 @@ func TestDecodeShowActionPayloadResolumeClipNotFoundRefused(t *testing.T) {
 // naming every candidate.
 func TestDecodeShowActionPayloadResolumeClipAmbiguousNamesCandidates(t *testing.T) {
 	resolver := newFakeResolumeReferenceResolver().withAmbiguous("clip", "Whole House 1")
-	_, verr := DecodeShowActionPayload(validResolumeLaunchClipJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(validResolumeLaunchClipJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 	if verr == nil {
 		t.Fatal("expected an error for an ambiguous clip")
 	}
@@ -923,7 +923,7 @@ func TestDecodeShowActionPayloadResolumeClipAmbiguousNamesCandidates(t *testing.
 // resolved lazily.
 func TestDecodeShowActionPayloadResolumeCompositionNotUploadedRefused(t *testing.T) {
 	resolver := newFakeResolumeReferenceResolver().withNotUploaded()
-	_, verr := DecodeShowActionPayload(validResolumeLaunchClipJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(validResolumeLaunchClipJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference {
 		t.Fatalf("expected field-unknown-reference error, got %+v", verr)
 	}
@@ -938,7 +938,7 @@ func TestDecodeShowActionPayloadResolumeCompositionNotUploadedRefused(t *testing
 func TestDecodeShowActionPayloadResolumeBlackoutRequiresBlackoutSafetyClass(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "Blackout", "safetyClass": "none",
 		"target": {"integration": "resolume", "action": "blackout", "ref": {}}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeSafetyClassMismatch {
 		t.Fatalf("expected safety-class-mismatch error, got %+v", verr)
 	}
@@ -948,7 +948,7 @@ func TestDecodeShowActionPayloadResolumeClearLayerRequiresBlackoutSafetyClass(t 
 	raw := `{"show": "halloween-2026", "label": "Clear the main layer", "safetyClass": "none",
 		"target": {"integration": "resolume", "action": "clearLayer", "ref": {"layer": "Whole House 1"}}}`
 	resolver := newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1")
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeSafetyClassMismatch {
 		t.Fatalf("expected safety-class-mismatch error, got %+v", verr)
 	}
@@ -960,7 +960,7 @@ func TestDecodeShowActionPayloadResolumeClearLayerRequiresBlackoutSafetyClass(t 
 func TestDecodeShowActionPayloadResolumeBlackoutAcceptsBlackoutSafetyClass(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "Blackout", "safetyClass": "blackout",
 		"target": {"integration": "resolume", "action": "blackout", "ref": {}}}`
-	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -972,7 +972,7 @@ func TestDecodeShowActionPayloadResolumeBlackoutAcceptsBlackoutSafetyClass(t *te
 func TestDecodeShowActionPayloadResolumeUnrecognizedActionRejected(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "none",
 		"target": {"integration": "resolume", "action": "teleportClip", "ref": {}}}`
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "target.action" {
 		t.Fatalf("expected target.action-invalid error, got %+v", verr)
 	}
@@ -982,7 +982,7 @@ func TestDecodeShowActionPayloadResolumeUnknownRefKeyRejected(t *testing.T) {
 	raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "none",
 		"target": {"integration": "resolume", "action": "clearLayer", "ref": {"layer": "Whole House 1", "colum": "3"}}}`
 	resolver := newFakeResolumeReferenceResolver().withKnown("layer", "Whole House 1")
-	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key error for typo'd \"colum\", got %+v", verr)
 	}
@@ -1000,7 +1000,7 @@ func TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout(t *testing.
 	t.Run("ref absent on a non-empty-vocabulary action is required", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "none",
 			"target": {"integration": "resolume", "action": "selectDeck"}}`
-		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "target.ref" {
 			t.Fatalf("expected target.ref-required error, got %+v", verr)
 		}
@@ -1008,7 +1008,7 @@ func TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout(t *testing.
 	t.Run("ref absent on blackout is accepted", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
 			"target": {"integration": "resolume", "action": "blackout"}}`
-		p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -1019,7 +1019,7 @@ func TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout(t *testing.
 	t.Run("ref null on blackout is rejected", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
 			"target": {"integration": "resolume", "action": "blackout", "ref": null}}`
-		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "target.ref" {
 			t.Fatalf("expected target.ref-null error, got %+v", verr)
 		}
@@ -1027,7 +1027,7 @@ func TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout(t *testing.
 	t.Run("ref non-empty on blackout is rejected naming the keys", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
 			"target": {"integration": "resolume", "action": "blackout", "ref": {"layer": "Whole House 1"}}}`
-		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 			t.Fatalf("expected field-unknown-key error, got %+v", verr)
 		}
@@ -1041,7 +1041,7 @@ func TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout(t *testing.
 	t.Run("blackout's own encoded output re-decodes", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "safetyClass": "blackout",
 			"target": {"integration": "resolume", "action": "blackout", "ref": {}}}`
-		p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("decode: %+v", verr)
 		}
@@ -1049,7 +1049,7 @@ func TestDecodeShowActionPayloadResolumeRefRequiredExceptForBlackout(t *testing.
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
-		if _, verr := DecodeShowActionPayload(encoded, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists); verr != nil {
+		if _, verr := DecodeShowActionPayload(encoded, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists, nil); verr != nil {
 			t.Fatalf("re-decoding the coordinator's own encoded output was refused: %+v (encoded: %s)", verr, encoded)
 		}
 	})
@@ -1066,21 +1066,21 @@ func TestDecodeShowActionPayloadResolumeLaunchClipDeckConditional(t *testing.T) 
 	}
 	t.Run("neither-deck-nor-persistent", func(t *testing.T) {
 		resolver := newFakeResolumeReferenceResolver().withKnown("clip", "Whole House 1")
-		_, verr := DecodeShowActionPayload(mk(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "target.ref.deck" {
 			t.Fatalf("expected target.ref.deck-required error, got %+v", verr)
 		}
 	})
 	t.Run("both-deck-and-persistent", func(t *testing.T) {
 		resolver := newFakeResolumeReferenceResolver().withKnown("clip", "Whole House 1")
-		_, verr := DecodeShowActionPayload(mk(`, "deck": "Main", "persistent": true`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`, "deck": "Main", "persistent": true`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "target.ref.deck" {
 			t.Fatalf("expected target.ref.deck-invalid error, got %+v", verr)
 		}
 	})
 	t.Run("persistent-only-accepted", func(t *testing.T) {
 		resolver := newFakeResolumeReferenceResolver().withKnown("clip", "Whole House 1")
-		p, verr := DecodeShowActionPayload(mk(`, "persistent": true`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+		p, verr := DecodeShowActionPayload(mk(`, "persistent": true`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 		if verr != nil {
 			t.Fatalf("unexpected error: %+v", verr)
 		}
@@ -1090,7 +1090,7 @@ func TestDecodeShowActionPayloadResolumeLaunchClipDeckConditional(t *testing.T) 
 	})
 	t.Run("deck-null-rejected", func(t *testing.T) {
 		resolver := newFakeResolumeReferenceResolver().withKnown("clip", "Whole House 1")
-		_, verr := DecodeShowActionPayload(mk(`, "deck": null`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists)
+		_, verr := DecodeShowActionPayload(mk(`, "deck": null`), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), resolver, alwaysTrueShowExists, nil)
 		if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "target.ref.deck" {
 			t.Fatalf("expected target.ref.deck-null error, got %+v", verr)
 		}
@@ -1103,7 +1103,7 @@ func TestDecodeShowActionPayloadResolumeLaunchClipDeckConditional(t *testing.T) 
 // the "zero shows defined" transition — creating the first action before
 // any show exists must fail this way, not with a bare 400.
 func TestDecodeShowActionPayloadShowMustExist(t *testing.T) {
-	_, verr := DecodeShowActionPayload(validFPPActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysFalse)
+	_, verr := DecodeShowActionPayload(validFPPActionJSON(), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysFalse, nil)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "show" {
 		t.Fatalf("expected show-unknown-reference error, got %+v", verr)
 	}

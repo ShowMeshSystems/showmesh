@@ -59,9 +59,9 @@ var showCueTopLevelKeys = map[string]bool{
 var (
 	showCueOutputsKeys      = map[string]bool{"render": true, "audio": true, "ltc": true, "announcement": true}
 	showCueRenderKeys       = map[string]bool{"sequence": true}
-	showCueAudioKeys        = map[string]bool{"asset": true, "startOffsetMillis": true, "target": true, "targets": true}
+	showCueAudioKeys        = map[string]bool{"asset": true, "startOffsetMillis": true, "target": true, "targets": true, "excludeNodes": true}
 	showCueLTCKeys          = map[string]bool{"startOffsetMillis": true, "target": true}
-	showCueAnnouncementKeys = map[string]bool{"policy": true, "duckGainDb": true, "fadeMillis": true, "target": true, "targets": true}
+	showCueAnnouncementKeys = map[string]bool{"policy": true, "duckGainDb": true, "fadeMillis": true, "target": true, "targets": true, "excludeNodes": true}
 )
 
 // ShowCuePayload is config_revisions.payload_json's decoded, VALIDATED
@@ -113,6 +113,10 @@ type ShowCueAudioOutput struct {
 	Asset             string   `json:"asset"`
 	StartOffsetMillis int      `json:"startOffsetMillis"`
 	Targets           []string `json:"targets,omitempty"`
+	// ExcludeNodes is ADR-049 decision 10's per-output exclude list: valid
+	// only when Targets is empty, and only removes nodes from the show's
+	// own audioNodes list. See [ResolveAudioNodes].
+	ExcludeNodes []string `json:"excludeNodes,omitempty"`
 }
 
 // UnmarshalJSON accepts a legacy "target" string or a "targets" array for
@@ -139,10 +143,45 @@ func (o *ShowCueAudioOutput) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
+	excludeNodes, err := decodeStoredExcludeNodes(fields, "outputs.audio")
+	if err != nil {
+		return err
+	}
 	o.Asset = wire.Asset
 	o.StartOffsetMillis = wire.StartOffsetMillis
 	o.Targets = targets
+	o.ExcludeNodes = excludeNodes
 	return nil
+}
+
+// decodeStoredExcludeNodes is [decodeExcludeNodes]'s own non-validating
+// stored-row read-back twin, mirroring [decodeStoredShowCueTargets]: it
+// parses "excludeNodes" and refuses a repeated or empty-string entry, but
+// never checks membership in the show's audioNodes list, because that
+// check needs a live show payload this read-back path has no access to.
+func decodeStoredExcludeNodes(fields map[string]json.RawMessage, path string) ([]string, error) {
+	raw, present := fields["excludeNodes"]
+	if !present || isJSONNull(raw) {
+		return nil, nil
+	}
+	var excludeNodes []string
+	if err := json.Unmarshal(raw, &excludeNodes); err != nil {
+		return nil, fmt.Errorf("%s.excludeNodes must be a JSON array of strings: %w", path, err)
+	}
+	seen := make(map[string]bool, len(excludeNodes))
+	for _, id := range excludeNodes {
+		if id == "" {
+			return nil, fmt.Errorf("%s.excludeNodes must not contain an empty string", path)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("%s.excludeNodes must not repeat %q", path, id)
+		}
+		seen[id] = true
+	}
+	if len(excludeNodes) == 0 {
+		return nil, nil
+	}
+	return excludeNodes, nil
 }
 
 // decodeStoredShowCueTargets is [decodeShowCueTargets]'s own compatibility
@@ -220,10 +259,11 @@ type ShowCueLTCOutput struct {
 // ADR-049's list of target audio.node ids, see
 // [ShowCueAudioOutput.Targets]'s doc comment; the same rules apply here.
 type ShowCueAnnouncementOutput struct {
-	Policy     string   `json:"policy"`
-	DuckGainDb *float64 `json:"duckGainDb,omitempty"`
-	FadeMillis int      `json:"fadeMillis"`
-	Targets    []string `json:"targets,omitempty"`
+	Policy       string   `json:"policy"`
+	DuckGainDb   *float64 `json:"duckGainDb,omitempty"`
+	FadeMillis   int      `json:"fadeMillis"`
+	Targets      []string `json:"targets,omitempty"`
+	ExcludeNodes []string `json:"excludeNodes,omitempty"`
 }
 
 // UnmarshalJSON is [ShowCueAudioOutput.UnmarshalJSON]'s sibling for
@@ -245,10 +285,15 @@ func (o *ShowCueAnnouncementOutput) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
+	excludeNodes, err := decodeStoredExcludeNodes(fields, "outputs.announcement")
+	if err != nil {
+		return err
+	}
 	o.Policy = wire.Policy
 	o.DuckGainDb = wire.DuckGainDb
 	o.FadeMillis = wire.FadeMillis
 	o.Targets = targets
+	o.ExcludeNodes = excludeNodes
 	return nil
 }
 
@@ -270,8 +315,12 @@ func EncodeShowCuePayload(p ShowCuePayload) (string, error) {
 // package has no store access. audioNodeExists reports whether an
 // outputs.audio/ltc/announcement "target" names an existing audio.node
 // object (ADR-045) — caller-supplied for the identical reason, mirroring
-// showsurface.go's nodeDeclared parameter.
-func DecodeShowCuePayload(raw string, showExists func(string) bool, audioNodeExists func(string) bool) (ShowCuePayload, *ValidationError) {
+// showsurface.go's nodeDeclared parameter. showAudioNodes, when non-nil,
+// returns the named show's own audioNodes list and switches on
+// ADR-049 decision 10's excludeNodes validation (membership in that list,
+// and refusing an exclude list that empties it); nil is the non-validating,
+// stored-row read-back posture [decodeStoredExcludeNodes] documents.
+func DecodeShowCuePayload(raw string, showExists func(string) bool, audioNodeExists func(string) bool, showAudioNodes func(string) []string) (ShowCuePayload, *ValidationError) {
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return ShowCuePayload{}, verr
@@ -305,7 +354,13 @@ func DecodeShowCuePayload(raw string, showExists func(string) bool, audioNodeExi
 		}
 	}
 
-	outputs, verr := decodeShowCueOutputs(top, audioNodeExists)
+	var showAudioNodesList []string
+	validateExcludeNodes := showAudioNodes != nil
+	if validateExcludeNodes {
+		showAudioNodesList = showAudioNodes(show)
+	}
+
+	outputs, verr := decodeShowCueOutputs(top, audioNodeExists, showAudioNodesList, validateExcludeNodes)
 	if verr != nil {
 		return ShowCuePayload{}, verr
 	}
@@ -316,8 +371,10 @@ func DecodeShowCuePayload(raw string, showExists func(string) bool, audioNodeExi
 // decodeShowCueOutputs decodes and validates the required "outputs" field.
 // Absent, explicit null, and an explicitly empty object ({}) are three
 // distinct refusals — see decodeRequiredObject for the first two and this
-// function's own "at least one output" check for the third.
-func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(string) bool) (ShowCueOutputs, *ValidationError) {
+// function's own "at least one output" check for the third. showAudioNodes
+// and validateExcludeNodes are [DecodeShowCuePayload]'s own parameters,
+// threaded down to each output's excludeNodes decode.
+func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(string) bool, showAudioNodes []string, validateExcludeNodes bool) (ShowCueOutputs, *ValidationError) {
 	fields, verr := decodeRequiredObject(top, "outputs", "outputs")
 	if verr != nil {
 		return ShowCueOutputs{}, verr
@@ -337,7 +394,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 	}
 
 	if raw, present := fields["audio"]; present {
-		audio, verr := decodeShowCueAudioOutput(raw, audioNodeExists)
+		audio, verr := decodeShowCueAudioOutput(raw, audioNodeExists, showAudioNodes, validateExcludeNodes)
 		if verr != nil {
 			return ShowCueOutputs{}, verr
 		}
@@ -353,7 +410,7 @@ func decodeShowCueOutputs(top map[string]json.RawMessage, audioNodeExists func(s
 	}
 
 	if raw, present := fields["announcement"]; present {
-		announcement, verr := decodeShowCueAnnouncementOutput(raw, audioNodeExists)
+		announcement, verr := decodeShowCueAnnouncementOutput(raw, audioNodeExists, showAudioNodes, validateExcludeNodes)
 		if verr != nil {
 			return ShowCueOutputs{}, verr
 		}
@@ -522,7 +579,7 @@ func decodeShowCueTargets(fields map[string]json.RawMessage, path string, audioN
 	return targets, nil
 }
 
-func decodeShowCueAudioOutput(raw json.RawMessage, audioNodeExists func(string) bool) (ShowCueAudioOutput, *ValidationError) {
+func decodeShowCueAudioOutput(raw json.RawMessage, audioNodeExists func(string) bool, showAudioNodes []string, validateExcludeNodes bool) (ShowCueAudioOutput, *ValidationError) {
 	fields, verr := decodeRequiredObjectFromRaw(raw, "outputs.audio")
 	if verr != nil {
 		return ShowCueAudioOutput{}, verr
@@ -551,7 +608,11 @@ func decodeShowCueAudioOutput(raw json.RawMessage, audioNodeExists func(string) 
 	if verr != nil {
 		return ShowCueAudioOutput{}, verr
 	}
-	return ShowCueAudioOutput{Asset: asset, StartOffsetMillis: startOffsetMillis, Targets: targets}, nil
+	excludeNodes, verr := decodeExcludeNodes(fields, "outputs.audio", targets, showAudioNodes, validateExcludeNodes)
+	if verr != nil {
+		return ShowCueAudioOutput{}, verr
+	}
+	return ShowCueAudioOutput{Asset: asset, StartOffsetMillis: startOffsetMillis, Targets: targets, ExcludeNodes: excludeNodes}, nil
 }
 
 // decodeDefaultedNonNegativeInt is [decodeRequiredNonNegativeInt] with a
@@ -590,7 +651,7 @@ func decodeShowCueLTCOutput(raw json.RawMessage, audioNodeExists func(string) bo
 	return ShowCueLTCOutput{StartOffsetMillis: startOffsetMillis, Target: target}, nil
 }
 
-func decodeShowCueAnnouncementOutput(raw json.RawMessage, audioNodeExists func(string) bool) (ShowCueAnnouncementOutput, *ValidationError) {
+func decodeShowCueAnnouncementOutput(raw json.RawMessage, audioNodeExists func(string) bool, showAudioNodes []string, validateExcludeNodes bool) (ShowCueAnnouncementOutput, *ValidationError) {
 	fields, verr := decodeRequiredObjectFromRaw(raw, "outputs.announcement")
 	if verr != nil {
 		return ShowCueAnnouncementOutput{}, verr
@@ -647,8 +708,12 @@ func decodeShowCueAnnouncementOutput(raw json.RawMessage, audioNodeExists func(s
 	if verr != nil {
 		return ShowCueAnnouncementOutput{}, verr
 	}
+	excludeNodes, verr := decodeExcludeNodes(fields, "outputs.announcement", targets, showAudioNodes, validateExcludeNodes)
+	if verr != nil {
+		return ShowCueAnnouncementOutput{}, verr
+	}
 
-	return ShowCueAnnouncementOutput{Policy: policy, DuckGainDb: duckGainDb, FadeMillis: fadeMillis, Targets: targets}, nil
+	return ShowCueAnnouncementOutput{Policy: policy, DuckGainDb: duckGainDb, FadeMillis: fadeMillis, Targets: targets, ExcludeNodes: excludeNodes}, nil
 }
 
 // decodeRequiredObjectFromRaw is decodeRequiredObject for a

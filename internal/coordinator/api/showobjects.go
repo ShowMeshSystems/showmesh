@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -71,6 +72,51 @@ func (h *handlers) audioNodeExists(ctx context.Context) func(id string) bool {
 		}
 		return obj.CurrentRevision > 0
 	}
+}
+
+// showAudioNodes reads a "show" object's own audioNodes list — the
+// showAudioNodes callback DecodeShowCuePayload, DecodeNightSessionPayload,
+// and DecodeShowActionPayload take to validate excludeNodes against
+// (ADR-049 decision 10). A show with no active revision, or with no
+// audioNodes recorded, reports an empty list, which makes any excludeNodes
+// entry refused: there is nothing to exclude from.
+func (h *handlers) showAudioNodes(ctx context.Context) func(show string) []string {
+	return func(show string) []string {
+		obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowConfigKind, show)
+		if err != nil || obj.CurrentRevision == 0 {
+			return nil
+		}
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowConfigKind, show, obj.CurrentRevision)
+		if err != nil {
+			return nil
+		}
+		payload, verr := config.DecodeShowPayload(rev.PayloadJSON, func(string) bool { return true })
+		if verr != nil {
+			return nil
+		}
+		return payload.AudioNodes
+	}
+}
+
+// resolveAudioActionTargetNodes is ADR-049 decision 10's own resolution,
+// applied to a show.action audio target: target's own AudioNodeIDs when
+// non-empty (explicit), else show's own audioNodes minus
+// target.ExcludeNodes, else the installation's default node. Every
+// dispatch consumer of a show.action audio target's node list calls this
+// rather than reading target.AudioNodeIDs directly, so a target relying on
+// the show's own list dispatches to the same nodes readiness and asset
+// sync already expect.
+func (h *handlers) resolveAudioActionTargetNodes(ctx context.Context, show string, target config.ShowActionTarget) []string {
+	if h.deps.AssetManifests == nil {
+		return []string(target.AudioNodeIDs)
+	}
+	showAudioNodes := h.showAudioNodes(ctx)(show)
+	defaultNodes, err := assetsync.DefaultAudioNodes(ctx, h.deps.AssetManifests)
+	if err != nil {
+		return []string(target.AudioNodeIDs)
+	}
+	resolved, _ := config.ResolveAudioNodes([]string(target.AudioNodeIDs), showAudioNodes, target.ExcludeNodes, defaultNodes)
+	return resolved
 }
 
 // --- kind "show" ---
@@ -167,7 +213,7 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowPayload(string(raw))
+	payload, verr := config.DecodeShowPayload(string(raw), h.audioNodeExists(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return

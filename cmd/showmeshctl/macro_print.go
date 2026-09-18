@@ -74,7 +74,13 @@ func printShowActionDetail(w io.Writer, resp showActionConfigResponse) {
 			_, _ = fmt.Fprintf(w, "  Ref:         %v\n", t.Ref)
 		}
 	case "audio":
-		_, _ = fmt.Fprintf(w, "  Node:        %s\n", strings.Join(t.AudioNodeIDs, ", "))
+		if len(t.AudioNodeIDs) > 0 {
+			_, _ = fmt.Fprintf(w, "  Node:        %s\n", strings.Join(t.AudioNodeIDs, ", "))
+		} else if len(t.ExcludeNodes) > 0 {
+			_, _ = fmt.Fprintf(w, "  Node:        the show's audio nodes, excluding %s\n", strings.Join(t.ExcludeNodes, ", "))
+		} else {
+			_, _ = fmt.Fprintf(w, "  Node:        the show's audio nodes, or the installation default if none are set\n")
+		}
 		_, _ = fmt.Fprintf(w, "  Session:     %s\n", t.AudioSessionID)
 		_, _ = fmt.Fprintf(w, "  Action:      %s\n", t.AudioAction)
 		if len(t.Params) > 0 {

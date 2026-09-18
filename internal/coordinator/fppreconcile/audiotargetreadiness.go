@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -55,8 +56,17 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 			ltcEmitters[0], ltcEmitters[1], config.AudioNodeRoleProgramLTC), "", nil
 	}
 	programLTC, defaultTarget := programLTCAndDefault(declared, ltcEmitters)
+	var defaultNodes []string
+	if defaultTarget != "" {
+		defaultNodes = []string{defaultTarget}
+	}
+	showAudioNodes, err := assetsync.ShowAudioNodes(ctx, st, p.Show)
+	if err != nil {
+		return "", "", "", fmt.Errorf("fppreconcile: audio target readiness: %w", err)
+	}
 
 	warning := ""
+	audioNodesDefaultedWarning := ""
 	for _, entry := range p.Entries {
 		payload, ok, err := decodeCueForAudioTargets(ctx, st, logger, entry.Cue)
 		if err != nil {
@@ -65,14 +75,24 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 		if !ok || payload.Show != p.Show {
 			continue
 		}
+		var audioResolved, announcementResolved []string
+		var audioFrom, announcementFrom config.AudioNodeResolution
+		if payload.Outputs.Audio != nil {
+			audioResolved, audioFrom = config.ResolveAudioNodes(targetsOf(payload.Outputs.Audio), showAudioNodes, excludeNodesOf(payload.Outputs.Audio), defaultNodes)
+		}
+		if payload.Outputs.Announcement != nil {
+			announcementResolved, announcementFrom = config.ResolveAudioNodes(targetsOfAnnouncement(payload.Outputs.Announcement), showAudioNodes, excludeNodesOfAnnouncement(payload.Outputs.Announcement), defaultNodes)
+		}
 		for _, out := range []struct {
-			name    string
-			targets []string
-			set     bool
+			name         string
+			targets      []string
+			set          bool
+			resolvedFrom config.AudioNodeResolution
+			decision10   bool
 		}{
-			{"outputs.audio", targetsOf(payload.Outputs.Audio), payload.Outputs.Audio != nil},
-			{"outputs.ltc", targetsOfLTC(payload.Outputs.LTC), payload.Outputs.LTC != nil},
-			{"outputs.announcement", targetsOfAnnouncement(payload.Outputs.Announcement), payload.Outputs.Announcement != nil},
+			{"outputs.audio", audioResolved, payload.Outputs.Audio != nil, audioFrom, true},
+			{"outputs.ltc", resolvedTargets(targetsOfLTC(payload.Outputs.LTC), defaultTarget), payload.Outputs.LTC != nil, "", false},
+			{"outputs.announcement", announcementResolved, payload.Outputs.Announcement != nil, announcementFrom, true},
 		} {
 			if !out.set {
 				continue
@@ -103,11 +123,20 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 						entry.Cue, out.name, target), "", nil
 				}
 			}
+			// ADR-049 decision 10: a nudge, not a failure, when the show
+			// has not named its own audio nodes and this output only
+			// plays where it does because of the installation-wide
+			// default rather than a choice made for this show.
+			if audioNodesDefaultedWarning == "" && out.decision10 && len(showAudioNodes) == 0 && out.resolvedFrom == config.AudioNodeResolutionDefault {
+				audioNodesDefaultedWarning = fmt.Sprintf(
+					"cue %q's %s has no show-wide audio node list to inherit and plays on the installation's default node instead. Set the show's audio nodes, then re-check.",
+					entry.Cue, out.name)
+			}
 		}
 		// Every output above passed its own unbound-target check, so the
 		// union below is safe to compute against already-valid targets.
 		if warning == "" {
-			union := cueAudioAnnouncementNodes(payload, defaultTarget)
+			union := cueAudioAnnouncementNodes(audioResolved, announcementResolved)
 			switch {
 			case len(union) <= 1:
 				// A Cue reaching at most one node has nothing for
@@ -121,6 +150,13 @@ func audioTargetReadiness(ctx context.Context, st *store.Store, logger *slog.Log
 					"Cue %q plays on several nodes but its outputs do not include the node with the program+LTC role. Add that node to the cue's outputs, then re-check.",
 					entry.Cue)
 			}
+		}
+	}
+	if audioNodesDefaultedWarning != "" {
+		if warning == "" {
+			warning = audioNodesDefaultedWarning
+		} else {
+			warning = warning + "; " + audioNodesDefaultedWarning
 		}
 	}
 	return "", "", warning, nil
@@ -151,23 +187,19 @@ func programLTCAndDefault(declared, ltcEmitters []string) (programLTC, defaultTa
 // unioned, deduplicated, and sorted for a deterministic report. outputs.ltc
 // is never included: ADR-045 decision 2 keeps it single-node, so it never
 // contributes to whether a Cue reaches more than one node.
-func cueAudioAnnouncementNodes(payload config.ShowCuePayload, defaultTarget string) []string {
+func cueAudioAnnouncementNodes(audioResolved, announcementResolved []string) []string {
 	seen := make(map[string]bool)
 	var nodes []string
-	add := func(targets []string) {
-		for _, id := range resolvedTargets(targets, defaultTarget) {
+	add := func(ids []string) {
+		for _, id := range ids {
 			if id != "" && !seen[id] {
 				seen[id] = true
 				nodes = append(nodes, id)
 			}
 		}
 	}
-	if payload.Outputs.Audio != nil {
-		add(payload.Outputs.Audio.Targets)
-	}
-	if payload.Outputs.Announcement != nil {
-		add(payload.Outputs.Announcement.Targets)
-	}
+	add(audioResolved)
+	add(announcementResolved)
 	sort.Strings(nodes)
 	return nodes
 }
@@ -207,6 +239,22 @@ func targetsOfAnnouncement(o *config.ShowCueAnnouncementOutput) []string {
 		return nil
 	}
 	return o.Targets
+}
+
+// excludeNodesOf and excludeNodesOfAnnouncement are [targetsOf]/
+// [targetsOfAnnouncement]'s own ADR-049 decision 10 siblings.
+func excludeNodesOf(o *config.ShowCueAudioOutput) []string {
+	if o == nil {
+		return nil
+	}
+	return o.ExcludeNodes
+}
+
+func excludeNodesOfAnnouncement(o *config.ShowCueAnnouncementOutput) []string {
+	if o == nil {
+		return nil
+	}
+	return o.ExcludeNodes
 }
 
 func containsID(ids []string, id string) bool {
@@ -353,6 +401,14 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 		return "", err
 	}
 	_, defaultTarget := programLTCAndDefault(declared, ltcEmitters)
+	var defaultNodes []string
+	if defaultTarget != "" {
+		defaultNodes = []string{defaultTarget}
+	}
+	showAudioNodes, err := assetsync.ShowAudioNodes(ctx, st, p.Show)
+	if err != nil {
+		return "", fmt.Errorf("fppreconcile: audio target clock readiness: %w", err)
+	}
 
 	reported := make(map[string]bool)
 	var warnings []string
@@ -364,7 +420,14 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 		if !ok || payload.Show != p.Show {
 			continue
 		}
-		if len(cueAudioAnnouncementNodes(payload, defaultTarget)) <= 1 {
+		var audioResolved, announcementResolved []string
+		if payload.Outputs.Audio != nil {
+			audioResolved, _ = config.ResolveAudioNodes(targetsOf(payload.Outputs.Audio), showAudioNodes, excludeNodesOf(payload.Outputs.Audio), defaultNodes)
+		}
+		if payload.Outputs.Announcement != nil {
+			announcementResolved, _ = config.ResolveAudioNodes(targetsOfAnnouncement(payload.Outputs.Announcement), showAudioNodes, excludeNodesOfAnnouncement(payload.Outputs.Announcement), defaultNodes)
+		}
+		if len(cueAudioAnnouncementNodes(audioResolved, announcementResolved)) <= 1 {
 			continue
 		}
 		for _, out := range []struct {
@@ -372,13 +435,13 @@ func audioTargetClockReadiness(ctx context.Context, st *store.Store, logger *slo
 			targets []string
 			set     bool
 		}{
-			{"outputs.audio", targetsOf(payload.Outputs.Audio), payload.Outputs.Audio != nil},
-			{"outputs.announcement", targetsOfAnnouncement(payload.Outputs.Announcement), payload.Outputs.Announcement != nil},
+			{"outputs.audio", audioResolved, payload.Outputs.Audio != nil},
+			{"outputs.announcement", announcementResolved, payload.Outputs.Announcement != nil},
 		} {
 			if !out.set {
 				continue
 			}
-			for _, target := range resolvedTargets(out.targets, defaultTarget) {
+			for _, target := range out.targets {
 				if reported[target] {
 					continue
 				}

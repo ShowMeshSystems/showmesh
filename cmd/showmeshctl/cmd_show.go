@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,12 @@ type configShow struct {
 	// integration takes part", and a populated slice is the selection.
 	FPPInstances      *[]string `json:"fppInstances,omitempty"`
 	ResolumeInstances *[]string `json:"resolumeInstances,omitempty"`
+
+	// AudioNodes is ADR-049 decision 10's show-wide audio node list: an
+	// audio-bearing object with no explicit list of its own resolves
+	// against this list minus its own excludeNodes. Absent or empty both
+	// mean unset.
+	AudioNodes []string `json:"audioNodes,omitempty"`
 }
 
 // showConfigResponse is the body of GET and PUT /config/show/{id}. See
@@ -244,9 +251,10 @@ func cmdShowGet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 
 func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl show set", stderr)
-	var name, notes string
+	var name, notes, audioNodes string
 	fs.StringVar(&name, "name", "", "the show's name (required)")
 	fs.StringVar(&notes, "notes", "", "the show's notes")
+	fs.StringVar(&audioNodes, "audio-nodes", "", "comma-separated audio.node ids this show's audio-bearing objects inherit by default (ADR-049 decision 10); omit to clear")
 	participation := registerParticipationFlags(fs, true)
 	ifMatchFlag, forceFlag := registerIfMatchFlags(fs)
 	fs.Usage = func() {
@@ -327,7 +335,7 @@ func cmdShowSet(args []string, stdout, stderr io.Writer, clock func() time.Time)
 		return reportError(stderr, "show set", err)
 	}
 
-	body := configShow{Name: name, Notes: notes, FPPInstances: fppSel, ResolumeInstances: resolumeSel}
+	body := configShow{Name: name, Notes: notes, FPPInstances: fppSel, ResolumeInstances: resolumeSel, AudioNodes: parseInstanceList(audioNodes)}
 	var resp showConfigResponse
 	if err := c.putJSON(ctx, apiPath, ifMatch, body, &resp); err != nil {
 		return reportError(stderr, "show set", err)
@@ -501,6 +509,11 @@ func printShowDetail(w io.Writer, resp showConfigResponse) {
 	}
 	printParticipationLine(w, "FPP", resp.Payload.FPPInstances)
 	printParticipationLine(w, "Resolume", resp.Payload.ResolumeInstances)
+	if len(resp.Payload.AudioNodes) > 0 {
+		_, _ = fmt.Fprintf(w, "Audio nodes: %s\n", strings.Join(resp.Payload.AudioNodes, ", "))
+	} else {
+		_, _ = fmt.Fprintf(w, "Audio nodes: (none configured; audio-bearing objects use the installation default)\n")
+	}
 	_, _ = fmt.Fprintf(w, "Revision:  %d\n", resp.Revision)
 	_, _ = fmt.Fprintf(w, "Updated:   %s\n", resp.UpdatedAt.Format(time.RFC3339))
 	if resp.CreatedByPrincipalName != nil {

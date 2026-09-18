@@ -1205,6 +1205,7 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
 | `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
 | `cue-multisync-trigger-missing` | shipped | ADR-051 decision 2 — reported only as `warning`, never `failingCondition`; see this file's own note below |
+| `audio-nodes-defaulted` | shipped | ADR-049 decision 10 — reported only as `warning`, never `failingCondition`; the same condition name is used at the night readiness layer for the background bed and announcements, which report through `nightReadinessCheck`, not this file's own `ReadinessCondition` |
 
 **`cue-multisync-trigger-missing` is warning-only, not a `failingCondition`.**
 Every condition above this row can make `ready` false; this one never does

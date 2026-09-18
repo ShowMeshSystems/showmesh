@@ -45,10 +45,18 @@ func nightAnnouncementCueWithResolvedPolicy(cue config.NightSessionCue, payload 
 	return cue
 }
 
-// nightAnnouncementDeclaredTarget declares source role "announcement" and
-// the configured mix policy on the cue's own dispatch, then clamps AudioNodeIDs to its first element: the generic
-// per-cue engine only ever dispatches to one target, so this file owns every other listed node's own fan-out.
-func nightAnnouncementDeclaredTarget(cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
+// nightAnnouncementDeclaredTarget resolves target's own node list (ADR-049
+// decision 10: [resolveAudioActionTargetNodes]) against rec's own show
+// before declaring source role "announcement" and the configured mix
+// policy on the cue's own dispatch, then clamps to the resolved list's
+// first element: the generic per-cue engine only ever dispatches to one
+// target, so this file owns every other listed node's own fan-out.
+func (h *handlers) nightAnnouncementDeclaredTarget(ctx context.Context, rec store.NightSessionRecord, cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
+	if target.Integration == config.ShowActionIntegrationAudio {
+		if payload, err := h.getPinnedNightSessionPayload(ctx, rec); err == nil {
+			target.AudioNodeIDs = config.AudioNodeIDList(h.resolveAudioActionTargetNodes(ctx, payload.Show, target))
+		}
+	}
 	target = nightAnnouncementDeclareParams(cue, target)
 	if len(target.AudioNodeIDs) > 1 {
 		target.AudioNodeIDs = target.AudioNodeIDs[:1]
@@ -244,7 +252,7 @@ func (h *handlers) nightAnnouncementAppliedThisCycle(ctx context.Context, rec st
 // dispatch, for every one of the cue's own target nodes: clearing a
 // session that does not exist is a no-op success on the node.
 func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
-	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	target, _, ok := h.nightAnnouncementSessionTarget(ctx, rec, cue)
 	if !ok {
 		return
 	}
@@ -268,7 +276,7 @@ func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.T
 // again for every node beyond the bound action's own first, using the
 // SAME applyRevision and params the generic engine already dispatched for that first node.
 func (h *handlers) nightAdvanceAnnouncementApplyExtra(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
-	target, applyRevision, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	target, applyRevision, ok := h.nightAnnouncementSessionTarget(ctx, rec, cue)
 	if !ok || len(target.AudioNodeIDs) <= 1 {
 		return
 	}
@@ -328,7 +336,7 @@ func nightAnnouncementApplyRowPhase(cuePhase string, target config.ShowActionTar
 // A target naming one node keeps [nightAdvanceAnnouncementStartUnscheduled]'s
 // pre-ADR-049 behavior; more than one takes the shared-instant path (ADR-049 decisions 3, 4, 6).
 func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
-	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	target, _, ok := h.nightAnnouncementSessionTarget(ctx, rec, cue)
 	if !ok {
 		return
 	}
@@ -684,7 +692,7 @@ func nightAnnouncementMediaRef(params map[string]any) nightAnnouncementMedia {
 // nightAnnouncementSessionTarget resolves cue's bound show.action and
 // reports it only when it is an announcement whose target this controller
 // can run the apply-then-start sequence against; everything else returns false.
-func (h *handlers) nightAnnouncementSessionTarget(ctx context.Context, cue config.NightSessionCue) (config.ShowActionTarget, int64, bool) {
+func (h *handlers) nightAnnouncementSessionTarget(ctx context.Context, rec store.NightSessionRecord, cue config.NightSessionCue) (config.ShowActionTarget, int64, bool) {
 	if cue.Role != config.NightSessionCueRoleAnnouncement {
 		return config.ShowActionTarget{}, 0, false
 	}
@@ -695,7 +703,11 @@ func (h *handlers) nightAnnouncementSessionTarget(ctx context.Context, cue confi
 	if !nightAnnouncementTargetDeclarable(action.Target) {
 		return config.ShowActionTarget{}, 0, false
 	}
-	return action.Target, revision, true
+	target := action.Target
+	if payload, err := h.getPinnedNightSessionPayload(ctx, rec); err == nil {
+		target.AudioNodeIDs = config.AudioNodeIDList(h.resolveAudioActionTargetNodes(ctx, payload.Show, target))
+	}
+	return target, revision, true
 }
 
 // nightAnnouncementApplyDispatchRevision reports the audio-session dispatch revision an announcement apply must

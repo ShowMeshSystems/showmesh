@@ -227,7 +227,7 @@ func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payl
 	case config.ShowActionIntegrationResolume:
 		binding.State, binding.Reason = h.checkResolumeActionBinding(payload.Target)
 	case config.ShowActionIntegrationAudio:
-		binding.State, binding.Reason = h.checkAudioActionBinding(ctx, payload.Target)
+		binding.State, binding.Reason = h.checkAudioActionBinding(ctx, payload.Show, payload.Target)
 	default:
 		// Reached whenever payload.Target.Integration is a value this
 		// switch does not name: NOT unreachable — see dispatchActionTarget's
@@ -250,8 +250,9 @@ func (h *handlers) checkActionBindingTarget(ctx context.Context, id string, payl
 // minted by the caller (the night-session driver or an operator), never
 // looked up, so a session that does not exist yet is not a broken binding,
 // exactly as an unresolvable one is not checked at write time either.
-func (h *handlers) checkAudioActionBinding(ctx context.Context, target config.ShowActionTarget) (state, reason string) {
-	for _, nodeID := range target.AudioNodeIDs {
+func (h *handlers) checkAudioActionBinding(ctx context.Context, show string, target config.ShowActionTarget) (state, reason string) {
+	resolvedNodeIDs := h.resolveAudioActionTargetNodes(ctx, show, target)
+	for _, nodeID := range resolvedNodeIDs {
 		hasNode, err := nodeHasAudioNodeObject(ctx, h.deps.Config, nodeID)
 		if err != nil {
 			return v1.ActionBindingStateUnknown, fmt.Sprintf("this coordinator could not check whether audio node %q is still declared: %v", nodeID, err)
@@ -264,7 +265,7 @@ func (h *handlers) checkAudioActionBinding(ctx context.Context, target config.Sh
 		return v1.ActionBindingStateBroken, fmt.Sprintf("audioAction %q is no longer a supported audio operation (supported: %s)",
 			target.AudioAction, strings.Join(config.ShowActionAudioActions(), ", "))
 	}
-	return v1.ActionBindingStateOK, fmt.Sprintf("audio node(s) %v are declared and operation %q is still supported", []string(target.AudioNodeIDs), target.AudioAction)
+	return v1.ActionBindingStateOK, fmt.Sprintf("audio node(s) %v are declared and operation %q is still supported", resolvedNodeIDs, target.AudioAction)
 }
 
 // checkFPPActionBinding is a configuration check only — no network call.
